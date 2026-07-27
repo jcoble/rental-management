@@ -68,6 +68,19 @@ String _tenantDisplayName(Tenant t) {
   return '${t.firstName} ${t.lastName}'.trim();
 }
 
+const messageRecipientTenantQuery = TenantListQuery(take: 200, sort: 'name');
+
+@visibleForTesting
+String messageRecipientLabel(Tenant tenant) {
+  final locationParts = [
+    tenant.currentPropertyName?.trim(),
+    tenant.currentUnitNumber?.trim(),
+  ].where((part) => part != null && part.isNotEmpty).cast<String>();
+  final location = locationParts.join(' / ');
+  final name = _tenantDisplayName(tenant);
+  return location.isEmpty ? name : '$name - $location';
+}
+
 @visibleForTesting
 String messagesEmptyInstruction({
   required bool hasCriteria,
@@ -616,12 +629,6 @@ class _ComposeConversationSheetState
   String? _operationKey;
 
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(tenantsProvider.notifier).load());
-  }
-
-  @override
   void dispose() {
     _subjectCtrl.dispose();
     _bodyCtrl.dispose();
@@ -682,7 +689,9 @@ class _ComposeConversationSheetState
 
   @override
   Widget build(BuildContext context) {
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = ref.watch(
+      tenantsPageProvider(messageRecipientTenantQuery),
+    );
     final colorScheme = Theme.of(context).colorScheme;
     const gap = SizedBox(height: 12);
 
@@ -711,16 +720,16 @@ class _ComposeConversationSheetState
                     'Could not load tenants: ${e is ApiException ? e.message : e}',
                     style: TextStyle(color: colorScheme.error, fontSize: 13),
                   ),
-                  data: (tenants) => DropdownButtonFormField<int>(
+                  data: (page) => DropdownButtonFormField<int>(
                     initialValue: _selectedTenantId,
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'To (tenant)'),
-                    items: tenants
+                    items: page.items
                         .map(
                           (t) => DropdownMenuItem(
                             value: t.id,
                             child: Text(
-                              _tenantDisplayName(t),
+                              messageRecipientLabel(t),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),

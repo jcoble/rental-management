@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Identity;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Time;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Auth;
@@ -133,7 +132,7 @@ public class AuthService : IAuthService
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<AuthService> _logger;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -147,7 +146,7 @@ public class AuthService : IAuthService
         ICanonicalAccountBootstrapService accountBootstrap,
         IAtomicUnitOfWork atomic,
         ILogger<AuthService> logger,
-        TimeProvider timeProvider)
+        IAuthSecurityClock securityClock)
     {
         _userManager = userManager;
         _signInManager = signInManager;
@@ -160,7 +159,7 @@ public class AuthService : IAuthService
         _accountBootstrap = accountBootstrap;
         _atomic = atomic;
         _logger = logger;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
     }
 
     public async Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null)
@@ -215,8 +214,7 @@ public class AuthService : IAuthService
         // Password/external-provider verification and the email-confirmation gate have already
         // succeeded. The DB exposes only the narrow effective-context option projection here; it
         // does not grant the runtime API generic cross-workspace table access.
-        var now = _timeProvider.UtcNow();
-        var contexts = await _contextSelection.ListAsync(user.Id, accessContextId, now, ct);
+        var contexts = await _contextSelection.ListAsync(user.Id, accessContextId, ct);
         var firstContext = contexts.FirstOrDefault();
         if (firstContext is null)
         {
@@ -347,7 +345,7 @@ public class AuthService : IAuthService
             user.Id,
             accessContextId,
             accessRevision,
-            _timeProvider.UtcNow(),
+            _securityClock.UtcNow(),
             ct);
         if (envelope is null || envelope.SelectedContext.AccessRevision != accessRevision)
         {
@@ -356,7 +354,7 @@ public class AuthService : IAuthService
 
         var access = _canonicalTokens.Issue(new CanonicalAccessCoordinates(
             user.Id, sessionId, accessContextId, accessRevision));
-        var refreshExpiresAt = _timeProvider.UtcNow().AddDays(_credentialOptions.CredentialLifetimeDays);
+        var refreshExpiresAt = _securityClock.UtcNow().AddDays(_credentialOptions.CredentialLifetimeDays);
         var tokens = new TokenResult
         {
             AccessToken = access.Token,

@@ -177,7 +177,7 @@ public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
         Mock.Of<ICanonicalAccountBootstrapService>(),
         atomic ?? Mock.Of<IAtomicUnitOfWork>(),
         NullLogger<AuthService>.Instance,
-        TimeProvider.System);
+        new SystemAuthSecurityClock());
 
     private sealed class SuccessfulPasswordAtomicUnitOfWork : IAtomicUnitOfWork
     {

@@ -30,7 +30,7 @@ public class AuthController : ControllerBase
     private readonly ICanonicalAccessTokenService _canonicalTokens;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
     private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public AuthController(
         IAuthService authService,
@@ -42,7 +42,7 @@ public class AuthController : ControllerBase
         ICanonicalAccessTokenService canonicalTokens,
         IAccessEnvelopeQuery accessEnvelopes,
         IEffectiveAccessContextSelectionQuery contextSelection,
-        TimeProvider timeProvider,
+        IAuthSecurityClock securityClock,
         ILogger<AuthController> logger)
     {
         _authService = authService;
@@ -54,7 +54,7 @@ public class AuthController : ControllerBase
         _canonicalTokens = canonicalTokens;
         _accessEnvelopes = accessEnvelopes;
         _contextSelection = contextSelection;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
         _logger = logger;
     }
 
@@ -202,7 +202,7 @@ public class AuthController : ControllerBase
             active.UserId,
             active.AccessContextId,
             active.AccessRevision,
-            _timeProvider.GetUtcNow().UtcDateTime,
+            _securityClock.UtcNow(),
             ct);
         return envelope is null
             ? Unauthorized(new { error = "Active access context is unavailable." })
@@ -218,11 +218,7 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Active access context is unavailable." });
         }
 
-        return Ok(await _contextSelection.ListAsync(
-            active.UserId,
-            null,
-            _timeProvider.GetUtcNow().UtcDateTime,
-            ct));
+        return Ok(await _contextSelection.ListAsync(active.UserId, null, ct));
     }
 
     [HttpPost("contexts/select")]
@@ -245,7 +241,7 @@ public class AuthController : ControllerBase
                     active.AccessContextId,
                     active.AccessRevision,
                     request.AccessContextId,
-                    _timeProvider.GetUtcNow().UtcDateTime),
+                    _securityClock.UtcNow()),
                 Guid.NewGuid(),
                 ct);
             if (!switched.Switched)
@@ -258,7 +254,7 @@ public class AuthController : ControllerBase
                 switched.UserId,
                 switched.AccessContextId,
                 switched.AccessRevision,
-                _timeProvider.GetUtcNow().UtcDateTime,
+                _securityClock.UtcNow(),
                 ct);
             if (envelope is null)
             {
@@ -468,7 +464,7 @@ public class AuthController : ControllerBase
                     active.UserId,
                     active.AccessContextId,
                     active.AccessRevision,
-                    _timeProvider.GetUtcNow().UtcDateTime,
+                    _securityClock.UtcNow(),
                     "User signed out"),
                 Guid.NewGuid(),
                 HttpContext.RequestAborted);

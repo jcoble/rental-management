@@ -34,12 +34,12 @@ public interface ICanonicalAccessTokenService
 public sealed class CanonicalAccessTokenService : ICanonicalAccessTokenService
 {
     private readonly JwtSettings _settings;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
-    public CanonicalAccessTokenService(IOptions<JwtSettings> settings, TimeProvider timeProvider)
+    public CanonicalAccessTokenService(IOptions<JwtSettings> settings, IAuthSecurityClock securityClock)
     {
         _settings = settings.Value;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
     }
 
     public (string Token, DateTime ExpiresAtUtc) Issue(CanonicalAccessCoordinates coordinates)
@@ -50,7 +50,7 @@ public sealed class CanonicalAccessTokenService : ICanonicalAccessTokenService
             throw new ArgumentOutOfRangeException(nameof(coordinates));
         }
 
-        var expiresAt = _timeProvider.GetUtcNow().UtcDateTime
+        var expiresAt = _securityClock.UtcNow()
             .AddMinutes(_settings.AccessTokenExpirationMinutes);
         var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.SecretKey));
         var token = new JwtSecurityToken(

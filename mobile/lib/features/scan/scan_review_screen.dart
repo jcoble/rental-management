@@ -9,6 +9,7 @@ import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../leases/leases_repository.dart';
+import '../maintenance/work_order_unit_aware_loader.dart';
 import '../maintenance/work_orders_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
@@ -1045,6 +1046,11 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           .confirm(draft.id, overrides);
       if (!mounted) return;
       final agreementId = (result?['agreementId'] as num?)?.toInt();
+      final workOrderId =
+          (result?['workOrderId'] as num?)?.toInt() ??
+          (result?['entityType'] == 'WorkOrder'
+              ? (result?['entityId'] as num?)?.toInt()
+              : null);
       final unitId = (result?['unitId'] as num?)?.toInt();
       if (draft.isWorkOrder) {
         ref.invalidate(workOrdersPageProvider);
@@ -1053,6 +1059,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           ref.invalidate(unitDashboardProvider(unitId));
         }
       }
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1074,6 +1081,28 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           backgroundColor: Colors.green,
         ),
       );
+
+      if (draft.isWorkOrder && workOrderId != null) {
+        final shellNavigator = mobileShellNavigatorOf(context);
+        if (shellNavigator != null) {
+          shellNavigator.openTab(
+            MobileShellTabId.work,
+            destination: MobileDestinationId.workOrders,
+            detailBuilder: (_) =>
+                WorkOrderUnitAwareLoaderScreen(workOrderId: workOrderId),
+          );
+          revealMobileShellIfDetached(context);
+          return;
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                WorkOrderUnitAwareLoaderScreen(workOrderId: workOrderId),
+          ),
+        );
+        return;
+      }
 
       // For an imported agreement, jump to its Unit relationship so the
       // landlord can review the canonical agreement history. Replace this

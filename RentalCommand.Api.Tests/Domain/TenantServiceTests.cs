@@ -303,6 +303,69 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_PropertyFilterDisambiguatesDuplicateTenantNamesInSql()
+    {
+        var now = DateTime.UtcNow;
+        var (unionProperty, unionUnit, _) = SeedPropertyWithUnits();
+        unionProperty.Name = "Union Duplex";
+        unionUnit.UnitNumber = "B";
+        var franklinProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Franklin Place",
+            AddressLine1 = "200 Franklin Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var franklinUnit = new Unit
+        {
+            Property = franklinProperty,
+            UnitNumber = "1A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.Add(franklinUnit);
+        _ctx.Db.SaveChanges();
+
+        var unionTenant = SeedTenant("Sage", "King", activeRelationshipCount: 0);
+        var franklinTenant = SeedTenant("Sage", "King", activeRelationshipCount: 0);
+        SeedRelationshipOnUnit(unionTenant, unionProperty, unionUnit, occupying: true);
+        SeedRelationshipOnUnit(franklinTenant, franklinProperty, franklinUnit, occupying: true);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            PropertyId = unionProperty.Id,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(1);
+        var tenant = result.Items.Should().ContainSingle().Subject;
+        tenant.Id.Should().Be(unionTenant.Id);
+        tenant.FirstName.Should().Be("Sage");
+        tenant.LastName.Should().Be("King");
+        tenant.CurrentPropertyId.Should().Be(unionProperty.Id);
+        tenant.CurrentPropertyName.Should().Be("Union Duplex");
+        tenant.CurrentUnitId.Should().Be(unionUnit.Id);
+        tenant.CurrentUnitNumber.Should().Be("B");
+
+        _commands.Should().HaveCount(2, "count and page remain DB-side translated queries");
+        _commands.Should().Contain(sql =>
+            sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Properties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Units", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().OnlyContain(sql =>
+            !sql.Contains("SELECT *", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GuidedSetupBatch_CreatesEveryTenantOnceAndReplaysTheReceipt()
     {
         var request = new GuidedTenantSetupRequest

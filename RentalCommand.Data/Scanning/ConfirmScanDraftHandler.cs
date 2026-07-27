@@ -123,14 +123,17 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             command.ConfirmedAtUtc,
             ct);
         await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
-            command.PortfolioId,
-            canonicalEntityType,
-            target.EntityId,
-            AuditLogOperation.Created,
-            UserId: command.ConfirmedByUserId,
-            OldValues: claim.ExtractedFieldsJson,
-            ChangeReason: $"Created from scan draft #{command.DraftId}."));
+        if (!target.TargetAuditRecorded)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                canonicalEntityType,
+                target.EntityId,
+                AuditLogOperation.Created,
+                UserId: command.ConfirmedByUserId,
+                OldValues: claim.ExtractedFieldsJson,
+                ChangeReason: $"Created from scan draft #{command.DraftId}."));
+        }
 
         return new ConfirmScanDraftResult(
             ConfirmScanDraftOutcome.Confirmed,

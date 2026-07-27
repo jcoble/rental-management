@@ -11,6 +11,10 @@ class Tenant {
   final String? notes;
   final int? activeLeaseCount;
   final int? leaseHistoryCount;
+  final int? currentPropertyId;
+  final String? currentPropertyName;
+  final int? currentUnitId;
+  final String? currentUnitNumber;
   final bool canDelete;
   final String? deleteBlockedReason;
 
@@ -30,6 +34,10 @@ class Tenant {
     this.notes,
     this.activeLeaseCount,
     this.leaseHistoryCount,
+    this.currentPropertyId,
+    this.currentPropertyName,
+    this.currentUnitId,
+    this.currentUnitNumber,
     this.canDelete = true,
     this.deleteBlockedReason,
     required this.createdAt,
@@ -50,6 +58,10 @@ class Tenant {
       notes: json['notes'] as String?,
       activeLeaseCount: (json['activeLeaseCount'] as num?)?.toInt(),
       leaseHistoryCount: (json['leaseHistoryCount'] as num?)?.toInt(),
+      currentPropertyId: (json['currentPropertyId'] as num?)?.toInt(),
+      currentPropertyName: json['currentPropertyName'] as String?,
+      currentUnitId: (json['currentUnitId'] as num?)?.toInt(),
+      currentUnitNumber: json['currentUnitNumber'] as String?,
       canDelete: json['canDelete'] as bool? ?? true,
       deleteBlockedReason: json['deleteBlockedReason'] as String?,
       createdAt:

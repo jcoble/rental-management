@@ -182,7 +182,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await db.SaveChangesAsync();
 
         var option = (await new EffectiveAccessContextSelectionQuery(db)
-                .ListAsync(_userId, null, _now.AddMinutes(1)))
+                .ListAsync(_userId, null))
             .Single(item => item.AccessContextId == _accessContextId);
 
         option.DefaultExperience.Should().Be(
@@ -1705,16 +1705,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         int portfolioId,
         int roleProfileId,
         MembershipRoleAssignmentScopeKind scopeKind) => new()
-    {
-        WorkspaceMembershipId = membershipId,
-        PortfolioId = portfolioId,
-        RoleProfileId = roleProfileId,
-        Status = MembershipRoleAssignmentStatus.Active,
-        ScopeKind = scopeKind,
-        EffectiveFromUtc = _now.AddHours(-1),
-        CreatedAtUtc = _now,
-        UpdatedAtUtc = _now,
-    };
+        {
+            WorkspaceMembershipId = membershipId,
+            PortfolioId = portfolioId,
+            RoleProfileId = roleProfileId,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = scopeKind,
+            EffectiveFromUtc = _now.AddHours(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
 
     private Portfolio Portfolio(string name) => new()
     {

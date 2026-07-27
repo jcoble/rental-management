@@ -317,6 +317,7 @@ public class TenantService : ITenantService
                     response,
                     r.ActiveLeaseCount,
                     r.LeaseHistoryCount);
+                ApplyCurrentResidentContext(response, r);
                 return response;
             }).ToList(),
             TotalCount = totalCount,
@@ -356,6 +357,74 @@ public class TenantService : ITenantService
                 .Select(party => party.LeaseManagementId)
                 .Distinct()
                 .Count(),
+            CurrentPropertyId = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.TenantId == t.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                .OrderBy(party => party.LeaseManagement!.Property!.Name)
+                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
+                .ThenBy(party => party.LeaseManagementId)
+                .Select(party => (int?)party.LeaseManagement!.PropertyId)
+                .FirstOrDefault(),
+            CurrentPropertyName = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.TenantId == t.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                .OrderBy(party => party.LeaseManagement!.Property!.Name)
+                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
+                .ThenBy(party => party.LeaseManagementId)
+                .Select(party => party.LeaseManagement!.Property!.Name)
+                .FirstOrDefault(),
+            CurrentUnitId = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.TenantId == t.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                .OrderBy(party => party.LeaseManagement!.Property!.Name)
+                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
+                .ThenBy(party => party.LeaseManagementId)
+                .Select(party => (int?)party.LeaseManagement!.UnitId)
+                .FirstOrDefault(),
+            CurrentUnitNumber = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.TenantId == t.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                .OrderBy(party => party.LeaseManagement!.Property!.Name)
+                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
+                .ThenBy(party => party.LeaseManagementId)
+                .Select(party => party.LeaseManagement!.Unit!.UnitNumber)
+                .FirstOrDefault(),
         });
 
     internal sealed class TenantRelationshipReadRow
@@ -363,6 +432,10 @@ public class TenantService : ITenantService
         public Tenant Entity { get; init; } = null!;
         public int ActiveLeaseCount { get; init; }
         public int LeaseHistoryCount { get; init; }
+        public int? CurrentPropertyId { get; init; }
+        public string? CurrentPropertyName { get; init; }
+        public int? CurrentUnitId { get; init; }
+        public string? CurrentUnitNumber { get; init; }
     }
 
     private static TenantListQuery ToTenantListQuery(ListQuery query) => new()
@@ -387,6 +460,14 @@ public class TenantService : ITenantService
             : leaseHistoryCount > 0
                 ? LeaseHistoryDeleteBlockedReason
                 : null;
+    }
+
+    private static void ApplyCurrentResidentContext(TenantResponse response, TenantRelationshipReadRow row)
+    {
+        response.CurrentPropertyId = row.CurrentPropertyId;
+        response.CurrentPropertyName = row.CurrentPropertyName;
+        response.CurrentUnitId = row.CurrentUnitId;
+        response.CurrentUnitNumber = row.CurrentUnitNumber;
     }
 
     private static IReadOnlyList<string> SearchTokens(string search)

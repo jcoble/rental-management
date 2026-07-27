@@ -36,7 +36,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         CancellationToken ct) => command.Target.Kind switch
         {
             ScanConfirmationTargetKind.Expense => WriteExpenseAsync(
-                command, Required(command.Target.Expense), attempt, ct),
+                command, Required(command.Target.Expense), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.Payment => WritePaymentAsync(
                 command, Required(command.Target.Payment), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.WorkOrder => WriteWorkOrderAsync(
@@ -46,7 +46,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             ScanConfirmationTargetKind.Application => WriteApplicationAsync(
                 command, Required(command.Target.Application), extractedFieldsJson, attempt, ct),
             ScanConfirmationTargetKind.Loan => WriteLoanAsync(
-                command, Required(command.Target.Loan), attempt, ct),
+                command, Required(command.Target.Loan), extractedFieldsJson, attempt, ct),
             _ => throw new InvalidOperationException(
                 $"Scan confirmation target {command.Target.Kind} is not supported by this writer."),
         };
@@ -204,21 +204,21 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ConfirmScanDraftCommand command,
         IAtomicPersistenceSession persistence,
         CancellationToken ct) => command.Target.Kind switch
-    {
-        ScanConfirmationTargetKind.Expense => await ResolveExpensePropertyIdAsync(
-            command, Required(command.Target.Expense), persistence, ct),
-        ScanConfirmationTargetKind.Payment => await persistence.Query<TenantAccount>()
-            .Where(account => account.Id == Required(command.Target.Payment).TenantAccountId
-                && account.PortfolioId == command.PortfolioId && account.LeaseManagement != null)
-            .Select(account => (int?)account.LeaseManagement!.PropertyId)
-            .SingleOrDefaultAsync(ct),
-        ScanConfirmationTargetKind.WorkOrder => Required(command.Target.WorkOrder).PropertyId,
-        ScanConfirmationTargetKind.Application => await ResolveOptionalPropertyIdAsync(
-            command, Required(command.Target.Application).PropertyId,
-            Required(command.Target.Application).UnitId, persistence, ct),
-        ScanConfirmationTargetKind.Loan => Required(command.Target.Loan).PropertyId,
-        _ => null,
-    };
+        {
+            ScanConfirmationTargetKind.Expense => await ResolveExpensePropertyIdAsync(
+                command, Required(command.Target.Expense), persistence, ct),
+            ScanConfirmationTargetKind.Payment => await persistence.Query<TenantAccount>()
+                .Where(account => account.Id == Required(command.Target.Payment).TenantAccountId
+                    && account.PortfolioId == command.PortfolioId && account.LeaseManagement != null)
+                .Select(account => (int?)account.LeaseManagement!.PropertyId)
+                .SingleOrDefaultAsync(ct),
+            ScanConfirmationTargetKind.WorkOrder => Required(command.Target.WorkOrder).PropertyId,
+            ScanConfirmationTargetKind.Application => await ResolveOptionalPropertyIdAsync(
+                command, Required(command.Target.Application).PropertyId,
+                Required(command.Target.Application).UnitId, persistence, ct),
+            ScanConfirmationTargetKind.Loan => Required(command.Target.Loan).PropertyId,
+            _ => null,
+        };
 
     private static async Task<int?> ResolveExpensePropertyIdAsync(
         ConfirmScanDraftCommand command,
@@ -277,6 +277,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
         ConfirmScanDraftCommand command,
         ScanExpenseTargetData target,
+        string? extractedFieldsJson,
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
@@ -328,8 +329,9 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
 
         attempt.Persistence.Add(expense);
-        await attempt.FlushBusinessAsync(ct);
-        return new ScanConfirmationTargetWriteResult(expense.Id, expense.UnitId);
+        var flush = await attempt.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, expense);
+        return new ScanConfirmationTargetWriteResult(expense.Id, expense.UnitId, TargetAuditRecorded: true);
     }
 
     private static ReviewedExpenseFacts RequireReviewedExpenseFacts(
@@ -485,8 +487,9 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         });
 
         attempt.Persistence.Add(workOrder);
-        await attempt.FlushBusinessAsync(ct);
-        return new ScanConfirmationTargetWriteResult(workOrder.Id, workOrder.UnitId);
+        var flush = await attempt.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, workOrder);
+        return new ScanConfirmationTargetWriteResult(workOrder.Id, workOrder.UnitId, TargetAuditRecorded: true);
     }
 
     private static async Task<ScanConfirmationTargetWriteResult> WriteApplicationAsync(
@@ -547,13 +550,15 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         };
 
         attempt.Persistence.Add(application);
-        await attempt.FlushBusinessAsync(ct);
-        return new ScanConfirmationTargetWriteResult(application.Id, application.UnitId);
+        var flush = await attempt.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, application);
+        return new ScanConfirmationTargetWriteResult(application.Id, application.UnitId, TargetAuditRecorded: true);
     }
 
     private static async Task<ScanConfirmationTargetWriteResult> WriteLoanAsync(
         ConfirmScanDraftCommand command,
         ScanLoanTargetData target,
+        string? extractedFieldsJson,
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
@@ -594,8 +599,31 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         };
 
         attempt.Persistence.Add(loan);
-        await attempt.FlushBusinessAsync(ct);
-        return new ScanConfirmationTargetWriteResult(loan.Id);
+        var flush = await attempt.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, loan);
+        return new ScanConfirmationTargetWriteResult(loan.Id, TargetAuditRecorded: true);
+    }
+
+    private static void EnrichCreatedTargetAudit(
+        ConfirmScanDraftCommand command,
+        string? claimExtractedFieldsJson,
+        IAtomicWriteAttempt attempt,
+        AtomicBusinessFlush flush,
+        object target)
+    {
+        var mutation = flush.Mutations.Single(row =>
+            ReferenceEquals(row.EntityReference, target)
+            && row.Operation == AuditLogOperation.Created);
+        attempt.EnrichMutation(
+            mutation,
+            new AtomicSemanticAudit(
+                command.PortfolioId,
+                mutation.EntityType,
+                mutation.EntityId,
+                AuditLogOperation.Created,
+                UserId: command.ConfirmedByUserId,
+                OldValues: claimExtractedFieldsJson,
+                ChangeReason: $"Created from scan draft #{command.DraftId}."));
     }
 
     private static async Task<ExpenseLocationContext> ResolveExpenseLocationAsync(

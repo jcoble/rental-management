@@ -12,6 +12,8 @@ import '../../core/models/models.dart' hide Vendor;
 import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
 import '../activity/activity_history_screen.dart';
+import '../home/mobile_domain_navigation.dart';
+import '../home/mobile_quick_action_fab.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/dispatch_vendor_sheet.dart';
@@ -180,11 +182,46 @@ class WorkOrderDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
+  final Object _externalSheetQuickActionOwner = Object();
   bool _statusUpdating = false;
   bool _uploadingPhoto = false;
 
   Future<void> _refresh() =>
       ref.read(workOrderDetailProvider(widget.workOrderId).notifier).refresh();
+
+  Future<T?> _showWorkOrderActionSheet<T>({
+    required WidgetBuilder builder,
+    bool isScrollControlled = false,
+    ShapeBorder? shape,
+  }) {
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: isScrollControlled,
+      shape: shape,
+      builder: (sheetContext) =>
+          MobileQuickActionHider(child: builder(sheetContext)),
+    );
+  }
+
+  Future<T?> _runWithWorkOrderQuickActionsHidden<T>(
+    Future<T?> Function() action,
+  ) async {
+    final shellNavigator = mobileShellNavigatorOf(context);
+    shellNavigator?.setTabQuickActionsHidden?.call(
+      MobileShellTabId.work,
+      _externalSheetQuickActionOwner,
+      true,
+    );
+    try {
+      return await action();
+    } finally {
+      shellNavigator?.setTabQuickActionsHidden?.call(
+        MobileShellTabId.work,
+        _externalSheetQuickActionOwner,
+        false,
+      );
+    }
+  }
 
   void _showError(Object error) {
     if (!mounted) return;
@@ -195,8 +232,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   }
 
   Future<void> _changeStatus(String status) async {
-    final note = await showModalBottomSheet<String?>(
-      context: context,
+    final note = await _showWorkOrderActionSheet<String?>(
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -236,8 +272,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
       final current = currentMatch;
       int? selectedAssignmentId;
       var reason = 'Assigned by property manager';
-      await showModalBottomSheet<void>(
-        context: context,
+      await _showWorkOrderActionSheet<void>(
         isScrollControlled: true,
         builder: (sheetContext) => StatefulBuilder(
           builder: (context, setSheetState) => Padding(
@@ -412,8 +447,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   }
 
   void _showPhotoSourceSheet() {
-    showModalBottomSheet<void>(
-      context: context,
+    _showWorkOrderActionSheet<void>(
       builder: (sheetCtx) => SafeArea(
         child: Wrap(
           children: [
@@ -483,7 +517,9 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   }
 
   Future<void> _callVendor() async {
-    final vendor = await showSelectVendorSheet(context);
+    final vendor = await _runWithWorkOrderQuickActionsHidden(
+      () => showSelectVendorSheet(context),
+    );
     if (vendor == null || !mounted) return;
 
     final phone = vendor.phone?.trim() ?? '';
@@ -502,9 +538,8 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   }
 
   Future<void> _dispatchVendor() async {
-    final vendor = await showDispatchVendorSheet(
-      context,
-      workOrderId: widget.workOrderId,
+    final vendor = await _runWithWorkOrderQuickActionsHidden(
+      () => showDispatchVendorSheet(context, workOrderId: widget.workOrderId),
     );
     if (vendor == null || !mounted) return;
 
@@ -527,11 +562,13 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   Future<void> _rateVendor(WorkOrder wo) async {
     final vendorId = wo.vendorId;
     if (vendorId == null) return;
-    final rated = await showRateVendorSheet(
-      context,
-      vendorId: vendorId,
-      vendorName: wo.vendorName ?? 'this vendor',
-      workOrderId: wo.id,
+    final rated = await _runWithWorkOrderQuickActionsHidden(
+      () => showRateVendorSheet(
+        context,
+        vendorId: vendorId,
+        vendorName: wo.vendorName ?? 'this vendor',
+        workOrderId: wo.id,
+      ),
     );
     if (rated == true && mounted) {
       ScaffoldMessenger.of(context)
@@ -541,8 +578,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   }
 
   void _showEditSheet(BuildContext context, WorkOrder wo) {
-    showModalBottomSheet<void>(
-      context: context,
+    _showWorkOrderActionSheet<void>(
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),

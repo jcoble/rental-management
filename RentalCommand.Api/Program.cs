@@ -933,6 +933,7 @@ builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
+builder.Services.AddSingleton<IAuthSecurityClock, SystemAuthSecurityClock>();
 builder.Services.AddScoped<ICanonicalAccessTokenService, CanonicalAccessTokenService>();
 builder.Services.AddSingleton(serviceProvider =>
     new RentalCommand.Core.Auth.RefreshCredentialTokenFactory(
