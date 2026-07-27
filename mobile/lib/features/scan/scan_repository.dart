@@ -17,11 +17,15 @@ class TenantAccountOption {
     required this.relationshipNumber,
     required this.propertyName,
     required this.unitNumber,
+    this.propertyId,
+    this.unitId,
     this.primaryTenantName,
   });
 
   final int tenantAccountId;
   final int leaseManagementId;
+  final int? propertyId;
+  final int? unitId;
   final String relationshipNumber;
   final String propertyName;
   final String unitNumber;
@@ -31,6 +35,8 @@ class TenantAccountOption {
       TenantAccountOption(
         tenantAccountId: (json['tenantAccountId'] as num).toInt(),
         leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+        propertyId: (json['propertyId'] as num?)?.toInt(),
+        unitId: (json['unitId'] as num?)?.toInt(),
         relationshipNumber: json['relationshipNumber'] as String? ?? '',
         propertyName: json['propertyName'] as String? ?? '',
         unitNumber: json['unitNumber'] as String? ?? '',
@@ -105,6 +111,7 @@ class ScanRepository {
 
   final Dio _dio;
   final Map<int, String> _confirmOperationIds = {};
+  final Map<(int, int), String> _paymentAccountOperationIds = {};
 
   /// Lists scan drafts for the caller's portfolio, newest first.
   Future<List<ScanDraft>> listDrafts({String? status}) async {
@@ -412,6 +419,34 @@ class ScanRepository {
       );
       _confirmOperationIds.remove(id);
       return response.data;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Persists the reviewer-selected canonical account for a payment draft.
+  Future<ScanDraft> setPaymentAccount(int id, int tenantAccountId) async {
+    final operationKey = (id, tenantAccountId);
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/scans/$id/payment-account',
+        data: {
+          'tenantAccountId': tenantAccountId,
+          'clientOperationId': _paymentAccountOperationIds.putIfAbsent(
+            operationKey,
+            () => const Uuid().v4(),
+          ),
+        },
+      );
+      _paymentAccountOperationIds.remove(operationKey);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

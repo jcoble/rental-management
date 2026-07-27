@@ -43,7 +43,76 @@ void main() {
     expect(review, contains('if (error.statusCode == 404) return null'));
   });
 
-  testWidgets('contextual payment review confirms captured account id', (
+  test('payment context conflict blocks exact contradictory extracted ids', () {
+    final draft = ScanDraft(
+      id: 67,
+      portfolioId: 1,
+      targetEntityType: 'Payment',
+      status: 'Reviewing',
+      fileUrl: '/api/v1/scans/67/file',
+      fields: const [
+        ScanField(name: 'unit_id', value: '5', confidence: 0.96),
+        ScanField(name: 'lease_number', value: 'L005', confidence: 0.94),
+        ScanField(name: 'unit_number', value: 'U005', confidence: 0.94),
+        ScanField(name: 'payer_name', value: 'Parker Flores', confidence: 0.9),
+      ],
+      createdAt: DateTime(2027, 1, 5),
+      captureContext: const ScanCaptureContext(
+        tenantAccountId: 29,
+        sourceLabel: 'Nolan · Zenith',
+      ),
+    );
+    const selectedAccount = TenantAccountOption(
+      tenantAccountId: 29,
+      leaseManagementId: 29,
+      propertyId: 12,
+      unitId: 4,
+      relationshipNumber: 'L029',
+      propertyName: 'Zenith',
+      unitNumber: 'U004',
+      primaryTenantName: 'Nolan',
+    );
+
+    expect(
+      paymentContextConflictMessage(
+        draft: draft,
+        selectedTenantAccountId: 29,
+        selectedTenantAccount: selectedAccount,
+      ),
+      contains('different rental account'),
+    );
+    expect(
+      paymentContextConflictMessage(
+        draft: draft,
+        selectedTenantAccountId: 31,
+        selectedTenantAccount: const TenantAccountOption(
+          tenantAccountId: 31,
+          leaseManagementId: 31,
+          propertyId: 12,
+          unitId: 5,
+          relationshipNumber: 'L005',
+          propertyName: 'Zenith',
+          unitNumber: 'U005',
+          primaryTenantName: 'Parker Flores',
+        ),
+      ),
+      isNull,
+      reason:
+          'Choosing an account whose exact canonical Unit matches the extraction is the conservative correction path.',
+    );
+  });
+
+  test('scan review hides the shell quick action launcher', () {
+    final review = File(
+      'lib/features/scan/scan_review_screen.dart',
+    ).readAsStringSync();
+
+    expect(review, contains('MobileQuickActionHider'));
+    expect(review, contains('child: Scaffold('));
+    expect(review, contains('paymentConflictMessage == null'));
+  });
+
+  testWidgets('reopened reviewing payment draft selects captured account', (
     tester,
   ) async {
     final scanRepo = _FakePaymentScanRepository();
@@ -60,46 +129,170 @@ void main() {
       find.text('Which rental account is this payment for?'),
       findsOneWidget,
     );
-    expect(find.text('Create Payment'), findsOneWidget);
+    expect(find.text('Select a rental account'), findsNothing);
+    expect(
+      find.text('Select a rental account above to enable payment creation.'),
+      findsNothing,
+    );
+    expect(find.textContaining('Dana Garcia'), findsOneWidget);
+
+    final createPayment = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Create Payment'),
+    );
+    expect(createPayment.onPressed, isNotNull);
 
     await tester.tap(find.text('Create Payment'));
     await tester.pumpAndSettle();
 
     expect(scanRepo.lastConfirmId, 63);
-    expect(scanRepo.lastOverrides?['tenantAccountId'], 63);
+    expect(scanRepo.confirmCount, 1);
+    expect(scanRepo.exactAccountReads, 1);
+    expect(scanRepo.lastOverrides?['tenantAccountId'], 17);
     expect(scanRepo.lastOverrides?['total'], '1250.00');
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(seconds: 11));
   });
+
+  testWidgets('draft67-shaped payment conflict disables Create Payment', (
+    tester,
+  ) async {
+    final scanRepo = _FakePaymentScanRepository.conflictingDraft67();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [scanRepositoryProvider.overrideWithValue(scanRepo)],
+        child: const MaterialApp(home: ScanReviewScreen(draftId: 67)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('different rental account'), findsWidgets);
+    expect(find.textContaining('Nolan'), findsWidgets);
+
+    final createPayment = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Create Payment'),
+    );
+    expect(createPayment.onPressed, isNull);
+
+    expect(scanRepo.confirmCount, 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 11));
+  });
+
+  testWidgets(
+    'draft68-shaped matching account metadata enables Create Payment',
+    (tester) async {
+      final scanRepo = _FakePaymentScanRepository.matchingDraft68();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [scanRepositoryProvider.overrideWithValue(scanRepo)],
+          child: const MaterialApp(home: ScanReviewScreen(draftId: 68)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('different rental account'), findsNothing);
+
+      final createPayment = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, 'Create Payment'),
+      );
+      expect(createPayment.onPressed, isNotNull);
+      expect(scanRepo.exactAccountReads, 1);
+      expect(scanRepo.confirmCount, 0);
+
+      await tester.tap(find.text('Create Payment'));
+      await tester.pumpAndSettle();
+
+      expect(scanRepo.confirmCount, 1);
+      expect(scanRepo.lastConfirmId, 68);
+      expect(scanRepo.lastOverrides?['tenantAccountId'], 29);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 11));
+    },
+  );
 }
 
 class _FakePaymentScanRepository extends ScanRepository {
-  _FakePaymentScanRepository() : super(dio: Dio());
+  _FakePaymentScanRepository()
+    : shape = _FakePaymentShape.normal,
+      super(dio: Dio());
+
+  _FakePaymentScanRepository.conflictingDraft67()
+    : shape = _FakePaymentShape.draft67Conflict,
+      super(dio: Dio());
+
+  _FakePaymentScanRepository.matchingDraft68()
+    : shape = _FakePaymentShape.draft68Match,
+      super(dio: Dio());
+
+  final _FakePaymentShape shape;
 
   int? lastConfirmId;
   Map<String, dynamic>? lastOverrides;
+  int exactAccountReads = 0;
+  int confirmCount = 0;
 
   @override
   Future<ScanDraft> getDraft(int id) async {
-    return ScanDraft(
-      id: id,
-      portfolioId: 1,
-      targetEntityType: 'Payment',
-      status: 'Reviewing',
-      fileUrl: '/api/v1/scans/$id/file',
-      fields: const [
-        ScanField(name: 'total', value: '1250.00', confidence: 0.98),
-        ScanField(
-          name: 'transaction_date',
-          value: '2027-01-05',
-          confidence: 0.96,
-        ),
-        ScanField(name: 'payment_method', value: 'Check', confidence: 0.9),
+    if (shape == _FakePaymentShape.draft67Conflict) {
+      return ScanDraft.fromJson({
+        'id': id,
+        'portfolioId': 1,
+        'targetEntityType': 'Payment',
+        'status': 'Reviewing',
+        'fileUrl': '/api/v1/scans/$id/file',
+        'fields': [
+          {'name': 'total', 'value': '1250.00', 'confidence': 0.98},
+          {'name': 'unit_id', 'value': '5', 'confidence': 0.96},
+          {'name': 'lease_number', 'value': 'L005', 'confidence': 0.94},
+          {'name': 'unit_number', 'value': 'U005', 'confidence': 0.94},
+          {'name': 'payer_name', 'value': 'Parker Flores', 'confidence': 0.9},
+        ],
+        'createdAt': '2027-01-05T12:00:00Z',
+        'captureContext': {
+          'tenantAccountId': 29,
+          'sourceLabel': 'Nolan · Zenith',
+        },
+      });
+    }
+    if (shape == _FakePaymentShape.draft68Match) {
+      return ScanDraft.fromJson({
+        'id': id,
+        'portfolioId': 1,
+        'targetEntityType': 'Payment',
+        'status': 'Reviewing',
+        'fileUrl': '/api/v1/scans/$id/file',
+        'fields': [
+          {'name': 'total', 'value': '1250.00', 'confidence': 0.98},
+          {'name': 'property_id', 'value': '26', 'confidence': 0.96},
+          {'name': 'unit_id', 'value': '30', 'confidence': 0.96},
+        ],
+        'createdAt': '2027-01-05T12:00:00Z',
+        'captureContext': {
+          'tenantAccountId': 29,
+          'sourceLabel': 'Nolan · Zenith',
+        },
+      });
+    }
+
+    return ScanDraft.fromJson({
+      'id': id,
+      'portfolioId': 1,
+      'targetEntityType': 'Payment',
+      'status': 'Reviewing',
+      'fileUrl': '/api/v1/scans/$id/file',
+      'fields': [
+        {'name': 'total', 'value': '1250.00', 'confidence': 0.98},
+        {'name': 'transaction_date', 'value': '2027-01-05', 'confidence': 0.96},
+        {'name': 'payment_method', 'value': 'Money order', 'confidence': 0.9},
       ],
-      createdAt: DateTime(2027, 1, 5),
-      captureContext: const ScanCaptureContext(tenantAccountId: 63),
-    );
+      'createdAt': '2027-01-05T12:00:00Z',
+      'captureContext': {'tenantAccountId': 17, 'sourceLabel': 'SCN-0096'},
+    });
   }
 
   @override
@@ -128,13 +321,36 @@ class _FakePaymentScanRepository extends ScanRepository {
   Future<TenantAccountOption> getTenantAccountOption(
     int tenantAccountId,
   ) async {
+    exactAccountReads += 1;
     return TenantAccountOption(
       tenantAccountId: tenantAccountId,
-      leaseManagementId: 31,
-      relationshipNumber: 'REL-0063',
-      propertyName: 'January Flats',
-      unitNumber: '5',
-      primaryTenantName: 'Jan Five',
+      leaseManagementId: switch (shape) {
+        _FakePaymentShape.normal => 17,
+        _FakePaymentShape.draft67Conflict => 29,
+        _FakePaymentShape.draft68Match => 29,
+      },
+      propertyId: switch (shape) {
+        _FakePaymentShape.normal => 7,
+        _FakePaymentShape.draft67Conflict => 12,
+        _FakePaymentShape.draft68Match => 26,
+      },
+      unitId: switch (shape) {
+        _FakePaymentShape.normal => 17,
+        _FakePaymentShape.draft67Conflict => 4,
+        _FakePaymentShape.draft68Match => 30,
+      },
+      relationshipNumber: shape == _FakePaymentShape.normal ? 'L017' : 'L029',
+      propertyName: shape == _FakePaymentShape.normal
+          ? 'Quarry House'
+          : 'Zenith',
+      unitNumber: switch (shape) {
+        _FakePaymentShape.normal => 'Main',
+        _FakePaymentShape.draft67Conflict => 'U004',
+        _FakePaymentShape.draft68Match => 'U030',
+      },
+      primaryTenantName: shape == _FakePaymentShape.normal
+          ? 'Dana Garcia'
+          : 'Nolan',
     );
   }
 
@@ -143,8 +359,15 @@ class _FakePaymentScanRepository extends ScanRepository {
     int id,
     Map<String, dynamic> overrides,
   ) async {
+    confirmCount += 1;
     lastConfirmId = id;
     lastOverrides = Map<String, dynamic>.from(overrides);
-    return {'receiptId': 7001, 'tenantAccountId': 63, 'status': 'confirmed'};
+    return {
+      'receiptId': 7001,
+      'tenantAccountId': shape == _FakePaymentShape.normal ? 17 : 29,
+      'status': 'confirmed',
+    };
   }
 }
+
+enum _FakePaymentShape { normal, draft67Conflict, draft68Match }

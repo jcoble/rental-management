@@ -877,6 +877,13 @@ public interface IAtomicPersistenceSession
         DateTime utcNow,
         CancellationToken ct = default);
 
+    Task<bool> IsTenantAccountAuthorizedForPaymentReviewAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        int tenantAccountId,
+        DateTime utcNow,
+        CancellationToken ct = default);
+
     Task<bool> CanCreateScanDraftAsync(
         WorkspaceReadScope scope,
         string? targetEntityType,

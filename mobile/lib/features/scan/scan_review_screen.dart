@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../home/mobile_quick_action_fab.dart';
 import '../leases/leases_repository.dart';
 import '../maintenance/work_orders_repository.dart';
 import '../places/address_autocomplete_field.dart';
@@ -536,6 +537,130 @@ Map<String, dynamic> buildOverridesMap({
   return overrides;
 }
 
+String? paymentContextConflictMessage({
+  required ScanDraft draft,
+  required int? selectedTenantAccountId,
+  TenantAccountOption? selectedTenantAccount,
+}) {
+  final selectedId =
+      selectedTenantAccount?.tenantAccountId ?? selectedTenantAccountId;
+  if (!draft.isPayment || selectedId == null) return null;
+
+  final extractedTenantAccountId = _positiveFieldInt(draft, const [
+    'tenantAccountId',
+    'tenant_account_id',
+  ]);
+  if (extractedTenantAccountId != null &&
+      extractedTenantAccountId != selectedId) {
+    return _paymentContextConflictCorrection;
+  }
+
+  if (selectedTenantAccount == null && _hasExtractedPaymentTargetIds(draft)) {
+    return _paymentContextConflictCorrection;
+  }
+
+  if (selectedTenantAccount != null) {
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.propertyId,
+      extractedId: _positiveFieldInt(draft, const [
+        'propertyId',
+        'property_id',
+      ]),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.unitId,
+      extractedId: _positiveFieldInt(draft, const ['unitId', 'unit_id']),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.leaseManagementId,
+      extractedId: _positiveFieldInt(draft, const [
+        'leaseManagementId',
+        'lease_management_id',
+      ]),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+  }
+
+  final capture = draft.captureContext;
+  if (capture == null) return null;
+  final capturedTenantAccountId = capture.tenantAccountId;
+  if (capturedTenantAccountId != null &&
+      capturedTenantAccountId > 0 &&
+      selectedId != capturedTenantAccountId) {
+    return null;
+  }
+
+  if (_conflictsWithCapture(
+    capturedId: capture.unitId,
+    extractedId: _positiveFieldInt(draft, const ['unitId', 'unit_id']),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+  if (_conflictsWithCapture(
+    capturedId: capture.leaseManagementId,
+    extractedId: _positiveFieldInt(draft, const [
+      'leaseManagementId',
+      'lease_management_id',
+    ]),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+  if (_conflictsWithCapture(
+    capturedId: capture.tenantLedgerEntryId,
+    extractedId: _positiveFieldInt(draft, const [
+      'tenantLedgerEntryId',
+      'tenant_ledger_entry_id',
+    ]),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+
+  return null;
+}
+
+bool _hasExtractedPaymentTargetIds(ScanDraft draft) {
+  return _positiveFieldInt(draft, const ['propertyId', 'property_id']) !=
+          null ||
+      _positiveFieldInt(draft, const ['unitId', 'unit_id']) != null ||
+      _positiveFieldInt(draft, const [
+            'leaseManagementId',
+            'lease_management_id',
+          ]) !=
+          null;
+}
+
+const _paymentContextConflictCorrection =
+    'This scan appears to belong to a different rental account. Choose the matching rental account, or reject this scan and upload the document from the right Unit/account before creating the payment.';
+
+bool _conflictsWithCapture({
+  required int? capturedId,
+  required int? extractedId,
+}) {
+  return capturedId != null &&
+      capturedId > 0 &&
+      extractedId != null &&
+      extractedId > 0 &&
+      capturedId != extractedId;
+}
+
+int? _positiveFieldInt(ScanDraft draft, List<String> names) {
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = int.tryParse(field?.value.trim() ?? '');
+    if (value != null && value > 0) return value;
+  }
+  return null;
+}
+
+extension _MobileQuickActionHideExtension on Widget {
+  Widget hideShellQuickAction() => MobileQuickActionHider(child: this);
+}
+
 // ---------------------------------------------------------------------------
 // ScanReviewScreen
 // ---------------------------------------------------------------------------
@@ -565,6 +690,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   // Selected canonical tenant account (Payment only).
   int? _selectedTenantAccountId;
+  TenantAccountOption? _selectedTenantAccountOption;
+  bool _savingTenantAccountSelection = false;
+  String? _tenantAccountSelectionError;
 
   // Lease-draft selections. In LINK mode property + unit are required; tenant is
   // optional (null = create/match from the extracted tenant_name). Seeded once
@@ -728,6 +856,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   int? _positiveOrNull(int? value) => value != null && value > 0 ? value : null;
 
+  int? _effectiveSelectedTenantAccountId(ScanDraft draft) =>
+      _selectedTenantAccountId ??
+      _positiveOrNull(draft.captureContext?.tenantAccountId);
+
   /// Reads an extracted scalar field's raw value, or '' when absent. Used to
   /// seed the create-new-property address fields.
   String _extractedValue(ScanDraft draft, String name) {
@@ -747,7 +879,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isApplication: draft.isApplication,
         isLoan: draft.isLoan,
         isPaid: _isPaid,
-        selectedTenantAccountId: _selectedTenantAccountId,
+        selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
         applicationPropertyId: _extractedInt(draft, 'property_id'),
         applicationUnitId: _extractedInt(draft, 'unit_id'),
         createNewProperty: _createNewProperty,
@@ -841,6 +973,70 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     }
   }
 
+  Future<void> _selectTenantAccount(
+    ScanDraft draft,
+    TenantAccountOption? account,
+  ) async {
+    if (!draft.isPayment) return;
+    final tenantAccountId = account?.tenantAccountId;
+    if (tenantAccountId == null || tenantAccountId <= 0) {
+      setState(() {
+        _selectedTenantAccountId = null;
+        _selectedTenantAccountOption = null;
+        _tenantAccountSelectionError = null;
+      });
+      return;
+    }
+
+    if (draft.captureContext?.tenantAccountId == tenantAccountId) {
+      setState(() {
+        _selectedTenantAccountId = tenantAccountId;
+        _selectedTenantAccountOption = account;
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _selectedTenantAccountId = tenantAccountId;
+      _selectedTenantAccountOption = account;
+      _savingTenantAccountSelection = true;
+      _tenantAccountSelectionError = null;
+    });
+
+    try {
+      final updated = await ref
+          .read(scanRepositoryProvider)
+          .setPaymentAccount(draft.id, tenantAccountId);
+      if (!mounted) return;
+      final persistedTenantAccountId =
+          _positiveOrNull(updated.captureContext?.tenantAccountId) ??
+          tenantAccountId;
+      setState(() {
+        _selectedTenantAccountId = persistedTenantAccountId;
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = null;
+      });
+      ref.invalidate(_draftProvider(draft.id));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = e.message;
+      });
+      _showError(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      const message = 'Could not save the rental account. Please try again.';
+      setState(() {
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = message;
+      });
+      _showError(message);
+    }
+  }
+
   Future<void> _reject(ScanDraft draft) async {
     final reason = await _promptReason(context);
     if (!mounted) return;
@@ -915,16 +1111,20 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     });
 
     return draftAsync.when(
-      loading: () => Scaffold(
-        appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
-        body: const Center(child: CircularProgressIndicator()),
+      loading: () => MobileQuickActionHider(
+        child: Scaffold(
+          appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
+          body: const Center(child: CircularProgressIndicator()),
+        ),
       ),
-      error: (e, _) => Scaffold(
-        appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
-        body: Center(
-          child: Text(
-            e is ApiException ? e.message : e.toString(),
-            textAlign: TextAlign.center,
+      error: (e, _) => MobileQuickActionHider(
+        child: Scaffold(
+          appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
+          body: Center(
+            child: Text(
+              e is ApiException ? e.message : e.toString(),
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
       ),
@@ -936,9 +1136,12 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
               setState(() => _editedFields[name] = value),
           isPaid: _isPaid,
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
-          selectedTenantAccountId: _selectedTenantAccountId,
-          onTenantAccountSelected: (id) =>
-              setState(() => _selectedTenantAccountId = id),
+          selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
+          selectedTenantAccount: _selectedTenantAccountOption,
+          savingTenantAccountSelection: _savingTenantAccountSelection,
+          tenantAccountSelectionError: _tenantAccountSelectionError,
+          onTenantAccountSelected: (account) =>
+              unawaited(_selectTenantAccount(draft, account)),
           createNewProperty: _createNewProperty,
           onCreateNewPropertyChanged: (v) => setState(() {
             _createNewProperty = v;
@@ -1006,6 +1209,9 @@ class _ReviewBody extends ConsumerWidget {
     required this.isPaid,
     required this.onIsPaidChanged,
     required this.selectedTenantAccountId,
+    required this.selectedTenantAccount,
+    required this.savingTenantAccountSelection,
+    required this.tenantAccountSelectionError,
     required this.onTenantAccountSelected,
     required this.createNewProperty,
     required this.onCreateNewPropertyChanged,
@@ -1039,7 +1245,10 @@ class _ReviewBody extends ConsumerWidget {
   final bool isPaid;
   final ValueChanged<bool> onIsPaidChanged;
   final int? selectedTenantAccountId;
-  final ValueChanged<int?> onTenantAccountSelected;
+  final TenantAccountOption? selectedTenantAccount;
+  final bool savingTenantAccountSelection;
+  final String? tenantAccountSelectionError;
+  final ValueChanged<TenantAccountOption?> onTenantAccountSelected;
   final bool createNewProperty;
   final ValueChanged<bool> onCreateNewPropertyChanged;
   final RentalStructure? newPropertyRentalStructure;
@@ -1113,11 +1322,18 @@ class _ReviewBody extends ConsumerWidget {
         ((editedFields['first_name']?.trim().isNotEmpty ?? false) &&
             (editedFields['last_name']?.trim().isNotEmpty ?? false));
     final loanReady = !draft.isLoan || loanPropertyId != null;
+    final paymentConflictMessage = paymentContextConflictMessage(
+      draft: draft,
+      selectedTenantAccountId: selectedTenantAccountId,
+      selectedTenantAccount: selectedTenantAccount,
+    );
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
+        !savingTenantAccountSelection &&
         !isTerminal &&
         (!draft.isPayment || selectedTenantAccountId != null) &&
+        paymentConflictMessage == null &&
         leaseReady &&
         rentTrackingReady &&
         applicationReady &&
@@ -1202,7 +1418,32 @@ class _ReviewBody extends ConsumerWidget {
                     selectedTenantAccountId: selectedTenantAccountId,
                     contextualTenantAccountId:
                         draft.captureContext?.tenantAccountId,
+                    selectedTenantAccount: selectedTenantAccount,
                     onTenantAccountSelected: onTenantAccountSelected,
+                  ),
+
+                if (draft.isPayment && savingTenantAccountSelection)
+                  _Banner(
+                    color: colorScheme.surfaceContainerHighest,
+                    borderColor: colorScheme.outlineVariant,
+                    textColor: colorScheme.onSurfaceVariant,
+                    child: const Text('Saving rental account selection...'),
+                  ),
+
+                if (draft.isPayment && tenantAccountSelectionError != null)
+                  _Banner(
+                    color: colorScheme.errorContainer,
+                    borderColor: colorScheme.error.withValues(alpha: 0.4),
+                    textColor: colorScheme.onErrorContainer,
+                    child: Text(tenantAccountSelectionError!),
+                  ),
+
+                if (paymentConflictMessage != null)
+                  _Banner(
+                    color: colorScheme.errorContainer,
+                    borderColor: colorScheme.error.withValues(alpha: 0.4),
+                    textColor: colorScheme.onErrorContainer,
+                    child: Text(paymentConflictMessage),
                   ),
 
                 if (draft.isLease) ...[
@@ -1334,6 +1575,27 @@ class _ReviewBody extends ConsumerWidget {
                   textAlign: TextAlign.center,
                 ),
               ),
+            if (draft.isPayment && savingTenantAccountSelection && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Saving rental account selection...',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            if (paymentConflictMessage != null && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  paymentConflictMessage,
+                  style: TextStyle(fontSize: 12, color: colorScheme.error),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             if (draft.isLease && !leaseReady && !isTerminal)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -1449,7 +1711,7 @@ class _ReviewBody extends ConsumerWidget {
           ],
         ),
       ),
-    );
+    ).hideShellQuickAction();
   }
 }
 
@@ -1713,12 +1975,14 @@ class _TenantAccountSelector extends ConsumerStatefulWidget {
   const _TenantAccountSelector({
     required this.selectedTenantAccountId,
     required this.contextualTenantAccountId,
+    required this.selectedTenantAccount,
     required this.onTenantAccountSelected,
   });
 
   final int? selectedTenantAccountId;
   final int? contextualTenantAccountId;
-  final ValueChanged<int?> onTenantAccountSelected;
+  final TenantAccountOption? selectedTenantAccount;
+  final ValueChanged<TenantAccountOption?> onTenantAccountSelected;
 
   @override
   ConsumerState<_TenantAccountSelector> createState() =>
@@ -1733,6 +1997,21 @@ class _TenantAccountSelectorState
   String _search = '';
   int _skip = 0;
   TenantAccountOption? _selectedOption;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedOption = widget.selectedTenantAccount;
+  }
+
+  @override
+  void didUpdateWidget(covariant _TenantAccountSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedTenantAccount?.tenantAccountId !=
+        oldWidget.selectedTenantAccount?.tenantAccountId) {
+      _selectedOption = widget.selectedTenantAccount;
+    }
+  }
 
   @override
   void dispose() {
@@ -1831,14 +2110,26 @@ class _TenantAccountSelectorState
                   )) {
                 accounts.insert(0, _selectedOption!);
               }
-              if (widget.selectedTenantAccountId == null &&
-                  contextualAccount != null) {
+              final parentNeedsSelectedMetadata =
+                  contextualAccount != null &&
+                  widget.selectedTenantAccountId ==
+                      contextualAccount.tenantAccountId &&
+                  widget.selectedTenantAccount?.tenantAccountId !=
+                      contextualAccount.tenantAccountId;
+              if (contextualAccount != null &&
+                  (widget.selectedTenantAccountId == null ||
+                      parentNeedsSelectedMetadata)) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted && widget.selectedTenantAccountId == null) {
+                  final stillNeedsSelectedMetadata =
+                      widget.selectedTenantAccountId ==
+                          contextualAccount.tenantAccountId &&
+                      widget.selectedTenantAccount?.tenantAccountId !=
+                          contextualAccount.tenantAccountId;
+                  if (mounted &&
+                      (widget.selectedTenantAccountId == null ||
+                          stillNeedsSelectedMetadata)) {
                     _selectedOption = contextualAccount;
-                    widget.onTenantAccountSelected(
-                      contextualAccount.tenantAccountId,
-                    );
+                    widget.onTenantAccountSelected(contextualAccount);
                   }
                 });
               }
@@ -1881,7 +2172,7 @@ class _TenantAccountSelectorState
                       _selectedOption = accounts
                           .where((item) => item.tenantAccountId == id)
                           .firstOrNull;
-                      widget.onTenantAccountSelected(id);
+                      widget.onTenantAccountSelected(_selectedOption);
                     },
                   ),
                   const SizedBox(height: 6),
