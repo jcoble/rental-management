@@ -141,6 +141,8 @@ def data_context(
         if issue_match
         else "Reported maintenance condition requiring review"
     )
+    memo = event.get("memo") or asset.intake_expectation
+    work_order_match = re.search(r"\bWO-\d{4}-\d+\b", memo)
     principal_cents = int(prop.get("monthly_principal_cents") or 0)
     interest_cents = int(prop.get("monthly_interest_cents") or 0)
     return {
@@ -165,6 +167,9 @@ def data_context(
         "rent": money(lease.get("monthly_rent_cents")),
         "deposit": money(lease.get("deposit_cents")),
         "amount": money(event.get("amount_cents")),
+        "counterparty": event.get("counterparty")
+        or lease.get("tenant_name")
+        or "Synthetic QA Counterparty",
         "original_cost": money(prop.get("original_cost_cents")),
         "opening_loan_balance": money(prop.get("opening_loan_balance_cents")),
         "principal": money(principal_cents),
@@ -173,7 +178,8 @@ def data_context(
         "reference": event.get("reference", asset.asset_id),
         "event_type": event.get("event_type", asset.intended_target),
         "category": event.get("category", asset.document_family),
-        "memo": event.get("memo", asset.intake_expectation),
+        "memo": memo,
+        "work_order": work_order_match.group(0) if work_order_match else "N/A",
         "effective_date": event.get("effective_date", asset.planned_date),
         "maintenance_issue": maintenance_issue,
     }
@@ -261,13 +267,22 @@ def field_rows(asset: Asset, ctx: dict[str, str]) -> list[tuple[str, str]]:
             ("Closing balance", "$164,915.00"),
         ]
     if family in {"Vendor invoice / receipt", "Capital improvement invoice"}:
-        return common + [
-            ("Vendor", ctx["tenant"]),
-            ("Service location", ctx["address"]),
+        return [
+            ("Document ID", asset.asset_id),
+            ("Invoice number", ctx["reference"]),
             ("Invoice date", ctx["effective_date"]),
+            ("Vendor", ctx["counterparty"]),
+            ("Bill to", "Blue Door Property Management"),
+            ("Service location", ctx["address"]),
+            ("Property", f"{asset.property_id or 'Portfolio'} - {ctx['property_name']}"),
+            ("Unit", f"{asset.unit_id or 'N/A'} - {ctx['unit']}"),
+            ("Work order", ctx["work_order"]),
+            ("Category", ctx["category"]),
+            ("Line item", ctx["memo"]),
             ("Subtotal", ctx["amount"]),
             ("Tax", "$0.00"),
             ("Total due", ctx["amount"]),
+            ("Payment method", "ACH (synthetic QA)"),
             ("Payment terms", "Net 15"),
         ]
     if family == "Maintenance request with supporting photo":
@@ -575,7 +590,12 @@ def image_wrapped(
 
 
 def draw_image_document(asset: Asset, ctx: dict[str, str], panel_count: int) -> Image.Image:
-    panel_height = 1450
+    first_panel_rows = field_rows(asset, ctx)
+    panel_height = (
+        max(1450, 205 + len(first_panel_rows) * 114 + 260)
+        if panel_count == 1
+        else 1450
+    )
     width = 1200
     height = panel_height * panel_count
     background = Image.new("RGB", (width + 160, height + 160), (74, 82, 85))
@@ -634,7 +654,7 @@ def draw_image_document(asset: Asset, ctx: dict[str, str], panel_count: int) -> 
             )
             y += 700
         else:
-            rows = field_rows(asset, ctx) if panel == 0 else [
+            rows = first_panel_rows if panel == 0 else [
                 ("Section", f"Supporting page photo {panel + 1}"),
                 ("Property", ctx["property_name"]),
                 ("Premises", ctx["address"]),
