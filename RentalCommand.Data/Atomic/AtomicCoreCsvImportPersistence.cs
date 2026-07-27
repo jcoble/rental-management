@@ -402,14 +402,16 @@ internal sealed class AtomicCoreCsvImportPersistence
                 "PortfolioId", "PropertyId", "Lender", "OriginalAmount", "CurrentBalance",
                 "AnnualInterestRatePct", "TermMonths", "StartDate", "DayOfMonthDue",
                 "MonthlyPrincipalInterest", "MonthlyEscrow", "EscrowCoversTaxes",
-                "EscrowCoversInsurance", "Status", "CreatedAt", "UpdatedAt", "WorkerClaimAttemptCount")
+                "EscrowCoversInsurance", "Status", "CreatedAt", "UpdatedAt",
+                "DebtServiceAutomationStartDate", "WorkerClaimAttemptCount")
             SELECT @portfolioId, classified."PropertyId", trim(classified."Lender"),
                    classified."OriginalAmount",
                    COALESCE(classified."CurrentBalance", classified."OriginalAmount"),
                    classified."AnnualInterestRatePct", classified."TermMonths",
                    classified."StartDate", classified."DayOfMonthDue",
                    classified."MonthlyPrincipalInterest", classified."MonthlyEscrow",
-                   false, false, 0, @createdAt, @createdAt, 0
+                   false, false, 0, @createdAt, @createdAt,
+                   @loanAutomationStartDate, 0
             FROM classified CROSS JOIN authorization
             WHERE authorization."Authorized"
               AND cardinality(classified."FinalErrors") = 0
@@ -455,8 +457,9 @@ internal sealed class AtomicCoreCsvImportPersistence
         AtomicCoreCsvImportDomain domain,
         string rowsJson,
         DateTime createdAtUtc,
+        DateTime loanAutomationStartDateUtc,
         CancellationToken ct = default) =>
-        ExecuteAsync(scope, domain, rowsJson, createdAtUtc, write: true, ct);
+        ExecuteAsync(scope, domain, rowsJson, createdAtUtc, loanAutomationStartDateUtc, write: true, ct);
 
     public async Task<AtomicCoreCsvImportBatchResult> PreviewAsync(
         WorkspaceReadScope scope,
@@ -467,7 +470,7 @@ internal sealed class AtomicCoreCsvImportPersistence
         var now = await _db.Database
             .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
             .SingleAsync(ct);
-        return await ExecuteAsync(scope, domain, rowsJson, now, write: false, ct);
+        return await ExecuteAsync(scope, domain, rowsJson, now, loanAutomationStartDateUtc: null, write: false, ct);
     }
 
     private async Task<AtomicCoreCsvImportBatchResult> ExecuteAsync(
@@ -475,6 +478,7 @@ internal sealed class AtomicCoreCsvImportPersistence
         AtomicCoreCsvImportDomain domain,
         string rowsJson,
         DateTime effectiveAtUtc,
+        DateTime? loanAutomationStartDateUtc,
         bool write,
         CancellationToken ct)
     {
@@ -522,7 +526,13 @@ internal sealed class AtomicCoreCsvImportPersistence
             },
         };
         if (write)
+        {
             parameters.Add(new NpgsqlParameter("createdAt", NpgsqlDbType.TimestampTz) { Value = effectiveAtUtc });
+            parameters.Add(new NpgsqlParameter("loanAutomationStartDate", NpgsqlDbType.TimestampTz)
+            {
+                Value = loanAutomationStartDateUtc ?? effectiveAtUtc,
+            });
+        }
 
         using var primaryPermit = write
             ? _scope.BeginInternalRawDml(

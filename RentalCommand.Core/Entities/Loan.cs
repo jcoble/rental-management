@@ -47,6 +47,12 @@ public class Loan : IAuditable, IPortfolioScoped
     /// <summary>Loan start / first-payment-period anchor (UTC). Period index is counted from here.</summary>
     public DateTime StartDate { get; set; }
 
+    /// <summary>
+    /// Business-effective boundary for generated debt-service automation. This preserves real DB-wall
+    /// audit timestamps while preventing imported historical loans from generating pre-import periods.
+    /// </summary>
+    public DateTime? DebtServiceAutomationStartDate { get; set; }
+
     /// <summary>Day of month the payment is due (1–31, clamped to the month's length).</summary>
     public int DayOfMonthDue { get; set; } = 1;
 

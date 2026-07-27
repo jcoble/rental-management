@@ -49,10 +49,12 @@ public sealed class AtomicCoreCsvImportHandler
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var now = times.WallClockUtc;
+        var loanAutomationStartDateUtc = times.BusinessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         var scope = Scope(command);
         var batch = await attempt.CoreCsvImports.ImportAsync(
-            scope, command.Domain, command.RowsJson, now, ct);
+            scope, command.Domain, command.RowsJson, now, loanAutomationStartDateUtc, ct);
         if (!batch.Authorized)
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
 

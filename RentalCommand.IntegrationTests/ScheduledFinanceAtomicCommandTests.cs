@@ -299,9 +299,12 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
         var importedBalance = 125_825m;
         var preImportTailBalance = 50_000m;
+        var databaseWallClockCreatedAt = new DateTime(2026, 7, 27, 12, 0, 0, DateTimeKind.Utc);
         var loanId = await SeedLoanAsync(
             new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
-            createdAt: importDate,
+            createdAt: databaseWallClockCreatedAt,
+            updatedAt: importDate,
+            debtServiceAutomationStartDate: importDate,
             currentBalance: importedBalance,
             dayOfMonthDue: 12,
             monthlyPrincipalInterest: 900m);
@@ -338,6 +341,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         generated.BalanceAfter.Should().BeGreaterThan(123_999.58m);
         generated.BalanceAfter.Should().BeGreaterThan(preImportTailBalance);
         var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
+        loan.CreatedAt.Should().Be(databaseWallClockCreatedAt);
+        loan.DebtServiceAutomationStartDate.Should().Be(importDate);
         loan.CurrentBalance.Should().Be(generated.BalanceAfter);
     }
 
@@ -503,6 +508,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     private async Task<int> SeedLoanAsync(
         DateTime? startDate = null,
         DateTime? createdAt = null,
+        DateTime? updatedAt = null,
+        DateTime? debtServiceAutomationStartDate = null,
         decimal currentBalance = 100_000m,
         int? dayOfMonthDue = null,
         decimal monthlyPrincipalInterest = 600m)
@@ -520,11 +527,12 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             AnnualInterestRatePct = 6m,
             TermMonths = 360,
             StartDate = effectiveStartDate,
+            DebtServiceAutomationStartDate = debtServiceAutomationStartDate ?? effectiveCreatedAt,
             DayOfMonthDue = dayOfMonthDue ?? _today.Day,
             MonthlyPrincipalInterest = monthlyPrincipalInterest,
             Status = LoanStatus.Active,
             CreatedAt = effectiveCreatedAt,
-            UpdatedAt = effectiveCreatedAt,
+            UpdatedAt = updatedAt ?? effectiveCreatedAt,
         };
         db.Loans.Add(loan);
         await db.SaveChangesAsync();

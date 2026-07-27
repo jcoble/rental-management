@@ -53,7 +53,9 @@ public sealed class AtomicMoneyMutationHandler
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var now = times.WallClockUtc;
+        var businessDateUtc = times.BusinessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         attempt.UseDatabaseWallClockForAudit(now);
         if (!await LiveAssignments(command, attempt.Persistence, now).AnyAsync(ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
@@ -67,7 +69,7 @@ public sealed class AtomicMoneyMutationHandler
         {
             AtomicMoneyDomain.Expense => await MutateExpenseAsync(command, attempt, now, ct),
             AtomicMoneyDomain.RecurringExpense => await MutateRecurringExpenseAsync(command, attempt, now, ct),
-            AtomicMoneyDomain.Loan => await MutateLoanAsync(command, attempt, now, ct),
+            AtomicMoneyDomain.Loan => await MutateLoanAsync(command, attempt, now, businessDateUtc, ct),
             AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(command, attempt, now, ct),
             AtomicMoneyDomain.CapitalAsset => await MutateCapitalAssetAsync(command, attempt, now, ct),
             AtomicMoneyDomain.PropertyDisposition => await MutatePropertyDispositionAsync(command, attempt, now, ct),
@@ -389,7 +391,11 @@ public sealed class AtomicMoneyMutationHandler
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateLoanAsync(
-        AtomicMoneyMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
+        AtomicMoneyMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        DateTime businessDateUtc,
+        CancellationToken ct)
     {
         var persistence = attempt.Persistence;
         var entity = command.Operation == AtomicMoneyOperation.Create ? null :
@@ -420,7 +426,8 @@ public sealed class AtomicMoneyMutationHandler
                 PortfolioId = command.PortfolioId, PropertyId = request.PropertyId, Lender = request.Lender,
                 OriginalAmount = request.OriginalAmount, CurrentBalance = request.CurrentBalance ?? request.OriginalAmount,
                 AnnualInterestRatePct = request.AnnualInterestRatePct, TermMonths = request.TermMonths,
-                StartDate = Utc(request.StartDate), DayOfMonthDue = request.DayOfMonthDue,
+                StartDate = Utc(request.StartDate), DebtServiceAutomationStartDate = businessDateUtc,
+                DayOfMonthDue = request.DayOfMonthDue,
                 MonthlyPrincipalInterest = request.MonthlyPrincipalInterest, MonthlyEscrow = request.MonthlyEscrow,
                 EscrowCoversTaxes = request.EscrowCoversTaxes, EscrowCoversInsurance = request.EscrowCoversInsurance,
                 Status = request.Status, Notes = request.Notes, CreatedAt = now, UpdatedAt = now,
