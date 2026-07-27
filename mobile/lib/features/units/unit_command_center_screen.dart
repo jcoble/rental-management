@@ -16,6 +16,7 @@ import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/navigation/mobile_restoration_state.dart';
 import '../../core/presentation/plain_english_labels.dart';
+import '../../core/widgets/mobile_pill_tab_bar.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -327,43 +328,38 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         builder: (tabContext) {
           final topController = DefaultTabController.of(tabContext);
           _bindTopController(topController);
-          final unitTabs = Semantics(
-            label: 'Unit sections',
-            child: TabBar(
+          final unitTabs = AnimatedBuilder(
+            animation: topController.animation!,
+            builder: (context, _) => MobilePillTabBar(
               key: const Key('unit-section-tabs'),
-              controller: topController,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
+              scrollKey: const Key('unit-section-tabs-scroll'),
+              semanticLabel: 'Unit sections',
+              selectedIndex: topController.index,
+              onSelected: topController.animateTo,
               tabs: const [
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-summary'),
-                  icon: Icon(Icons.dashboard_outlined),
-                  text: 'Summary',
+                  label: 'Summary',
                 ),
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-leasing'),
-                  icon: Icon(Icons.campaign_outlined),
-                  text: 'Leasing',
+                  label: 'Leasing',
                 ),
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-tenant-lease'),
-                  icon: Icon(Icons.group_outlined),
-                  text: 'Tenant & lease',
+                  label: 'Tenant & lease',
                 ),
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-money'),
-                  icon: Icon(Icons.payments_outlined),
-                  text: 'Money',
+                  label: 'Money',
                 ),
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-maintenance'),
-                  icon: Icon(Icons.build_outlined),
-                  text: 'Maintenance',
+                  label: 'Maintenance',
                 ),
-                Tab(
+                MobilePillTab(
                   key: ValueKey('unit-section-documents-history'),
-                  icon: Icon(Icons.folder_copy_outlined),
-                  text: 'Documents & history',
+                  label: 'Documents & history',
                 ),
               ],
             ),
