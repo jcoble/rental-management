@@ -96,7 +96,8 @@ public class VendorService : IVendorService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
-            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request,
+            createdAtUtc: _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
@@ -110,7 +111,8 @@ public class VendorService : IVendorService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
-            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request,
+            changedAtUtc: _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<VendorResponse>(outcome.Value);
@@ -123,7 +125,8 @@ public class VendorService : IVendorService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
-            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object(),
+            changedAtUtc: _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return outcome.Value.Found;

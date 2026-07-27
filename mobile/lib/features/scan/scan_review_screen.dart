@@ -8,10 +8,12 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../leases/leases_repository.dart';
+import '../maintenance/work_orders_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
+import '../units/units_repository.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 import 'scan_target_options.dart';
@@ -389,6 +391,20 @@ const _scheduleECategories = [
   'Other',
 ];
 
+const _workOrderCategories = [
+  'General',
+  'Plumbing',
+  'Electrical',
+  'HVAC',
+  'Appliance',
+  'Structural',
+  'Exterior',
+  'Landscaping',
+  'Cleaning',
+  'Safety',
+  'Other',
+];
+
 // ---------------------------------------------------------------------------
 // Overrides map builder (mirrors web's buildOverridesJson)
 // ---------------------------------------------------------------------------
@@ -744,6 +760,15 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           .read(scanRepositoryProvider)
           .confirm(draft.id, overrides);
       if (!mounted) return;
+      final agreementId = (result?['agreementId'] as num?)?.toInt();
+      final unitId = (result?['unitId'] as num?)?.toInt();
+      if (draft.isWorkOrder) {
+        ref.invalidate(workOrdersPageProvider);
+        await ref.read(workOrdersProvider.notifier).refresh();
+        if (unitId != null) {
+          ref.invalidate(unitDashboardProvider(unitId));
+        }
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -769,8 +794,6 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       // For an imported agreement, jump to its Unit relationship so the
       // landlord can review the canonical agreement history. Replace this
       // review screen so Back returns to the scan list.
-      final agreementId = (result?['agreementId'] as num?)?.toInt();
-      final unitId = (result?['unitId'] as num?)?.toInt();
       if (draft.isLease && agreementId != null && unitId != null) {
         final shellNavigator = mobileShellNavigatorOf(context);
         if (shellNavigator != null) {
@@ -3217,6 +3240,9 @@ class _FieldsSection extends StatelessWidget {
                       field: field,
                       value: editedFields[field.name] ?? field.value,
                       onChanged: (v) => onFieldChanged(field.name, v),
+                      categoryOptions: draft.isWorkOrder
+                          ? _workOrderCategories
+                          : _scheduleECategories,
                     ),
                   ),
                 ),
@@ -3238,11 +3264,13 @@ class _FieldInput extends StatefulWidget {
     required this.field,
     required this.value,
     required this.onChanged,
+    this.categoryOptions = _scheduleECategories,
   });
 
   final ScanField field;
   final String value;
   final ValueChanged<String> onChanged;
+  final List<String> categoryOptions;
 
   @override
   State<_FieldInput> createState() => _FieldInputState();
@@ -3327,7 +3355,7 @@ class _FieldInputState extends State<_FieldInput> {
         children: [
           _FieldLabel(label: fieldLabel, level: level, labelColor: labelColor),
           DropdownButtonFormField<String>(
-            initialValue: _scheduleECategories.contains(widget.value)
+            initialValue: widget.categoryOptions.contains(widget.value)
                 ? widget.value
                 : null,
             hint: const Text('Select category'),
@@ -3339,7 +3367,7 @@ class _FieldInputState extends State<_FieldInput> {
                 vertical: 10,
               ),
             ),
-            items: _scheduleECategories
+            items: widget.categoryOptions
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
             onChanged: (v) {

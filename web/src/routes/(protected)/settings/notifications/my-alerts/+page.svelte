@@ -92,7 +92,7 @@
 	helpDescription="These destinations belong only to your signed-in account."
 	helpGuidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant messages have their own steps and are never changed here."
 >
-<div data-testid="my-alerts-page">
+	<div class="space-y-5" data-testid="my-alerts-page">
 	{#if alertsQuery.isLoading}
 		<LoadingState label="Loading your alert destinations" testid="my-alerts-loading" />
 	{:else if alertsQuery.isError || !alertsQuery.data}

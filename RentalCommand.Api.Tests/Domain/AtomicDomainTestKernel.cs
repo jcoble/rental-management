@@ -51,9 +51,9 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForCoreCrud(string connectionString)
+    internal static ServiceProvider CreateForCoreCrud(string connectionString, TimeProvider? timeProvider = null)
     {
-        var services = Core(connectionString);
+        var services = Core(connectionString, timeProvider);
         services.AddAtomicCommandHandler<
             AtomicCoreCrudMutationCommand,
             AtomicCoreCrudMutationResult,
@@ -125,10 +125,14 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    private static ServiceCollection Core(string connectionString)
+    private static ServiceCollection Core(string connectionString, TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>

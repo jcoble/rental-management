@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart' hide Vendor;
+import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
 import '../activity/activity_history_screen.dart';
 import '../properties/properties_repository.dart';
@@ -250,20 +251,32 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Technician responsibility', style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Technician responsibility',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 8),
-                Text(current == null
-                    ? 'No technician is currently assigned.'
-                    : '${current['memberDisplayName']} is currently responsible.'),
+                Text(
+                  current == null
+                      ? 'No technician is currently assigned.'
+                      : '${current['memberDisplayName']} is currently responsible.',
+                ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<int>(
                   initialValue: selectedAssignmentId,
                   decoration: const InputDecoration(labelText: 'Technician'),
-                  items: candidates.map((candidate) => DropdownMenuItem<int>(
-                    value: (candidate['membershipRoleAssignmentId'] as num).toInt(),
-                    child: Text(candidate['memberDisplayName'] as String),
-                  )).toList(growable: false),
-                  onChanged: (value) => setSheetState(() => selectedAssignmentId = value),
+                  items: candidates
+                      .map(
+                        (candidate) => DropdownMenuItem<int>(
+                          value:
+                              (candidate['membershipRoleAssignmentId'] as num)
+                                  .toInt(),
+                          child: Text(candidate['memberDisplayName'] as String),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) =>
+                      setSheetState(() => selectedAssignmentId = value),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -274,48 +287,81 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
                 ),
                 const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: selectedAssignmentId == null ? null : () async {
-                    final selected = candidates.firstWhere((candidate) =>
-                        (candidate['membershipRoleAssignmentId'] as num).toInt() == selectedAssignmentId);
-                    final contextIds = <int>{(selected['accessContextId'] as num).toInt()};
-                    if (current?['accessContextId'] case final num currentId) {
-                      contextIds.add(currentId.toInt());
-                    }
-                    final expectations = contextIds.map((contextId) {
-                      final candidate = candidates.firstWhere((item) =>
-                          (item['accessContextId'] as num).toInt() == contextId);
-                      return {
-                        'accessContextId': contextId,
-                        'expectedRevision': (candidate['accessRevision'] as num).toInt(),
-                      };
-                    }).toList(growable: false);
-                    await repository.assignResponsibility(widget.workOrderId, {
-                      'workspaceMembershipId': (selected['workspaceMembershipId'] as num).toInt(),
-                      'membershipRoleAssignmentId': selectedAssignmentId,
-                      'kind': 'Primary',
-                      'expectedCurrentPrimaryResponsibilityId': current?['id'],
-                      'accessRevisionExpectations': expectations,
-                      'reason': reason.trim(),
-                    });
-                    if (sheetContext.mounted) Navigator.pop(sheetContext);
-                    await _refresh();
-                  },
+                  onPressed: selectedAssignmentId == null
+                      ? null
+                      : () async {
+                          final selected = candidates.firstWhere(
+                            (candidate) =>
+                                (candidate['membershipRoleAssignmentId'] as num)
+                                    .toInt() ==
+                                selectedAssignmentId,
+                          );
+                          final contextIds = <int>{
+                            (selected['accessContextId'] as num).toInt(),
+                          };
+                          if (current?['accessContextId']
+                              case final num currentId) {
+                            contextIds.add(currentId.toInt());
+                          }
+                          final expectations = contextIds
+                              .map((contextId) {
+                                final candidate = candidates.firstWhere(
+                                  (item) =>
+                                      (item['accessContextId'] as num)
+                                          .toInt() ==
+                                      contextId,
+                                );
+                                return {
+                                  'accessContextId': contextId,
+                                  'expectedRevision':
+                                      (candidate['accessRevision'] as num)
+                                          .toInt(),
+                                };
+                              })
+                              .toList(growable: false);
+                          await repository
+                              .assignResponsibility(widget.workOrderId, {
+                                'workspaceMembershipId':
+                                    (selected['workspaceMembershipId'] as num)
+                                        .toInt(),
+                                'membershipRoleAssignmentId':
+                                    selectedAssignmentId,
+                                'kind': 'Primary',
+                                'expectedCurrentPrimaryResponsibilityId':
+                                    current?['id'],
+                                'accessRevisionExpectations': expectations,
+                                'reason': reason.trim(),
+                              });
+                          if (sheetContext.mounted) Navigator.pop(sheetContext);
+                          await _refresh();
+                        },
                   child: Text(current == null ? 'Assign' : 'Reassign'),
                 ),
                 if (current != null) ...[
                   const SizedBox(height: 8),
                   OutlinedButton(
                     onPressed: () async {
-                      final contextId = (current['accessContextId'] as num).toInt();
-                      final candidate = candidates.firstWhere((item) =>
-                          (item['accessContextId'] as num).toInt() == contextId);
-                      await repository.closeResponsibility(widget.workOrderId, current['id'] as String, {
-                        'accessRevisionExpectations': [{
-                          'accessContextId': contextId,
-                          'expectedRevision': (candidate['accessRevision'] as num).toInt(),
-                        }],
-                        'reason': 'Unassigned by property manager',
-                      });
+                      final contextId = (current['accessContextId'] as num)
+                          .toInt();
+                      final candidate = candidates.firstWhere(
+                        (item) =>
+                            (item['accessContextId'] as num).toInt() ==
+                            contextId,
+                      );
+                      await repository.closeResponsibility(
+                        widget.workOrderId,
+                        current['id'] as String,
+                        {
+                          'accessRevisionExpectations': [
+                            {
+                              'accessContextId': contextId,
+                              'expectedRevision':
+                                  (candidate['accessRevision'] as num).toInt(),
+                            },
+                          ],
+                          'reason': 'Unassigned by property manager',
+                        },
+                      );
                       if (sheetContext.mounted) Navigator.pop(sheetContext);
                       await _refresh();
                     },
@@ -532,7 +578,8 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final auth = ref.watch(authControllerProvider);
-    final canManageWork = auth is AuthStateAuthenticated &&
+    final canManageWork =
+        auth is AuthStateAuthenticated &&
         auth.capabilities.contains('work.manage');
 
     return Scaffold(
@@ -540,7 +587,9 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
         title: const Text('Work Order'),
         actions: [
           if (auth is AuthStateAuthenticated &&
-              auth.capabilities.contains('responsibility.assign-existing-member'))
+              auth.capabilities.contains(
+                'responsibility.assign-existing-member',
+              ))
             IconButton(
               icon: const Icon(Icons.engineering_outlined),
               tooltip: 'Assign technician',
@@ -552,14 +601,15 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             onPressed: () =>
                 _showActivityHistory(subtitle: detail?.workOrder.title),
           ),
-          if (canManageWork) detailAsync.whenOrNull(
-                data: (detail) => IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Edit',
-                  onPressed: () => _showEditSheet(context, detail.workOrder),
-                ),
-              ) ??
-              const SizedBox.shrink(),
+          if (canManageWork)
+            detailAsync.whenOrNull(
+                  data: (detail) => IconButton(
+                    icon: const Icon(Icons.edit_outlined),
+                    tooltip: 'Edit',
+                    onPressed: () => _showEditSheet(context, detail.workOrder),
+                  ),
+                ) ??
+                const SizedBox.shrink(),
         ],
       ),
       body: RefreshIndicator(
@@ -1485,7 +1535,8 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   }
 
   Future<void> _pickScheduledDate() async {
-    final now = DateTime.now();
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
       initialDate: _scheduledDate ?? now,
@@ -1499,9 +1550,13 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   }
 
   Future<void> _pickTime({required bool isStart}) async {
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showTimePicker(
       context: context,
-      initialTime: (isStart ? _startTime : _windowEndTime) ?? TimeOfDay.now(),
+      initialTime:
+          (isStart ? _startTime : _windowEndTime) ??
+          TimeOfDay.fromDateTime(now.toLocal()),
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -1526,19 +1581,6 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     propertyId: _selectedPropertyId,
     unitId: _selectedUnitId,
   );
-
-  void _clearSelectedTenantIfMissing(List<Tenant> tenants) {
-    final tenantId = _selectedTenantId;
-    if (tenantId == null || tenants.any((tenant) => tenant.id == tenantId)) {
-      return;
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _selectedTenantId == tenantId) {
-        setState(() => _selectedTenantId = null);
-      }
-    });
-  }
 
   double? _parseOptionalAmount(TextEditingController controller) {
     final trimmed = controller.text.trim();
@@ -1710,15 +1752,22 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
       ),
       data: (page) {
         final tenants = page.items;
-        _clearSelectedTenantIfMissing(tenants);
         final hasSelectedTenant =
             _selectedTenantId == null ||
             tenants.any((tenant) => tenant.id == _selectedTenantId);
         return DropdownButtonFormField<int?>(
-          initialValue: hasSelectedTenant ? _selectedTenantId : null,
+          initialValue: _selectedTenantId,
           decoration: const InputDecoration(labelText: 'Tenant (optional)'),
           items: [
             const DropdownMenuItem<int?>(value: null, child: Text('No tenant')),
+            if (!hasSelectedTenant && _selectedTenantId != null)
+              DropdownMenuItem<int?>(
+                value: _selectedTenantId,
+                child: Text(
+                  widget.workOrder.tenantName ?? 'Tenant #$_selectedTenantId',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ...tenants.map(
               (tenant) => DropdownMenuItem<int?>(
                 value: tenant.id,

@@ -23,7 +23,9 @@ public sealed record AtomicCoreCrudMutationCommand(
     AtomicCoreCrudMutationOperation Operation,
     int EntityId,
     string RequestJson,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    string DeliveryIdempotencyKey,
+    DateTime? CreatedAtUtc = null,
+    DateTime? ChangedAtUtc = null) : IAtomicCommandData;
 
 public sealed record AtomicCoreCrudMutationResult(
     bool Found,
@@ -641,6 +643,9 @@ public sealed class AtomicCoreCrudMutationHandler
         var persistence = attempt.Persistence;
         if (!await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct))
             throw Denied();
+        var mutationNow = command.Operation == AtomicCoreCrudMutationOperation.Create
+            ? command.CreatedAtUtc ?? now
+            : command.ChangedAtUtc ?? now;
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
         {
             var request = Read<CreateVendorRequest>(command);
@@ -651,13 +656,13 @@ public sealed class AtomicCoreCrudMutationHandler
                 AddressLine1 = request.AddressLine1, City = request.City, State = request.State,
                 PostalCode = request.PostalCode, Is1099Eligible = request.Is1099Eligible,
                 W9OnFile = request.W9OnFile, Preferred = request.Preferred, Notes = request.Notes,
-                CreatedAt = now, UpdatedAt = now,
+                CreatedAt = mutationNow, UpdatedAt = mutationNow,
             };
             persistence.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Vendor), AuditLogOperation.Created,
                 $"Vendor {entity.Name} created", entityId: 0));
             await attempt.FlushBusinessAsync(ct);
-            StageDataUpdate(attempt, command, nameof(Vendor), entity.Id, now);
+            StageDataUpdate(attempt, command, nameof(Vendor), entity.Id, mutationNow);
             return Applied(entity.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(entity)));
         }
         var vendor = await persistence.Query<Vendor>().SingleOrDefaultAsync(entity =>
@@ -671,12 +676,12 @@ public sealed class AtomicCoreCrudMutationHandler
                 && work.Status != WorkOrderStatus.Completed && work.Status != WorkOrderStatus.Cancelled
                 && work.Status != WorkOrderStatus.Archived, ct);
             if (open > 0) throw Conflict($"This vendor is assigned to {open} open {(open == 1 ? "work order" : "work orders")}; reassign or close them first.");
-            vendor.DeletedAt = now;
-            vendor.UpdatedAt = now;
+            vendor.DeletedAt = mutationNow;
+            vendor.UpdatedAt = mutationNow;
             attempt.BindSemanticAudit(vendor, Audit(command, nameof(Vendor), AuditLogOperation.Deleted,
                 $"Vendor {vendor.Name} deleted"));
             await attempt.FlushBusinessAsync(ct);
-            StageDataUpdate(attempt, command, nameof(Vendor), vendor.Id, now, deleted: true);
+            StageDataUpdate(attempt, command, nameof(Vendor), vendor.Id, mutationNow, deleted: true);
             return Applied(vendor.Id);
         }
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
@@ -696,11 +701,11 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.W9OnFile.HasValue) vendor.W9OnFile = update.W9OnFile.Value;
         if (update.Preferred.HasValue) vendor.Preferred = update.Preferred.Value;
         if (update.Notes is not null) vendor.Notes = update.Notes;
-        vendor.UpdatedAt = now;
+        vendor.UpdatedAt = mutationNow;
         attempt.BindSemanticAudit(vendor, Audit(command, nameof(Vendor), AuditLogOperation.Updated,
             $"Vendor {vendor.Name} updated"));
         await attempt.FlushBusinessAsync(ct);
-        StageDataUpdate(attempt, command, nameof(Vendor), vendor.Id, now);
+        StageDataUpdate(attempt, command, nameof(Vendor), vendor.Id, mutationNow);
         return Applied(vendor.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(vendor)));
     }
 
@@ -1103,10 +1108,12 @@ public static class AtomicCoreCrudMutation
         AtomicCoreCrudMutationOperation operation,
         int entityId,
         string operationKey,
-        TRequest request) => new(
+        TRequest request,
+        DateTime? createdAtUtc = null,
+        DateTime? changedAtUtc = null) => new(
             scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
             scope.AccessRevision, domain, operation, entityId,
-            JsonSerializer.Serialize(request), operationKey);
+            JsonSerializer.Serialize(request), operationKey, createdAtUtc, changedAtUtc);
 
     public static AtomicCommandIdentity Identity(AtomicCoreCrudMutationCommand command) => new(
         $"rental.{command.Domain.ToString().ToLowerInvariant()}.{command.Operation.ToString().ToLowerInvariant()}",

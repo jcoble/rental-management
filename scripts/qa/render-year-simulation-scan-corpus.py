@@ -109,11 +109,38 @@ def data_context(
     units: dict[str, dict[str, str]],
     leases: dict[str, dict[str, str]],
     events: dict[str, dict[str, str]],
+    schedules: dict[str, dict[str, str]],
 ) -> dict[str, str]:
     prop = properties.get(asset.property_id, {})
     unit = units.get(asset.unit_id, {})
     lease = leases.get(asset.lease_id, {})
+    if not lease and asset.unit_id:
+        matching_leases = [
+            candidate
+            for candidate in leases.values()
+            if candidate.get("unit_id") == asset.unit_id
+        ]
+        lease = next(
+            (
+                candidate
+                for candidate in matching_leases
+                if candidate.get("start_date", "") <= asset.planned_date
+                <= candidate.get("end_date", "")
+            ),
+            matching_leases[0] if matching_leases else {},
+        )
     event = events.get(asset.financial_event_id, {})
+    schedule = schedules.get(asset.asset_id, {})
+    issue_match = re.search(
+        r"\breview (.*?); confirm;",
+        schedule.get("exact_actions", ""),
+        flags=re.IGNORECASE,
+    )
+    maintenance_issue = (
+        issue_match.group(1).strip()
+        if issue_match
+        else "Reported maintenance condition requiring review"
+    )
     principal_cents = int(prop.get("monthly_principal_cents") or 0)
     interest_cents = int(prop.get("monthly_interest_cents") or 0)
     return {
@@ -148,6 +175,7 @@ def data_context(
         "category": event.get("category", asset.document_family),
         "memo": event.get("memo", asset.intake_expectation),
         "effective_date": event.get("effective_date", asset.planned_date),
+        "maintenance_issue": maintenance_issue,
     }
 
 
@@ -247,7 +275,7 @@ def field_rows(asset: Asset, ctx: dict[str, str]) -> list[tuple[str, str]]:
             ("Requested by", ctx["tenant"]),
             ("Location", ctx["address"]),
             ("Priority", "Normal"),
-            ("Issue", "Water visible beneath kitchen sink after faucet use"),
+            ("Issue", ctx["maintenance_issue"]),
             ("Permission to enter", "Yes, with notice"),
             ("Preferred contact", ctx["tenant_email"]),
         ]
@@ -361,23 +389,27 @@ def draw_check(c: canvas.Canvas, asset: Asset, ctx: dict[str, str], y: float) ->
     return y - 210
 
 
-def draw_photo_panel(c: canvas.Canvas, asset: Asset, y: float, page_no: int) -> float:
+def draw_photo_panel(
+    c: canvas.Canvas,
+    asset: Asset,
+    ctx: dict[str, str],
+    y: float,
+    page_no: int,
+) -> float:
     c.setFillColor(colors.HexColor("#D9E3E7"))
     c.roundRect(42, y - 245, PAGE_WIDTH - 84, 230, 6, fill=1, stroke=0)
     c.setFillColor(colors.HexColor("#8FA7B0"))
     c.rect(62, y - 216, PAGE_WIDTH - 124, 165, fill=1, stroke=0)
     if asset.document_family == "Maintenance request with supporting photo":
         c.setFillColor(colors.HexColor("#E8ECEC"))
-        c.rect(104, y - 135, 300, 58, fill=1, stroke=0)
+        c.roundRect(104, y - 145, 404, 78, 6, fill=1, stroke=0)
         c.setFillColor(colors.HexColor("#7E8B91"))
-        c.rect(236, y - 173, 36, 42, fill=1, stroke=0)
+        c.rect(236, y - 185, 96, 40, fill=1, stroke=0)
         c.setStrokeColor(colors.HexColor("#2C6675"))
-        c.setLineWidth(5)
-        c.arc(205, y - 112, 305, y - 45, 10, 160)
-        c.setFillColor(colors.HexColor("#4C97B8"))
-        for dx, dy in [(250, -188), (277, -197), (224, -202)]:
-            c.circle(dx, y + dy, 8, fill=1, stroke=0)
-        caption = "Tenant photo: moisture beneath kitchen sink"
+        c.setLineWidth(3)
+        for offset in (0, 18, 36):
+            c.line(350, y - 165 + offset, 455, y - 165 + offset)
+        caption = f"Tenant photo evidence: {ctx['maintenance_issue']}"
     else:
         c.setFillColor(colors.HexColor("#F5F1E7"))
         c.rect(78, y - 198, 130, 120, fill=1, stroke=0)
@@ -480,7 +512,7 @@ def render_pdf(
                 "Move-out inspection report",
                 "Maintenance request with supporting photo",
             }:
-                y = draw_photo_panel(pdf, asset, y, page_no)
+                y = draw_photo_panel(pdf, asset, ctx, y, page_no)
             y = draw_terms(pdf, asset, ctx, y, page_no)
         if y > 180:
             y -= 14
@@ -579,12 +611,27 @@ def draw_image_document(asset: Asset, ctx: dict[str, str], panel_count: int) -> 
             y += 470
         elif asset.document_family == "Maintenance request with supporting photo" and panel > 0:
             draw.rounded_rectangle((80, y, 1120, y + 650), radius=18, fill=(146, 166, 173))
-            draw.rectangle((240, y + 100, 960, y + 290), fill=(231, 236, 235))
-            draw.rectangle((535, y + 285, 665, y + 445), fill=(103, 119, 126))
-            draw.arc((450, y + 25, 760, y + 235), 190, 350, fill=(45, 103, 119), width=18)
-            for dx, dy in [(600, 490), (535, 535), (680, 555), (455, 520)]:
-                draw.ellipse((dx - 22, y + dy - 22, dx + 22, y + dy + 22), fill=(68, 150, 190))
-            draw.text((105, y + 585), "Tenant photo: moisture beneath kitchen sink", font=small_font, fill=(20, 38, 47))
+            draw.rounded_rectangle((240, y + 100, 960, y + 330), radius=18, fill=(231, 236, 235))
+            draw.rectangle((500, y + 330, 700, y + 450), fill=(103, 119, 126))
+            for offset in (0, 60, 120):
+                draw.line(
+                    (300, y + 205 + offset, 450, y + 205 + offset),
+                    fill=(45, 103, 119),
+                    width=12,
+                )
+                draw.line(
+                    (750, y + 205 + offset, 900, y + 205 + offset),
+                    fill=(45, 103, 119),
+                    width=12,
+                )
+            image_wrapped(
+                draw,
+                f"Tenant photo evidence: {ctx['maintenance_issue']}",
+                (105, y + 535),
+                small_font,
+                (20, 38, 47),
+                80,
+            )
             y += 700
         else:
             rows = field_rows(asset, ctx) if panel == 0 else [
@@ -828,6 +875,12 @@ def render_all(output: Path, clean: bool) -> dict[str, object]:
     units = {row["unit_id"]: row for row in read_csv("units.csv")}
     leases = {row["lease_id"]: row for row in read_csv("leases.csv")}
     events = {row["event_id"]: row for row in read_csv("financial-oracle.csv")}
+    schedules = {
+        asset_id.strip(): row
+        for row in read_csv("schedule.csv")
+        for asset_id in row.get("asset_refs", "").split(";")
+        if asset_id.strip()
+    }
     if clean and output.exists():
         shutil.rmtree(output)
     documents = output / "documents"
@@ -838,7 +891,7 @@ def render_all(output: Path, clean: bool) -> dict[str, object]:
     family_preview_source: dict[str, Path] = {}
     for index, asset in enumerate(assets, start=1):
         target = documents / asset.planned_date / asset.filename
-        ctx = data_context(asset, properties, units, leases, events)
+        ctx = data_context(asset, properties, units, leases, events, schedules)
         if asset.format == "PDF":
             render_pdf(asset, target, ctx)
             family_preview_source.setdefault(asset.document_family, target)

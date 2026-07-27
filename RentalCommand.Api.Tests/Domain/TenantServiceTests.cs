@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -749,6 +750,212 @@ public class TenantServiceTests : IDisposable
         UpdatedAtUtc = now,
         RowVersion = Guid.NewGuid(),
     };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+}
+
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
+{
+    private const int PortfolioId = 1;
+    private const int ActorUserId = 1;
+
+    private readonly List<string> _commands = [];
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private TenantService _sut = null!;
+    private WorkspaceReadScope _scope;
+
+    public TenantServicePostgreSqlTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantServicePostgreSqlTests));
+        _sut = new TenantService(
+            _ctx.Db,
+            Mock.Of<IDataUpdateService>(),
+            TimeProvider.System,
+            Mock.Of<IAtomicUnitOfWork>());
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
+
+    [Fact]
+    public async Task ListPageAuthorizedAsync_UnitFilterKeepsAssignedWorkOrderTenantWhenProjectionMissesParty()
+    {
+        var now = DateTime.UtcNow;
+        var (property, targetUnit) = SeedPropertyWithUnit(now);
+        var assignedTenant = SeedTenant("Yara", "Brooks", now);
+        var historicalTenant = SeedTenant("Devon", "History", now);
+        var activeRelationship = SeedRelationshipOnUnit(assignedTenant, property, targetUnit, now, occupying: true);
+        var activeParty = _ctx.Db.LeaseManagementParties.Single(party =>
+            party.LeaseManagementId == activeRelationship.Id && party.TenantId == assignedTenant.Id);
+        activeParty.EffectiveThrough = DateOnly.FromDateTime(now.AddDays(-1));
+        var returnedRelationship = SeedRelationshipOnUnit(
+            historicalTenant,
+            property,
+            targetUnit,
+            now.AddMonths(-3),
+            occupying: false);
+        _ctx.Db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = targetUnit.Id,
+                TenantId = assignedTenant.Id,
+                LeaseManagementId = activeRelationship.Id,
+                Title = "Assigned tenant repair",
+                Description = "Existing work order tenant must remain selectable during edit.",
+                RequestedAt = now,
+                UpdatedAt = now,
+                CreatedBy = "tenant-service-test",
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = targetUnit.Id,
+                TenantId = historicalTenant.Id,
+                LeaseManagementId = returnedRelationship.Id,
+                Title = "Historical tenant repair",
+                Description = "Returned tenant should not be revived by work-order history alone.",
+                RequestedAt = now,
+                UpdatedAt = now,
+                CreatedBy = "tenant-service-test",
+            });
+        _ctx.Db.SaveChanges();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            PropertyId = property.Id,
+            UnitId = targetUnit.Id,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(1);
+        result.Items.Should().ContainSingle(t => t.FirstName == "Yara" && t.LastName == "Brooks");
+        result.Items.Should().NotContain(t => t.FirstName == "Devon");
+
+        _commands.Should().HaveCount(2, "the authorized count and page should remain DB-side queries");
+        _commands.Should().Contain(sql =>
+            sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("public.rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private (Property property, Unit unit) SeedPropertyWithUnit(DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Scoped Property",
+            AddressLine1 = "100 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = "1A",
+            MarketRent = 1250m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+        return (property, unit);
+    }
+
+    private Tenant SeedTenant(string firstName, string lastName, DateTime now)
+    {
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = $"{firstName.ToLowerInvariant()}.{lastName.ToLowerInvariant()}@example.local",
+            Phone = "555-0100",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+        return tenant;
+    }
+
+    private LeaseManagement SeedRelationshipOnUnit(
+        Tenant tenant,
+        Property property,
+        Unit unit,
+        DateTime now,
+        bool occupying)
+    {
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"LM-{unit.Id}-{Guid.NewGuid():N}",
+            PlannedPossessionAtUtc = occupying ? now.AddMonths(-1) : now.AddMonths(-2),
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            PossessionReturnedAtUtc = occupying ? null : now.AddDays(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddMonths(-1)),
+            EffectiveThrough = occupying ? null : DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "PostgreSQL tenant unit filter fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        });
+        _ctx.Db.SaveChanges();
+        return relationship;
+    }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

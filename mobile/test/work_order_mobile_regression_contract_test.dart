@@ -1,0 +1,151 @@
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('work order edit date picker is anchored to the app clock', () {
+    final editSheet = _classBody(
+      'lib/features/maintenance/work_order_detail_screen.dart',
+      '_EditWorkOrderSheetState',
+    );
+    final pickScheduledDate = _methodBody(editSheet, '_pickScheduledDate');
+
+    expect(pickScheduledDate, contains('ref.read(appNowProvider.future)'));
+    expect(pickScheduledDate, contains('showDatePicker('));
+    expect(pickScheduledDate, isNot(contains('DateTime.now()')));
+  });
+
+  test('work order edit time picker is anchored to the app clock', () {
+    final editSheet = _classBody(
+      'lib/features/maintenance/work_order_detail_screen.dart',
+      '_EditWorkOrderSheetState',
+    );
+    final pickTime = _methodBody(editSheet, '_pickTime');
+
+    expect(pickTime, contains('ref.read(appNowProvider.future)'));
+    expect(pickTime, contains('showTimePicker('));
+    expect(pickTime, contains('TimeOfDay.fromDateTime(now.toLocal())'));
+    expect(pickTime, isNot(contains('DateTime.now()')));
+  });
+
+  test(
+    'work order edit preserves selected tenant absent from lookup options',
+    () {
+      final editSheet = _classBody(
+        'lib/features/maintenance/work_order_detail_screen.dart',
+        '_EditWorkOrderSheetState',
+      );
+
+      expect(
+        editSheet,
+        contains('if (!hasSelectedTenant && _selectedTenantId != null)'),
+      );
+      expect(
+        editSheet,
+        contains(
+          "widget.workOrder.tenantName ?? 'Tenant #\$_selectedTenantId'",
+        ),
+      );
+      expect(editSheet, contains("'tenantId': ?_selectedTenantId"));
+    },
+  );
+
+  test('work order scan category dropdown uses maintenance taxonomy', () {
+    final source = _source('lib/features/scan/scan_review_screen.dart');
+    final categories = _constList(source, '_workOrderCategories');
+    final fieldGroups = _constList(source, '_fieldGroups');
+    final fieldList = _classBody(
+      'lib/features/scan/scan_review_screen.dart',
+      '_FieldsSection',
+    );
+
+    expect(fieldGroups, contains("'category'"));
+    expect(categories, contains("'Plumbing'"));
+    expect(categories, contains("'Electrical'"));
+    expect(categories, contains("'HVAC'"));
+    expect(categories, contains("'Appliance'"));
+    expect(categories, isNot(contains("'MortgageInterest'")));
+    expect(categories, isNot(contains("'CleaningMaintenance'")));
+    expect(
+      fieldList,
+      matches(
+        RegExp(
+          r'categoryOptions:\s*draft\.isWorkOrder\s*\?\s*_workOrderCategories\s*:\s*_scheduleECategories',
+        ),
+      ),
+    );
+  });
+
+  test('work order scan confirmation refreshes mobile work-order surfaces', () {
+    final source = _source('lib/features/scan/scan_review_screen.dart');
+    final confirm = _methodBody(source, '_confirm');
+
+    expect(confirm, contains('if (draft.isWorkOrder)'));
+    expect(confirm, contains('ref.invalidate(workOrdersPageProvider)'));
+    expect(
+      confirm,
+      contains('ref.read(workOrdersProvider.notifier).refresh()'),
+    );
+    expect(confirm, contains('ref.invalidate(unitDashboardProvider(unitId))'));
+  });
+}
+
+String _source(String relativePath) => File(relativePath).readAsStringSync();
+
+String _classBody(String relativePath, String className) {
+  final source = _source(relativePath);
+  final start = source.indexOf('class $className');
+  expect(start, isNonNegative, reason: 'Expected to find class $className');
+  final bodyStart = source.indexOf('{', start);
+  final end = _matchingBrace(source, bodyStart);
+  return source.substring(bodyStart, end + 1);
+}
+
+String _methodBody(String source, String methodName) {
+  final match = RegExp(
+    '${RegExp.escape(methodName)}\\s*\\(',
+  ).firstMatch(source);
+  final start = match?.start ?? -1;
+  expect(start, isNonNegative, reason: 'Expected to find method $methodName');
+  final parameterStart = source.indexOf('(', start);
+  final parameterEnd = _matchingParen(source, parameterStart);
+  final bodyStart = source.indexOf('{', parameterEnd);
+  final end = _matchingBrace(source, bodyStart);
+  return source.substring(bodyStart, end + 1);
+}
+
+String _constList(String source, String constName) {
+  final start = source.indexOf('const $constName');
+  expect(start, isNonNegative, reason: 'Expected to find const $constName');
+  final listStart = source.indexOf('[', start);
+  final end = _matchingBracket(source, listStart);
+  return source.substring(listStart, end + 1);
+}
+
+int _matchingBrace(String source, int openIndex) =>
+    _matchingDelimiter(source, openIndex, '{', '}');
+
+int _matchingBracket(String source, int openIndex) =>
+    _matchingDelimiter(source, openIndex, '[', ']');
+
+int _matchingParen(String source, int openIndex) =>
+    _matchingDelimiter(source, openIndex, '(', ')');
+
+int _matchingDelimiter(
+  String source,
+  int openIndex,
+  String open,
+  String close,
+) {
+  expect(openIndex, isNonNegative, reason: 'Expected to find $open delimiter');
+  var depth = 0;
+  for (var i = openIndex; i < source.length; i++) {
+    final char = source[i];
+    if (char == open) depth++;
+    if (char == close) {
+      depth--;
+      if (depth == 0) return i;
+    }
+  }
+  fail('No matching $close delimiter found');
+}
