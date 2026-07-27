@@ -7,12 +7,14 @@
 		type LeaseAgreementRenewalFinancialEffectSummary,
 		type LeaseRenewalAddendumDecisionType
 	} from '$lib/api/endpoints/lease-managements';
+	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import type { LeaseAgreementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { FilePlus2, Loader2 } from '@lucide/svelte';
 
 	type SuccessorType = 'Correction' | 'Restatement' | 'Renewal' | 'MonthToMonth';
@@ -48,12 +50,35 @@
 	let governingFromOn = $state(isReplacement ? initialReplacementGoverningDate : '');
 	let correctionReason = $state('');
 	let validationError = $state('');
+	let documentTemplateId = $state('');
 	let selectedAddendumDecisions = $state<Record<string, LeaseRenewalAddendumDecisionType | undefined>>({});
 	let operation: { fingerprint: string; key: string } | null = null;
 
+	const sourceRequiresTemplate = $derived(source.hasSourceScan);
 	const title = $derived(
 		changeType === 'MonthToMonth' ? 'Create month-to-month draft' : `Create ${changeType.toLowerCase()} draft`
 	);
+	const relationshipQuery = createQuery(() => ({
+		queryKey: ['lease-managements', leaseManagementId, 'successor-template-context'],
+		queryFn: () => leaseManagements.get(leaseManagementId),
+		enabled: sourceRequiresTemplate
+	}));
+	const templatePropertyId = $derived(relationshipQuery.data?.summary.propertyId ?? null);
+	const templatesQuery = createQuery(() => ({
+		queryKey: ['document-templates', 'agreement-successor', templatePropertyId],
+		queryFn: () => documentTemplates.listPage({
+			kind: 'Lease',
+			status: 'Active',
+			propertyId: templatePropertyId!,
+			take: 200,
+			sort: 'name'
+		}),
+		enabled: sourceRequiresTemplate && templatePropertyId != null
+	}));
+	const templateOptions = $derived((templatesQuery.data?.items ?? []).map((template) => ({
+		value: String(template.id),
+		label: `${template.name} · version ${template.version}${template.defaultForPortfolio ? ' · default' : ''}`
+	})));
 	const effectiveSeriesQuery = createQuery(() => ({
 		queryKey: [
 			'lease-managements',
@@ -65,6 +90,22 @@
 		queryFn: () => leaseManagements.getEffectiveAddendumSeries(leaseManagementId, source.leaseAgreementId),
 		enabled: isRenewal
 	}));
+
+	$effect(() => {
+		if (!sourceRequiresTemplate) {
+			documentTemplateId = '';
+			return;
+		}
+		const templates = templatesQuery.data?.items ?? [];
+		if (templates.length === 0 || templates.some((template) => String(template.id) === documentTemplateId)) return;
+		const defaultTemplates = templates.filter((template) => template.defaultForPortfolio);
+		const defaultTemplate = defaultTemplates.length === 1
+			? defaultTemplates[0]
+			: templates.length === 1
+				? templates[0]
+				: null;
+		if (defaultTemplate) documentTemplateId = String(defaultTemplate.id);
+	});
 
 	function setAddendumDecision(seriesPublicId: string, value: string | undefined) {
 		selectedAddendumDecisions = {
@@ -159,6 +200,26 @@
 			validationError = 'A fixed-term renewal needs an end date on or after its start.';
 			return null;
 		}
+		let selectedDocumentTemplateId: number | null = null;
+		if (sourceRequiresTemplate) {
+			if (relationshipQuery.isLoading || templatesQuery.isLoading) {
+				validationError = 'Wait for active lease templates to load before creating the draft.';
+				return null;
+			}
+			if (relationshipQuery.isError || templatesQuery.isError || !templatesQuery.data) {
+				validationError = 'Could not load active lease templates for this property. Retry before creating the draft.';
+				return null;
+			}
+			if (templatesQuery.data.items.length === 0) {
+				validationError = 'Create or activate a lease template for this property before drafting a successor.';
+				return null;
+			}
+			selectedDocumentTemplateId = Number(documentTemplateId);
+			if (!Number.isInteger(selectedDocumentTemplateId) || selectedDocumentTemplateId <= 0) {
+				validationError = 'Choose an active lease template before creating the draft.';
+				return null;
+			}
+		}
 		const addendumDecisions = buildAddendumDecisions();
 		if (!addendumDecisions) return null;
 		return {
@@ -172,6 +233,7 @@
 						? (source.termEndOn ?? null)
 						: termEndOn,
 			governingFromOn,
+			documentTemplateId: selectedDocumentTemplateId,
 			addendumDecisions
 		};
 	}
@@ -254,6 +316,42 @@
 				<DatePicker bind:value={governingFromOn} testid="agreement-successor-governing-from" />
 				{#if isRenewal}<span class="block text-xs text-muted-foreground">For renewals, this must match the new term start.</span>{/if}
 			</label>
+
+			{#if sourceRequiresTemplate}
+				<section class="space-y-2 rounded-xl border p-4" aria-labelledby="agreement-successor-template-heading">
+					<div>
+						<h3 id="agreement-successor-template-heading" class="text-sm font-semibold">Lease template</h3>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Choose the active template that turns this imported agreement into an editable successor draft.
+						</p>
+					</div>
+					{#if relationshipQuery.isLoading || templatesQuery.isLoading}
+						<div class="flex items-center gap-2 text-sm text-muted-foreground" data-testid="agreement-successor-template-loading">
+							<Loader2 class="h-4 w-4 animate-spin" /> Loading active lease templates…
+						</div>
+					{:else if relationshipQuery.isError || templatesQuery.isError}
+						<div class="space-y-2 text-sm" data-testid="agreement-successor-template-error">
+							<p class="font-medium text-destructive">Active lease templates could not be loaded.</p>
+							<Button variant="outline" size="sm" onclick={() => { relationshipQuery.refetch(); templatesQuery.refetch(); }}>Retry</Button>
+						</div>
+					{:else if templatesQuery.data?.items.length === 0}
+						<p class="text-sm text-destructive" data-testid="agreement-successor-template-empty">
+							No active lease template is available for this property.
+						</p>
+					{:else}
+						<label class="block space-y-1.5">
+							<span class="text-sm font-medium">Template for successor draft</span>
+							<SimpleSelect
+								bind:value={documentTemplateId}
+								options={templateOptions}
+								placeholder="Choose a template"
+								disabled={mutation.isPending}
+								testid="agreement-successor-document-template"
+							/>
+						</label>
+					{/if}
+				</section>
+			{/if}
 
 			{#if isRenewal}
 				<section class="space-y-3" aria-labelledby="addendum-decisions-heading">

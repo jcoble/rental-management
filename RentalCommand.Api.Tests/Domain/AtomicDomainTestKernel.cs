@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Auth;
@@ -12,6 +13,7 @@ using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Operations;
+using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
@@ -82,6 +84,16 @@ internal static class AtomicDomainTestKernel
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
             AtomicMoneyMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForScheduledTenantChargesPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddAtomicCommandHandler<
+            ApplyScheduledTenantChargeBatchCommand,
+            ApplyScheduledTenantChargeBatchResult,
+            ApplyScheduledTenantChargeBatchHandler>();
         return services.BuildServiceProvider();
     }
 

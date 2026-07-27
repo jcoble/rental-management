@@ -104,6 +104,29 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void NativeEsignExecutionWorker_CanAppendExecutedStoredFilesWithoutBroadMutationRights()
+    {
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+    }
+
+    [Fact]
     public void SandboxGraduation_AddsDeleteWithoutWeakeningAppendOnlyRows()
     {
         CreateSql.Should().Contain(
@@ -944,6 +967,82 @@ public sealed class FoundationBaselinePostgreSqlTests
             "REVOKE EXECUTE ON FUNCTION rc_pre_auth_email_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
         downSql.Should().Contain(
             "REVOKE EXECUTE ON FUNCTION rc_pre_auth_account_security_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
+    }
+
+    [Fact]
+    public void EngineStoredFileAppendMigration_GrantsOnlyInsertAndSequenceUsage()
+    {
+        var migration = new GrantEngineStoredFileAppend();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineStoredFileAppend).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT INSERT ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        upSql.Should().Contain("GRANT USAGE, SELECT ON SEQUENCE");
+        upSql.Should().NotContain("GRANT UPDATE");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineStoredFileAppend).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE INSERT ON TABLE \"StoredFiles\" FROM rentalcommand_engine;");
+        downSql.Should().Contain("REVOKE USAGE, SELECT ON SEQUENCE");
+    }
+
+    [Fact]
+    public void EngineLegalDocumentArtifactAppendMigration_GrantsOnlyInsertAndSequenceUsage()
+    {
+        var migration = new GrantEngineLegalDocumentArtifactAppend();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLegalDocumentArtifactAppend).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT INSERT ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        upSql.Should().Contain("GRANT USAGE, SELECT ON SEQUENCE");
+        upSql.Should().NotContain("GRANT UPDATE");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLegalDocumentArtifactAppend).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE INSERT ON TABLE \"LegalDocumentArtifacts\" FROM rentalcommand_engine;");
+        downSql.Should().Contain("REVOKE USAGE, SELECT ON SEQUENCE");
+    }
+
+    [Fact]
+    public void EngineLeaseAddendumExecutionMigration_GrantsUpdateWithoutCreateOrDelete()
+    {
+        var migration = new GrantEngineLeaseAddendumExecutionUpdate();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLeaseAddendumExecutionUpdate).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        upSql.Should().NotContain("GRANT INSERT");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLeaseAddendumExecutionUpdate).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE UPDATE ON TABLE \"LeaseAddenda\" FROM rentalcommand_engine;");
     }
 
     [Fact]

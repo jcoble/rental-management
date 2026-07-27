@@ -162,6 +162,7 @@ export interface CreateLeaseAgreementSuccessorDraftRequest {
   termStartOn: string;
   termEndOn: string | null;
   governingFromOn: string;
+  documentTemplateId: number | null;
   addendumDecisions: Array<{
     sourceAddendumSeriesPublicId: string;
     decision: LeaseRenewalAddendumDecisionType;

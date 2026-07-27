@@ -27,6 +27,9 @@ using RentalCommand.Engine.Workers;
 // Every DB-written DateTime in the Engine is either DateTime.UtcNow-derived or
 // explicitly constructed with DateTimeKind.Utc (see RentChargeService). This matches
 // the API project which also runs without the legacy switch.
+// QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
+QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
 var builder = Host.CreateApplicationBuilder(args);
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("RentalCommand");

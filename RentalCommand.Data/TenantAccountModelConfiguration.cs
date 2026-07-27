@@ -142,7 +142,11 @@ internal static class TenantAccountModelConfiguration
             entity.HasIndex(e => new { e.Provider, e.IdempotencyKey }).IsUnique();
             entity.HasIndex(e => new { e.Provider, e.ProviderObjectId })
                 .IsUnique()
-                .HasFilter("\"ProviderObjectId\" IS NOT NULL");
+                .HasFilter("\"ProviderObjectId\" IS NOT NULL AND \"Provider\" <> 'manual'");
+            entity.HasIndex(e => new { e.Provider, e.TenantAccountId, e.ProviderObjectId })
+                .HasDatabaseName("IX_TenantPaymentAttempts_ManualProviderObject")
+                .IsUnique()
+                .HasFilter("\"Provider\" = 'manual' AND \"ProviderObjectId\" IS NOT NULL");
             entity.HasIndex(e => e.RefundsPaymentAttemptId)
                 .IsUnique()
                 .HasFilter("\"RefundsPaymentAttemptId\" IS NOT NULL");

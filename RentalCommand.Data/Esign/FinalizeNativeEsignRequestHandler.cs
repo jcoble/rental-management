@@ -45,7 +45,7 @@ public sealed class FinalizeNativeEsignRequestHandler
                 && upload.CleanupClaimToken == null && upload.RequestFingerprint == command.RequestFingerprint, ct)
             ?? throw new DomainValidationException("The executed PDF admission is missing or changed.");
         if (pending.StoragePath != command.StorageKey || pending.FileName != command.FileName
-            || pending.ContentType != "application/pdf" || pending.SizeBytes != command.FileSize)
+            || pending.ContentType != "application/pdf")
             throw new DomainValidationException("The executed PDF does not match its admitted storage metadata.");
 
         var storedFile = new StoredFile
@@ -81,6 +81,7 @@ public sealed class FinalizeNativeEsignRequestHandler
 
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
+        pending.SizeBytes = command.FileSize;
         pending.UpdatedAtUtc = now;
         request.ExecutedArtifactId = artifact.Id;
         request.CompletedAtUtc = now;

@@ -140,6 +140,57 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ScanPaymentConfirmation_AllowsSameManualCheckNumberOnDifferentTenantAccounts()
+    {
+        const string repeatedCheckNumber = "000424242";
+        var existingGraph = SeedTenantAccountWithOpenCharge("same-check-existing", 1_675m);
+        var scanGraph = SeedTenantAccountWithOpenCharge("same-check-scan", 1_350m);
+        var existingCommand = ReceiptCommand(
+            existingGraph.AccountId,
+            1_675m,
+            "same-check-existing",
+            SimulatedEntryAtUtc.AddMinutes(-5),
+            repeatedCheckNumber,
+            repeatedCheckNumber);
+
+        await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("tenant-account.receipt.record", existingCommand.DeliveryIdempotencyKey),
+            existingCommand,
+            ReceiptCodec);
+        var draft = SeedPaymentScanDraft(scanGraph.AccountId);
+        var scanCommand = ScanCommand(
+            draft,
+            scanGraph.AccountId,
+            1_350m,
+            SimulatedEntryAtUtc,
+            repeatedCheckNumber);
+
+        var outcome = await _atomic.ExecuteAsync(
+            ScanConfirmationCommandIdentity.Create(PortfolioId, draft.Id, "scan-same-check"),
+            scanCommand,
+            ScanCodec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        _ctx.Db.ChangeTracker.Clear();
+        var attempts = await _ctx.Db.TenantPaymentAttempts.AsNoTracking()
+            .Where(attempt => attempt.Provider == "manual"
+                && attempt.ProviderObjectId == repeatedCheckNumber)
+            .Select(attempt => new
+            {
+                attempt.TenantAccountId,
+                attempt.Amount,
+                attempt.CheckNumber,
+            })
+            .OrderBy(attempt => attempt.TenantAccountId)
+            .ToListAsync();
+
+        attempts.Should().HaveCount(2);
+        attempts.Select(attempt => attempt.TenantAccountId)
+            .Should().BeEquivalentTo([existingGraph.AccountId, scanGraph.AccountId]);
+        attempts.Should().OnlyContain(attempt => attempt.CheckNumber == repeatedCheckNumber);
+    }
+
+    [Fact]
     public async Task ReceiptMutation_RollsBackPaymentAttemptWhenLaterLedgerInsertFails()
     {
         var graph = SeedTenantAccountWithOpenCharge("receipt-rollback", 1_200m);
@@ -309,17 +360,20 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         int accountId,
         decimal amount,
         string suffix,
-        DateTime recordedAtUtc) => new(
+        DateTime recordedAtUtc,
+        string? externalReference = null,
+        string? checkNumber = null,
+        string? bankName = null) => new(
             PortfolioId,
             accountId,
             amount,
             new DateOnly(2027, 01, 05),
             "January 2027 rent receipt",
             "Bank transfer",
-            $"PMT-{suffix}",
+            externalReference ?? $"PMT-{suffix}",
             "Receipt Tenant",
-            null,
-            null,
+            checkNumber,
+            bankName,
             null,
             AllocateOldestCharges: true,
             _scope.UserId,
@@ -335,7 +389,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         ScanDraft draft,
         int accountId,
         decimal amount,
-        DateTime confirmedAtUtc)
+        DateTime confirmedAtUtc,
+        string checkNumber = "1001")
     {
         var fingerprint = ScanConfirmationDraftFingerprint.Create(
             draft.TargetEntityType,
@@ -363,7 +418,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             new ScanConfirmationTargetData(
                 ScanConfirmationTargetKind.Payment,
                 Payment: new ScanPaymentTargetData(
-                    Receipt(amount, confirmedAtUtc),
+                    Receipt(amount, confirmedAtUtc, checkNumber),
                     accountId)),
             draft.SourceStoredFileId,
             _scope.SessionId,
@@ -388,7 +443,10 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                 draft.SourceLabel));
     }
 
-    private static ScanReceiptData Receipt(decimal amount, DateTime transactionAtUtc) => new(
+    private static ScanReceiptData Receipt(
+        decimal amount,
+        DateTime transactionAtUtc,
+        string checkNumber = "1001") => new(
         VendorName: null,
         VendorAddress: null,
         VendorPhone: null,
@@ -411,7 +469,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         DueDate: null,
         LineItems: [],
         PayerName: "Receipt Tenant",
-        CheckNumber: "1001",
+        CheckNumber: checkNumber,
         BankName: "Test Bank",
         ExtraFields: []);
 

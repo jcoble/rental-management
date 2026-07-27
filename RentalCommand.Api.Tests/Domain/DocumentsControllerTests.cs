@@ -69,6 +69,95 @@ public sealed class DocumentsControllerTests : IDisposable
         controller.Response.Headers.ContentDisposition.ToString().Should().Be("inline; filename=\"inspection-thumb.jpg\"");
     }
 
+    [Fact]
+    public async Task GetFile_WithAuthorizedDocumentTemplateSource_ReturnsSourcePdf()
+    {
+        var (storedFile, template, _) = SeedDocumentTemplateSource();
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        storage
+            .Setup(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream("%PDF-1.7 source"u8.ToArray()));
+
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<FileStreamResult>()
+            .Which.ContentType.Should().Be("application/pdf");
+        controller.Response.Headers.ContentDisposition.ToString()
+            .Should().Be($"inline; filename=\"{storedFile.FileName}\"");
+        storage.Verify(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()), Times.Once);
+        template.OriginalStoredFileId.Should().Be(storedFile.Id);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateOutsideSelectedPropertyScope_DeniesBeforeStorage()
+    {
+        var (storedFile, _, authorizedPropertyId) = SeedDocumentTemplateSource();
+        var foreignPropertyId = SeedProperty("Foreign template scope").Id;
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.LeasingAgent, foreignPropertyId);
+
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        authorizedPropertyId.Should().NotBe(foreignPropertyId);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateEntityButUnlinkedStoredFile_DeniesBeforeStorage()
+    {
+        var (storedFile, template, _) = SeedDocumentTemplateSource();
+        var unlinkedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            EntityId = template.Id,
+            FileName = "unlinked-source.pdf",
+            FilePath = "stored/unlinked-source.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.StoredFiles.Add(unlinkedFile);
+        _ctx.Db.SaveChanges();
+
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, unlinkedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(unlinkedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+
+        var result = await controller.GetFile(unlinkedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        storedFile.Id.Should().Be(template.OriginalStoredFileId);
+    }
+
     public static IEnumerable<object[]> StaffUploadTargets()
     {
         foreach (var target in Enum.GetNames<StoredDocumentTarget>())
@@ -1028,6 +1117,97 @@ public sealed class DocumentsControllerTests : IDisposable
             UpdatedAt = now,
         });
         return vendor.Id;
+    }
+
+    private (StoredFile StoredFile, DocumentTemplate Template, int PropertyId) SeedDocumentTemplateSource()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty("Template source property");
+        var storedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            FileName = "lease-template-source.pdf",
+            FilePath = "stored/lease-template-source.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = now,
+        };
+        _ctx.Db.StoredFiles.Add(storedFile);
+        _ctx.Db.SaveChanges();
+
+        var template = new DocumentTemplate
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Draft,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Lease template source",
+            OriginalStoredFileId = storedFile.Id,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.DocumentTemplates.Add(template);
+        _ctx.Db.SaveChanges();
+
+        storedFile.EntityId = template.Id;
+        _ctx.Db.SaveChanges();
+        return (storedFile, template, property.Id);
+    }
+
+    private Property SeedProperty(string name)
+    {
+        var now = DateTime.UtcNow;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Owner {name}",
+            OwnerEntityType = OwnerEntityType.Person,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "200 Template",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+            Ownerships =
+            [
+                new PropertyOwnership
+                {
+                    PortfolioId = PortfolioId,
+                    OwnerEntity = owner,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = now,
+                    StatementRecipientName = owner.Name,
+                    PayeeName = owner.Name,
+                },
+            ],
+        };
+        _ctx.Db.AddRange(owner, property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private void RestrictManagementAssignmentToSelectedProperty(string roleProfileKey, int propertyId)
+    {
+        var assignment = _ctx.Db.MembershipRoleAssignments.Single();
+        assignment.RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleProfileKey).Id;
+        assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        assignment.UpdatedAtUtc = DateTime.UtcNow;
+        _ctx.Db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignmentId = assignment.Id,
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+        });
+        _ctx.Db.SaveChanges();
     }
 
     private sealed record CanonicalLeaseDocumentTargets(
