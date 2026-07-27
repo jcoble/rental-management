@@ -287,16 +287,17 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             throw new ScanConfirmationValidationException("Confirmed expense amount must be greater than zero.");
         }
 
-        await ValidateExpenseLocationAsync(command.PortfolioId, target, attempt.Persistence, ct);
+        var location = await ResolveExpenseLocationAsync(command.PortfolioId, target, attempt.Persistence, ct);
         var vendorId = await ResolveOrCreateVendorAsync(
             command.PortfolioId, receipt, ToUtc(command.ConfirmedAtUtc), attempt, ct);
         var now = ToUtc(command.ConfirmedAtUtc);
         var expense = new Expense
         {
             PortfolioId = command.PortfolioId,
-            PropertyId = target.PropertyId,
-            UnitId = target.UnitId,
-            WorkOrderId = target.WorkOrderId,
+            OperationalScope = location.OperationalScope,
+            PropertyId = location.PropertyId,
+            UnitId = location.UnitId,
+            WorkOrderId = location.WorkOrderId,
             VendorId = vendorId,
             Category = receipt.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(receipt.VendorName)
@@ -560,31 +561,67 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         return new ScanConfirmationTargetWriteResult(loan.Id);
     }
 
-    private static async Task ValidateExpenseLocationAsync(
+    private static async Task<ExpenseLocationContext> ResolveExpenseLocationAsync(
         int portfolioId,
         ScanExpenseTargetData target,
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        if (target.PropertyId is int propertyId &&
-            !await IsPropertyInPortfolioAsync(portfolioId, propertyId, persistence, ct))
+        if (target.WorkOrderId is int workOrderId)
         {
-            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+            var workOrderLocation = await persistence.Query<WorkOrder>()
+                .Where(order => order.Id == workOrderId
+                    && order.PortfolioId == portfolioId
+                    && (target.PropertyId == null || order.PropertyId == target.PropertyId)
+                    && (target.UnitId == null || order.UnitId == target.UnitId))
+                .Select(order => new ExpenseLocationContext(
+                    ExpenseOperationalScope.WorkOrder,
+                    order.PropertyId,
+                    order.UnitId,
+                    order.Id))
+                .SingleOrDefaultAsync(ct);
+            return workOrderLocation
+                ?? throw new ScanConfirmationValidationException("Selected work order is not in this portfolio or location.");
         }
-        if (target.UnitId is int unitId && !await persistence.Query<Unit>()
-                .AnyAsync(unit => unit.Id == unitId
-                    && unit.Property != null
-                    && unit.Property.PortfolioId == portfolioId
-                    && (target.PropertyId == null || unit.PropertyId == target.PropertyId), ct))
+
+        if (target.UnitId is int unitId)
         {
-            throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
+            var unitLocation = await persistence.Query<Unit>()
+                .Where(unit => unit.Id == unitId
+                    && unit.PortfolioId == portfolioId
+                    && (target.PropertyId == null || unit.PropertyId == target.PropertyId))
+                .Select(unit => new ExpenseLocationContext(
+                    ExpenseOperationalScope.Unit,
+                    unit.PropertyId,
+                    unit.Id,
+                    null))
+                .SingleOrDefaultAsync(ct);
+            return unitLocation
+                ?? throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
         }
-        if (target.WorkOrderId is int workOrderId && !await persistence.Query<WorkOrder>()
-                .AnyAsync(order => order.Id == workOrderId && order.PortfolioId == portfolioId, ct))
+
+        if (target.PropertyId is int propertyId)
         {
-            throw new ScanConfirmationValidationException("Selected work order is not in this portfolio.");
+            var propertyLocation = await persistence.Query<Property>()
+                .Where(property => property.Id == propertyId && property.PortfolioId == portfolioId)
+                .Select(property => new ExpenseLocationContext(
+                    ExpenseOperationalScope.Property,
+                    property.Id,
+                    null,
+                    null))
+                .SingleOrDefaultAsync(ct);
+            return propertyLocation
+                ?? throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
         }
+
+        return new ExpenseLocationContext(ExpenseOperationalScope.Portfolio, null, null, null);
     }
+
+    private sealed record ExpenseLocationContext(
+        ExpenseOperationalScope OperationalScope,
+        int? PropertyId,
+        int? UnitId,
+        int? WorkOrderId);
 
     private static async Task ValidateOptionalPropertyUnitAsync(
         int portfolioId,

@@ -34,6 +34,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _leaseManagementId;
     private int _tenantAccountId;
     private int _vendorId;
+    private int _workOrderId;
     private int _actorUserId;
     private Guid _authSessionId;
     private int _accessContextId;
@@ -225,6 +226,28 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await scope.Db.SaveChangesAsync();
         _tenantAccountId = tenantAccount.Id;
         _leaseManagementId = relationship.Id;
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            UnitId = _unitId,
+            TenantId = _tenantId,
+            LeaseManagementId = _leaseManagementId,
+            VendorId = _vendorId,
+            Title = "Scan-linked repair",
+            Description = "Fixture work order for scanned expense receipts.",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = CommandTime,
+            CreatedBy = "test",
+            UpdatedAt = CommandTime,
+        };
+        scope.Db.WorkOrders.Add(workOrder);
+        await scope.Db.SaveChangesAsync();
+        _workOrderId = workOrder.Id;
+
         _authSessionId = session.Id;
         _accessContextId = accessContext.Id;
         _accessRevision = accessContext.AccessRevision;
@@ -270,6 +293,49 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             (await verify.Db.ExpenseLineItems.CountAsync(row =>
                 row.ExpenseId == result.Value.TargetEntityId)).Should().Be(1);
         }
+    }
+
+    [SkippableFact]
+    public async Task ExpenseScanConfirmation_PersistsOperationalScopeMatchingTargetLocation()
+    {
+        SkipIfDockerUnavailable();
+
+        await AssertExpenseScopeAsync(
+            "portfolio-scope",
+            null,
+            null,
+            null,
+            ExpenseOperationalScope.Portfolio,
+            expectedPropertyId: null,
+            expectedUnitId: null,
+            expectedWorkOrderId: null);
+        await AssertExpenseScopeAsync(
+            "property-scope",
+            _propertyId,
+            null,
+            null,
+            ExpenseOperationalScope.Property,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: null,
+            expectedWorkOrderId: null);
+        await AssertExpenseScopeAsync(
+            "unit-scope",
+            null,
+            _unitId,
+            null,
+            ExpenseOperationalScope.Unit,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: _unitId,
+            expectedWorkOrderId: null);
+        await AssertExpenseScopeAsync(
+            "work-order-scope",
+            null,
+            null,
+            _workOrderId,
+            ExpenseOperationalScope.WorkOrder,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: _unitId,
+            expectedWorkOrderId: _workOrderId);
     }
 
     [SkippableFact]
@@ -577,6 +643,41 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         DeliveryIdempotencyKey: $"scan-confirm:{_portfolioId}:{source.DraftId}:lease-agreement",
         SourceContentSha256: source.Sha256,
         SourceLabel: source.SourceLabel);
+
+    private async Task AssertExpenseScopeAsync(
+        string idempotencyKey,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        ExpenseOperationalScope expectedScope,
+        int? expectedPropertyId,
+        int? expectedUnitId,
+        int? expectedWorkOrderId)
+    {
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Expense,
+                Expense: new ScanExpenseTargetData(
+                    Receipt($"Expense {idempotencyKey}"), true, propertyId, unitId, workOrderId)),
+            DeliveryIdempotencyKey = $"scan-confirm:{_portfolioId}:{draftId}:{idempotencyKey}",
+        };
+
+        var result = await UnitOfWork.ExecuteAsync(
+            ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, idempotencyKey),
+            command,
+            Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var expense = await verify.Db.Expenses.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.TargetEntityId);
+        expense.OperationalScope.Should().Be(expectedScope);
+        expense.PropertyId.Should().Be(expectedPropertyId);
+        expense.UnitId.Should().Be(expectedUnitId);
+        expense.WorkOrderId.Should().Be(expectedWorkOrderId);
+    }
 
     private static ScanLeaseTargetData LeaseTarget(
         int propertyId,
