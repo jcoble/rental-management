@@ -110,6 +110,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         {
             Id = 76,
             PortfolioId = _portfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             Property = property,
             Unit = unit,
             Description = "Audit search expense",
@@ -124,8 +125,19 @@ public sealed class AuditSearchTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             Property = property,
             Unit = unit,
-            Title = "Audit search work",
+            Title = "Yard cleanup appointment",
             Description = "Audit search work",
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        var updatedWorkOrder = new WorkOrder
+        {
+            Id = 12,
+            PortfolioId = _portfolioId,
+            Property = property,
+            Unit = unit,
+            Title = "Updated audit search work",
+            Description = "Updated audit search work",
             RequestedAt = now,
             UpdatedAt = now,
         };
@@ -141,7 +153,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        ctx.AddRange(property, unit, expense, workOrder, application);
+        ctx.AddRange(property, unit, expense, workOrder, updatedWorkOrder, application);
 
         var user = new ApplicationUser
         {
@@ -216,6 +228,14 @@ public sealed class AuditSearchTests : IAsyncLifetime
                 AttemptId = Guid.NewGuid(), CommandType = "test.audit-search.seed",
                 CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
                 PortfolioId = _portfolioId, EntityType = "WorkOrder", EntityId = 11,
+                Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord",
+                IpAddress = "198.51.100.9", Timestamp = DateTime.UtcNow.AddMinutes(-2),
+            },
+            new AtomicAuditLog
+            {
+                AttemptId = Guid.NewGuid(), CommandType = "test.audit-search.seed",
+                CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
+                PortfolioId = _portfolioId, EntityType = "WorkOrder", EntityId = 12,
                 Operation = AuditLogOperation.Updated, ActorLabel = "Bob Staff",
                 IpAddress = "198.51.100.9", Timestamp = DateTime.UtcNow.AddMinutes(-2),
             },
@@ -249,7 +269,12 @@ public sealed class AuditSearchTests : IAsyncLifetime
 
         async Task<List<int>> SearchIds(string term)
         {
-            var page = await sut.ListAsync(_scope, null, null, null, new ListQuery { Search = term });
+            var page = await sut.ListForensicAsync(
+                _portfolioId,
+                null,
+                null,
+                null,
+                new ListQuery { Search = term });
             return page.Select(e => e.EntityId).ToList();
         }
 
@@ -261,14 +286,14 @@ public sealed class AuditSearchTests : IAsyncLifetime
         // Entity type via ILIKE.
         (await SearchIds("application")).Should().Equal(7);
         // Actor label via ILIKE (lowercase term → case-insensitive match on "Bob Staff").
-        (await SearchIds("bob")).Should().Equal(11);
+        (await SearchIds("bob")).Should().Equal(12);
         // IP address via ILIKE substring → both Jane rows share 203.0.113.5.
         (await SearchIds("203.0.113")).Should().BeEquivalentTo(new[] { 76, 7 });
         // Action verb → operation. "updated" narrows to the WorkOrder row.
-        (await SearchIds("updated")).Should().Equal(11);
+        (await SearchIds("updated")).Should().Equal(12);
         // Friendly verbs map to the stored Created operation, so both Created rows match.
-        (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 7 });
-        (await SearchIds("received")).Should().BeEquivalentTo(new[] { 76, 7 });
+        (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 11, 7 });
+        (await SearchIds("received")).Should().BeEquivalentTo(new[] { 76, 11, 7 });
     }
 
     [SkippableFact]
@@ -295,7 +320,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         sql.Should().Contain("FROM \"AtomicAuditLogs\"");
         sql.Should().Contain("\"AspNetUsers\"");
         sql.Should().Contain("\"WorkspaceAccessContexts\"");
-        sql.Should().Contain("\"AuthSessions\"");
+        sql.Should().Contain("rc_api_effective_capability_scopes");
         sql.Should().Contain("reports.read");
         sql.Should().Contain("\"LeaseManagements\"");
         sql.Should().Contain("\"LeaseAgreements\"");
@@ -307,12 +332,62 @@ public sealed class AuditSearchTests : IAsyncLifetime
         sql.Should().Contain("LIMIT");
         sql.Should().Contain("OFFSET");
 
-        var page = await sut.ListAsync(_scope, null, null, null, query);
+        var page = await sut.ListForensicAsync(_portfolioId, null, null, null, query);
 
         page.Should().HaveCount(2);
         commands.ReaderCommands.Should().ContainSingle(
             "the audit page and all actor/Unit enrichment must execute as one SQL reader command");
         commands.ReaderCommands[0].Should().Contain("FROM \"AtomicAuditLogs\"");
+    }
+
+    [SkippableFact]
+    public async Task Search_Matches_WorkOrder_Target_Title_Inside_One_Translated_Paged_Command()
+    {
+        SkipIfNoDocker();
+
+        var commands = new ReaderCommandRecorder();
+        await using var db = NewContext(_ownerConnString, commands);
+        var sut = new AuditQueryService(
+            db,
+            new AuditDescriber(),
+            new AuditDiffBuilder(),
+            new FakeTimeZoneProvider(),
+            TimeProvider.System);
+        var query = new ListQuery
+        {
+            Search = "Yard cleanup",
+            Skip = 0,
+            Take = 51,
+            Sort = "-timestamp",
+        };
+
+        var translatedSql = sut.BuildPageProjectionQuery(
+                _scope,
+                AuditLogOperation.Created,
+                nameof(WorkOrder),
+                null,
+                query)
+            .ToQueryString();
+
+        translatedSql.Should().Contain("\"WorkOrders\"");
+        translatedSql.Should().Contain("\"Title\"");
+        translatedSql.Should().Contain("ILIKE");
+        translatedSql.Should().Contain("ORDER BY");
+        translatedSql.Should().Contain("LIMIT");
+
+        var page = await sut.ListForensicAsync(
+            _portfolioId,
+            AuditLogOperation.Created,
+            nameof(WorkOrder),
+            null,
+            query);
+
+        page.Should().ContainSingle();
+        page[0].EntityId.Should().Be(11);
+        commands.ReaderCommands.Should().ContainSingle(
+            "audit target-title search, authorization, filtering, sorting, paging, actor resolution, and route projection must remain one SQL reader command");
+        commands.ReaderCommands[0].Should().Contain("\"WorkOrders\"");
+        commands.ReaderCommands[0].Should().Contain("\"Title\"");
     }
 
     // ───────────────────────────────── helpers ─────────────────────────────────
