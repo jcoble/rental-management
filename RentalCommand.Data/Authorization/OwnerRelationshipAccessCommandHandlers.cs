@@ -54,7 +54,7 @@ public sealed class GrantOwnerUserAccessHandler
             AccessContext = target.Context,
             ApplicationUserId = target.Context.UserId,
             OwnerEntityId = command.OwnerEntityId,
-            EffectiveFromUtc = command.EffectiveFromUtc,
+            EffectiveFromUtc = now,
             EffectiveToUtc = command.EffectiveToUtc,
             GrantedAtUtc = now,
             GrantedByUserId = command.ActorUserId,
@@ -63,9 +63,9 @@ public sealed class GrantOwnerUserAccessHandler
         attempt.Persistence.Add(access);
         target.Context.AdvanceRevision(command.ExpectedTargetAccessRevision);
         target.Context.UpdatedAtUtc = now;
-        await attempt.FlushBusinessAsync(ct);
         attempt.BindSemanticAudit(access, OwnerRelationshipAccessCommandSupport.Audit(
             command, access.Id, AuditLogOperation.Created, "Owner portal relationship granted"));
+        await attempt.FlushBusinessAsync(ct);
         return new(OwnerRelationshipAccessMutationOutcome.Applied, command.OwnerEntityId,
             command.TargetAccessContextId, access.Id, target.Context.AccessRevision);
     }

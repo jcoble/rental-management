@@ -1,18 +1,23 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
-using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auth;
 using RentalCommand.Data.Authorization;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -33,6 +38,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         new("workspace-team.membership.create.v1");
     private static readonly AtomicJsonResultCodec<WorkspaceTeamMutationResult> TeamMutationCodec =
         new("workspace-team.mutation.v1");
+    private static readonly AtomicJsonResultCodec<OwnerRelationshipAccessMutationResult> OwnerAccessCodec =
+        new("owner-relationship-access-mutation-result:v1");
+    private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartSessionCodec =
+        new("auth-session-start-result:v1");
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
@@ -108,6 +117,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             CreateWorkspaceMembershipResult,
             CreateWorkspaceMembershipHandler>();
         services.AddAtomicCommandHandler<
+            StartAuthSessionCommand,
+            StartAuthSessionResult,
+            StartAuthSessionHandler>();
+        services.AddAtomicCommandHandler<
             AddWorkspaceRoleAssignmentCommand,
             WorkspaceTeamMutationResult,
             AddWorkspaceRoleAssignmentHandler>();
@@ -123,6 +136,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             ChangeWorkspaceMembershipStatusCommand,
             WorkspaceTeamMutationResult,
             ChangeWorkspaceMembershipStatusHandler>();
+        services.AddAtomicCommandHandler<
+            GrantOwnerUserAccessCommand,
+            OwnerRelationshipAccessMutationResult,
+            GrantOwnerUserAccessHandler>();
         services.AddAtomicCommandHandler<
             UnsafeWorkspaceAssignmentMutationCommand,
             WorkspaceAccessMutationResult,
@@ -1092,6 +1109,170 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task TeamInvite_UsesRealSecurityClockForImmediateActivationAndLoginUnderSimAhead()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"sim-ahead-invite-{Guid.NewGuid():N}");
+        var simAheadUtc = new DateTime(2027, 1, 18, 15, 0, 0, DateTimeKind.Utc);
+        var lowerBoundUtc = DateTime.UtcNow.AddMinutes(-1);
+        var email = $"sim-ahead-member-{Guid.NewGuid():N}@example.test";
+        var created = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.sim-ahead.membership.create"),
+            new CreateWorkspaceMembershipCommand(
+                pair.PortfolioId,
+                pair.ActorUserId,
+                pair.ActorSessionId,
+                pair.ActorContextId,
+                1,
+                email,
+                "Simulation Ahead Member",
+                RoleProfileKeys.PropertyManager,
+                MembershipRoleAssignmentScopeKind.SelectedProperties,
+                [_managerPropertyId],
+                simAheadUtc,
+                "https://localhost:5667"),
+            TeamCreateCodec);
+        var upperBoundUtc = DateTime.UtcNow.AddMinutes(1);
+
+        string invitationToken;
+        long invitationId;
+        await using (var db = NewContext())
+        {
+            var membership = await db.WorkspaceMemberships.AsNoTracking()
+                .SingleAsync(item => item.Id == created.Value.WorkspaceMembershipId);
+            var assignment = await db.MembershipRoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.Id == created.Value.AssignmentId);
+            var option = await new EffectiveAccessContextSelectionQuery(db)
+                .ListAsync(created.Value.UserId, created.Value.AccessContextId);
+            var invitation = await db.WorkspaceInvitations.AsNoTracking()
+                .SingleAsync(item => item.WorkspaceMembershipId == created.Value.WorkspaceMembershipId);
+            var outbox = await db.OutboxMessages.AsNoTracking()
+                .SingleAsync(message =>
+                    message.IdempotencyKey ==
+                    $"workspace-invitation:{created.Value.WorkspaceMembershipId}:activation-v1");
+
+            membership.EffectiveFromUtc.Should().BeOnOrAfter(lowerBoundUtc);
+            membership.EffectiveFromUtc.Should().BeBefore(upperBoundUtc);
+            membership.EffectiveFromUtc.Should().BeBefore(simAheadUtc);
+            assignment.EffectiveFromUtc.Should().BeOnOrAfter(lowerBoundUtc);
+            assignment.EffectiveFromUtc.Should().BeBefore(upperBoundUtc);
+            assignment.EffectiveFromUtc.Should().BeBefore(simAheadUtc);
+            option.Should().ContainSingle(item =>
+                item.AccessContextId == created.Value.AccessContextId &&
+                item.DefaultExperience == WorkspaceExperience.Management);
+
+            invitationId = invitation.Id;
+            invitationToken = ReadActivationToken(outbox.Payload);
+        }
+
+        var activated = await ActivateInvitationAsApiAsync(
+            invitationId,
+            created.Value.UserId,
+            CreateWorkspaceMembershipHandler.HashInvitationToken(invitationToken));
+        var issuedAtUtc = DateTime.UtcNow;
+        var started = await AtomicUnitOfWork.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            new StartAuthSessionCommand(
+                created.Value.UserId,
+                created.Value.AccessContextId,
+                created.Value.AccessRevision,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                LowerSha256(Guid.NewGuid().ToString("N")),
+                issuedAtUtc,
+                issuedAtUtc.AddDays(30),
+                issuedAtUtc.AddDays(7),
+                issuedAtUtc.AddDays(30)),
+            StartSessionCodec);
+
+        activated.InvitedUserId.Should().Be(created.Value.UserId);
+        activated.AccessContextId.Should().Be(created.Value.AccessContextId);
+        started.Value.Started.Should().BeTrue(
+            "team access created during simulation must be immediately login-eligible on the real security clock");
+    }
+
+    [SkippableFact]
+    public async Task OwnerUserAccessGrant_UsesRealSecurityClockForImmediateContextEligibilityUnderSimAhead()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"sim-ahead-owner-{Guid.NewGuid():N}");
+        var simAheadUtc = new DateTime(2027, 1, 18, 15, 0, 0, DateTimeKind.Utc);
+        var email = $"sim-ahead-owner-{Guid.NewGuid():N}@example.test";
+        int ownerEntityId;
+        int relationshipUserId;
+        int relationshipContextId;
+        await using (var db = NewContext())
+        {
+            var user = new ApplicationUser
+            {
+                UserName = email,
+                NormalizedUserName = email.ToUpperInvariant(),
+                Email = email,
+                NormalizedEmail = email.ToUpperInvariant(),
+                EmailConfirmed = true,
+                DisplayName = "Simulation Ahead Owner",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = simAheadUtc,
+            };
+            var context = new WorkspaceAccessContext
+            {
+                User = user,
+                PortfolioId = pair.PortfolioId,
+                Status = WorkspaceAccessContextStatus.Active,
+                LastAuthorizedExperience = WorkspaceExperience.Owner,
+                CreatedAtUtc = simAheadUtc,
+                UpdatedAtUtc = simAheadUtc,
+            };
+            var owner = new OwnerEntity
+            {
+                PortfolioId = pair.PortfolioId,
+                Name = "Simulation Ahead Owner Entity",
+                CreatedAt = simAheadUtc,
+                UpdatedAt = simAheadUtc,
+            };
+            db.AddRange(context, owner);
+            await db.SaveChangesAsync();
+            ownerEntityId = owner.Id;
+            relationshipUserId = user.Id;
+            relationshipContextId = context.Id;
+        }
+
+        var lowerBoundUtc = DateTime.UtcNow.AddMinutes(-1);
+        var granted = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.owner-access.sim-ahead.grant"),
+            new GrantOwnerUserAccessCommand(
+                pair.PortfolioId,
+                ownerEntityId,
+                relationshipContextId,
+                1,
+                simAheadUtc,
+                null,
+                "Grant owner portal access under simulation",
+                pair.ActorUserId,
+                pair.ActorSessionId,
+                pair.ActorContextId,
+                1),
+            OwnerAccessCodec);
+        var upperBoundUtc = DateTime.UtcNow.AddMinutes(1);
+
+        await using var verification = NewContext();
+        var access = await verification.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(item => item.Id == granted.Value.OwnerUserAccessId!.Value);
+        var options = await new EffectiveAccessContextSelectionQuery(verification)
+            .ListAsync(relationshipUserId, relationshipContextId);
+
+        granted.Value.Outcome.Should().Be(OwnerRelationshipAccessMutationOutcome.Applied);
+        access.EffectiveFromUtc.Should().BeOnOrAfter(lowerBoundUtc);
+        access.EffectiveFromUtc.Should().BeBefore(upperBoundUtc);
+        access.EffectiveFromUtc.Should().BeBefore(simAheadUtc);
+        options.Should().ContainSingle(item =>
+            item.AccessContextId == relationshipContextId &&
+            item.DefaultExperience == WorkspaceExperience.Owner);
+    }
+
+    [SkippableFact]
     public async Task TeamInvite_ReusesExistingRelationshipContextWithoutCreatingSecondRoot()
     {
         SkipIfNoDocker();
@@ -1800,6 +1981,29 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     private static AtomicCommandIdentity Identity(string commandType) =>
         new(commandType, Guid.NewGuid().ToString("N"));
 
+    private static string ReadActivationToken(string outboxPayload)
+    {
+        using var document = JsonDocument.Parse(outboxPayload);
+        var body = document.RootElement.GetProperty("body").GetString()
+            ?? throw new InvalidOperationException("Invitation email body is missing.");
+        const string marker = "activate-team?token=";
+        var markerIndex = body.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            throw new InvalidOperationException("Invitation email body is missing the activation token.");
+        }
+
+        var tokenStart = markerIndex + marker.Length;
+        var tokenEnd = body.IndexOfAny(['\r', '\n', ' '], tokenStart);
+        var token = tokenEnd < 0
+            ? body[tokenStart..]
+            : body[tokenStart..tokenEnd];
+        return Uri.UnescapeDataString(token.Trim());
+    }
+
+    private static string LowerSha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
     private AuthSessionRefreshTokenFamily RefreshFamily() => new()
     {
         Id = Guid.NewGuid(),
@@ -1901,6 +2105,23 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options);
 
+    private async Task<WorkspaceInvitationActivationRow> ActivateInvitationAsApiAsync(
+        long invitationId,
+        int invitedUserId,
+        string tokenHash)
+    {
+        await using var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_apiConnectionString)
+                .Options);
+        return await db.Database.SqlQuery<WorkspaceInvitationActivationRow>($"""
+                SELECT * FROM rc_activate_workspace_invitation(
+                    {invitationId}, {invitedUserId}, {tokenHash}, {"hashed-password-for-test"},
+                    {Guid.NewGuid().ToString("N")}, {Guid.NewGuid().ToString("N")})
+                """)
+            .SingleAsync();
+    }
+
     private async Task<RentalCommandDbContext> NewAuthorizationQueryContextAsync()
     {
         var db = new RentalCommandDbContext(
@@ -1920,6 +2141,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; workspace authorization kernel test skipped.");
+
+    private sealed class WorkspaceInvitationActivationRow
+    {
+        public int PortfolioId { get; set; }
+        public int WorkspaceMembershipId { get; set; }
+        public int AccessContextId { get; set; }
+        public int InvitedUserId { get; set; }
+        public DateTime AcceptedAtUtc { get; set; }
+    }
 
     private sealed class AccessTestActor : ICurrentActor
     {
