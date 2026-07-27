@@ -327,6 +327,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 LineNumber = lineNumber++,
             });
         }
+        AddDefaultExpenseAllocation(command.PortfolioId, expense, location, reviewed.Amount, now);
 
         attempt.Persistence.Add(expense);
         var flush = await attempt.FlushBusinessAsync(ct);
@@ -375,6 +376,39 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         DateTime TransactionDate,
         decimal Amount,
         ScheduleECategory Category);
+
+    private static void AddDefaultExpenseAllocation(
+        int portfolioId,
+        Expense expense,
+        ExpenseLocationContext location,
+        decimal amount,
+        DateTime now)
+    {
+        if (location.UnitId is int unitId)
+        {
+            expense.Allocations.Add(new ExpenseAllocation
+            {
+                PortfolioId = portfolioId,
+                TargetKind = ExpenseAllocationTargetKind.Unit,
+                UnitId = unitId,
+                Amount = amount,
+                CreatedAt = now,
+            });
+            return;
+        }
+
+        if (location.PropertyId is int propertyId)
+        {
+            expense.Allocations.Add(new ExpenseAllocation
+            {
+                PortfolioId = portfolioId,
+                TargetKind = ExpenseAllocationTargetKind.Property,
+                PropertyId = propertyId,
+                Amount = amount,
+                CreatedAt = now,
+            });
+        }
+    }
 
     private static async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync(
         ConfirmScanDraftCommand command,
