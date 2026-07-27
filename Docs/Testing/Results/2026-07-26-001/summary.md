@@ -921,6 +921,36 @@
   - Rejected the duplicate verification draft with a recorded reason; the already-corrected
     original receipt and allocation were unchanged.
 
+### TSK-754-D031 — Prepare move-in contract test omitted restored rent-start fields
+
+- Status: Fixed and verified
+- Severity: Medium regression-safety defect
+- Reproduction:
+  - Run the focused web Prepare move-in form contract after restoring
+    `rentTrackingStartMode` and `rentTrackingStartOn` to the canonical typed request.
+- Expected:
+  - The primary atomic-request assertion covers the default forward-only choice.
+  - Separate assertions preserve backfill-from-lease-start and custom-cutoff behavior, including
+    required-date and pre-agreement validation.
+- Actual:
+  - The implementation emitted the correct `ForwardOnly` and null cutoff fields, but the stale
+    expected payload omitted both fields and failed.
+  - No product mutation failed; this was a test-contract regression exposed before the next
+    simulation entry.
+- Fix:
+  - Updated the full atomic-request expectation.
+  - Added coverage for backfill, custom cutoff, missing custom date, and cutoff-before-agreement.
+- Verification:
+  - All 13 focused web application-first and Prepare move-in tests pass.
+  - All seven focused Data-layer Prepare move-in validation tests pass.
+  - Live browser proof against Azure commit
+    `3e3c2ef7037f68481138c5bc9beb6c1924badd47` confirms Leases routes Prepare move-in to
+    Applications instead of restoring the removed generic lease modal.
+  - The Azure stack remained healthy and preserved 22 Properties, 24 Units, 24 Tenants, and 24
+    LeaseAgreements after the application runtime update.
+  - Ignored evidence:
+    `output/remote-verification/tsk754-3e3c2ef7/live-leasing-prepare-move-in.png`.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -1151,7 +1181,7 @@
 - Uploaded and confirmed scan assets: 29 / 953
 - Pilot scan confirmations: 1
 - Official scan confirmations: 29
-- Findings and safety blockers: 30
+- Findings and safety blockers: 31
 - Current blockers:
   - D029 defers `RUN-20270103-13` through `RUN-20270103-15` until their January 4 opening leases
     exist.
