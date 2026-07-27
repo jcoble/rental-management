@@ -111,6 +111,26 @@ describe('canonical lease lifecycle action hub', () => {
 		);
 	});
 
+	it('formats lease-detail planned date-only fields without local timezone drift', () => {
+		assert.match(detailPageSource, /import \{ formatDateOnly \} from '\$lib\/utils\/date';/);
+		assert.match(
+			detailPageSource,
+			/Possession planned \$\{formatDateOnly\(summary\.plannedPossessionAtUtc\)\}/
+		);
+		assert.match(
+			detailPageSource,
+			/Move-out planned \{formatDateOnly\(summary\.plannedMoveOutAtUtc\)\}/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedPossessionAtUtc\)\.toLocaleDateString/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedMoveOutAtUtc\)\.toLocaleDateString/
+		);
+	});
+
 	it('records the approved ending disposition without mutating an agreement', () => {
 		assert.match(endpointSource, /recordEndingDisposition:/);
 		assert.match(endpointSource, /\/ending-disposition`/);

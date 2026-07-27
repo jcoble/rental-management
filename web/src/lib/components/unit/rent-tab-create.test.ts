@@ -28,6 +28,14 @@ describe('unit rent canonical receipt and charge commands', () => {
 		assert.match(source, /Use this only for a true one-off charge/);
 	});
 
+	it('offers an idempotent generic ledger reversal for non-payment activity rows', () => {
+		assert.match(source, /tenantAccounts\.reverseEntry\(tenantAccountId, operationKey/);
+		assert.match(source, /canReverseTenantLedgerEntry\(entry\)/);
+		assert.match(source, /data-testid=\{`rent-reverse-ledger-entry-\$\{entry\.tenantLedgerEntryId\}`\}/);
+		assert.match(source, /data-testid="rent-reversal-form"/);
+		assert.doesNotMatch(source, /entry\.entryType === 'PaymentReceipt'[\s\S]*tenantAccounts\.reverseEntry/);
+	});
+
 	it('renders immutable receipt detail without edit or delete actions', () => {
 		assert.match(paymentDetailSource, /This receipt stays in your records/);
 		assert.match(paymentDetailSource, /records a matching correction instead of rewriting it/);

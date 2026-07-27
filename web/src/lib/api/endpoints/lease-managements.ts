@@ -264,7 +264,14 @@ export interface LeaseAgreementSignatureProgress {
 }
 
 export interface PrepareMoveInPartyRequest {
-  tenantId: number;
+  tenantId: number | null;
+  newTenant: {
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string | null;
+    emergencyContact: string | null;
+  } | null;
   role: LeaseManagementPartyRole;
   guarantorLegalNoticeEligible: boolean;
   changeReason: string;
@@ -274,7 +281,7 @@ export interface PrepareMoveInPartyRequest {
 }
 
 export interface PrepareMoveInRequest {
-  applicationId: number;
+  applicationId: number | null;
   unitId: number;
   plannedPossessionAtUtc: string | null;
   partyEffectiveFrom: string;
@@ -299,7 +306,7 @@ export interface PrepareMoveInRequest {
 }
 
 export interface PrepareMoveInResponse {
-  applicationId: number;
+  applicationId: number | null;
   leaseManagementId: number;
   tenantAccountId: number;
   leaseAgreementId: number;

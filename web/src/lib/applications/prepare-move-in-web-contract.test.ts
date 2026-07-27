@@ -14,13 +14,19 @@ const applicationsPageSource = readFileSync(
 	new URL('../../routes/(protected)/applications/+page.svelte', import.meta.url),
 	'utf8'
 );
+const leasesPageSource = readFileSync(
+	new URL('../../routes/(protected)/leases/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('canonical web Prepare move-in workflow', () => {
 	it('posts the complete typed request with an explicit idempotency key', () => {
 		assert.match(endpointSource, /export interface PrepareMoveInRequest/);
-		assert.match(endpointSource, /applicationId: number/);
+		assert.match(endpointSource, /applicationId: number \| null/);
+		assert.match(endpointSource, /tenantId: number \| null/);
+		assert.match(endpointSource, /newTenant: \{/);
 		assert.match(endpointSource, /parties: PrepareMoveInPartyRequest\[\]/);
-		assert.match(endpointSource, /documentTemplateId: number/);
+		assert.match(endpointSource, /documentTemplateId: number \| null/);
 		assert.match(endpointSource, /termsPayload: Record<string, unknown>/);
 		assert.match(endpointSource, /openingBalanceAmount: number \| null/);
 		assert.match(
@@ -30,12 +36,23 @@ describe('canonical web Prepare move-in workflow', () => {
 		assert.match(endpointSource, /["']Idempotency-Key["']:\s*operationKey/);
 	});
 
+	it('offers a direct manual lease path from Leases without creating a legacy lease', () => {
+		assert.match(leasesPageSource, /data-testid="leases-create-lease"/);
+		assert.match(leasesPageSource, /<FilePlus2[^>]*\/> Create lease/);
+		assert.match(leasesPageSource, /<PrepareMoveInDialog[\s\S]*mode="manual"/);
+		assert.match(leasesPageSource, /onprepared=\{finishManualLease\}/);
+		assert.doesNotMatch(leasesPageSource, /leases\.create/);
+		assert.doesNotMatch(leasesPageSource, /tenants\.create/);
+	});
+
 	it('consumes exact application, unit, and tenant context without legacy lease creation', () => {
 		assert.match(applicationsPageSource, /readPrepareMoveInPrefill\(page\.url\.searchParams\)/);
 		assert.match(applicationsPageSource, /<PrepareMoveInDialog/);
 		assert.match(dialogSource, /seededApplicationId/);
 		assert.match(dialogSource, /data-testid="prepare-move-in-locked-application"/);
 		assert.match(dialogSource, /data-testid="prepare-move-in-locked-unit"/);
+		assert.match(dialogSource, /buildPrepareMoveInRequest\(form,\s*\{\s*requireApplication: !manualMode\s*\}\)/);
+		assert.match(dialogSource, /selectedApplicationId <= 0[\s\S]*Choose an approved application/);
 		assert.match(dialogSource, /application\.approvedTenantId !== requiredTenantId/);
 		assert.doesNotMatch(dialogSource, /leases\.create/);
 		assert.doesNotMatch(dialogSource, /leaseId/);
@@ -44,8 +61,12 @@ describe('canonical web Prepare move-in workflow', () => {
 	it('uses server-filtered paged selectors for unresolved approved applications, units, and templates', () => {
 		assert.match(dialogSource, /applications\.listPage\(\{/);
 		assert.match(dialogSource, /status: 'Approved'/);
+		assert.match(dialogSource, /loadManualUnitOptions/);
+		assert.match(dialogSource, /status: 'Vacant'/);
+		assert.match(dialogSource, /loadManualTenantOptions/);
+		assert.match(dialogSource, /availableForLease: true/);
 		assert.match(dialogSource, /units\.listWithHealthPage\(\{/);
-		assert.match(dialogSource, /propertyId: application\?\.propertyId \?\? undefined/);
+		assert.match(dialogSource, /propertyId: selectedPropertyId \?\? undefined/);
 		assert.match(dialogSource, /documentTemplates\.listPage\(\{/);
 		assert.match(dialogSource, /documentTemplates\.get\(selectedTemplateId\)/);
 		assert.match(dialogSource, /kind: 'Lease'/);

@@ -350,6 +350,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             new("LeaseAgreements", AtomicRawDmlOperation.Update),
             new("LeaseAddenda", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
+            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
             new("TenantAccounts", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update));
         var row = await _db.Database.SingleTopLevelResultAsync<CancelPlannedRelationshipRow>(
@@ -1168,20 +1169,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                       AND addendum."IssuedAtUtc" IS NOT NULL
                       AND addendum."VoidedAtUtc" IS NULL)
                     AS unresolved_issued_artifacts,
-                EXISTS (
-                    SELECT 1
-                    FROM "TenantLedgerEntries" AS entry
-                    WHERE entry."PortfolioId" = @portfolioId
-                      AND entry."TenantAccountId" = account."Id")
-                OR EXISTS (
-                    SELECT 1
-                    FROM "SecurityDepositEntries" AS entry
-                    INNER JOIN "SecurityDepositAccounts" AS deposit
-                        ON deposit."Id" = entry."SecurityDepositAccountId"
-                       AND deposit."PortfolioId" = entry."PortfolioId"
-                    WHERE deposit."PortfolioId" = @portfolioId
-                      AND deposit."TenantAccountId" = account."Id")
-                OR COALESCE((
+                COALESCE((
                     SELECT sum(CASE WHEN entry."Direction" = 'Debit' THEN entry."Amount" ELSE -entry."Amount" END)
                     FROM "TenantLedgerEntries" AS entry
                     WHERE entry."PortfolioId" = @portfolioId
@@ -1199,7 +1187,20 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                     FROM "TenantPaymentAttempts" AS attempt
                     WHERE attempt."PortfolioId" = @portfolioId
                       AND attempt."TenantAccountId" = account."Id"
-                      AND attempt."State" NOT IN ('Failed', 'Canceled'))
+                      AND attempt."State" IN ('Prepared', 'Submitted', 'Unknown'))
+                OR EXISTS (
+                    SELECT 1
+                    FROM "TenantLedgerAllocations" AS allocation
+                    WHERE allocation."PortfolioId" = @portfolioId
+                      AND allocation."TenantAccountId" = account."Id"
+                      AND allocation."ReversesAllocationId" IS NULL
+                      AND allocation."Amount" > 0
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "TenantLedgerAllocations" AS reversal
+                          WHERE reversal."PortfolioId" = allocation."PortfolioId"
+                            AND reversal."TenantAccountId" = allocation."TenantAccountId"
+                            AND reversal."ReversesAllocationId" = allocation."Id"))
                 OR EXISTS (
                     SELECT 1
                     FROM "TenantAutopayEnrollments" AS enrollment

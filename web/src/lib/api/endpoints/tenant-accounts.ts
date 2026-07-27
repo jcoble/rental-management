@@ -1,5 +1,10 @@
 import { api } from '../client';
 
+export interface TenantMoneyCommandResponse<T> {
+	value: T;
+	replayed: boolean;
+}
+
 export interface TenantAccountListItem {
 	tenantAccountId: number;
 	leaseManagementId: number;
@@ -43,6 +48,8 @@ export interface TenantLedgerEntry {
 	postedAtUtc: string;
 	description: string;
 	businessKey: string;
+	reversesEntryId?: number | null;
+	hasReversal: boolean;
 	providerPaymentAttemptId?: number | null;
 	sourceStoredFileId?: number | null;
 }
@@ -144,6 +151,27 @@ export interface EntryListParams extends ListParams {
 	direction?: string;
 }
 
+export interface ReverseTenantLedgerEntryRequest {
+	reversesEntryId: number;
+	effectiveOn: string;
+	reason: string;
+	sourceStoredFileId?: number | null;
+}
+
+export interface TenantLedgerMutationResult {
+	found: boolean;
+	applied: boolean;
+	tenantAccountId: number;
+	ledgerEntryId: number;
+	reversesEntryId?: number | null;
+	entryType: string;
+	direction: string;
+	amount: number;
+	allocatedAmount: number;
+	allocationCount: number;
+	error?: string | null;
+}
+
 function queryString(params: object): string {
 	const query = new URLSearchParams();
 	for (const [key, value] of Object.entries(params)) {
@@ -173,6 +201,10 @@ export function buildTenantAccountDepositsPagePath(
 	return `/tenant-accounts/deposits/page${queryString(params)}`;
 }
 
+export function buildTenantAccountReversalsPath(tenantAccountId: number): string {
+	return `/tenant-accounts/${tenantAccountId}/reversals`;
+}
+
 export const tenantAccounts = {
 	listPage: (params: ListParams = {}) =>
 		api.get<Page<TenantAccountListItem>>(`/tenant-accounts/page${queryString(params)}`),
@@ -188,4 +220,13 @@ export const tenantAccounts = {
 		api.get<Page<TenantAccountDeposit>>(buildTenantAccountDepositsPagePath(params)),
 	entry: (tenantAccountId: number, tenantLedgerEntryId: number) =>
 		api.get<TenantLedgerEntryDetail>(`/tenant-accounts/${tenantAccountId}/entries/${tenantLedgerEntryId}`),
+	reverseEntry: (
+		tenantAccountId: number,
+		operationKey: string,
+		body: ReverseTenantLedgerEntryRequest
+	) => api.post<TenantMoneyCommandResponse<TenantLedgerMutationResult>>(
+		buildTenantAccountReversalsPath(tenantAccountId),
+		body,
+		{ headers: { 'Idempotency-Key': operationKey } }
+	),
 };
