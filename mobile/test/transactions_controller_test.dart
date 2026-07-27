@@ -242,6 +242,32 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('expense ledger amount renders one outflow sign', (tester) async {
+    final repo = _FakeMoneyRepository();
+    repo.completeNext(_page(_tx(kind: 'Expense', id: 4, amount: -157)));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          accountingRepositoryProvider.overrideWithValue(
+            _FakeAccountingRepository(),
+          ),
+          moneyRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(
+          home: MoneyScreen(
+            initialView: MoneyScreenView.expenses,
+            showTransactionSelector: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(r'-$157.00'), findsOneWidget);
+    expect(find.text(r'-$-157.00'), findsNothing);
+  });
+
   test('tenant ledger rows preserve canonical tenant-account identity', () {
     final transaction = AccountingTransaction.fromJson({
       'kind': 'TenantLedger',
@@ -401,7 +427,11 @@ AccountingTransactionsPage _pageWith({
   take: 40,
 );
 
-AccountingTransaction _tx({required String kind, required int id}) {
+AccountingTransaction _tx({
+  required String kind,
+  required int id,
+  double amount = 75,
+}) {
   return AccountingTransaction(
     kind: kind,
     id: id,
@@ -409,7 +439,7 @@ AccountingTransaction _tx({required String kind, required int id}) {
     description: '$kind row',
     category: kind,
     status: 'Scheduled',
-    amount: 75,
+    amount: amount,
     hasReceipt: false,
     receiptIsImage: false,
     reconciled: false,

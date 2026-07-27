@@ -812,7 +812,7 @@ class _TransactionCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Text(
-            '${isPayment ? '+' : '-'}${moneyFmt(tx.amount)}',
+            '${isPayment ? '+' : '-'}${moneyFmt(tx.amount.abs())}',
             style: theme.textTheme.bodyMedium?.copyWith(
               fontWeight: FontWeight.w700,
               color: signColor,
