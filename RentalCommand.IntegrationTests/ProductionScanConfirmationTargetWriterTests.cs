@@ -344,15 +344,6 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         SkipIfDockerUnavailable();
 
         await AssertExpenseScopeAsync(
-            "portfolio-scope",
-            null,
-            null,
-            null,
-            ExpenseOperationalScope.Portfolio,
-            expectedPropertyId: null,
-            expectedUnitId: null,
-            expectedWorkOrderId: null);
-        await AssertExpenseScopeAsync(
             "property-scope",
             _propertyId,
             null,
@@ -360,7 +351,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ExpenseOperationalScope.Property,
             expectedPropertyId: _propertyId,
             expectedUnitId: null,
-            expectedWorkOrderId: null);
+            expectedWorkOrderId: null,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Property,
+            expectedAllocationPropertyId: _propertyId,
+            expectedAllocationUnitId: null);
         await AssertExpenseScopeAsync(
             "unit-scope",
             null,
@@ -369,7 +363,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ExpenseOperationalScope.Unit,
             expectedPropertyId: _propertyId,
             expectedUnitId: _unitId,
-            expectedWorkOrderId: null);
+            expectedWorkOrderId: null,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Unit,
+            expectedAllocationPropertyId: null,
+            expectedAllocationUnitId: _unitId);
         await AssertExpenseScopeAsync(
             "work-order-scope",
             null,
@@ -378,7 +375,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ExpenseOperationalScope.WorkOrder,
             expectedPropertyId: _propertyId,
             expectedUnitId: _unitId,
-            expectedWorkOrderId: _workOrderId);
+            expectedWorkOrderId: _workOrderId,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Unit,
+            expectedAllocationPropertyId: null,
+            expectedAllocationUnitId: _unitId);
     }
 
     [SkippableFact]
@@ -737,7 +737,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         ExpenseOperationalScope expectedScope,
         int? expectedPropertyId,
         int? expectedUnitId,
-        int? expectedWorkOrderId)
+        int? expectedWorkOrderId,
+        ExpenseAllocationTargetKind? expectedAllocationTargetKind,
+        int? expectedAllocationPropertyId,
+        int? expectedAllocationUnitId)
     {
         var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
         var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
@@ -762,6 +765,22 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         expense.PropertyId.Should().Be(expectedPropertyId);
         expense.UnitId.Should().Be(expectedUnitId);
         expense.WorkOrderId.Should().Be(expectedWorkOrderId);
+        var allocations = await verify.Db.ExpenseAllocations.AsNoTracking()
+            .Where(row => row.ExpenseId == expense.Id)
+            .ToListAsync();
+        if (expectedAllocationTargetKind is null)
+        {
+            allocations.Should().BeEmpty();
+        }
+        else
+        {
+            var allocation = allocations.Should().ContainSingle().Subject;
+            allocation.TargetKind.Should().Be(expectedAllocationTargetKind);
+            allocation.PropertyId.Should().Be(expectedAllocationPropertyId);
+            allocation.UnitId.Should().Be(expectedAllocationUnitId);
+            allocation.OwnerEntityId.Should().BeNull();
+            allocation.Amount.Should().Be(expense.Amount);
+        }
     }
 
     private static ScanLeaseTargetData LeaseTarget(
