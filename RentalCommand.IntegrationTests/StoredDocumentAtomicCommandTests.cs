@@ -162,6 +162,33 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Duplicate_content_for_same_active_target_reuses_existing_document_and_cleans_retry_blob()
+    {
+        SkipIfNoDocker();
+        Storage.Add("blob-original");
+        Storage.Add("blob-duplicate");
+
+        var original = await CreateAsync("upload-original", "blob-original");
+        var duplicate = await CreateAsync("upload-duplicate", "blob-duplicate");
+
+        duplicate.Should().BeEquivalentTo(original);
+        await using var db = NewContext();
+        (await db.StoredFiles.CountAsync(file =>
+            file.PortfolioId == _portfolioId
+            && file.EntityType == nameof(StoredDocumentTarget.Unit)
+            && file.EntityId == _unitId
+            && file.ContentSha256 == ContentHash)).Should().Be(1);
+        (await db.PendingFileUploads.CountAsync(upload =>
+            upload.PortfolioId == _portfolioId
+            && upload.State == PendingFileUploadState.Finalized
+            && upload.StoredFileId == original!.Id)).Should().Be(2);
+        var cleanup = await db.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey.StartsWith("stored-document-duplicate-upload:"));
+        cleanup.MessageType.Should().Be("blob-delete");
+        cleanup.Payload.Should().Contain("blob-duplicate");
+    }
+
+    [SkippableFact]
     public async Task Audit_failure_rolls_back_row_receipt_and_unit_audit_then_compensates_upload()
     {
         SkipIfNoDocker();

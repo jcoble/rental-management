@@ -14,6 +14,7 @@ public class StoredFile : IAuditable, IPortfolioScoped
     public string FilePath { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public long FileSize { get; set; }
+    public string? ContentSha256 { get; set; }
     public string? EntityType { get; set; }
     public long? EntityId { get; set; }
     public DateTime UploadedAt { get; set; }

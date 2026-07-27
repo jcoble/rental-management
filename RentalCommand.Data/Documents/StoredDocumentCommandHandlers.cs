@@ -16,6 +16,8 @@ public sealed class CreateStoredDocumentHandler
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+
         var pendingUpload = await attempt.Persistence.Query<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == command.PortfolioId
@@ -36,6 +38,40 @@ public sealed class CreateStoredDocumentHandler
         }
 
         var entityType = command.Target.ToString();
+        var existing = await attempt.Persistence.Query<StoredFile>()
+            .Where(file => file.PortfolioId == command.PortfolioId
+                && file.EntityType == entityType
+                && file.EntityId == command.EntityId
+                && file.ContentSha256 == command.ContentSha256
+                && file.DeletedAt == null)
+            .SingleOrDefaultAsync(ct);
+        if (existing is not null)
+        {
+            pendingUpload.State = PendingFileUploadState.Finalized;
+            pendingUpload.StoredFileId = existing.Id;
+            pendingUpload.UpdatedAtUtc = command.UploadedAtUtc;
+            attempt.StageOutbox(new OutboxMessage
+            {
+                PortfolioId = command.PortfolioId,
+                MessageType = "blob-delete",
+                Payload = JsonSerializer.Serialize(new { pendingUploadId = pendingUpload.Id, storagePath = command.StoragePath }),
+                IdempotencyKey = $"stored-document-duplicate-upload:{pendingUpload.Id}",
+                CreatedAtUtc = command.UploadedAtUtc,
+                NextAttemptAtUtc = command.UploadedAtUtc,
+            });
+
+            return new CreateStoredDocumentResult(
+                StoredDocumentMutationOutcome.ReusedExisting,
+                existing.Id,
+                entityType,
+                command.EntityId,
+                existing.FileName,
+                existing.FilePath,
+                existing.ContentType,
+                existing.FileSize,
+                existing.UploadedAt);
+        }
+
         var row = new StoredFile
         {
             PortfolioId = command.PortfolioId,
@@ -43,6 +79,7 @@ public sealed class CreateStoredDocumentHandler
             EntityId = command.EntityId,
             FileName = command.FileName,
             ContentType = command.ContentType,
+            ContentSha256 = command.ContentSha256,
             FileSize = command.SizeBytes,
             FilePath = command.StoragePath,
             UploadedAt = command.UploadedAtUtc,
