@@ -18,6 +18,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
+using RentalCommand.Engine.Extensions;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -146,7 +147,7 @@ builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
 // API; the dispatcher resolves the portfolio's chosen provider then dispatches to the matching impl.
 builder.Services.AddSmsProviders();
-builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
+builder.Services.AddNotificationDeliveryChannel(builder.Configuration);
 // Push (FCM HTTP v1 via FirebaseAdmin). Singleton: the FirebaseApp is a process-global. Fail-soft
 // when no Push:* credential is configured — the outbox worker still marks push messages sent.
 builder.Services.Configure<PushConfig>(builder.Configuration.GetSection(PushConfig.SectionName));

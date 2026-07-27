@@ -15,6 +15,13 @@ public class NotificationsConfig
     public VonageOptions Vonage { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
+    /// <summary>
+    /// "Capture" records local/test sends as accepted without calling external providers.
+    /// "External" allows configured SMTP, SendGrid, and SMS providers to be called.
+    /// Hosts default to Capture unless this is explicitly set to External.
+    /// </summary>
+    public string? DeliveryMode { get; set; }
+
     /// <summary>SMTP email transport. Lets email be sent over a domain-authenticated SMTP provider
     /// or IP-authorized relay. Selected via <see cref="Email"/>.Transport == "Smtp".</summary>
     public SmtpOptions Smtp { get; set; } = new();
@@ -32,6 +39,15 @@ public class NotificationsConfig
     // Keyed by 2-letter US state (e.g. "CA"); caps the late fee. Missing state = no cap (use lease amount).
     public Dictionary<string, LateFeeCap> StateLateFeeCaps { get; set; } = new();
 
+}
+
+public static class NotificationDeliveryModes
+{
+    public const string Capture = "Capture";
+    public const string External = "External";
+
+    public static bool IsExternal(string? mode) =>
+        string.Equals(mode, External, StringComparison.OrdinalIgnoreCase);
 }
 
 public class TwilioOptions

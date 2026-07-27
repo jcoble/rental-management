@@ -22,6 +22,10 @@ const endpointSource = readFileSync(
   new URL("../../api/endpoints/notifications.ts", import.meta.url),
   "utf8"
 );
+const myAlertsRouteSource = readFileSync(
+  new URL("../../../routes/(protected)/settings/notifications/my-alerts/+page.svelte", import.meta.url),
+  "utf8"
+);
 
 describe("notification settings contract", () => {
   it("opens accessible help", () => {
@@ -49,6 +53,11 @@ describe("notification settings contract", () => {
     assert.match(journeySource, /hasUnsavedChanges/);
     assert.match(journeySource, /aria-current/);
     assert.match(journeySource, /Saved summary/);
+  });
+
+  it("keeps notification setup pages padded and their step content spaced", () => {
+    assert.match(journeySource, /mx-auto box-border h-full w-full max-w-5xl space-y-6 overflow-y-auto p-4 pb-20 sm:p-6/);
+    assert.match(myAlertsRouteSource, /<div class="space-y-5" data-testid="my-alerts-page">/);
   });
 
   it("uses an accessible single-panel disclosure pattern", () => {

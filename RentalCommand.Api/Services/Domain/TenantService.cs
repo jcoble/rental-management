@@ -150,36 +150,65 @@ public class TenantService : ITenantService
         if (query.UnitId.HasValue)
         {
             var unitId = query.UnitId.Value;
-            q = q.Where(tenant => _db.LeaseManagementParties.Any(party =>
-                party.PortfolioId == portfolioId
-                && party.TenantId == tenant.Id
-                && party.Role != LeaseManagementPartyRole.Guarantor
-                && _db.UnitOccupancyProjections.Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId
-                    && occupancy.UnitId == unitId
-                    && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId
-                    && lifecycle.LeaseManagementId == party.LeaseManagementId
-                    && party.EffectiveFrom <= lifecycle.BusinessDate
-                    && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
+            var propertyId = query.PropertyId;
+            q = q.Where(tenant =>
+                _db.LeaseManagementParties.Any(party =>
+                    party.PortfolioId == portfolioId
+                    && party.TenantId == tenant.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.UnitId == unitId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                || _db.WorkOrders.Any(workOrder =>
+                    workOrder.PortfolioId == portfolioId
+                    && workOrder.TenantId == tenant.Id
+                    && workOrder.UnitId == unitId
+                    && (!propertyId.HasValue || workOrder.PropertyId == propertyId.Value)
+                    && _db.LeaseManagementParties.Any(party =>
+                        party.PortfolioId == portfolioId
+                        && party.TenantId == tenant.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && party.LeaseManagement != null
+                        && party.LeaseManagement.UnitId == unitId
+                        && (!propertyId.HasValue || party.LeaseManagement.PropertyId == propertyId.Value)
+                        && party.LeaseManagement.CanceledAtUtc == null
+                        && party.LeaseManagement.PossessionReturnedAtUtc == null)));
         }
         else if (query.PropertyId.HasValue)
         {
             var propertyId = query.PropertyId.Value;
-            q = q.Where(tenant => _db.LeaseManagementParties.Any(party =>
-                party.PortfolioId == portfolioId
-                && party.TenantId == tenant.Id
-                && party.Role != LeaseManagementPartyRole.Guarantor
-                && _db.UnitOccupancyProjections.Any(occupancy =>
-                    occupancy.PortfolioId == portfolioId
-                    && occupancy.PropertyId == propertyId
-                    && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                    lifecycle.PortfolioId == portfolioId
-                    && lifecycle.LeaseManagementId == party.LeaseManagementId
-                    && party.EffectiveFrom <= lifecycle.BusinessDate
-                    && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
+            q = q.Where(tenant =>
+                _db.LeaseManagementParties.Any(party =>
+                    party.PortfolioId == portfolioId
+                    && party.TenantId == tenant.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.PropertyId == propertyId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                || _db.WorkOrders.Any(workOrder =>
+                    workOrder.PortfolioId == portfolioId
+                    && workOrder.TenantId == tenant.Id
+                    && workOrder.PropertyId == propertyId
+                    && _db.LeaseManagementParties.Any(party =>
+                        party.PortfolioId == portfolioId
+                        && party.TenantId == tenant.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && party.LeaseManagement != null
+                        && party.LeaseManagement.PropertyId == propertyId
+                        && party.LeaseManagement.CanceledAtUtc == null
+                        && party.LeaseManagement.PossessionReturnedAtUtc == null)));
         }
 
         if (query.AvailableForLease == true)

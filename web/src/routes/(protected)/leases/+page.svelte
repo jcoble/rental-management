@@ -104,10 +104,16 @@
 	<title>Leases - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full space-y-6 overflow-y-auto p-6 pb-20" data-testid="leases-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="leases-page">
 	<PageHeader
+		class="mb-4"
+		band
+		art={10}
+		tone="violet"
+		eyebrow="Rentals"
 		title="Leases"
 		description="Find a tenant relationship, its governing agreement, upcoming agreement, and account context."
+		data-testid="leases-header"
 	>
 		{#snippet actions()}
 			<Button href="/scan" variant="outline" class="gap-2"
