@@ -661,11 +661,24 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
             command.PortfolioId, command.SelectedPropertyIds,
             MembershipRoleAssignmentScopeKind.SelectedProperties, attempt.Persistence, ct);
 
-        await attempt.Persistence.Query<MembershipRoleAssignmentProperty>()
+        var obsoleteScopes = await attempt.Persistence.Query<MembershipRoleAssignmentProperty>()
             .Where(scope => scope.MembershipRoleAssignmentId == command.AssignmentId &&
-                            scope.PortfolioId == command.PortfolioId)
-            .ExecuteDeleteAsync(ct);
-        foreach (var propertyId in command.SelectedPropertyIds)
+                            scope.PortfolioId == command.PortfolioId &&
+                            !command.SelectedPropertyIds.Contains(scope.PropertyId))
+            .ToListAsync(ct);
+        foreach (var scope in obsoleteScopes)
+        {
+            attempt.Persistence.Remove(scope);
+        }
+
+        var existingSelectedPropertyIds = await attempt.Persistence.Query<MembershipRoleAssignmentProperty>()
+            .AsNoTracking()
+            .Where(scope => scope.MembershipRoleAssignmentId == command.AssignmentId &&
+                            scope.PortfolioId == command.PortfolioId &&
+                            command.SelectedPropertyIds.Contains(scope.PropertyId))
+            .Select(scope => scope.PropertyId)
+            .ToArrayAsync(ct);
+        foreach (var propertyId in command.SelectedPropertyIds.Except(existingSelectedPropertyIds))
         {
             attempt.Persistence.Add(new MembershipRoleAssignmentProperty
             {

@@ -1489,6 +1489,35 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task PropertyScopeReplacement_OverlappingSelectedPropertiesReplacesScopeAndWritesReceipt()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"replace-scope-{Guid.NewGuid():N}");
+        var command = new ReplaceWorkspaceAssignmentPropertyScopeCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.TargetContextId, 1, pair.TargetAssignmentId, [_leasingPropertyId, _managerPropertyId]);
+
+        var result = await AtomicUnitOfWork.ExecuteAsync(
+            Identity("test.team.replace-overlap"), command, TeamMutationCodec);
+
+        result.Value.AccessRevision.Should().Be(2);
+        result.Value.AssignmentId.Should().Be(pair.TargetAssignmentId);
+
+        await using var db = NewContext();
+        (await db.WorkspaceAccessContexts.Where(item => item.Id == pair.TargetContextId)
+            .Select(item => item.AccessRevision).SingleAsync()).Should().Be(2);
+        var propertyIds = await db.MembershipRoleAssignmentProperties
+            .Where(scope => scope.MembershipRoleAssignmentId == pair.TargetAssignmentId)
+            .OrderBy(scope => scope.PropertyId)
+            .Select(scope => scope.PropertyId)
+            .ToListAsync();
+        propertyIds.Should().Equal(_leasingPropertyId, _managerPropertyId);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "test.team.replace-overlap" &&
+            receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task RevokingMembership_InvalidatesTargetSessionImmediately()
     {
         SkipIfNoDocker();
