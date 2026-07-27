@@ -13,6 +13,7 @@ import 'package:rental_command/core/models/lease.dart';
 import 'package:rental_command/core/models/unit.dart';
 import 'package:rental_command/core/navigation/mobile_restoration_state.dart';
 import 'package:rental_command/core/theme/app_theme.dart';
+import 'package:rental_command/core/widgets/mobile_pill_tab_bar.dart';
 import 'package:rental_command/features/activity/activity_repository.dart';
 import 'package:rental_command/features/applications/application_detail_screen.dart';
 import 'package:rental_command/features/applications/applications_models.dart';
@@ -470,7 +471,7 @@ void main() {
     ).readAsStringSync();
 
     expect(source, isNot(contains('MobileSectionSelector<int>(')));
-    expect(RegExp(r'child: TabBar\(').allMatches(source), hasLength(1));
+    expect(source, contains('MobilePillTabBar('));
     expect(source, contains("Key('unit-section-tabs')"));
     expect(
       RegExp(r'final tabView = TabBarView\(').allMatches(source),
@@ -518,8 +519,7 @@ void main() {
     );
     expect(controller.index, UnitCommandCenterTab.summary.index);
 
-    await tester.tap(find.byKey(const ValueKey('unit-section-money')));
-    await tester.pumpAndSettle();
+    await _selectUnitSection(tester, 'money');
 
     controller = DefaultTabController.of(
       tester.element(find.byKey(const Key('unit-section-tabs'))),
@@ -557,7 +557,7 @@ void main() {
       );
 
       expect(find.byKey(const Key('unit-section-tabs')), findsOneWidget);
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byType(MobilePillTabBar), findsOneWidget);
       expect(find.text('Agreement'), findsOneWidget);
       expect(find.text('Residents'), findsOneWidget);
       expect(find.text('This unit is currently vacant.'), findsOneWidget);
@@ -598,7 +598,7 @@ void main() {
       await tester.pump();
 
       expect(find.byKey(const Key('unit-section-tabs')), findsOneWidget);
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byType(MobilePillTabBar), findsOneWidget);
       expect(find.byType(TabBarView), findsOneWidget);
       expect(find.text('Documents'), findsWidgets);
       expect(find.text('Scan document').hitTestable(), findsOneWidget);
