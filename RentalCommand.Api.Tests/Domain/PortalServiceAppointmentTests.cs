@@ -28,6 +28,8 @@ public sealed class PortalServiceAppointmentTests : IDisposable
             .ToQueryString();
 
         sql.Should().Contain("FROM \"Appointments\"");
+        sql.Should().Contain("FROM \"WorkOrders\"");
+        sql.Should().Contain("UNION ALL");
         sql.Should().Contain("vw_effective_tenant_access");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("vw_lease_management_lifecycle");

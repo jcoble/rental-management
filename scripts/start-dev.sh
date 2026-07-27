@@ -50,6 +50,16 @@ WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST:-$([ "$LAN_DEV" = "1" ] && echo "${LAN_IP:-lo
 WEB_URL="${WEB_URL:-https://$WEB_PUBLIC_HOST:$WEB_PORT}"
 export App__WebBaseUrl="${App__WebBaseUrl:-$WEB_URL}"
 
+# Keep the dev-only simulation UI aligned with the .NET simulation gate. A one-off
+# `Simulation__Enabled=true ./scripts/start-dev.sh` is inherited by API/Engine, but
+# SvelteKit only exposes PUBLIC_* values to the browser; derive the public flag only
+# when simulation is explicitly requested so ordinary dev/prod starts stay unchanged.
+SIMULATION_ENABLED_NORMALIZED="${Simulation__Enabled:-}"
+SIMULATION_ENABLED_NORMALIZED="${SIMULATION_ENABLED_NORMALIZED,,}"
+if [ "$SIMULATION_ENABLED_NORMALIZED" = "true" ] || [ "$SIMULATION_ENABLED_NORMALIZED" = "1" ]; then
+    export PUBLIC_SIMULATION_ENABLED="true"
+fi
+
 CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=$PG_USER;Password=$PG_PASSWORD"
 API_DB_PASSWORD="${API_DB_PASSWORD:-rentalcommand_api_dev}"
 ENGINE_DB_PASSWORD="${ENGINE_DB_PASSWORD:-rentalcommand_engine_dev}"
