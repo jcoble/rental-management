@@ -215,6 +215,31 @@ class _MobileQuickActionHiderState extends State<MobileQuickActionHider> {
   Widget build(BuildContext context) => widget.child;
 }
 
+Future<T?> showMobileQuickActionHiddenModalBottomSheet<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  bool isScrollControlled = false,
+  ShapeBorder? shape,
+  bool showDragHandle = false,
+  bool useSafeArea = false,
+}) async {
+  final controller = MobileQuickActionScope.maybeOf(context);
+  final owner = Object();
+  controller?.setHidden(owner, true);
+  try {
+    return await showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: isScrollControlled,
+      shape: shape,
+      showDragHandle: showDragHandle,
+      useSafeArea: useSafeArea,
+      builder: builder,
+    );
+  } finally {
+    controller?.clearHidden(owner);
+  }
+}
+
 class MobileQuickActionFabRegistry extends ChangeNotifier {
   int _mountedFabCount = 0;
   bool _notificationScheduled = false;
