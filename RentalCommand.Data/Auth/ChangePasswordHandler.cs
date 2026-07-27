@@ -50,6 +50,13 @@ public sealed class ChangePasswordHandler
         user.PasswordHash = hasher.HashPassword(user, command.NewPassword);
         user.SecurityStamp = Guid.NewGuid().ToString("N");
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await attempt.AccountSecurity.RevokeOtherActiveSessionsForPasswordChangeAsync(
+            user.Id,
+            command.AuthSessionId,
+            now,
+            "Password changed by account user",
+            ct);
         attempt.StageSemanticEvent(
             new AtomicSemanticAudit(
                 authorization.PortfolioId,
@@ -63,6 +70,8 @@ public sealed class ChangePasswordHandler
                     SecurityEvent = "PasswordChanged",
                     TargetUserId = user.Id,
                     command.AccessContextId,
+                    PreservedAuthSessionId = command.AuthSessionId,
+                    OtherSessionsRevoked = true,
                 }),
                 ChangeReason: "Password changed by account user."));
 

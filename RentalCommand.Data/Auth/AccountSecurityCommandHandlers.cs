@@ -369,6 +369,11 @@ public sealed class ResetAccountPasswordHandler
         user.AccessFailedCount = 0;
         user.LockoutEnd = null;
         user.EmailConfirmed = true;
+        await attempt.AccountSecurity.RevokeActiveSessionsForPasswordResetAsync(
+            user.Id,
+            now,
+            "Password reset completed",
+            ct);
         attempt.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
             root,
             user.Id,
