@@ -197,6 +197,18 @@ public sealed class ConfirmScanRequest
     public string? OverridesJson { get; set; }
 }
 
+/// <summary>Stable operation identity plus selected canonical account for payment scan review.</summary>
+public sealed class SetScanDraftPaymentAccountRequest
+{
+    [Range(1, int.MaxValue)]
+    public int TenantAccountId { get; set; }
+
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
+}
+
 /// <summary>Optional rejection reason when rejecting a scan draft.</summary>
 public sealed class RejectScanRequest
 {

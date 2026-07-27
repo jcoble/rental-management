@@ -122,6 +122,10 @@ internal static class AtomicDomainTestKernel
             RetryScanDraftCommand,
             ScanDraftMutationResult,
             RetryScanDraftHandler>();
+        services.AddAtomicCommandHandler<
+            SetScanDraftPaymentAccountCommand,
+            ScanDraftMutationResult,
+            SetScanDraftPaymentAccountHandler>();
         return services.BuildServiceProvider();
     }
 

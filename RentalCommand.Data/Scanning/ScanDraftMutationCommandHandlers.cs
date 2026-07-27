@@ -227,6 +227,63 @@ public sealed class AnswerVoiceScanDraftHandler
     }
 }
 
+public sealed class SetScanDraftPaymentAccountHandler
+    : IAtomicCommandHandler<SetScanDraftPaymentAccountCommand, ScanDraftMutationResult>,
+      IAtomicReplayAuthorizer<SetScanDraftPaymentAccountCommand>
+{
+    public async Task<ScanDraftMutationResult> HandleAsync(
+        SetScanDraftPaymentAccountCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        ScanDraftMutationValidation.Validate(command);
+        await ScanDraftMutationAuthorization.LockAsync(command.AuthSessionId,
+            command.AccessContextId, command.PortfolioId, command.DraftId, attempt, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
+        if (!await attempt.ScanConfirmation.IsAuthorizedForReviewAsync(scope, command.DraftId, now, ct))
+            return ScanDraftMutationResults.NotFound(command.DraftId);
+
+        var accountIsAuthorized = await attempt.Persistence.IsTenantAccountAuthorizedForPaymentReviewAsync(
+            scope, command.DraftId, command.TenantAccountId, now, ct);
+        if (!accountIsAuthorized)
+            return ScanDraftMutationResults.NotFound(command.DraftId);
+
+        var draft = await attempt.Persistence.Query<ScanDraft>().SingleOrDefaultAsync(candidate =>
+            candidate.Id == command.DraftId && candidate.PortfolioId == command.PortfolioId, ct);
+        if (draft is null) return ScanDraftMutationResults.NotFound(command.DraftId);
+        if (draft.Status != "Reviewing" || !string.Equals(draft.TargetEntityType, "Payment", StringComparison.Ordinal))
+            return new(ScanDraftMutationOutcome.InvalidStatus, command.DraftId);
+
+        draft.CaptureTenantAccountId = command.TenantAccountId;
+        draft.ReviewedAt = now;
+        draft.ReviewedBy = command.UserId.ToString();
+        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.BindSemanticAudit(draft, ScanDraftMutationResults.Audit(
+            command.PortfolioId, draft.Id, AuditLogOperation.Updated, command.UserId,
+            "Payment scan draft tenant account selected during review"));
+        await attempt.FlushBusinessAsync(ct);
+        attempt.StageOutbox(ScanDraftMutationResults.DataUpdate(
+            command.PortfolioId, draft.Id, "update", command.DeliveryIdempotencyKey, now));
+        return ScanDraftMutationResults.Applied(await ScanDraftMutationResults.SnapshotAsync(
+            attempt.Persistence, command.PortfolioId, draft.Id, ct));
+    }
+
+    public async Task AuthorizeReplayAsync(
+        SetScanDraftPaymentAccountCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
+    {
+        ScanDraftMutationValidation.Validate(command);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var scope = ScanDraftMutationAuthorization.Scope(command.PortfolioId, command.UserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision);
+        if (!await persistence.IsScanDraftAuthorizedForReviewAsync(scope, command.DraftId, now, ct)
+            || !await persistence.IsTenantAccountAuthorizedForPaymentReviewAsync(
+                scope, command.DraftId, command.TenantAccountId, now, ct))
+        {
+            throw new UnauthorizedAccessException("The scan draft or payment account is outside the current review scope.");
+        }
+    }
+}
+
 internal static class ScanDraftMutationAuthorization
 {
     internal static WorkspaceReadScope Scope(
@@ -280,6 +337,14 @@ internal static class ScanDraftMutationValidation
         ArgumentException.ThrowIfNullOrWhiteSpace(command.TargetEntityType);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.MergedExtractedFieldsJson);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ModelId);
+    }
+
+    internal static void Validate(SetScanDraftPaymentAccountCommand command)
+    {
+        ValidateCommon(command.PortfolioId, command.UserId, command.AuthSessionId,
+            command.AccessContextId, command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
+        if (command.DraftId <= 0 || command.TenantAccountId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(command));
     }
 
     private static void ValidateCommon(

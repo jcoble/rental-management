@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -117,14 +118,11 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     String filename,
     String contentType,
   ) {
-    var hash = 0x811c9dc5;
-    for (final byte in bytes) {
-      hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
-    }
-    return '$filename|$contentType|${bytes.length}|${hash.toRadixString(16)}';
+    return '$filename|$contentType|${bytes.length}|${sha256.convert(bytes)}';
   }
 
   Future<void> _pick(ImageSource source) async {
+    _uploadOperation.cancel();
     final picker = ImagePicker();
     // Gallery documents may be multi-page scans composited into one tall image.
     // A maxHeight silently reduced a 6,605px scan to 1,600px (only 165px wide),
@@ -144,6 +142,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 
   Future<void> _pickFile() async {
+    _uploadOperation.cancel();
+    await FilePicker.platform.clearTemporaryFiles().catchError((_) => false);
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
@@ -159,6 +159,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 
   Future<void> _pickDocumentPages() async {
+    _uploadOperation.cancel();
     // Preserve page resolution for OCR/extraction. The PDF stitcher controls
     // the rendered page size without discarding source pixels.
     final picked = await ImagePicker().pickMultiImage();

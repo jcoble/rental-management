@@ -53,6 +53,16 @@ public sealed record AnswerVoiceScanDraftCommand(
     int? CapturePropertyId,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
+public sealed record SetScanDraftPaymentAccountCommand(
+    int PortfolioId,
+    int DraftId,
+    int UserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    int TenantAccountId,
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
+
 public sealed record ScanDraftReceiptSnapshot(
     int Id,
     int PortfolioId,

@@ -232,6 +232,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.ScanDraftMutationResult,
     RentalCommand.Data.Scanning.AnswerVoiceScanDraftHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.SetScanDraftPaymentAccountCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.SetScanDraftPaymentAccountHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicRentalMutationCommand,
     RentalCommand.Api.Services.Domain.AtomicRentalMutationResult,
     RentalCommand.Api.Services.Domain.AtomicRentalMutationHandler>();

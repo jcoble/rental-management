@@ -548,6 +548,74 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             CancellationToken ct = default) =>
             _scanConfirmation.IsAuthorizedForReviewAsync(scope, draftId, utcNow, ct);
 
+        public Task<bool> IsTenantAccountAuthorizedForPaymentReviewAsync(
+            WorkspaceReadScope scope,
+            int draftId,
+            int tenantAccountId,
+            DateTime utcNow,
+            CancellationToken ct = default)
+        {
+            var assignments = _db.MembershipRoleAssignments.AsNoTracking()
+                .Where(assignment =>
+                    assignment.Status == MembershipRoleAssignmentStatus.Active
+                    && assignment.SuspendedAtUtc == null
+                    && assignment.RevokedAtUtc == null
+                    && assignment.EffectiveFromUtc <= utcNow
+                    && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow));
+            return (
+                from draft in _db.ScanDrafts.AsNoTracking()
+                join account in _db.TenantAccounts.AsNoTracking()
+                    on draft.PortfolioId equals account.PortfolioId
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { account.PortfolioId, Id = account.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                where draft.Id == draftId
+                    && draft.PortfolioId == scope.PortfolioId
+                    && draft.Status == "Reviewing"
+                    && draft.TargetEntityType == "Payment"
+                    && account.Id == tenantAccountId
+                    && account.ClosedAtUtc == null
+                    && (draft.CaptureLeaseManagementId == null
+                        || account.LeaseManagementId == draft.CaptureLeaseManagementId)
+                    && _db.AuthSessions.AsNoTracking().Any(session =>
+                        session.Id == scope.SessionId
+                        && session.UserId == scope.UserId
+                        && session.ActiveAccessContextId == scope.AccessContextId
+                        && session.Status == AuthSessionStatus.Active
+                        && session.RevokedAtUtc == null
+                        && session.ExpiresAtUtc > utcNow)
+                    && _db.WorkspaceAccessContexts.AsNoTracking().Any(context =>
+                        context.Id == scope.AccessContextId
+                        && context.UserId == scope.UserId
+                        && context.PortfolioId == scope.PortfolioId
+                        && context.AccessRevision == scope.AccessRevision
+                        && context.Status == WorkspaceAccessContextStatus.Active
+                        && context.SuspendedAtUtc == null
+                        && context.RevokedAtUtc == null)
+                    && _db.WorkspaceMemberships.AsNoTracking().Any(membership =>
+                        membership.AccessContextId == scope.AccessContextId
+                        && membership.PortfolioId == scope.PortfolioId
+                        && membership.Status == WorkspaceMembershipStatus.Active
+                        && membership.SuspendedAtUtc == null
+                        && membership.RevokedAtUtc == null
+                        && membership.EffectiveFromUtc <= utcNow
+                        && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > utcNow)
+                        && assignments.Any(assignment =>
+                            assignment.WorkspaceMembershipId == membership.Id
+                            && assignment.PortfolioId == scope.PortfolioId
+                            && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                                || assignment.ScopeKind ==
+                                    MembershipRoleAssignmentScopeKind.SelectedProperties
+                                && assignment.SelectedProperties.Any(selected =>
+                                    selected.PortfolioId == scope.PortfolioId
+                                    && selected.PropertyId == management.PropertyId))
+                            && assignment.RoleProfile!.Capabilities.Any(capability =>
+                                capability.CapabilityDefinition!.Key ==
+                                CapabilityKeys.MoneyPaymentsManage)))
+                select account.Id)
+                .AnyAsync(ct);
+        }
+
         public Task<bool> CanCreateScanDraftAsync(
             WorkspaceReadScope scope,
             string? targetEntityType,

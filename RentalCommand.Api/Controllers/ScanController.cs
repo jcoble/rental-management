@@ -920,6 +920,104 @@ public class ScanController : ManagementControllerBase
     }
 
     // -------------------------------------------------------------------------
+    // POST /api/v1/scans/{id}/payment-account — persist selected review account
+    // -------------------------------------------------------------------------
+
+    [HttpPost("{id:int}/payment-account")]
+    [ProducesResponseType(typeof(ScanDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ScanDraftResponse>> SetPaymentAccount(
+        int id,
+        [FromBody] SetScanDraftPaymentAccountRequest? body,
+        CancellationToken ct)
+    {
+        if (body is null
+            || body.TenantAccountId <= 0
+            || string.IsNullOrWhiteSpace(body.ClientOperationId)
+            || body.ClientOperationId.Trim().Length > 160)
+        {
+            return BadRequest(new
+            {
+                error = "tenantAccountId and a non-blank clientOperationId of at most 160 characters are required.",
+            });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(body.ClientOperationId.Trim())))
+            .ToLowerInvariant();
+        var command = new SetScanDraftPaymentAccountCommand(
+            scope.PortfolioId,
+            id,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            body.TenantAccountId,
+            $"scan-payment-account:{scope.PortfolioId}:{id}:{operationDigest}");
+
+        ScanDraftMutationResult result;
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "scan-draft.payment-account",
+                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
+                command,
+                DraftMutationCodec,
+                ct);
+            result = outcome.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return NotFound(new { error = "Scan draft not found" });
+        }
+
+        return result.Outcome switch
+        {
+            ScanDraftMutationOutcome.Applied when result.Snapshot is not null =>
+                Ok(ScanDraftResponseFromMutationSnapshot(result.Snapshot)),
+            ScanDraftMutationOutcome.InvalidStatus => BadRequest(new
+            {
+                error = "Only reviewing payment scan drafts can choose a rental account.",
+            }),
+            _ => NotFound(new { error = "Scan draft not found" }),
+        };
+    }
+
+    private static ScanDraftResponse ScanDraftResponseFromMutationSnapshot(
+        ScanDraftReceiptSnapshot snapshot) => new(
+        snapshot.Id,
+        snapshot.PortfolioId,
+        snapshot.TargetEntityType,
+        snapshot.Status,
+        $"/api/v1/scans/{snapshot.Id}/file",
+        ScanDraftResponse.ParseFields(snapshot.ExtractedFields),
+        snapshot.ModelId,
+        snapshot.TokensUsed,
+        snapshot.CostUsd,
+        snapshot.FailureReason,
+        snapshot.CreatedAt,
+        snapshot.ReviewedAt,
+        snapshot.ConfirmedAt,
+        CaptureContext: new ScanCaptureContextDto(
+            snapshot.CaptureExperience?.ToString(),
+            snapshot.CaptureAccessContextId,
+            snapshot.CaptureAccessRevision,
+            snapshot.CapturePropertyId,
+            snapshot.CaptureUnitId,
+            snapshot.CaptureLeaseManagementId,
+            snapshot.CaptureLeaseAgreementId,
+            snapshot.CaptureTenantAccountId,
+            snapshot.CaptureTenantLedgerEntryId,
+            snapshot.CaptureWorkOrderId,
+            snapshot.CaptureApplicationId,
+            snapshot.CaptureRentalListingId,
+            snapshot.SourceLabel),
+        SourceContentSha256: snapshot.SourceContentSha256);
+
+    // -------------------------------------------------------------------------
     // GET /api/v1/scans/{id}/file  — stream the stored file
     // -------------------------------------------------------------------------
 
