@@ -39,21 +39,55 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
                 FROM "LoanPayments" AS payment
                 WHERE payment."LoanId" = loan."Id"
             ) AS tail ON TRUE
+            CROSS JOIN LATERAL (
+                SELECT
+                    date_trunc('month', loan."StartDate") AS start_month,
+                    GREATEST(loan."StartDate", loan."CreatedAt") AS activation_at,
+                    GREATEST(loan."DayOfMonthDue", 1) AS due_day
+            ) AS base
+            CROSS JOIN LATERAL (
+                SELECT
+                    date_trunc('month', base.activation_at) AS activation_month,
+                    date_trunc('month', @today) AS today_month
+            ) AS months
+            CROSS JOIN LATERAL (
+                SELECT
+                    months.activation_month + make_interval(days =>
+                        LEAST(
+                            base.due_day,
+                            EXTRACT(DAY FROM months.activation_month + interval '1 month - 1 day')::int) - 1) AS activation_due,
+                    months.today_month + make_interval(days =>
+                        LEAST(
+                            base.due_day,
+                            EXTRACT(DAY FROM months.today_month + interval '1 month - 1 day')::int) - 1) AS today_due
+            ) AS due_dates
+            CROSS JOIN LATERAL (
+                SELECT
+                    CASE
+                        WHEN due_dates.activation_due < base.activation_at::date
+                            THEN months.activation_month + interval '1 month'
+                        ELSE months.activation_month
+                    END AS first_month,
+                    CASE
+                        WHEN due_dates.today_due > @today::date
+                            THEN months.today_month - interval '1 month'
+                        ELSE months.today_month
+                    END AS due_through_month
+            ) AS bounds
+            CROSS JOIN LATERAL (
+                SELECT
+                    COALESCE(to_date(tail.last_period, 'YYYY-MM') + interval '1 month', bounds.first_month) AS next_month,
+                    LEAST(
+                        bounds.due_through_month,
+                        base.start_month + make_interval(months => loan."TermMonths" - 1)) AS last_month
+            ) AS schedule
             WHERE loan."DeletedAt" IS NULL
               AND loan."Status" = @activeStatus
               AND loan."TermMonths" > 0
-              AND date_trunc('month', loan."StartDate") <= date_trunc('month', @today)
+              AND schedule.next_month >= base.start_month
+              AND schedule.next_month <= schedule.last_month
               AND (loan."WorkerClaimToken" IS NULL OR loan."WorkerClaimExpiresAtUtc" <= clock_timestamp())
-              AND COALESCE(tail.last_period, '') < to_char(
-                    LEAST(
-                      date_trunc('month', @today),
-                      date_trunc('month', loan."StartDate")
-                        + make_interval(months => loan."TermMonths" - 1)),
-                    'YYYY-MM')
-            ORDER BY COALESCE(
-                to_date(tail.last_period, 'YYYY-MM') + interval '1 month',
-                date_trunc('month', loan."StartDate")),
-              loan."Id"
+            ORDER BY schedule.next_month, loan."Id"
             FOR UPDATE OF loan SKIP LOCKED
             LIMIT @batchSize
         )

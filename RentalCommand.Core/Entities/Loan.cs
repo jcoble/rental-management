@@ -16,7 +16,8 @@ namespace RentalCommand.Core.Entities;
 /// immutable amortization comes from the <see cref="LoanPayment"/> rows themselves — each period's
 /// opening balance is the prior payment's <see cref="LoanPayment.BalanceAfter"/>, never this live,
 /// user-editable field. That keeps a filed interest figure from silently changing if the balance is
-/// later edited.</para>
+/// later edited. The only exception is an imported existing loan with no generated payment tail yet:
+/// its first generated period opens from the imported <see cref="CurrentBalance"/> snapshot.</para>
 /// </summary>
 public class Loan : IAuditable, IPortfolioScoped
 {
