@@ -57,6 +57,35 @@ internal sealed class AtomicNotificationPersistence : IAtomicNotificationPersist
             """, ct);
     }
 
+    public async Task<int> MarkConversationReadAsync(
+        int portfolioId,
+        int conversationId,
+        bool tenantViewer,
+        DateTime readAtUtc,
+        CancellationToken ct = default)
+    {
+        using var lease = _scope.BeginInternalRawDml(
+            "Conversations", AtomicRawDmlOperation.Update);
+        if (tenantViewer)
+        {
+            return await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE "Conversations"
+                   SET "TenantUnreadCount" = 0
+                 WHERE "PortfolioId" = {{portfolioId}}
+                   AND "Id" = {{conversationId}}
+                   AND "TenantUnreadCount" > 0
+                """, ct);
+        }
+
+        return await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+            UPDATE "Conversations"
+               SET "LandlordUnreadCount" = 0
+             WHERE "PortfolioId" = {{portfolioId}}
+               AND "Id" = {{conversationId}}
+               AND "LandlordUnreadCount" > 0
+            """, ct);
+    }
+
     public async Task<IReadOnlyList<AtomicMorningBriefingDigest>> ReadDueMorningBriefingsAsync(
         DateTime evaluationUtc,
         CancellationToken ct = default) =>

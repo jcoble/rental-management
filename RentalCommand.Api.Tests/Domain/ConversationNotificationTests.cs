@@ -209,6 +209,55 @@ public class ConversationNotificationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TenantMarkReadAsync_WhenUnread_UpdatesOnceAndSecondReadIsNoOp()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        SeedConversation(
+            tenant.Id,
+            "HVAC appointment confirmed",
+            now.AddMinutes(-1),
+            tenantUnreadCount: 2);
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = 20,
+            ActiveAccessContextId = tenantContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var conversationId = await _ctx.Db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.TenantId == tenant.Id
+                && conversation.Subject == "HVAC appointment confirmed")
+            .Select(conversation => conversation.Id)
+            .SingleAsync();
+        var scope = new WorkspaceReadScope(
+            1, 20, session.Id, tenantContext.Id, tenantContext.AccessRevision);
+        var sut = CreateSut();
+
+        (await sut.MarkReadForTenantAsync(scope, tenant.Id, conversationId, "tenant-read-hvac-first"))
+            .Should().BeTrue();
+        (await sut.MarkReadForTenantAsync(scope, tenant.Id, conversationId, "tenant-read-hvac-second"))
+            .Should().BeTrue();
+
+        (await _ctx.Db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.Id == conversationId)
+            .Select(conversation => conversation.TenantUnreadCount)
+            .SingleAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+            log.EntityType == nameof(Conversation)
+            && log.EntityId == conversationId
+            && log.ChangeReason == "Tenant conversation marked read")).Should().Be(1);
+    }
+
+    [Fact]
     public async Task ListAsync_HidesTenantMessageNotificationsFromTenantOnlyUsers()
     {
         SeedTenantWithStaffAndTenantUsers();

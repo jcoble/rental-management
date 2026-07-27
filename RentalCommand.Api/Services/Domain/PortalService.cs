@@ -763,7 +763,7 @@ public class PortalService : IPortalService
         var effectiveRelationships = EffectiveTenantRelationshipQuery(
             portfolioId, accessContextId, tenantId);
 
-        return _db.Appointments
+        var appointments = _db.Appointments
             .AsNoTracking()
             .Where(appointment => appointment.PortfolioId == portfolioId
                 && appointment.TenantId == tenantId
@@ -773,9 +773,6 @@ public class PortalService : IPortalService
                 && effectiveRelationships.Any(access =>
                     appointment.LeaseManagementId == null
                     || access.LeaseManagementId == appointment.LeaseManagementId))
-            .OrderBy(appointment => appointment.ScheduledStart)
-            .ThenBy(appointment => appointment.Id)
-            .Take(50)
             .Select(appointment => new AppointmentResponse
             {
                 Id = appointment.Id,
@@ -783,6 +780,7 @@ public class PortalService : IPortalService
                 PropertyId = appointment.PropertyId,
                 UnitId = appointment.UnitId,
                 LeaseManagementId = appointment.LeaseManagementId,
+                RentalApplicationId = appointment.RentalApplicationId,
                 TenantId = appointment.TenantId,
                 Title = appointment.Title,
                 ProspectName = appointment.ProspectName,
@@ -831,6 +829,53 @@ public class PortalService : IPortalService
                     ? null
                     : (appointment.Tenant.FirstName + " " + appointment.Tenant.LastName).Trim(),
             });
+
+        var maintenanceVisits = _db.WorkOrders
+            .AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId
+                && workOrder.TenantId == tenantId
+                && workOrder.LeaseManagementId != null
+                && workOrder.ScheduledFor != null
+                && workOrder.ScheduledFor >= now
+                && workOrder.Status != WorkOrderStatus.Completed
+                && workOrder.Status != WorkOrderStatus.Cancelled
+                && workOrder.Status != WorkOrderStatus.Archived
+                && effectiveRelationships.Any(access =>
+                    access.LeaseManagementId == workOrder.LeaseManagementId))
+            .Select(workOrder => new AppointmentResponse
+            {
+                Id = -workOrder.Id,
+                PortfolioId = workOrder.PortfolioId,
+                PropertyId = workOrder.PropertyId,
+                UnitId = workOrder.UnitId,
+                LeaseManagementId = workOrder.LeaseManagementId,
+                RentalApplicationId = null,
+                TenantId = workOrder.TenantId,
+                Title = workOrder.Title,
+                ProspectName = null,
+                ProspectEmail = null,
+                Type = AppointmentType.MaintenanceVisit,
+                Status = workOrder.Status == WorkOrderStatus.Scheduled
+                    ? AppointmentStatus.Confirmed
+                    : AppointmentStatus.Scheduled,
+                ScheduledStart = workOrder.ScheduledFor!.Value,
+                ScheduledEnd = workOrder.ScheduledWindowEnd,
+                AssignedTo = workOrder.Vendor == null ? null : workOrder.Vendor.Name,
+                Notes = workOrder.TechnicianAccessInstructions ?? workOrder.Description,
+                CreatedAt = workOrder.RequestedAt,
+                UpdatedAt = workOrder.UpdatedAt,
+                PropertyName = workOrder.Property == null ? null : workOrder.Property.Name,
+                UnitNumber = workOrder.Unit == null ? null : workOrder.Unit.UnitNumber,
+                TenantName = workOrder.Tenant == null
+                    ? null
+                    : (workOrder.Tenant.FirstName + " " + workOrder.Tenant.LastName).Trim(),
+            });
+
+        return appointments
+            .Concat(maintenanceVisits)
+            .OrderBy(appointment => appointment.ScheduledStart)
+            .ThenBy(appointment => appointment.Id)
+            .Take(50);
     }
 
     public async Task<PortalTenantWorkOrderPageResponse> ListWorkOrdersPageAsync(

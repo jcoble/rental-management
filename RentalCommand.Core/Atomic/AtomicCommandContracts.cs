@@ -246,6 +246,17 @@ public interface IAtomicNotificationPersistence
         CancellationToken ct = default);
 
     /// <summary>
+    /// Clears the unread counter for one authorized conversation in one SQL statement. The caller
+    /// owns authorization and supplies whether the tenant or landlord counter is being cleared.
+    /// </summary>
+    Task<int> MarkConversationReadAsync(
+        int portfolioId,
+        int conversationId,
+        bool tenantViewer,
+        DateTime readAtUtc,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Resolves due workspaces, authorized recipients, preferences, destinations, and the bounded
     /// 25-item digest in one PostgreSQL statement.
     /// </summary>

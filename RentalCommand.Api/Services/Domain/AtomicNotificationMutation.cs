@@ -557,11 +557,11 @@ public sealed class AtomicNotificationMutationHandler
 
         var unread = tenantViewer ? conversation.TenantUnreadCount : conversation.LandlordUnreadCount;
         if (unread == 0) return new(true, false, conversation.Id, 0);
-        if (tenantViewer) conversation.TenantUnreadCount = 0;
-        else conversation.LandlordUnreadCount = 0;
-        attempt.BindSemanticAudit(conversation, Audit(command, nameof(Conversation), AuditLogOperation.Updated,
-            tenantViewer ? "Tenant conversation marked read" : "Team conversation marked read", conversation.Id));
-        await attempt.FlushBusinessAsync(ct);
+        var changed = await attempt.Notifications.MarkConversationReadAsync(
+            command.PortfolioId, conversation.Id, tenantViewer, now, ct);
+        if (changed == 0) return new(true, false, conversation.Id, 0);
+        attempt.StageSemanticEvent(Audit(command, nameof(Conversation), AuditLogOperation.Updated,
+            tenantViewer ? "Tenant conversation marked read" : "Team conversation marked read", conversation.Id), now);
         StageDataUpdate(attempt, command, nameof(Conversation), conversation.Id, now);
         return new(true, true, conversation.Id, unread);
     }
