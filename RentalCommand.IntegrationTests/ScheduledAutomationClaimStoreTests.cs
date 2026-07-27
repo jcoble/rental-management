@@ -281,6 +281,55 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
             .Should().ContainSingle();
     }
 
+    [SkippableFact]
+    public async Task Imported_historical_debt_with_pre_import_tail_is_not_claimed_before_import_due_date()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var importDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
+        var (portfolioId, propertyId) = await SeedScopeAsync(importDate);
+
+        await using (var seed = NewContext())
+        {
+            var loan = Loan(
+                portfolioId,
+                propertyId,
+                new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                LoanStatus.Active,
+                createdAt: importDate,
+                dayOfMonthDue: 12);
+            seed.Loans.Add(loan);
+            await seed.SaveChangesAsync();
+            seed.LoanPayments.Add(new LoanPayment
+            {
+                PortfolioId = portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2026-07",
+                DueDate = new DateTime(2026, 7, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 100m,
+                PrincipalAmount = 500m,
+                TotalAmount = 600m,
+                BalanceAfter = 50_000m,
+                CreatedAt = importDate,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var beforeDue = NewContext();
+        var store = new ScheduledAutomationClaimStore(beforeDue);
+        (await store.ClaimDebtServiceAsync(
+                "debt-before-due-first", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+        (await store.ClaimDebtServiceAsync(
+                "debt-before-due-second", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+
+        await using var onDue = NewContext();
+        (await new ScheduledAutomationClaimStore(onDue).ClaimDebtServiceAsync(
+                "debt-on-due", firstDueDate, TimeSpan.FromMinutes(2), 1))
+            .Should().ContainSingle();
+    }
+
     private async Task<(int PortfolioId, int PropertyId)> SeedScopeAsync(DateTime now)
     {
         await using var db = NewContext();

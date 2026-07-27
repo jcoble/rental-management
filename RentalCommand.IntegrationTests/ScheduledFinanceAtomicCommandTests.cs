@@ -292,6 +292,56 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task DebtService_ImportedHistoricalLoanWithPreImportTailDoesNotBackfillHistoricalPeriods_AndUsesCurrentBalance()
+    {
+        SkipIfNoDocker();
+        var importDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
+        var importedBalance = 125_825m;
+        var preImportTailBalance = 50_000m;
+        var loanId = await SeedLoanAsync(
+            new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+            createdAt: importDate,
+            currentBalance: importedBalance,
+            dayOfMonthDue: 12,
+            monthlyPrincipalInterest: 900m);
+        await SeedLoanPaymentAsync(
+            loanId,
+            "2026-07",
+            new DateTime(2026, 7, 12, 0, 0, 0, DateTimeKind.Utc),
+            preImportTailBalance,
+            importDate);
+
+        (await ClaimDebtAsync(importDate)).Should().BeEmpty();
+        (await ClaimDebtAsync(importDate)).Should().BeEmpty();
+
+        var claim = (await ClaimDebtAsync(firstDueDate)).Single();
+        var result = await Atomic.ExecuteAsync(
+            DebtIdentity(claim.ClaimToken, "imported-pre-import-tail"),
+            new ApplyClaimedDebtServiceBatchCommand(
+                [claim.Id], claim.ClaimToken, firstDueDate, firstDueDate.AddMinutes(1)),
+            DebtCodec);
+
+        result.Value.GeneratedRowCount.Should().Be(1);
+        await using var verify = NewContext();
+        var periods = await verify.LoanPayments
+            .Where(row => row.LoanId == loanId)
+            .OrderBy(row => row.PeriodKey)
+            .Select(row => row.PeriodKey)
+            .ToListAsync();
+        periods.Should().Equal("2026-07", "2027-01");
+        periods.Should().NotContain(period => string.CompareOrdinal(period, "2026-08") >= 0
+            && string.CompareOrdinal(period, "2026-12") <= 0);
+        var generated = await verify.LoanPayments.SingleAsync(row => row.LoanId == loanId && row.PeriodKey == "2027-01");
+        generated.DueDate.Should().Be(firstDueDate);
+        generated.BalanceAfter.Should().BeLessThan(importedBalance);
+        generated.BalanceAfter.Should().BeGreaterThan(123_999.58m);
+        generated.BalanceAfter.Should().BeGreaterThan(preImportTailBalance);
+        var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(generated.BalanceAfter);
+    }
+
+    [SkippableFact]
     public async Task ExpiredTakenOverToken_WritesNothing_AndReplacementRecovers()
     {
         SkipIfNoDocker();
@@ -479,6 +529,30 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         db.Loans.Add(loan);
         await db.SaveChangesAsync();
         return loan.Id;
+    }
+
+    private async Task SeedLoanPaymentAsync(
+        int loanId,
+        string periodKey,
+        DateTime dueDate,
+        decimal balanceAfter,
+        DateTime createdAt)
+    {
+        await using var db = NewContext();
+        db.LoanPayments.Add(new LoanPayment
+        {
+            PortfolioId = _portfolioId,
+            LoanId = loanId,
+            PeriodKey = periodKey,
+            DueDate = dueDate,
+            InterestAmount = 100m,
+            PrincipalAmount = 500m,
+            TotalAmount = 600m,
+            BalanceAfter = balanceAfter,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = createdAt,
+        });
+        await db.SaveChangesAsync();
     }
 
     private async Task<int> SeedRecurringMaintenanceAsync(DateTime nextDueDate)
