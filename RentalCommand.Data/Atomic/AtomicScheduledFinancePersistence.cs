@@ -69,7 +69,10 @@ internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinanc
             ) AS bounds
             CROSS JOIN LATERAL (
                 SELECT
-                    COALESCE(to_date(tail.last_period, 'YYYY-MM') + interval '1 month', bounds.first_month) AS next_month,
+                    CASE
+                        WHEN tail.last_period IS NULL THEN bounds.first_month
+                        ELSE GREATEST(to_date(tail.last_period, 'YYYY-MM') + interval '1 month', bounds.first_month)
+                    END AS next_month,
                     LEAST(
                         bounds.due_through_month,
                         base.start_month + make_interval(months => loan."TermMonths" - 1)) AS last_month

@@ -39,10 +39,17 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 LastDuePeriodIndexOnOrBefore(command.BusinessDateUtc, startMonth, dueDay),
                 loan.TermMonths);
             tails.TryGetValue(loan.Id, out var tail);
-            var nextPeriod = tail is null
-                ? FirstDuePeriodIndexOnOrAfter(Max(loan.StartDate, loan.CreatedAt), startMonth, dueDay)
-                : PeriodIndexFromKey(tail.PeriodKey, startMonth) + 1;
-            var openingBalance = tail?.BalanceAfter ?? loan.CurrentBalance;
+            var firstEligiblePeriod = FirstDuePeriodIndexOnOrAfter(
+                Max(loan.StartDate, loan.CreatedAt), startMonth, dueDay);
+            var tailPeriod = tail is null ? (int?)null : PeriodIndexFromKey(tail.PeriodKey, startMonth);
+            // There is no explicit "imported existing loan" marker; the safe invariant is that
+            // Engine never generates a period whose due date predates the loan record creation.
+            var nextPeriod = tailPeriod is null
+                ? firstEligiblePeriod
+                : Math.Max(tailPeriod.Value + 1, firstEligiblePeriod);
+            var openingBalance = tail is not null && tailPeriod.HasValue && tailPeriod.Value >= firstEligiblePeriod
+                ? tail.BalanceAfter
+                : loan.CurrentBalance;
             var lastBalance = openingBalance;
             var paidOff = false;
             var generatedForLoan = 0;
