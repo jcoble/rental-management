@@ -874,6 +874,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // Action states
   bool _confirming = false;
   bool _rejecting = false;
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -1233,6 +1234,30 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     }
   }
 
+  Future<void> _retry(ScanDraft draft) async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    try {
+      final updated = await ref.read(scanRepositoryProvider).retry(draft.id);
+      if (!mounted) return;
+      ref.invalidate(_draftProvider(draft.id));
+      if (updated.isPending || updated.isProcessing) {
+        _ensurePolling(updated.id);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Extraction retry started.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      _showError(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _showError('Could not retry extraction. Please try again.');
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1362,8 +1387,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
               setState(() => _selectedLoanPropertyId = id),
           confirming: _confirming,
           rejecting: _rejecting,
+          retrying: _retrying,
           onConfirm: () => _confirm(draft),
           onReject: () => _reject(draft),
+          onRetry: () => _retry(draft),
         );
       },
     );
@@ -1408,8 +1435,10 @@ class _ReviewBody extends ConsumerWidget {
     required this.onLoanPropertySelected,
     required this.confirming,
     required this.rejecting,
+    required this.retrying,
     required this.onConfirm,
     required this.onReject,
+    required this.onRetry,
   });
 
   final ScanDraft draft;
@@ -1445,8 +1474,10 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<int?> onLoanPropertySelected;
   final bool confirming;
   final bool rejecting;
+  final bool retrying;
   final VoidCallback onConfirm;
   final VoidCallback onReject;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1464,10 +1495,11 @@ class _ReviewBody extends ConsumerWidget {
     final actionsLocked = draft.isProcessing || draft.isInFlight;
     final isTerminal = draft.isTerminal;
     final isFailed = draft.status == 'Failed';
-    final busy = confirming || rejecting;
+    final busy = confirming || rejecting || retrying;
 
-    // Confirm is only possible once the draft is ready for review (or Failed, so
-    // manual values can still be entered) and nothing is in flight. For a lease:
+    // Confirm is only possible once the draft is ready for review and nothing
+    // is in flight. Failed drafts stay blocked unless the server makes them
+    // reviewable again through retry; they can still be rejected/cleared. For a lease:
     //  - CREATE mode (C3): a usable property name/address is needed (the server
     //    creates the property + unit from the document).
     //  - LINK mode: choose an existing unit, or choose an existing property
@@ -1532,8 +1564,14 @@ class _ReviewBody extends ConsumerWidget {
         ? 'Enter the new Unit number from the lease.'
         : 'Choose an existing Unit, or create a new Unit in an existing Property.';
     // Reject stays available on Failed so a bad scan can always be cleared, but
-    // never while processing, mid-action, or already terminal.
-    final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
+    // never while processing, mid-action, or already confirmed/rejected.
+    final rejectEnabled =
+        (!actionsLocked || isFailed) && !busy && (!isTerminal || isFailed);
+    final retryEnabled = isFailed && !busy;
+    final failedBannerText =
+        draft.scalarFields.isEmpty && draft.lineItems.isEmpty
+        ? 'Extraction failed before review fields could be recovered. Retry extraction or reject this scan.'
+        : 'Extraction failed. Review any recovered fields, retry extraction, or reject this scan.';
 
     return Scaffold(
       appBar: AppBar(
@@ -1555,9 +1593,7 @@ class _ReviewBody extends ConsumerWidget {
                     color: colorScheme.errorContainer,
                     borderColor: colorScheme.error.withValues(alpha: 0.4),
                     textColor: colorScheme.onErrorContainer,
-                    child: const Text(
-                      'Extraction failed. You can still enter the values below and confirm.',
-                    ),
+                    child: Text(failedBannerText),
                   ),
 
                 if (draft.isNoOp)
@@ -1871,6 +1907,21 @@ class _ReviewBody extends ConsumerWidget {
                               : 'Confirm & Create Expense',
                         ),
                 ),
+                if (isFailed)
+                  OutlinedButton.icon(
+                    onPressed: retryEnabled ? onRetry : null,
+                    icon: retrying
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: colorScheme.primary,
+                            ),
+                          )
+                        : const Icon(Icons.refresh),
+                    label: const Text('Retry extraction'),
+                  ),
                 // design#9: Reject is clearly destructive (error-coloured text +
                 // border) so it can't be mistaken for a secondary action.
                 OutlinedButton(
