@@ -82,7 +82,7 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         // them to live canonical rows, so stale or forged coordinates see no portfolio data.
         if (httpContext?.User.Identity?.IsAuthenticated == true &&
             Guid.TryParse(httpContext.User.FindFirstValue("sid"), out var sessionId) &&
-            int.TryParse(httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) &&
+            httpContext.User.TryReadSubjectUserId(out var userId) &&
             int.TryParse(httpContext.User.FindFirstValue("ctx"), out var accessContextId) &&
             long.TryParse(httpContext.User.FindFirstValue("ar"), out var accessRevision))
         {

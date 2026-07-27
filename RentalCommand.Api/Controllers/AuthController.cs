@@ -394,7 +394,7 @@ public class AuthController : ControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userId = User.FindSubjectValue();
         if (string.IsNullOrEmpty(userId))
         {
             return Unauthorized(new { error = "Not authenticated" });
@@ -437,7 +437,7 @@ public class AuthController : ControllerBase
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
     public async Task<ActionResult<UserDto>> GetCurrentUser()
     {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userId = User.FindSubjectValue();
         if (string.IsNullOrEmpty(userId))
         {
             return Unauthorized(new { error = "Not authenticated" });

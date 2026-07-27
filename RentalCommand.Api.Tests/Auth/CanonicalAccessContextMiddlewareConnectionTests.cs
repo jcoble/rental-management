@@ -1,9 +1,11 @@
 using System.Data;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
 
@@ -29,10 +31,61 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         await middleware.InvokeAsync(
             httpContext,
             new StubAccessContextResolver(active),
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             db);
 
         nextCalled.Should().BeTrue();
+        db.Database.GetDbConnection().State.Should().Be(ConnectionState.Closed);
+    }
+
+    [Fact]
+    public async Task Authenticated_request_resolves_canonical_context_with_security_clock_not_simulated_business_clock()
+    {
+        await using var db = CreateDbContext();
+        var active = ValidAccessContext();
+        var realSecurityNowUtc = new DateTime(2026, 7, 27, 20, 0, 0, DateTimeKind.Utc);
+        var resolver = new StubAccessContextResolver(active);
+        var nextCalled = false;
+        var middleware = new CanonicalAccessContextMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        await middleware.InvokeAsync(
+            AuthenticatedHttpContext(active),
+            resolver,
+            new FixedAuthSecurityClock(realSecurityNowUtc),
+            db);
+
+        nextCalled.Should().BeTrue();
+        resolver.LastUtcNow.Should().Be(realSecurityNowUtc,
+            "auth sessions and access envelopes are real security-time boundaries even when business time is simulated ahead");
+    }
+
+    [Fact]
+    public async Task Authenticated_request_accepts_raw_jwt_subject_claim()
+    {
+        await using var db = CreateDbContext();
+        var active = ValidAccessContext();
+        var resolver = new StubAccessContextResolver(active);
+        var nextCalled = false;
+        var middleware = new CanonicalAccessContextMiddleware(context =>
+        {
+            nextCalled = true;
+            context.Items[CanonicalAccessContextHttpItem.Key].Should().Be(active);
+            return Task.CompletedTask;
+        });
+        var httpContext = AuthenticatedHttpContext(active, useRawSubjectClaim: true);
+
+        await middleware.InvokeAsync(
+            httpContext,
+            resolver,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
+            db);
+
+        nextCalled.Should().BeTrue();
+        resolver.LastUserId.Should().Be(active.UserId);
         db.Database.GetDbConnection().State.Should().Be(ConnectionState.Closed);
     }
 
@@ -50,7 +103,7 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         var action = () => middleware.InvokeAsync(
             AuthenticatedHttpContext(active),
             new StubAccessContextResolver(active),
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             db);
 
         await action.Should().ThrowAsync<InvalidOperationException>()
@@ -77,7 +130,7 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         await middleware.InvokeAsync(
             httpContext,
             new StubAccessContextResolver(active),
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             db);
 
         nextCalled.Should().BeTrue();
@@ -106,7 +159,7 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         await middleware.InvokeAsync(
             httpContext,
             new StubAccessContextResolver(ValidAccessContext()),
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             db);
 
         httpContext.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -136,7 +189,7 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         await middleware.InvokeAsync(
             httpContext,
             new StubAccessContextResolver(failure),
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             db);
 
         httpContext.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
@@ -154,14 +207,19 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
         return new RentalCommandDbContext(options);
     }
 
-    private static DefaultHttpContext AuthenticatedHttpContext(ActiveAccessContext active)
+    private static DefaultHttpContext AuthenticatedHttpContext(
+        ActiveAccessContext active,
+        bool useRawSubjectClaim = false)
     {
+        var userIdClaim = useRawSubjectClaim
+            ? new Claim(JwtRegisteredClaimNames.Sub, active.UserId.ToString())
+            : new Claim(ClaimTypes.NameIdentifier, active.UserId.ToString());
         var context = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity(
             [
                 new Claim("sid", active.SessionId.ToString()),
-                new Claim(ClaimTypes.NameIdentifier, active.UserId.ToString()),
+                userIdClaim,
                 new Claim("ctx", active.AccessContextId.ToString()),
                 new Claim("ar", active.AccessRevision.ToString()),
             ], "Test")),
@@ -189,15 +247,27 @@ public sealed class CanonicalAccessContextMiddlewareConnectionTests
 
         public StubAccessContextResolver(Exception failure) => _failure = failure;
 
+        public DateTime? LastUtcNow { get; private set; }
+        public int? LastUserId { get; private set; }
+
         public Task<ActiveAccessContext> ResolveAsync(
             Guid sessionId,
             int userId,
             int accessContextId,
             long presentedAccessRevision,
             DateTime utcNow,
-            CancellationToken cancellationToken = default) =>
-            _failure is null
+            CancellationToken cancellationToken = default)
+        {
+            LastUtcNow = utcNow;
+            LastUserId = userId;
+            return _failure is null
                 ? Task.FromResult(_active!)
                 : Task.FromException<ActiveAccessContext>(_failure);
+        }
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
     }
 }

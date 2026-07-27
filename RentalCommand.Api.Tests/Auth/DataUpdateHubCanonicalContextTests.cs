@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Hubs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -164,7 +165,7 @@ public sealed class DataUpdateHubCanonicalContextTests
 
         var hub = new DataUpdateHub(
             resolver.Object,
-            TimeProvider.System,
+            new FixedAuthSecurityClock(DateTime.UtcNow),
             Mock.Of<ILogger<DataUpdateHub>>())
         {
             Context = callerContext.Object,
@@ -187,4 +188,9 @@ public sealed class DataUpdateHubCanonicalContextTests
             LastAuthorizedExperience: null,
             WorkspaceMembershipId: workspaceMembershipId,
             DefaultExperience: null);
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
+    }
 }
