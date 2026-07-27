@@ -64,6 +64,8 @@
 			'securityDepositObligation',
 			'lateFeeAmount',
 			'gracePeriodDays',
+			'rentTrackingStartMode',
+			'rentTrackingStartOn',
 			'openingBalanceAmount',
 			'openingBalanceEffectiveOn',
 			'openingBalanceNote'
@@ -537,6 +539,48 @@
 				</div>
 			{:else}
 				<div class="space-y-5" data-testid="prepare-move-in-money-step">
+					<div class="grid gap-4 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2">
+						<div class={form.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+							<p class="mb-1 block text-sm font-medium">Begin rent charges</p>
+							<SimpleSelect
+								bind:value={form.rentTrackingStartMode}
+								onchange={() => {
+									if (form.rentTrackingStartMode !== 'CustomCutoffDate') {
+										form.rentTrackingStartOn = '';
+									}
+									clearError('rentTrackingStartMode');
+									clearError('rentTrackingStartOn');
+								}}
+								options={[
+									{ value: 'ForwardOnly', label: 'Start from the current date' },
+									{ value: 'BackfillFromLeaseStart', label: 'Backfill from the lease start' },
+									{ value: 'CustomCutoffDate', label: 'Start from a custom date' }
+								]}
+								ariaLabel="Begin rent charges"
+								testid="prepare-move-in-rent-tracking-mode"
+							/>
+							<p class="mt-1 text-xs text-muted-foreground">
+								This controls the first rent period Rental Command posts to the tenant ledger.
+							</p>
+						</div>
+						{#if form.rentTrackingStartMode === 'CustomCutoffDate'}
+							<div>
+								<label class="mb-1 block text-sm font-medium" for="prepare-rent-tracking-start"
+									>Custom start date</label
+								>
+								<DatePicker
+									id="prepare-rent-tracking-start"
+									bind:value={form.rentTrackingStartOn}
+									min={form.termStartOn || undefined}
+									onchange={() => clearError('rentTrackingStartOn')}
+									testid="prepare-move-in-rent-tracking-date"
+								/>
+								{#if errors.rentTrackingStartOn}<p class="mt-1 text-xs text-destructive">
+										{errors.rentTrackingStartOn}
+									</p>{/if}
+							</div>
+						{/if}
+					</div>
 					<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 						<div>
 							<label class="mb-1 block text-sm font-medium" for="prepare-rent">Base rent</label

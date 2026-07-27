@@ -32,9 +32,11 @@ public sealed class PrepareMoveInHandler
             await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, applicationId, ct);
         }
 
-        // Query 1 is the database wall clock. Security eligibility never trusts command time or a
-        // simulation clock. Query 2 combines the live access envelope and application facts.
-        var wallClockUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        // Query 1 reads the database wall clock and simulation-aware business date together.
+        // Security eligibility uses only the wall clock; rent tracking uses only the business date.
+        // Query 2 combines the live access envelope and application facts.
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var wallClockUtc = times.WallClockUtc;
         attempt.UseDatabaseWallClockForAudit(wallClockUtc);
         var target = command.ApplicationId.HasValue
             ? await AuthorizedApplications(command, attempt.Persistence)
@@ -355,6 +357,11 @@ public sealed class PrepareMoveInHandler
             LeaseManagement = relationship,
             AccountNumber = $"TA-{relationshipToken}",
             Currency = target.Currency,
+            RentTrackingStartOn = RentTrackingStartPolicy.Resolve(
+                command.TermStartOn,
+                command.RentTrackingStartMode,
+                command.RentTrackingStartOn,
+                times.BusinessDate),
             OpenedAtUtc = wallClockUtc,
             CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
@@ -706,6 +713,11 @@ public sealed class PrepareMoveInHandler
             throw new ArgumentException("Agreement signer order, required status, and party role are invalid.");
         }
         if (command.DocumentTemplateId is <= 0
+            || !Enum.IsDefined(command.RentTrackingStartMode)
+            || (command.RentTrackingStartMode == RentTrackingStartMode.CustomCutoffDate
+                && command.RentTrackingStartOn is null)
+            || (command.RentTrackingStartMode != RentTrackingStartMode.CustomCutoffDate
+                && command.RentTrackingStartOn is not null)
             || command.TermsSchemaVersion <= 0 || string.IsNullOrWhiteSpace(command.TermsPayload)
             || command.BaseRentAmount < 0 || command.SecurityDepositObligation < 0
             || command.LateFeeAmount < 0 || command.RentDueDay is < 1 or > 31

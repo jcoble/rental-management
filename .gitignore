@@ -22,8 +22,11 @@ output/playwright/
 output/qa/
 output/remote-verification/
 output/pdf/tsk-749-year-simulation-scan-corpus*
+output/pdf/tsk-754-year-simulation-corrections*
 web/output/playwright/
 .playwright-cli/
+tmp/pdfs/
+tmp/year-simulation/
 
 # TLS certs
 certs/

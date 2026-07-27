@@ -43,6 +43,7 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LeaseScanSignatureChoice, {
 		type LeaseScanReviewDisposition
 	} from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
@@ -244,6 +245,10 @@
 	let newPropertyFieldsSeeded = $state(false);
 	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
 	let leaseDocumentTemplateId = $state('');
+	let rentTrackingStartMode = $state<
+		'ForwardOnly' | 'BackfillFromLeaseStart' | 'CustomCutoffDate'
+	>('ForwardOnly');
+	let rentTrackingStartOn = $state('');
 
 	function resetLeaseReviewState() {
 		selectedLeasePropertyId = '';
@@ -261,6 +266,8 @@
 		newPropertyFieldsSeeded = false;
 		leaseReviewDisposition = '';
 		leaseDocumentTemplateId = '';
+		rentTrackingStartMode = 'ForwardOnly';
+		rentTrackingStartOn = '';
 	}
 
 	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
@@ -530,6 +537,9 @@
 	const leaseSignatureChoiceInvalid = $derived(
 		isLease &&
 			!leaseReviewDisposition
+	);
+	const leaseRentTrackingInvalid = $derived(
+		isLease && rentTrackingStartMode === 'CustomCutoffDate' && !rentTrackingStartOn
 	);
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
@@ -1010,6 +1020,10 @@
 				overrides['tenantId'] = Number(selectedTenantId);
 			}
 			overrides['reviewDisposition'] = leaseReviewDisposition;
+			overrides['rentTrackingStartMode'] = rentTrackingStartMode;
+			if (rentTrackingStartMode === 'CustomCutoffDate') {
+				overrides['rentTrackingStartOn'] = rentTrackingStartOn;
+			}
 			if (leaseReviewDisposition === 'NeedsSignatures' && leaseDocumentTemplateId) {
 				overrides['documentTemplateId'] = Number(leaseDocumentTemplateId);
 			}
@@ -1637,6 +1651,50 @@
 										disabled={reviewControlsDisabled}
 									/>
 								</div>
+								<div class="mb-5 grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+									<div class={rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-rent-tracking-mode">
+											Begin rent charges
+										</label>
+										<Select.Root
+											type="single"
+											bind:value={rentTrackingStartMode}
+											onValueChange={() => {
+												if (rentTrackingStartMode !== 'CustomCutoffDate') rentTrackingStartOn = '';
+											}}
+											disabled={reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-rent-tracking-mode" data-testid="scan-rent-tracking-mode" class="w-full">
+												{rentTrackingStartMode === 'ForwardOnly'
+													? 'Start from the current date'
+													: rentTrackingStartMode === 'BackfillFromLeaseStart'
+														? 'Backfill from the lease start'
+														: 'Start from a custom date'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="ForwardOnly" label="Start from the current date">Start from the current date</Select.Item>
+												<Select.Item value="BackfillFromLeaseStart" label="Backfill from the lease start">Backfill from the lease start</Select.Item>
+												<Select.Item value="CustomCutoffDate" label="Start from a custom date">Start from a custom date</Select.Item>
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											This decides whether older rent periods are posted when the lease is imported.
+										</p>
+									</div>
+									{#if rentTrackingStartMode === 'CustomCutoffDate'}
+										<div>
+											<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-rent-tracking-date">
+												Custom start date
+											</label>
+											<DatePicker
+												id="scan-rent-tracking-date"
+												bind:value={rentTrackingStartOn}
+												min={editedFields['start_date'] || undefined}
+												testid="scan-rent-tracking-date"
+											/>
+										</div>
+									{/if}
+								</div>
 							{/if}
 
 						<!-- Lease terms — editable, mapped from the extracted fields -->
@@ -2137,7 +2195,7 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || applicationInvalid || loanInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || leaseRentTrackingInvalid || applicationInvalid || loanInvalid || amountInvalid}
 								class="flex-1"
 							>
 								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? 'Add Loan' : 'Confirm & Create Expense'}

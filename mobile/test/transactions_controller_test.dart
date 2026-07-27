@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/widgets/mobile_m3_list.dart';
 import 'package:rental_command/features/accounting/accounting_models.dart';
 import 'package:rental_command/features/accounting/accounting_repository.dart';
 import 'package:rental_command/features/money/money_screen.dart';
@@ -152,6 +153,38 @@ void main() {
 
     expect(container.read(transactionsProvider).items, hasLength(2));
     expect(find.byKey(const Key('ledger-append-progress')), findsNothing);
+  });
+
+  testWidgets('ledger loading state is not shaped like a transaction row', (
+    tester,
+  ) async {
+    final repo = _FakeMoneyRepository();
+    final pending = Completer<AccountingTransactionsPage>();
+    repo.queue(pending.future);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          accountingRepositoryProvider.overrideWithValue(
+            _FakeAccountingRepository(),
+          ),
+          moneyRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(
+          home: MoneyScreen(initialView: MoneyScreenView.ledger),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('ledger-loading')), findsOneWidget);
+    expect(find.byType(MobileM3ListItem), findsNothing);
+    expect(find.text('Loading ledger'), findsNothing);
+
+    pending.complete(_pageWith(items: const [], totalCount: 0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ledger-loading')), findsNothing);
   });
 
   testWidgets('ledger source and date context may wrap twice at phone width', (

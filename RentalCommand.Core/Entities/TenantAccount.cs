@@ -11,6 +11,11 @@ public class TenantAccount : IAuditable, IPortfolioScoped
     public int LeaseManagementId { get; set; }
     public string AccountNumber { get; set; } = string.Empty;
     public string Currency { get; set; } = string.Empty;
+    /// <summary>
+    /// First date Rental Command may generate rent for this account. Null is the explicit
+    /// backfill-from-lease-start choice.
+    /// </summary>
+    public DateOnly? RentTrackingStartOn { get; set; }
     public DateTime OpenedAtUtc { get; set; }
     public DateTime? ClosedAtUtc { get; set; }
     public string? CloseReasonCode { get; set; }

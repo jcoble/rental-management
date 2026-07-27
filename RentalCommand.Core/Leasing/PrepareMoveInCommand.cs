@@ -52,7 +52,9 @@ public sealed record PrepareMoveInCommand(
     decimal? OpeningBalanceAmount,
     DateOnly? OpeningBalanceEffectiveOn,
     string? OpeningBalanceNote,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    string DeliveryIdempotencyKey,
+    RentTrackingStartMode RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+    DateOnly? RentTrackingStartOn = null) : IAtomicCommandData;
 
 public enum PrepareMoveInOutcome
 {

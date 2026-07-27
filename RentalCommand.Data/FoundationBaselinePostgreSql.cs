@@ -2071,7 +2071,7 @@ internal static class FoundationBaselinePostgreSql
              "EnableMorningBriefing", "MorningBriefingSendHourLocal", "MorningBriefingIncludeEmpty",
              "CreatedAtUtc", "UpdatedAtUtc")
           VALUES
-            (new_portfolio_id, FALSE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,
+            (new_portfolio_id, TRUE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,
              created_at_utc, created_at_utc);
 
           INSERT INTO public."UserAlertPreferences"

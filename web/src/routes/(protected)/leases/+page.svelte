@@ -104,7 +104,7 @@
 	<title>Leases - Rental Command</title>
 </svelte:head>
 
-<div class="space-y-6">
+<div class="box-border h-full space-y-6 overflow-y-auto p-6 pb-20" data-testid="leases-page">
 	<PageHeader
 		title="Leases"
 		description="Find a tenant relationship, its governing agreement, upcoming agreement, and account context."

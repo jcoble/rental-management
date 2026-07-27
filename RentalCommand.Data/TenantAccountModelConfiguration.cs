@@ -30,6 +30,7 @@ internal static class TenantAccountModelConfiguration
             entity.Property(e => e.PublicId).HasDefaultValueSql("gen_random_uuid()");
             entity.Property(e => e.AccountNumber).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);
+            entity.Property(e => e.RentTrackingStartOn).HasColumnType("date");
             entity.Property(e => e.OpenedAtUtc).HasDefaultValueSql("clock_timestamp()");
             entity.Property(e => e.CloseReasonCode).HasMaxLength(40);
             entity.Property(e => e.CloseNote).HasMaxLength(1000);

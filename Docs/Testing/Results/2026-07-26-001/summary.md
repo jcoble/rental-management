@@ -725,6 +725,202 @@
   - A fresh authenticated `/units/list-with-health/page` request returned HTTP 200 and the
     Valley Duplex target picker returned the expected existing Property.
 
+### TSK-754-D024 — Core rent posting was incorrectly gated by an off switch
+
+- Status: Fixed and verified locally; Azure checkpoint verification pending
+- Severity: Blocking financial-integrity defect
+- Reproduction:
+  - Confirm the opening leases, advance the business clock to January 3, and run the real
+    rent-charge worker.
+- Expected:
+  - Agreement-backed rent charges post automatically. This core ledger behavior is not optional.
+- Actual:
+  - The worker created zero charges because the restored portfolio's legacy
+    `EnableRentCharges` value was false.
+- Root cause:
+  - Scheduled rent SQL treated core monthly billing as an optional automation setting.
+- Fix:
+  - Removed the setting from rent eligibility.
+  - New workspaces persist true, existing false rows migrate to true, and a database check
+    constraint prevents rent posting from being disabled again.
+  - Product copy now distinguishes always-on rent posting from optional follow-up automation.
+- Verification:
+  - Both new migrations applied to the preserved simulation database.
+  - All 24 existing tenant accounts retained a forward-only rent start of January 3, 2027.
+  - No automation-settings row remained disabled.
+  - The focused PostgreSQL scheduled-charge suite passed, including exact backfill,
+    current-date, and custom-date cutoffs.
+
+### TSK-754-D025 — Enabling core rent posting silently backfilled historical charges
+
+- Status: Fixed and fully reconciled in the preserved local simulation ledger; Azure checkpoint pending
+- Severity: Blocking financial-integrity defect
+- Reproduction:
+  - Enable the corrected always-on rent worker for the 24 imported historical agreements while
+    the business clock is January 3, 2027.
+- Expected:
+  - Existing accounts begin automatic posting on the current business date unless a user
+    explicitly chooses backfill.
+- Actual:
+  - The first worker pass posted 228 historical 2026 rent charges totaling $331,800, plus the
+    correct 24 January 2027 charges totaling $35,500.
+- Root cause:
+  - The tenant account did not persist a rent-tracking cutoff, so scheduled SQL always generated
+    periods from the agreement start.
+- Fix:
+  - Add a nullable `TenantAccount.RentTrackingStartOn`, where null explicitly means backfill.
+  - Migrate existing accounts to the later of their agreement start or current portfolio business
+    date, preventing a surprise historical sweep.
+  - Bound scheduled SQL to that persisted cutoff without materializing account rows in memory.
+  - Keep the erroneous rows append-only; correct them through supported ledger reversals rather
+    than deleting or rewriting history.
+- Verification:
+  - The preserved local database has 24 accounts with a January 3, 2027 cutoff.
+  - PostgreSQL tests prove exact full, prorated, current-date, and custom-date posting behavior.
+  - Rendered and visually inspected the synthetic correction authority
+    `output/pdf/tsk-754-year-simulation-corrections/2027-01-03-rent-backfill-correction-memo.pdf`.
+  - Uploaded the memo through the supported Documents API as stored file 49, attached to tenant
+    account 1 at the frozen January 3, 2027 simulation time.
+  - Proved one reversal, then replayed the same idempotency key: the second response returned the
+    same reversal ledger entry with `replayed: true` and created no duplicate.
+  - Reversed every affected charge through the public charge-reversal API with a stable
+    per-original-entry idempotency key and stored-file provenance. No ledger row was deleted or
+    directly rewritten.
+  - Final database reconciliation:
+    - 228 original 2026 RentCharge debits retained, totaling $331,800.
+    - 228 exact compensating Reversal credits retained, totaling $331,800.
+    - Net affected 2026 rent is $0.
+    - Zero missing, mismatched, duplicate, or wrong-provenance reversals.
+    - The correct January 2027 batch remains 24 RentCharge debits totaling $35,500.
+
+### TSK-754-D026 — Current leasing omitted the rent-charge start choice
+
+- Status: Fixed and verified in the application-first web flow; mobile runtime proof pending
+- Severity: High financial-control regression
+- Reproduction:
+  - Approve an application and open the current Prepare move-in stepper.
+  - Review the Money & review step and the equivalent scanned-lease confirmation path.
+- Expected:
+  - The user chooses one of: start at the current business date, backfill from lease start, or
+    start at a custom date.
+- Actual:
+  - The restored leasing rewrite had removed the choice, leaving no supported way to control
+    historical rent generation.
+- Fix:
+  - Restore `ForwardOnly`, `BackfillFromLeaseStart`, and `CustomCutoffDate` as an explicit API and
+    domain policy.
+  - Carry the choice through application-first Prepare move-in, web scan review, mobile Prepare
+    move-in, mobile guided rental, and mobile scan review.
+  - Default new actions to forward-only; require a date only for custom mode.
+- Verification:
+  - A real scanned application created Hector Reed, approval created tenant 30, and the current
+    application-first Prepare move-in stepper opened from the approved application.
+  - Its Money & review step defaulted to `Start from the current date`, accepted a custom
+    February 15, 2027 date, and switched to `Backfill from the lease start` without retaining the
+    custom-date input.
+  - Evidence: `browser/prepare-move-in-rent-start-options.png`.
+
+### TSK-754-D027 — Leases and My alerts content touched the viewport edges
+
+- Status: Fixed and visually verified in the real local browser
+- Severity: Medium presentation and usability defect
+- Reproduction:
+  - Open Leases or Settings > My alerts at a desktop viewport.
+- Expected:
+  - Page content retains normal application padding and remains independently scrollable.
+- Actual:
+  - Both route surfaces rendered without the surrounding page padding.
+- Fix:
+  - Add responsive page padding and bottom scroll room to Leases.
+  - Add the same responsive padding and scroll boundary to the shared notification setup journey.
+- Verification:
+  - Full-viewport screenshots show consistent left, right, top, and bottom spacing on both pages.
+  - Evidence: `browser/leases-padding.png` and `browser/my-alerts-padding.png`.
+
+### TSK-754-D028 — Local stack was started without simulation enabled
+
+- Status: Closed as a verification-harness configuration error; not a product defect
+- Severity: Blocking until the local stack was restarted correctly
+- Reproduction:
+  - Start the local API, Engine, and web app without `Simulation__Enabled=true` and
+    `PUBLIC_SIMULATION_ENABLED=true` while reusing a database whose clock row is frozen on
+    January 3, 2027.
+- Actual:
+  - `/api/v1/dev/clock` correctly returned 404 because the simulation surface was disabled.
+  - The application detail recorded Submitted and Reviewed on the July 26, 2026 host date.
+  - The dashboard labeled the active reporting period `July 2026 (so far)`.
+- Root cause:
+  - The database clock row does not activate simulation by itself. The local host processes were
+    deliberately running their production-like system clocks because the simulation gates were
+    absent from the startup environment.
+- Resolution and verification:
+  - Restarted the same API, Engine, web app, database, uploads, and data-protection state with both
+    simulation gates enabled.
+  - API and Engine both started their clock refreshers.
+  - `GET /api/v1/dev/clock` returned Frozen with `simNowUtc` January 3, 2027 and
+    `America/New_York`.
+  - The real browser displayed `SIM CLOCK frozen` and the dashboard immediately changed to
+    `January 2027 (so far)`.
+- Run-data note:
+  - Application 1 retains the host timestamps written while the harness was misconfigured. Those
+    values are evidence of the harness incident, not evidence against the enabled product path.
+
+### TSK-754-D029 — Receipt rows precede their opening leases
+
+- Status: Confirmed planner dependency defect; execution workaround active
+- Severity: High test-plan integrity defect
+- Reproduction:
+  - Read the January 3 receipt rows `RUN-20270103-13` through `RUN-20270103-15`.
+  - Compare their L030, L033, and L036 dependencies with the January 4 opening-lease batch
+    `RUN-20270104-01`, which is responsible for creating L025 through L036.
+- Expected:
+  - Every receipt row runs only after its tenant account and January rent charge exist.
+- Actual:
+  - Three receipts are scheduled one business day before the only schedule row that creates their
+    lease and tenant-account aggregates.
+- Safety response:
+  - Do not fabricate placeholder accounts and do not move the simulation clock backward.
+  - Execute the ten January 3 receipts whose L001-L024 dependencies exist.
+  - Execute the three blocked receipts immediately after the January 4 opening batch, retaining
+    their original run IDs and documenting the one-day execution variance.
+- Required plan fix:
+  - Add a generator validation that rejects any financial workflow dated before its referenced
+    lease creation row, then regenerate and reconcile the planner corpus in a separate controlled
+    revision.
+
+### TSK-754-D030 — Payment scans rearranged visible ISO dates at full confidence
+
+- Status: Fixed and verified with the original failing image in the local scan worker
+- Severity: High scan-to-ledger accuracy defect
+- Reproduction:
+  - Upload the planned payment images SCN-0091 and SCN-0098 with an explicit Payment target.
+  - Compare the visible header `2027-01-03` with each Reviewing draft.
+- Expected:
+  - Copy the visible date exactly as `2027-01-03`, or leave it blank with low confidence if the
+    model cannot read it.
+- Actual:
+  - SCN-0091 returned `2023-10-01` at confidence 1.0.
+  - SCN-0098 returned `2022-07-01` at confidence 1.0.
+  - Both source images visibly print `2027-01-03`; the correct amounts were extracted.
+  - The PDF payment scans SCN-0093 and SCN-0100 extracted `2027-01-03` correctly.
+- Safety response:
+  - Keep both bad drafts in Reviewing until the date is explicitly corrected during confirmation.
+  - Verify the resulting receipt and allocation against the January 2027 charge.
+- Fix:
+  - Strengthen the shared receipt/payment extraction instructions to copy visible dates before ISO
+    conversion, never reorder or infer digits, accept a clearly labeled document-header date when
+    the instrument has no separate date, and leave the field empty when no complete date is visible.
+  - Add a focused schema contract test for those requirements.
+- Verification:
+  - The focused receipt-extraction schema test passed.
+  - Restarted the API and Engine from the changed source while preserving the database and uploads.
+  - Re-uploaded the byte-identical SCN-0091 image as draft 36.
+  - The provider retained the correct $1,275 amount and Bennett Garcia payer at confidence 1.0,
+    but returned the uncertain transaction date empty at confidence 0 instead of fabricating a
+    different date.
+  - Rejected the duplicate verification draft with a recorded reason; the already-corrected
+    original receipt and allocation were unchanged.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -922,16 +1118,43 @@
 - Evidence:
   - `mobile/local-phone/scn-0024-before-import.png`
   - `mobile/local-phone/scn-0024-opening-lease-confirmed.png`
+- `SCN-0924` exercised the new application scan target through the real web browser. The first
+  extraction attempt preserved the uploaded JPEG but failed because the Azure-copied credential
+  could not decrypt under the local data-protection key ring. The workspace OpenAI credential was
+  rotated through the supported API using an existing local secret; its real provider check
+  passed, and retrying the same draft extracted Hector Reed, `tenant.043@example.local`, requested
+  Dogwood Duplex / Unit A, and the February 1, 2027 move-in date.
+- Confirmation created one Submitted application with the source image attached. Approval created
+  tenant 30 and exposed the current application-first Prepare move-in action. No relationship,
+  agreement, or tenant account was created because P029/U037 is deliberately scheduled for manual
+  creation on January 5, and the test canceled before substituting an unrelated existing Unit.
+- The scan also exposed D028: Submitted and Reviewed displayed the host date instead of the
+  January 3, 2027 business date.
+- January 3 receipt execution completed for every row whose lease dependency exists:
+  - Six manual/portal receipt commands and four real Payment scan confirmations created ten
+    append-only PaymentReceipt entries totaling $13,295.
+  - The ten receipts produced exactly ten allocations totaling $13,295, each against its own
+    January 2027 RentCharge rather than a corrected historical charge.
+  - L011's planned $855 partial payment left $570 open; L022's planned $1,140 partial payment left
+    $760 open. The other eight selected January charges are fully allocated.
+  - SCN-0091, SCN-0093, SCN-0098, and SCN-0100 retain their source StoredFile provenance.
+  - Replaying FIN-00007's exact idempotency key returned the original receipt and created no second
+    cash or allocation row.
+  - SCN-0091 and SCN-0098 required reviewed date corrections after exposing D030; confirmation
+    persisted the planned January 3, 2027 effective date.
 
 ## Checkpoint 2026-07-26
 
-- Status: isolated run initialized; January 3 opening-lease batch complete
-- Completed run rows: 2 / 1,996
-- Uploaded and confirmed scan assets: 24 / 953
+- Status: isolated run initialized; January 3 opening-lease batch, application scan, rent correction,
+  and ten dependency-valid January 3 receipts complete
+- Completed run rows: 12 / 1,996
+- Uploaded and confirmed scan assets: 29 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 24
-- Findings and safety blockers: 23
-- Current blockers: rent-charge automation is disabled and the web Automations tab exposes no
-  control for the underlying setting.
-- Next action: restore atomic automation settings controls, generate January rent charges, prove
-  duplicate suppression, then execute the January 3 rent receipts.
+- Official scan confirmations: 29
+- Findings and safety blockers: 30
+- Current blockers:
+  - D029 defers `RUN-20270103-13` through `RUN-20270103-15` until their January 4 opening leases
+    exist.
+- Next action: complete the January 4 opening batch, execute its valid receipts plus the three D029
+  deferrals, then complete the January 5 P029/U037 setup and January 7 application-first Prepare
+  move-in flow.

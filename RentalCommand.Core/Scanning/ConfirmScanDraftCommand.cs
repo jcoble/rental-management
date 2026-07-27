@@ -116,7 +116,9 @@ public sealed record ScanLeaseTargetData(
     int TermsSchemaVersion = 1,
     string? TermsPayload = null,
     short GracePeriodDays = 0,
-    DateTime? PossessionGivenAtUtc = null) : IAtomicCommandData;
+    DateTime? PossessionGivenAtUtc = null,
+    RentTrackingStartMode RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+    DateOnly? RentTrackingStartOn = null) : IAtomicCommandData;
 
 public sealed record ScanApplicationTargetData(
     string? FirstName,

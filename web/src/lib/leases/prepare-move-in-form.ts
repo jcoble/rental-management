@@ -18,6 +18,8 @@ export interface PrepareMoveInForm {
 	securityDepositObligation: string;
 	lateFeeAmount: string;
 	gracePeriodDays: string;
+	rentTrackingStartMode: 'BackfillFromLeaseStart' | 'ForwardOnly' | 'CustomCutoffDate';
+	rentTrackingStartOn: string;
 	createSecurityDepositAccount: boolean;
 	openingBalanceAmount: string;
 	openingBalanceEffectiveOn: string;
@@ -48,6 +50,8 @@ export function createPrepareMoveInForm(
 		securityDepositObligation: '',
 		lateFeeAmount: '',
 		gracePeriodDays: '',
+		rentTrackingStartMode: 'ForwardOnly',
+		rentTrackingStartOn: '',
 		createSecurityDepositAccount: false,
 		openingBalanceAmount: '',
 		openingBalanceEffectiveOn: '',
@@ -106,6 +110,17 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 	}
 	if (lateFeeAmount == null) errors.lateFeeAmount = 'Enter the late fee, including zero.';
 	if (gracePeriodDays == null) errors.gracePeriodDays = 'Enter grace days from 0 through 31.';
+	if (form.rentTrackingStartMode === 'CustomCutoffDate' && !form.rentTrackingStartOn) {
+		errors.rentTrackingStartOn = 'Choose the custom rent tracking start date.';
+	}
+	if (
+		form.rentTrackingStartMode === 'CustomCutoffDate' &&
+		form.rentTrackingStartOn &&
+		form.termStartOn &&
+		form.rentTrackingStartOn < form.termStartOn
+	) {
+		errors.rentTrackingStartOn = 'Rent tracking cannot start before the agreement.';
+	}
 	const openingBalanceAmount =
 		form.openingBalanceAmount.trim() === '' ? null : Number(form.openingBalanceAmount);
 	if (
@@ -167,6 +182,9 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 			securityDepositObligation,
 			lateFeeAmount,
 			gracePeriodDays,
+			rentTrackingStartMode: form.rentTrackingStartMode,
+			rentTrackingStartOn:
+				form.rentTrackingStartMode === 'CustomCutoffDate' ? form.rentTrackingStartOn : null,
 			termsSchemaVersion: 1,
 			termsPayload: {},
 			createSecurityDepositAccount: form.createSecurityDepositAccount,

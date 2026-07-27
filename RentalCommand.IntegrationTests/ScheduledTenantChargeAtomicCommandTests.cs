@@ -164,6 +164,55 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task RentBatch_RespectsBackfillCurrentAndCustomAccountCutoffs()
+    {
+        SkipIfNoDocker();
+        var leaseStart = new DateOnly(2026, 5, 10);
+        var backfill = await SeedScenarioAsync("rent-backfill", FrozenNow, leaseStart);
+        var current = await SeedScenarioAsync(
+            "rent-current",
+            FrozenNow,
+            leaseStart,
+            new DateOnly(2026, 7, 15));
+        var custom = await SeedScenarioAsync(
+            "rent-custom",
+            FrozenNow,
+            leaseStart,
+            new DateOnly(2026, 6, 20));
+
+        var result = await Atomic.ExecuteAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "rent-cutoffs"),
+            RentCommand("rent-cutoffs"),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(6);
+        await using var verify = NewContext();
+        var rows = await verify.TenantLedgerEntries
+            .Where(row =>
+                row.TenantAccountId == backfill.AccountId
+                || row.TenantAccountId == current.AccountId
+                || row.TenantAccountId == custom.AccountId)
+            .OrderBy(row => row.TenantAccountId)
+            .ThenBy(row => row.EffectiveOn)
+            .ToListAsync();
+
+        rows.Where(row => row.TenantAccountId == backfill.AccountId)
+            .Select(row => (row.EffectiveOn, row.Amount))
+            .Should().Equal(
+                (new DateOnly(2026, 5, 10), 2200m),
+                (new DateOnly(2026, 6, 1), 3100m),
+                (new DateOnly(2026, 7, 1), 3100m));
+        rows.Where(row => row.TenantAccountId == current.AccountId)
+            .Select(row => (row.EffectiveOn, row.Amount))
+            .Should().Equal((new DateOnly(2026, 7, 15), 1700m));
+        rows.Where(row => row.TenantAccountId == custom.AccountId)
+            .Select(row => (row.EffectiveOn, row.Amount))
+            .Should().Equal(
+                (new DateOnly(2026, 6, 20), 1136.67m),
+                (new DateOnly(2026, 7, 1), 3100m));
+    }
+
+    [SkippableFact]
     public async Task LateFeeBatch_UsesOpenChargeBusinessDateGraceAndStateCap_AndDoesNotMutateRent()
     {
         SkipIfNoDocker();
@@ -237,7 +286,11 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         recovered.Value.RentChargeCount.Should().Be(1);
     }
 
-    private async Task<Scenario> SeedScenarioAsync(string suffix, DateTime frozenAtUtc)
+    private async Task<Scenario> SeedScenarioAsync(
+        string suffix,
+        DateTime frozenAtUtc,
+        DateOnly? termStartOn = null,
+        DateOnly? rentTrackingStartOn = null)
     {
         await using var db = NewContext();
         var portfolio = await db.Portfolios.FirstOrDefaultAsync();
@@ -368,6 +421,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             LeaseManagementId = management.Id,
             AccountNumber = $"TA-{suffix}",
             Currency = "USD",
+            RentTrackingStartOn = rentTrackingStartOn,
             OpenedAtUtc = frozenAtUtc,
             CreatedAtUtc = frozenAtUtc,
             CreatedByUserId = user.Id,
@@ -381,9 +435,9 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             AgreementNumber = $"AGR-{suffix}",
             ChangeType = LeaseAgreementChangeType.Initial,
             TermType = LeaseAgreementTermType.FixedTerm,
-            TermStartOn = new DateOnly(2026, 7, 10),
+            TermStartOn = termStartOn ?? new DateOnly(2026, 7, 10),
             TermEndOn = new DateOnly(2026, 8, 31),
-            GoverningFromOn = new DateOnly(2026, 7, 10),
+            GoverningFromOn = termStartOn ?? new DateOnly(2026, 7, 10),
             BaseRentAmount = 3100m,
             RentDueDay = 1,
             SecurityDepositObligation = 0m,
