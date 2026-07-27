@@ -3,7 +3,8 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Core.Operations;
 
-public sealed record WorkspaceAccessRevisionExpectation(int AccessContextId, long ExpectedRevision);
+public sealed record WorkspaceAccessRevisionExpectation(int AccessContextId, long ExpectedRevision)
+    : IAtomicCommandData, IAtomicResultData;
 
 /// <summary>Marker for one authority command that must advance several affected access roots once.</summary>
 public interface IWorkspaceAccessRevisionSetMutationCommand : IAtomicCommandData
@@ -33,7 +34,7 @@ public sealed record AssignWorkOrderResponsibilityResult(
     int MembershipRoleAssignmentId,
     WorkOrderResponsibilityKind Kind,
     DateTime EffectiveFromUtc,
-    IReadOnlyDictionary<int, long> AccessRevisions);
+    WorkspaceAccessRevisionExpectation[] AccessRevisions) : IAtomicResultData;
 
 public sealed record CloseWorkOrderResponsibilityCommand(
     int PortfolioId,
@@ -51,7 +52,7 @@ public sealed record CloseWorkOrderResponsibilityResult(
     Guid ResponsibilityId,
     int WorkOrderId,
     DateTime EffectiveToUtc,
-    IReadOnlyDictionary<int, long> AccessRevisions);
+    WorkspaceAccessRevisionExpectation[] AccessRevisions) : IAtomicResultData;
 
 /// <summary>
 /// The deliberately narrow mutation available to a currently assigned technician. Location,
