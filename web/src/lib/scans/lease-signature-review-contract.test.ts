@@ -77,4 +77,44 @@ describe("lease scan signature review contract", () => {
     assert.match(generalReviewSource, /leaseSignatureChoiceInvalid/);
     assert.match(leaseFirstImportSource, /signatureChoiceInvalid/);
   });
+
+  it("requires an explicit rent-charge start choice in both lease scan review entry points", () => {
+    for (const source of [generalReviewSource, leaseFirstImportSource]) {
+      assert.match(source, /Start from the current date/);
+      assert.match(source, /Backfill from the lease start/);
+      assert.match(source, /Start from a custom date/);
+      assert.match(source, /rentTrackingStartMode/);
+      assert.match(source, /rentTrackingStartOn/);
+      assert.match(source, /CustomCutoffDate/);
+    }
+
+    assert.match(
+      leaseFirstImportSource,
+      /o\.rentTrackingStartMode = rentTrackingStartMode/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /o\.rentTrackingStartOn = rentTrackingStartOn/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /Rent tracking cannot start before the agreement/
+    );
+  });
+
+  it("lets guided signed imports review and send the possession date required by leasing", () => {
+    assert.match(leaseFirstImportSource, /Possession given/);
+    assert.match(
+      leaseFirstImportSource,
+      /testid="new-rental-possession-given-date"/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /reviewDisposition === 'AlreadyFullySigned' && possessionGivenOn/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /o\.possessionGivenAtUtc = possessionGivenOn/
+    );
+  });
 });
