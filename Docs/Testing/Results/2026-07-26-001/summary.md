@@ -951,6 +951,98 @@
   - Ignored evidence:
     `output/remote-verification/tsk754-3e3c2ef7/live-leasing-prepare-move-in.png`.
 
+### TSK-754-D032 — Guided web lease import omitted the rent-charge start choice
+
+- Status: Fixed and verified
+- Severity: High financial-safety defect
+- Reproduction:
+  - Open Guided Setup > Import agreement and advance a historical lease to the Lease step.
+- Actual:
+  - The standard scan review and native guided flow exposed forward-only, lease-start backfill, and
+    custom-cutoff choices, but the web guided flow exposed none and sent no reviewed choice.
+- Fix:
+  - Added all three choices, custom-date validation, and the canonical confirmation overrides to
+    `LeaseFirstImport`.
+- Verification:
+  - Focused scan contracts and both web type-check lanes pass.
+  - Draft 38 persisted the reviewed custom cutoff `2027-01-01`.
+
+### TSK-754-D033 — Guided signed lease import omitted reviewed possession
+
+- Status: Fixed and verified in web; native contract verified
+- Severity: Blocking
+- Reproduction:
+  - Confirm draft 38 as an already-signed historical lease after completing every visible field.
+- Actual:
+  - Confirmation returned HTTP 400:
+    `A fully signed lease whose term has started requires the reviewed possession date.`
+  - The guided web and native flows did not expose or send that canonical field.
+- Safety evidence:
+  - The failed confirmation created no Property, Unit, Agreement, or TenantAccount.
+- Fix:
+  - Added extracted/manual possession review and `possessionGivenAtUtc` confirmation overrides to
+    both guided clients.
+- Verification:
+  - Focused web and Flutter scan tests pass.
+  - Resuming the same draft 38 created SCN-0025 atomically; its possession is `2026-02-01`, rent
+    cutoff is `2027-01-01`, and each expected aggregate advanced by exactly one.
+
+### TSK-754-D034 — Extracted numeric ids overrode conflicting lease premises
+
+- Status: Fixed and verified
+- Severity: Critical data-integrity defect
+- Reproduction:
+  - Upload SCN-0027 after Walnut Duplex exists.
+  - Extraction returned York Duplex / 508 York Street, but also model-supplied
+    `property_id=24` and `unit_id=27`.
+- Actual:
+  - The proposal linked those coincidentally valid database ids to Walnut Duplex / Unit B and hid
+    the create-new fields behind an empty `Select a property` picker.
+- Fix:
+  - Ground model-supplied ids against the independently extracted address/name and Unit number
+    using DB-side matching before preview or confirmation.
+  - Clear conflicting ids; apply explicit reviewer selections afterward so they still win.
+- Verification:
+  - Focused API regression passes.
+  - The live draft 40 proposal changed from linking Walnut to selecting York Duplex / Unit A.
+  - Resuming that exact draft created SCN-0027 under York without a duplicate upload.
+
+### TSK-754-D035 — First-time Google sign-in violated the rent-charge invariant
+
+- Status: Fixed locally; Azure deployment and real Google retry pending
+- Severity: Blocking authentication defect
+- Reproduction:
+  - Authenticate a first-time user with Google against the isolated Azure stack.
+- Actual:
+  - Google code exchange and token validation succeeded.
+  - `rc_bootstrap_initial_workspace` then inserted `EnableRentCharges=FALSE`, violating
+    `CK_AutomationSettings_RentChargesAlwaysEnabled`; the atomic signup rolled back and the web
+    callback returned to Login after the API 401.
+- Fix:
+  - Added a forward migration that redeploys the canonical authority bundle, whose initial
+    workspace bootstrap uses `EnableRentCharges=TRUE`.
+- Verification:
+  - Focused migration test passes.
+  - The local migration is recorded, and `pg_get_functiondef` contains the TRUE tuple and no stale
+    FALSE tuple.
+  - Azure and real-provider verification remain required before closure.
+
+### TSK-754-D036 — Burst lease scans exhausted the extraction provider limit
+
+- Status: Open; failed draft preserved
+- Severity: High scan-reliability defect
+- Reproduction:
+  - Run the January 4 opening-lease scan batch continuously.
+- Actual:
+  - Draft 48 received HTTP 429 twice in immediate succession and moved to Failed.
+  - The guided UI waited for its step until the automation timeout; SCN-0035 was not confirmed and
+    SCN-0036 was not uploaded.
+- Safety evidence:
+  - The failed draft created no rental aggregate.
+- Required follow-up:
+  - Verify provider-aware retry/backoff and a recoverable retry path without duplicating the stored
+    source, then resume SCN-0035 and SCN-0036.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -1178,13 +1270,15 @@
 - Status: isolated run initialized; January 3 opening-lease batch, application scan, rent correction,
   and ten dependency-valid January 3 receipts complete
 - Completed run rows: 12 / 1,996
-- Uploaded and confirmed scan assets: 29 / 953
+- Uploaded and confirmed scan assets: 39 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 29
-- Findings and safety blockers: 31
+- Official scan confirmations: 39
+- Findings and safety blockers: 36
 - Current blockers:
   - D029 defers `RUN-20270103-13` through `RUN-20270103-15` until their January 4 opening leases
     exist.
+  - D036 interrupted the January 4 batch after SCN-0034; draft 48 and SCN-0035 must be retried
+    without duplicating business aggregates, followed by SCN-0036.
 - Next action: complete the January 4 opening batch, execute its valid receipts plus the three D029
   deferrals, then complete the January 5 P029/U037 setup and January 7 application-first Prepare
   move-in flow.

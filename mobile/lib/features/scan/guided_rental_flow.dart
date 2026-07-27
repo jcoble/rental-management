@@ -65,6 +65,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   final _dueDay = TextEditingController(text: '1');
   DateTime? _start;
   DateTime? _end;
+  DateTime? _possessionGivenOn;
   String? _reviewDisposition;
   String _rentTrackingStartMode = 'ForwardOnly';
   DateTime? _rentTrackingStartOn;
@@ -183,6 +184,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     _dueDay.text = v.rentDueDay.isEmpty ? '1' : v.rentDueDay;
     _start = DateTime.tryParse(v.startDate);
     _end = DateTime.tryParse(v.endDate);
+    _possessionGivenOn = DateTime.tryParse(v.possessionGivenOn);
     setState(() => _loading = false);
   }
 
@@ -287,6 +289,10 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     }
     if (_reviewDisposition != null) {
       o['reviewDisposition'] = _reviewDisposition;
+    }
+    if (_reviewDisposition == 'AlreadyFullySigned' &&
+        _possessionGivenOn != null) {
+      o['possessionGivenAtUtc'] = _iso(_possessionGivenOn!);
     }
     o['rentTrackingStartMode'] = _rentTrackingStartMode;
     if (_rentTrackingStartMode == 'CustomCutoffDate' &&
@@ -674,6 +680,38 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
                 'Import the uploaded document as the executed agreement.',
               ),
             ),
+            if (_reviewDisposition == 'AlreadyFullySigned')
+              ListTile(
+                key: const ValueKey('guided-rental-possession-given-date'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Possession given'),
+                subtitle: Text(
+                  _possessionGivenOn == null
+                      ? 'Pick a date'
+                      : _iso(_possessionGivenOn!),
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = _start ?? DateTime(2000);
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: _possessionGivenOn ?? firstDate,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                    helpText: 'Possession given',
+                  );
+                  if (selected != null && mounted) {
+                    setState(() => _possessionGivenOn = selected);
+                  }
+                },
+              ),
+            if (_reviewDisposition == 'AlreadyFullySigned')
+              Text(
+                'Required when the signed lease term has started and the tenant already received possession.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             RadioListTile<String>(
               contentPadding: EdgeInsets.zero,
               value: 'NeedsSignatures',

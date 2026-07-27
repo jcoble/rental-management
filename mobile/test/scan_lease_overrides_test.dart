@@ -12,6 +12,16 @@ import 'package:rental_command/features/scan/scan_review_screen.dart';
 /// the chosen ids. This is the invariant that makes "the computer creates the
 /// property for you" actually reachable, so it's worth pinning.
 void main() {
+  test('guided signed import exposes and sends reviewed possession date', () {
+    final source = File(
+      'lib/features/scan/guided_rental_flow.dart',
+    ).readAsStringSync();
+
+    expect(source, contains("o['possessionGivenAtUtc']"));
+    expect(source, contains("Text('Possession given')"));
+    expect(source, contains("ValueKey('guided-rental-possession-given-date')"));
+  });
+
   test('lease review exposes every tenant and unit confirmation override', () {
     final source = File(
       'lib/features/scan/scan_review_screen.dart',

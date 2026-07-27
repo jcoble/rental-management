@@ -366,6 +366,60 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task LeaseImport_RejectsConflictingExtractedIdsBeforePreviewAndConfirmation()
+    {
+        var draft = SeedDraft(
+            "Reviewing",
+            extractedFields:
+                """
+                {
+                  "property_id":{"value":"12"},
+                  "unit_id":{"value":"34"},
+                  "property_name":{"value":"York Duplex"},
+                  "property_address":{"value":"508 York Street"},
+                  "property_city":{"value":"Columbus"},
+                  "unit_number":{"value":"A"}
+                }
+                """,
+            targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Walnut Duplex",
+            AddressLine1 = "491 Walnut Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43223",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "B",
+        });
+        await _db.SaveChangesAsync();
+
+        var proposal = await _sut.BuildLeaseProposalAsync(
+            PortfolioId, draft.Id, overridesJson: "{}");
+        var preparation = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson: """{"reviewDisposition":"AlreadyFullySigned"}""");
+
+        proposal.Should().NotBeNull();
+        proposal!.Property.Action.Should().Be("select");
+        proposal.Property.ExistingId.Should().BeNull();
+        proposal.Property.Label.Should().Be("York Duplex");
+        proposal.Unit.Action.Should().Be("select");
+        proposal.Unit.ExistingId.Should().BeNull();
+        preparation.Command!.Target.LeaseAgreement!.PropertyId.Should().Be(0);
+        preparation.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PrepareConfirmationAsync_LeaseTarget_CustomRentTrackingRequiresDate()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");

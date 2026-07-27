@@ -17,6 +17,7 @@ class LeasePrefill {
     this.leaseNumber = '',
     this.startDate = '',
     this.endDate = '',
+    this.possessionGivenOn = '',
     this.monthlyRent = '',
     this.securityDeposit = '',
     this.lateFee = '',
@@ -38,6 +39,7 @@ class LeasePrefill {
   final String leaseNumber;
   final String startDate;
   final String endDate;
+  final String possessionGivenOn;
   final String monthlyRent;
   final String securityDeposit;
   final String lateFee;
@@ -46,7 +48,8 @@ class LeasePrefill {
   /// Build from the draft's extracted fields list ({name,value,confidence} maps) and
   /// the set of field-names that were auto-filled (non-blank), for the "from your lease" badge.
   static ({LeasePrefill values, Set<String> filled}) fromFields(
-      List<Map<String, dynamic>> fields) {
+    List<Map<String, dynamic>> fields,
+  ) {
     final byName = <String, String>{};
     final filled = <String>{};
     for (final f in fields) {
@@ -73,6 +76,11 @@ class LeasePrefill {
         leaseNumber: g('lease_number'),
         startDate: g('start_date'),
         endDate: g('end_date'),
+        possessionGivenOn: g('possession_given_at').isNotEmpty
+            ? g('possession_given_at')
+            : g('possession_given_at_utc').isNotEmpty
+            ? g('possession_given_at_utc')
+            : g('possessionGivenAtUtc'),
         monthlyRent: g('monthly_rent'),
         securityDeposit: g('security_deposit'),
         lateFee: g('late_fee'),

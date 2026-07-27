@@ -7,7 +7,9 @@
 	import { units } from '$lib/api/endpoints/units';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import FileDrop from '$lib/components/FileDrop.svelte';
 	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
@@ -73,6 +75,11 @@
 	let leaseErrors = $state<Record<string, string>>({});
 	let reviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
 	let documentTemplateId = $state('');
+	let possessionGivenOn = $state('');
+	let rentTrackingStartMode = $state<
+		'ForwardOnly' | 'BackfillFromLeaseStart' | 'CustomCutoffDate'
+	>('ForwardOnly');
+	let rentTrackingStartOn = $state('');
 
 	// Which step-form fields were auto-filled (drives the "from your lease" badge).
 	let autoFilled = $state<Set<string>>(new Set());
@@ -167,6 +174,9 @@
 		leaseErrors = {};
 		reviewDisposition = '';
 		documentTemplateId = '';
+		possessionGivenOn = '';
+		rentTrackingStartMode = 'ForwardOnly';
+		rentTrackingStartOn = '';
 		autoFilled = new Set();
 		propertyChoice = CREATE;
 		unitChoice = CREATE;
@@ -255,6 +265,7 @@
 		leaseForm.leaseNumber = values.leaseNumber || defaultLeaseNumber(new Date(values.startDate || Date.now()));
 		leaseForm.startDate = values.startDate;
 		leaseForm.endDate = values.endDate;
+		possessionGivenOn = values.possessionGivenOn;
 		leaseForm.monthlyRent = values.monthlyRent;
 		leaseForm.securityDeposit = values.securityDeposit;
 		leaseForm.lateFeeAmount = seedNewRentalLateFeeAmount(values.lateFee);
@@ -335,6 +346,15 @@
 			// drop id errors (they aren't user-entered here)
 			const e = { ...(r.errors ?? {}) };
 			delete e.propertyId; delete e.unitId; delete e.tenantId;
+			if (rentTrackingStartMode === 'CustomCutoffDate' && !rentTrackingStartOn) {
+				e.rentTrackingStartOn = 'Choose the custom rent tracking start date.';
+			} else if (
+				rentTrackingStartMode === 'CustomCutoffDate' &&
+				leaseForm.startDate &&
+				rentTrackingStartOn < leaseForm.startDate
+			) {
+				e.rentTrackingStartOn = 'Rent tracking cannot start before the agreement.';
+			}
 			leaseErrors = e;
 			return Object.keys(leaseErrors).length === 0;
 		}
@@ -413,7 +433,14 @@
 		if (leaseForm.securityDeposit.trim()) o.securityDeposit = Number(leaseForm.securityDeposit);
 		if (leaseForm.lateFeeAmount.trim()) o.lateFee = Number(leaseForm.lateFeeAmount);
 		if (leaseForm.rentDueDay.trim()) o.rentDueDay = Number(leaseForm.rentDueDay);
+		o.rentTrackingStartMode = rentTrackingStartMode;
+		if (rentTrackingStartMode === 'CustomCutoffDate') {
+			o.rentTrackingStartOn = rentTrackingStartOn;
+		}
 		o.reviewDisposition = reviewDisposition;
+		if (reviewDisposition === 'AlreadyFullySigned' && possessionGivenOn) {
+			o.possessionGivenAtUtc = possessionGivenOn;
+		}
 		if (reviewDisposition === 'NeedsSignatures' && documentTemplateId) {
 			o.documentTemplateId = Number(documentTemplateId);
 		}
@@ -570,6 +597,56 @@
 		<div class="space-y-3" data-testid="new-rental-step-lease">
 			<h2 class="text-base font-semibold text-foreground">Lease</h2>
 			<LeaseTermFields bind:form={leaseForm} errors={leaseErrors} {autoFilled} {confidence} testidPrefix="new-rental-lease" />
+			<div class="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+				<div class={rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+					<label class="mb-1 block text-xs font-semibold text-foreground" for="new-rental-rent-tracking-mode">
+						Begin rent charges
+					</label>
+					<Select.Root
+						type="single"
+						bind:value={rentTrackingStartMode}
+						onValueChange={() => {
+							if (rentTrackingStartMode !== 'CustomCutoffDate') rentTrackingStartOn = '';
+						}}
+					>
+						<Select.Trigger
+							id="new-rental-rent-tracking-mode"
+							data-testid="new-rental-rent-tracking-mode"
+							class="w-full"
+						>
+							{rentTrackingStartMode === 'ForwardOnly'
+								? 'Start from the current date'
+								: rentTrackingStartMode === 'BackfillFromLeaseStart'
+									? 'Backfill from the lease start'
+									: 'Start from a custom date'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="ForwardOnly" label="Start from the current date">Start from the current date</Select.Item>
+							<Select.Item value="BackfillFromLeaseStart" label="Backfill from the lease start">Backfill from the lease start</Select.Item>
+							<Select.Item value="CustomCutoffDate" label="Start from a custom date">Start from a custom date</Select.Item>
+						</Select.Content>
+					</Select.Root>
+					<p class="mt-1 text-xs text-muted-foreground">
+						This decides whether older rent periods are posted when the signed lease is imported.
+					</p>
+				</div>
+				{#if rentTrackingStartMode === 'CustomCutoffDate'}
+					<div>
+						<label class="mb-1 block text-xs font-semibold text-foreground" for="new-rental-rent-tracking-date">
+							Custom start date
+						</label>
+						<DatePicker
+							id="new-rental-rent-tracking-date"
+							bind:value={rentTrackingStartOn}
+							min={leaseForm.startDate || undefined}
+							testid="new-rental-rent-tracking-date"
+						/>
+						{#if leaseErrors.rentTrackingStartOn}
+							<p class="mt-1 text-xs text-destructive">{leaseErrors.rentTrackingStartOn}</p>
+						{/if}
+					</div>
+				{/if}
+			</div>
 		</div>
 	{:else}
 		<!-- AC-4: final review before save -->
@@ -596,6 +673,22 @@
 				propertyId={isCreatingProperty ? 0 : Number(propertyChoice)}
 				disabled={confirmMutation.isPending}
 			/>
+			{#if reviewDisposition === 'AlreadyFullySigned'}
+				<div class="rounded-md border border-border bg-muted/20 p-3">
+					<label class="mb-1 block text-xs font-semibold text-foreground" for="new-rental-possession-given-date">
+						Possession given
+					</label>
+					<DatePicker
+						id="new-rental-possession-given-date"
+						bind:value={possessionGivenOn}
+						min={leaseForm.startDate || undefined}
+						testid="new-rental-possession-given-date"
+					/>
+					<p class="mt-1 text-xs text-muted-foreground">
+						Required when the signed lease term has started and the tenant already received possession.
+					</p>
+				</div>
+			{/if}
 			<p class="text-xs text-muted-foreground">Nothing is saved until you tap Confirm. We'll create everything in one step.</p>
 		</div>
 	{/if}

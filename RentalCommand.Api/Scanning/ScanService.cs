@@ -256,6 +256,7 @@ public sealed class ScanService : IScanService
         {
             var fields = BuildLeaseFields(draft.ExtractedFields);
             await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
+            await GroundExtractedLeasePremisesAsync(portfolioId, fields, ct);
             ApplyLeaseOverrides(fields, normalizedOverrides);
 
             var hasPropertyOverride = TryGetOverrideNullableInt(
@@ -509,6 +510,7 @@ public sealed class ScanService : IScanService
         // reflects exactly what confirm would do. Writes nothing.
         var fields = BuildLeaseFields(draft.ExtractedFields);
         await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
+        await GroundExtractedLeasePremisesAsync(portfolioId, fields, ct);
         ApplyLeaseOverrides(fields, overridesJson);
 
         // ---- Property proposal ----
@@ -581,6 +583,44 @@ public sealed class ScanService : IScanService
         }
 
         return new LeaseImportProposal(propertyProposal, unitProposal);
+    }
+
+    /// <summary>
+    /// Grounds model-supplied lease ids against the premises text that was independently extracted
+    /// from the document. Numeric ids are grounding hints, not document facts: a printed external
+    /// reference such as "P024" can otherwise collide with an unrelated database row whose id is 24.
+    /// When the document supplies an address/name or unit number, the DB-side identity match wins and
+    /// a conflicting/unmatched id is cleared before either preview or confirmation. Explicit reviewer
+    /// overrides are applied after this method and therefore still win.
+    /// </summary>
+    private async Task GroundExtractedLeasePremisesAsync(
+        int portfolioId,
+        LeaseDraftFields fields,
+        CancellationToken ct)
+    {
+        var hasPropertyIdentity =
+            !string.IsNullOrWhiteSpace(fields.PropertyAddress)
+            || !string.IsNullOrWhiteSpace(fields.PropertyName);
+        if (hasPropertyIdentity)
+        {
+            var propertyMatch = await FindMatchingPropertyAsync(portfolioId, fields, ct);
+            fields.PropertyId = propertyMatch?.Id ?? 0;
+        }
+
+        if (fields.PropertyId <= 0)
+        {
+            fields.UnitId = null;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(fields.UnitNumber))
+        {
+            var unitMatch = await FindMatchingUnitAsync(
+                fields.PropertyId,
+                DefaultUnitNumber(fields.UnitNumber),
+                ct);
+            fields.UnitId = unitMatch?.Id;
+        }
     }
 
     /// <summary>

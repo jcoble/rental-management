@@ -425,6 +425,31 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void InitialWorkspaceBootstrapRepair_DeploysAlwaysOnRentChargeDefault()
+    {
+        var migration = new RepairInitialWorkspaceRentChargeBootstrap();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RepairInitialWorkspaceRentChargeBootstrap).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        var sql = Regex.Replace(
+            builder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql,
+            @"\s+",
+            " ");
+        var bootstrap = Regex.Match(
+            sql,
+            @"CREATE OR REPLACE FUNCTION rc_bootstrap_initial_workspace\(.*?ALTER FUNCTION rc_bootstrap_initial_workspace",
+            RegexOptions.Singleline).Value;
+
+        bootstrap.Should().NotBeEmpty();
+        bootstrap.Should().Contain(
+            "(new_portfolio_id, TRUE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,");
+        bootstrap.Should().NotContain(
+            "(new_portfolio_id, FALSE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,");
+    }
+
+    [Fact]
     public void SandboxGraduation_PreservesIdentityAndReusableConfiguration()
     {
         FoundationBaselinePostgreSql.SandboxGraduationPreservedTables.Should().Contain(
