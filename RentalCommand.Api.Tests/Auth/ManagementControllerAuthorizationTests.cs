@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -123,7 +124,8 @@ public sealed class ManagementControllerAuthorizationTests
                     [new System.Security.Claims.Claim("sub", user.Id.ToString())], "Bearer")),
             http);
 
-        await new CanonicalManagementAuthorizationHandler(db, TimeProvider.System).HandleAsync(auth);
+        await new CanonicalManagementAuthorizationHandler(db, new FixedAuthSecurityClock(DateTime.UtcNow))
+            .HandleAsync(auth);
 
         auth.HasSucceeded.Should().BeTrue();
         auth.User.IsInRole("Admin").Should().BeFalse();
@@ -149,7 +151,8 @@ public sealed class ManagementControllerAuthorizationTests
                     [new System.Security.Claims.Claim("sub", user.Id.ToString())], "Bearer")),
             http);
 
-        await new CanonicalManagementAuthorizationHandler(db, TimeProvider.System).HandleAsync(auth);
+        await new CanonicalManagementAuthorizationHandler(db, new FixedAuthSecurityClock(DateTime.UtcNow))
+            .HandleAsync(auth);
 
         auth.HasSucceeded.Should().BeFalse(
             "a technician must use assignment-scoped endpoints and never retrieve Management Unit or money projections");
@@ -212,5 +215,10 @@ public sealed class ManagementControllerAuthorizationTests
         return (new ActiveAccessContext(
             Guid.NewGuid(), user.Id, context.Id, portfolio.Id, 1,
             experience, membership.Id, experience), user);
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
     }
 }
