@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/time/app_clock.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../money/money_format.dart';
@@ -247,6 +248,22 @@ class _RecordTenantReceiptSheetState
   DateTime _receivedOn = DateTime.now();
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBusinessDate();
+  }
+
+  Future<void> _loadBusinessDate() async {
+    try {
+      final now = await ref.read(appNowProvider.future);
+      if (!mounted) return;
+      setState(() => _receivedOn = DateUtils.dateOnly(now));
+    } catch (_) {
+      // Keep the device clock fallback when the simulation clock is unavailable.
+    }
+  }
 
   @override
   void dispose() {
