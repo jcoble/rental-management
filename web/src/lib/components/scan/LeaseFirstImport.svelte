@@ -56,8 +56,7 @@
 
 	// ----- the four step forms (string-bound, schema-validated) -----
 	let propertyForm = $state(createNewRentalPropertyForm());
-	let unitForm = $state({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
-	let unitSquareFeet = $state('');
+	let unitForm = $state({ unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' });
 	let tenantForm = $state({ firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' });
 	let leaseForm = $state({
 		leaseNumber: defaultLeaseNumber(),
@@ -157,8 +156,7 @@
 		confidence = {};
 		step = 0;
 		propertyForm = createNewRentalPropertyForm();
-		unitForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
-		unitSquareFeet = '';
+		unitForm = { unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' };
 		tenantForm = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
 		leaseForm = {
 			leaseNumber: defaultLeaseNumber(),
@@ -255,7 +253,7 @@
 		unitForm.bedrooms = values.unitBedrooms;
 		unitForm.bathrooms = values.unitBathrooms;
 		unitForm.marketRent = values.monthlyRent || '0';
-		unitSquareFeet = values.unitSquareFeet;
+		unitForm.squareFeet = values.unitSquareFeet;
 		// seed tenant (split on last space)
 		if (values.tenantName) {
 			const parts = values.tenantName.trim().split(/\s+/);
@@ -417,7 +415,7 @@
 			if (unitForm.unitNumber.trim()) o.unitNumber = unitForm.unitNumber.trim();
 			if (unitForm.bedrooms.trim()) o.unitBedrooms = Number(unitForm.bedrooms);
 			if (unitForm.bathrooms.trim()) o.unitBathrooms = Number(unitForm.bathrooms);
-			if (unitSquareFeet.trim()) o.unitSquareFeet = Number(unitSquareFeet);
+			if (unitForm.squareFeet.trim()) o.unitSquareFeet = Number(unitForm.squareFeet);
 		}
 		// tenant: link an existing tenant (trusted id), or create/match by name from the tenant step
 		if (tenantChoice !== CREATE) {
@@ -569,19 +567,6 @@
 			{/if}
 			{#if isCreatingProperty || unitChoice === CREATE}
 				<UnitFields bind:form={unitForm} errors={unitErrors} {autoFilled} {confidence} testidPrefix="new-rental-unit" />
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="new-rental-unit-square-feet-input">
-						Square feet
-					</label>
-					<Input
-						id="new-rental-unit-square-feet-input"
-						data-testid="new-rental-unit-square-feet-input"
-						bind:value={unitSquareFeet}
-						placeholder="Square feet"
-						inputmode="numeric"
-						mask="integer"
-					/>
-				</div>
 			{/if}
 		</div>
 	{:else if step === 2}

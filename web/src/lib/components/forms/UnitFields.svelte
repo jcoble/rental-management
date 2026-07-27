@@ -16,7 +16,15 @@
 		confidence,
 		testidPrefix = 'unit'
 	}: {
-		form: { unitNumber: string; bedrooms: string; bathrooms: string; marketRent: string };
+		form: {
+			unitNumber: string;
+			bedrooms: string;
+			bathrooms: string;
+			marketRent: string;
+			floorPlan?: string;
+			squareFeet?: string;
+			notes?: string;
+		};
 		errors?: Record<string, string>;
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
@@ -58,5 +66,31 @@
 			<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.marketRent} placeholder="Rent" inputmode="decimal" mask="currency" />
 			{#if errors.marketRent}<p class="mt-1 text-xs text-destructive">{errors.marketRent}</p>{/if}
 		</div>
+	</div>
+	<div class="grid gap-2 sm:grid-cols-2">
+		<div>
+			<div class="mb-1 flex items-center gap-2">
+				<span class="text-xs font-medium text-muted-foreground">Square feet</span>
+				<AutoFilledBadge show={filled('squareFeet')} confidence={conf('squareFeet')} />
+			</div>
+			<Input data-testid={`${testidPrefix}-square-feet-input`} bind:value={form.squareFeet} placeholder="Square feet" inputmode="numeric" mask="integer" />
+			{#if errors.squareFeet}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-square-feet-error`}>{errors.squareFeet}</p>{/if}
+		</div>
+		<div>
+			<span class="mb-1 block text-xs font-medium text-muted-foreground">Floor plan</span>
+			<Input data-testid={`${testidPrefix}-floor-plan-input`} bind:value={form.floorPlan} placeholder="e.g. Garden 2B" />
+			{#if errors.floorPlan}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-floor-plan-error`}>{errors.floorPlan}</p>{/if}
+		</div>
+	</div>
+	<div>
+		<span class="mb-1 block text-xs font-medium text-muted-foreground">Notes</span>
+		<textarea
+			data-testid={`${testidPrefix}-notes-input`}
+			bind:value={form.notes}
+			rows="3"
+			class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+			placeholder="Access, parking, appliances, or other unit details"
+		></textarea>
+		{#if errors.notes}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-notes-error`}>{errors.notes}</p>{/if}
 	</div>
 </div>

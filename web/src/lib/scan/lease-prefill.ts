@@ -88,6 +88,7 @@ export const STEP_FIELD_TO_EXTRACTION: Record<string, string> = {
 	unitNumber: 'unit_number',
 	bedrooms: 'unit_bedrooms',
 	bathrooms: 'unit_bathrooms',
+	squareFeet: 'unit_square_feet',
 	// tenant
 	firstName: 'tenant_name',
 	lastName: 'tenant_name',

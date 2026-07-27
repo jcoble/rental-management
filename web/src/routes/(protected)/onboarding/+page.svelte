@@ -690,7 +690,7 @@
 		return `${compactNumber.format(unit.bedrooms ?? 0)} bd · ${compactNumber.format(unit.bathrooms ?? 0)} ba · ${rent}/mo`;
 	}
 
-	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
+	const emptyUnit = () => ({ unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
 	let unitRowErrors = $state<Record<string, string>[]>([{}]);
 
@@ -712,9 +712,12 @@
 		return (
 			unitRows.length === 1 &&
 			!unitRows[0].unitNumber &&
+			!unitRows[0].floorPlan &&
 			!unitRows[0].bedrooms &&
 			!unitRows[0].bathrooms &&
-			!unitRows[0].marketRent
+			!unitRows[0].squareFeet &&
+			!unitRows[0].marketRent &&
+			!unitRows[0].notes
 		);
 	}
 	// A single rental still gets one canonical Unit underneath, but the setup copy presents the
@@ -723,7 +726,7 @@
 		if (!unitsAreDefaultEmpty()) return; // never clobber units the user already entered
 		if (isSingleRental && propertyIdFromSelection() == null) {
 			unitRows = [
-				{ unitNumber: propertyForm.name.trim() || '1', bedrooms: '1', bathrooms: '1', marketRent: '0' },
+				{ unitNumber: propertyForm.name.trim() || '1', floorPlan: '', bedrooms: '1', bathrooms: '1', squareFeet: '', marketRent: '0', notes: '' },
 			];
 			unitRowErrors = [{}];
 		}
@@ -733,9 +736,12 @@
 		const n = Math.max(1, Math.min(50, parseInt(unitCount, 10) || 0));
 		unitRows = Array.from({ length: n }, (_, i) => ({
 			unitNumber: String(i + 1),
+			floorPlan: '',
 			bedrooms: '',
 			bathrooms: '',
+			squareFeet: '',
 			marketRent: '',
+			notes: '',
 		}));
 		unitRowErrors = unitRows.map(() => ({}));
 	}
@@ -856,7 +862,7 @@
 		const validUnits: Record<string, unknown>[] = [];
 		let hasUnitError = false;
 		unitRows.forEach((row, i) => {
-			const blank = !row.unitNumber.trim() && !row.bedrooms.trim() && !row.bathrooms.trim() && !row.marketRent.trim();
+			const blank = !row.unitNumber.trim() && !row.floorPlan.trim() && !row.bedrooms.trim() && !row.bathrooms.trim() && !row.squareFeet.trim() && !row.marketRent.trim() && !row.notes.trim();
 			if (blank) return;
 			const res = parseForm(unitSchema, row);
 			if (res.errors) {
@@ -1782,6 +1788,23 @@
 															{/if}
 														</div>
 														{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
+													</div>
+												</div>
+												<div class="mt-3 grid gap-2 sm:grid-cols-3">
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Square feet</span>
+														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-square-feet-{i}" bind:value={row.squareFeet} placeholder="1425" />
+														{#if unitRowErrors[i]?.squareFeet}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].squareFeet}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Floor plan</span>
+														<Input data-testid="onboarding-unit-floor-plan-{i}" bind:value={row.floorPlan} placeholder="Garden 2B" />
+														{#if unitRowErrors[i]?.floorPlan}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].floorPlan}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Notes</span>
+														<Input data-testid="onboarding-unit-notes-{i}" bind:value={row.notes} placeholder="Access or parking notes" />
+														{#if unitRowErrors[i]?.notes}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].notes}</p>{/if}
 													</div>
 												</div>
 											</div>

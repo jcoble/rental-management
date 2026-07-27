@@ -87,8 +87,8 @@ describe('start-dev launcher', () => {
 	});
 
 	it('propagates explicit .NET simulation mode to the SvelteKit public flag without default enabling it', () => {
-		assert.match(script, /SIMULATION_ENABLED_NORMALIZED="\$\{Simulation__Enabled:-\}"/);
-		assert.match(script, /SIMULATION_ENABLED_NORMALIZED="\$\{SIMULATION_ENABLED_NORMALIZED,,\}"/);
+		assert.match(script, /SIMULATION_ENABLED_NORMALIZED="\$\(printf '%s' "\$\{Simulation__Enabled:-\}" \| tr '\[:upper:\]' '\[:lower:\]'\)"/);
+		assert.doesNotMatch(script, /\$\{SIMULATION_ENABLED_NORMALIZED,,\}/);
 		assert.match(
 			script,
 			/if \[ "\$SIMULATION_ENABLED_NORMALIZED" = "true" \] \|\| \[ "\$SIMULATION_ENABLED_NORMALIZED" = "1" \]; then\s+export PUBLIC_SIMULATION_ENABLED="true"\s+fi/

@@ -54,8 +54,7 @@ export App__WebBaseUrl="${App__WebBaseUrl:-$WEB_URL}"
 # `Simulation__Enabled=true ./scripts/start-dev.sh` is inherited by API/Engine, but
 # SvelteKit only exposes PUBLIC_* values to the browser; derive the public flag only
 # when simulation is explicitly requested so ordinary dev/prod starts stay unchanged.
-SIMULATION_ENABLED_NORMALIZED="${Simulation__Enabled:-}"
-SIMULATION_ENABLED_NORMALIZED="${SIMULATION_ENABLED_NORMALIZED,,}"
+SIMULATION_ENABLED_NORMALIZED="$(printf '%s' "${Simulation__Enabled:-}" | tr '[:upper:]' '[:lower:]')"
 if [ "$SIMULATION_ENABLED_NORMALIZED" = "true" ] || [ "$SIMULATION_ENABLED_NORMALIZED" = "1" ]; then
     export PUBLIC_SIMULATION_ENABLED="true"
 fi

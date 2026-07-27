@@ -40,7 +40,7 @@
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
-	const emptyUnitForm: UnitEditForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
+	const emptyUnitForm: UnitEditForm = { unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' };
 
 	const activeDestination = $derived(resolveUnitDestination(
 		page.state.unitTab ?? page.url.searchParams.get('tab'),
