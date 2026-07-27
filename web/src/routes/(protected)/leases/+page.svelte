@@ -2,8 +2,9 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
+	import { leaseManagements, type PrepareMoveInResponse } from '$lib/api/endpoints/lease-managements';
 	import type { LeaseManagementSummary } from '$lib/types';
+	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
@@ -14,7 +15,7 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { recordHref } from '$lib/navigation/record-href';
-	import { ScanLine, Users } from '@lucide/svelte';
+	import { FilePlus2, ScanLine } from '@lucide/svelte';
 
 	const PAGE_SIZE = 20;
 	const initial = page.url.searchParams;
@@ -22,6 +23,7 @@
 	let lifecycle = $state(readGridParam(initial, 'lifecycle'));
 	let gridSort = $state(readGridParam(initial, 'sort') || '-updatedAtUtc');
 	let gridPage = $state(readGridParam(initial, 'page', 1));
+	let showManualLeaseDialog = $state(false);
 	const debouncedSearch = debounced(() => search, 300);
 
 	$effect(() => {
@@ -98,6 +100,11 @@
 			mobileRole: 'metric'
 		}
 	];
+
+	function finishManualLease(result: PrepareMoveInResponse) {
+		showManualLeaseDialog = false;
+		void goto(recordHref('leaseManagement', { id: result.leaseManagementId }));
+	}
 </script>
 
 <svelte:head>
@@ -119,7 +126,9 @@
 			<Button href="/scan" variant="outline" class="gap-2"
 				><ScanLine class="h-4 w-4" /> Import agreement</Button
 			>
-			<Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button>
+			<Button onclick={() => (showManualLeaseDialog = true)} class="gap-2" data-testid="leases-create-lease">
+				<FilePlus2 class="h-4 w-4" /> Create lease
+			</Button>
 		{/snippet}
 	</PageHeader>
 
@@ -177,3 +186,12 @@
 	</DataGrid>
 	{/if}
 </div>
+
+{#if showManualLeaseDialog}
+	<PrepareMoveInDialog
+		mode="manual"
+		prefill={{ applicationId: '', unitId: '', tenantId: '' }}
+		onclose={() => (showManualLeaseDialog = false)}
+		onprepared={finishManualLease}
+	/>
+{/if}

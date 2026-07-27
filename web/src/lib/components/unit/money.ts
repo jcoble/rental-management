@@ -43,6 +43,29 @@ export function canCorrectPayment(
 	return entryType === 'PaymentReceipt' && capabilities.has('money.payments.manage');
 }
 
+export function canReverseTenantLedgerEntry(entry: {
+	entryType?: string | null;
+	reversesEntryId?: number | null;
+	hasReversal?: boolean;
+	providerPaymentAttemptId?: number | null;
+}): boolean {
+	if (!entry.entryType) return false;
+	if (entry.reversesEntryId != null || entry.hasReversal || entry.providerPaymentAttemptId != null) {
+		return false;
+	}
+	return !['PaymentReceipt', 'Reversal', 'Refund', 'TransferIn', 'TransferOut'].includes(entry.entryType);
+}
+
+export function tenantLedgerReversalReason(entry: {
+	entryType?: string | null;
+	description?: string | null;
+}): string {
+	const type = entry.entryType?.trim() || 'ledger entry';
+	const description = entry.description?.trim();
+	const reason = description ? `Reverse ${type}: ${description}` : `Reverse ${type}`;
+	return reason.length > 500 ? reason.slice(0, 500) : reason;
+}
+
 export const PAYMENT_CORRECTION_REASON = 'Correction of immutable payment receipt';
 
 export interface PaymentCorrectionContext {

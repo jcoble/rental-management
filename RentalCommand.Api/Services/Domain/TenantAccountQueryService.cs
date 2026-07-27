@@ -637,6 +637,10 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 LeaseAgreementId = entry.LeaseAgreementId,
                 LeaseAddendumId = entry.LeaseAddendumId,
                 ReversesEntryId = entry.ReversesEntryId,
+                HasReversal = _db.TenantLedgerEntries.AsNoTracking().Any(reversal =>
+                    reversal.PortfolioId == entry.PortfolioId
+                    && reversal.TenantAccountId == entry.TenantAccountId
+                    && reversal.ReversesEntryId == entry.Id),
                 ProviderPaymentAttemptId = entry.ProviderPaymentAttemptId,
                 SourceStoredFileId = entry.SourceStoredFileId,
                 CreatedByUserId = entry.CreatedByUserId,

@@ -32,6 +32,7 @@
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { CalendarClock, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
 
@@ -274,7 +275,7 @@
 						{summary.possessionGivenAtUtc
 							? `Possession given ${new Date(summary.possessionGivenAtUtc).toLocaleDateString()}`
 							: summary.plannedPossessionAtUtc
-								? `Possession planned ${new Date(summary.plannedPossessionAtUtc).toLocaleDateString()}`
+								? `Possession planned ${formatDateOnly(summary.plannedPossessionAtUtc)}`
 								: 'Possession not yet scheduled'}
 					</p>
 				</CardContent>
@@ -310,7 +311,7 @@
 						<p class="text-xs text-muted-foreground">Decided {new Date(summary.endingDispositionDecidedAtUtc).toLocaleDateString()}</p>
 					{/if}
 					{#if summary.plannedMoveOutAtUtc}
-						<p class="text-sm text-muted-foreground">Move-out planned {new Date(summary.plannedMoveOutAtUtc).toLocaleDateString()}</p>
+						<p class="text-sm text-muted-foreground">Move-out planned {formatDateOnly(summary.plannedMoveOutAtUtc)}</p>
 					{/if}
 					{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
 						<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>

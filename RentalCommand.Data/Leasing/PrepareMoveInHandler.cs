@@ -155,12 +155,24 @@ public sealed class PrepareMoveInHandler
                 "Only an approved application with an approved tenant can be prepared for move-in.");
         }
 
-        if (target.HasConflictingCurrentPossession || target.HasOpenOperationalPeriod)
+        var unitHasPreparedUpcomingOrCurrentRelationship =
+            await attempt.Persistence.Query<LeaseManagement>()
+                .AnyAsync(relationship =>
+                    relationship.PortfolioId == command.PortfolioId
+                    && relationship.PropertyId == target.PropertyId
+                    && relationship.UnitId == target.UnitId
+                    && relationship.CanceledAtUtc == null
+                    && (relationship.PossessionReturnedAtUtc == null
+                        || relationship.PossessionReturnedAtUtc > wallClockUtc), ct);
+
+        if (unitHasPreparedUpcomingOrCurrentRelationship
+            || target.HasConflictingCurrentPossession
+            || target.HasOpenOperationalPeriod)
         {
             return Empty(
                 PrepareMoveInOutcome.UnitUnavailable,
                 command,
-                "The unit has conflicting current possession or an open operational period.");
+                "The unit has a prepared, upcoming, or current relationship or an open operational period.");
         }
 
         if (!target.DocumentSourceIsValid)
@@ -171,22 +183,14 @@ public sealed class PrepareMoveInHandler
                 "The selected lease template is not active for this property.");
         }
 
-        var sourceVersion = command.DocumentTemplateId is { } documentTemplateId
-            ? await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-                command.PortfolioId, target.PropertyId, 0, documentTemplateId,
-                command.CreatedByUserId, wallClockUtc, ct)
-            : await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
-                command.PortfolioId, command.CreatedByUserId, wallClockUtc, ct);
-        if (!sourceVersion.Resolved)
-        {
-            return Empty(PrepareMoveInOutcome.InvalidTemplate, command,
-                command.DocumentTemplateId.HasValue
-                    ? "The selected lease template could not be frozen as immutable source provenance."
-                    : "The supplied lease source could not be frozen as immutable provenance.");
-        }
-
         var requestedTenantIds = command.Parties
             .Where(party => party.TenantId.HasValue)
+            .Select(party => party.TenantId!.Value)
+            .Distinct()
+            .ToArray();
+        var requestedExistingNonGuarantorTenantIds = command.Parties
+            .Where(party => party.TenantId.HasValue
+                && party.Role != LeaseManagementPartyRole.Guarantor)
             .Select(party => party.TenantId!.Value)
             .Distinct()
             .ToArray();
@@ -252,6 +256,29 @@ public sealed class PrepareMoveInHandler
                 "The application's approved Tenant must be the initial primary tenant.");
         }
 
+        var existingTenantHasActiveNonGuarantorRelationship =
+            requestedExistingNonGuarantorTenantIds.Length > 0
+            && await attempt.Persistence.Query<LeaseManagementParty>()
+                .AnyAsync(party =>
+                    party.PortfolioId == command.PortfolioId
+                    && requestedExistingNonGuarantorTenantIds.Contains(party.TenantId)
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && party.EffectiveFrom <= times.BusinessDate
+                    && (party.EffectiveThrough == null
+                        || party.EffectiveThrough >= times.BusinessDate)
+                    && party.LeaseManagement != null
+                    && party.LeaseManagement.PortfolioId == command.PortfolioId
+                    && party.LeaseManagement.CanceledAtUtc == null
+                    && (party.LeaseManagement.PossessionReturnedAtUtc == null
+                        || party.LeaseManagement.PossessionReturnedAtUtc > wallClockUtc), ct);
+        if (existingTenantHasActiveNonGuarantorRelationship)
+        {
+            return Empty(
+                PrepareMoveInOutcome.InvalidParties,
+                command,
+                "A selected existing Tenant already has an active non-guarantor relationship.");
+        }
+
         var tenantById = tenants.ToDictionary(tenant => tenant.Id);
         var suppliedNewTenantEmails = command.Parties
             .Where(party => party.NewTenant != null && !string.IsNullOrWhiteSpace(party.NewTenant.Email))
@@ -292,6 +319,20 @@ public sealed class PrepareMoveInHandler
                 PrepareMoveInOutcome.InvalidParties,
                 command,
                 "Every Agreement signer must have a unique email address.");
+        }
+
+        var sourceVersion = command.DocumentTemplateId is { } documentTemplateId
+            ? await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+                command.PortfolioId, target.PropertyId, 0, documentTemplateId,
+                command.CreatedByUserId, wallClockUtc, ct)
+            : await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
+                command.PortfolioId, command.CreatedByUserId, wallClockUtc, ct);
+        if (!sourceVersion.Resolved)
+        {
+            return Empty(PrepareMoveInOutcome.InvalidTemplate, command,
+                command.DocumentTemplateId.HasValue
+                    ? "The selected lease template could not be frozen as immutable source provenance."
+                    : "The supplied lease source could not be frozen as immutable provenance.");
         }
 
         var newTenantRows = command.Parties

@@ -36,6 +36,8 @@ public sealed class AtomicSetBasedCommandGuardInterceptorTests
                 UPDATE "LeaseAddenda" SET "DraftCancellationReason" = 'x' RETURNING "Id"
             ), access AS (
                 UPDATE "TenantUserAccesses" SET "Reason" = 'x' RETURNING "Id"
+            ), contexts AS (
+                UPDATE "WorkspaceAccessContexts" SET "AccessRevision" = "AccessRevision" + 1 RETURNING "Id"
             ), account AS (
                 UPDATE "TenantAccounts" SET "CloseReasonCode" = 'x' RETURNING "Id"
             )
@@ -48,6 +50,7 @@ public sealed class AtomicSetBasedCommandGuardInterceptorTests
                 new AtomicRawDmlTarget("LeaseAgreements", AtomicRawDmlOperation.Update),
                 new AtomicRawDmlTarget("LeaseAddenda", AtomicRawDmlOperation.Update),
                 new AtomicRawDmlTarget("TenantUserAccesses", AtomicRawDmlOperation.Update),
+                new AtomicRawDmlTarget("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
                 new AtomicRawDmlTarget("TenantAccounts", AtomicRawDmlOperation.Update),
                 new AtomicRawDmlTarget("LeaseManagements", AtomicRawDmlOperation.Update),
             ]);

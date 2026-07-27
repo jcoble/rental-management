@@ -173,7 +173,7 @@
 					</a>
 					{#if canManageLifecycle}
 						<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">
-							{#if relationship.lifecycle === 'Planned' && !relationship.possessionGivenAtUtc}
+							{#if !relationship.possessionGivenAtUtc && !relationship.canceledAtUtc}
 								<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned move-in</Button>
 							{/if}
 							{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}

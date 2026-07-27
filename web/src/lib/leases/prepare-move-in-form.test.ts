@@ -39,6 +39,7 @@ describe('Prepare move-in form contract', () => {
 			parties: [
 				{
 					tenantId: 42,
+					newTenant: null,
 					role: 'PrimaryTenant',
 					guarantorLegalNoticeEligible: false,
 					changeReason: 'Approved application move-in',
@@ -79,6 +80,49 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request?.termEndOn, null);
 		assert.equal(result.request?.openingBalanceAmount, null);
 		assert.equal(result.request?.openingBalanceEffectiveOn, null);
+	});
+
+	it('builds a manual lease request without an application and creates the new tenant atomically', () => {
+		const form = completeForm();
+		form.applicationId = '';
+		form.tenantId = '';
+		form.createNewTenant = true;
+		form.newTenantFirstName = 'Maya';
+		form.newTenantLastName = 'Ross';
+		form.newTenantEmail = 'maya@example.com';
+		form.newTenantPhone = '555-0102';
+		form.newTenantEmergencyContact = 'Sam Ross';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.deepEqual(result.errors, {});
+		assert.equal(result.request?.applicationId, null);
+		assert.deepEqual(result.request?.parties[0], {
+			tenantId: null,
+			newTenant: {
+				firstName: 'Maya',
+				lastName: 'Ross',
+				email: 'maya@example.com',
+				phone: '555-0102',
+				emergencyContact: 'Sam Ross'
+			},
+			role: 'PrimaryTenant',
+			guarantorLegalNoticeEligible: false,
+			changeReason: 'Manual lease creation',
+			isAgreementSigner: true,
+			signingOrder: 1,
+			isRequiredSigner: true
+		});
+	});
+
+	it('requires an approved application when the application workflow submits', () => {
+		const form = completeForm();
+		form.applicationId = '';
+
+		const result = buildPrepareMoveInRequest(form, { requireApplication: true });
+
+		assert.equal(result.request, null);
+		assert.match(result.errors.applicationId ?? '', /approved application/);
 	});
 
 	it('preserves backfill and custom rent tracking choices in the atomic request', () => {

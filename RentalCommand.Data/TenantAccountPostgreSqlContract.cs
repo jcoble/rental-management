@@ -12,7 +12,7 @@ internal static class TenantAccountPostgreSqlContract
     [
         CreateAppendOnlyGuard,
         CreateTenantAccountCurrencyGuard,
-        CreateTenantAccountCloseValidator,
+        TenantAccountCloseValidatorStatement(allowPlannedCancellation: true),
         CreateConditionPeriodGuard,
         CreatePaymentAttemptWriteGuard,
         CreatePaymentAttemptClaimFunction,
@@ -28,6 +28,24 @@ internal static class TenantAccountPostgreSqlContract
         CreateSecurityDepositEntryValidator,
         CreateTriggers,
     ];
+
+    internal static string TenantAccountCloseValidatorStatement(bool allowPlannedCancellation)
+    {
+        if (allowPlannedCancellation)
+        {
+            return CreateTenantAccountCloseValidator;
+        }
+
+        return CreateTenantAccountCloseValidator.Replace(
+            """
+              IF account_close_reason IS DISTINCT FROM 'PlannedRelationshipCanceled'
+                 AND (possession_returned_at IS NULL OR possession_returned_at > account_closed_at) THEN
+            """,
+            """
+              IF possession_returned_at IS NULL OR possession_returned_at > account_closed_at THEN
+            """,
+            StringComparison.Ordinal);
+    }
 
     internal static IReadOnlyList<string> DropStatements { get; } =
     [
@@ -91,6 +109,7 @@ internal static class TenantAccountPostgreSqlContract
           account_portfolio_id integer;
           management_id integer;
           account_closed_at timestamp with time zone;
+          account_close_reason text;
           management_closed_at timestamp with time zone;
           possession_returned_at timestamp with time zone;
           receivable_balance numeric(18,2);
@@ -120,9 +139,10 @@ internal static class TenantAccountPostgreSqlContract
           END IF;
 
           SELECT account."ClosedAtUtc",
+                 account."CloseReasonCode",
                  management."AccountClosedAtUtc",
                  management."PossessionReturnedAtUtc"
-            INTO account_closed_at, management_closed_at, possession_returned_at
+            INTO account_closed_at, account_close_reason, management_closed_at, possession_returned_at
           FROM "TenantAccounts" AS account
           JOIN "LeaseManagements" AS management
             ON management."PortfolioId" = account."PortfolioId"
@@ -142,7 +162,8 @@ internal static class TenantAccountPostgreSqlContract
 
           PERFORM pg_advisory_xact_lock(73001, account_id);
 
-          IF possession_returned_at IS NULL OR possession_returned_at > account_closed_at THEN
+          IF account_close_reason IS DISTINCT FROM 'PlannedRelationshipCanceled'
+             AND (possession_returned_at IS NULL OR possession_returned_at > account_closed_at) THEN
             RAISE EXCEPTION 'TenantAccount % cannot close before possession is returned', account_id
               USING ERRCODE = '23514';
           END IF;

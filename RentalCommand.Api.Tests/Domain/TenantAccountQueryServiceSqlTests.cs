@@ -142,6 +142,8 @@ public sealed class TenantAccountQueryServiceSqlTests
             sql.Should().Contain("OFFSET");
         }
         entrySql.Should().Contain("TenantLedgerEntries");
+        entrySql.Should().Contain("EXISTS");
+        entrySql.Should().Contain("\"ReversesEntryId\" =");
         depositSql.Should().Contain("vw_security_deposit_balances");
     }
 
