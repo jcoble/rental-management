@@ -184,4 +184,9 @@
 		flex: 2;
 		min-width: 0;
 	}
+	@media (min-width: 768px) {
+		.sim-panel {
+			left: calc(15rem + 12px);
+		}
+	}
 </style>
