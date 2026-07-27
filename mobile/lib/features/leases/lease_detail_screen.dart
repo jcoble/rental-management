@@ -225,6 +225,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       useSafeArea: true,
+      useRootNavigator: true,
       builder: (sheetContext) => Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -243,12 +244,14 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
-              onPressed: () => Navigator.of(sheetContext).pop(true),
+              onPressed: () =>
+                  Navigator.of(sheetContext, rootNavigator: true).pop(true),
               icon: const Icon(Icons.key_outlined),
               label: const Text('Confirm possession'),
             ),
             TextButton(
-              onPressed: () => Navigator.of(sheetContext).pop(false),
+              onPressed: () =>
+                  Navigator.of(sheetContext, rootNavigator: true).pop(false),
               child: const Text('Cancel'),
             ),
           ],
@@ -271,8 +274,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
       );
       if (result == null || !context.mounted) return;
-      ref.invalidate(leaseManagementDetailProvider(summary.id));
-      await ref.read(leaseManagementDetailProvider(summary.id).future);
+      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
