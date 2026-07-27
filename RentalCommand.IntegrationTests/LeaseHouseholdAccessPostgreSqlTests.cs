@@ -225,7 +225,89 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .Should().Be(2);
     }
 
+    [Fact]
+    public async Task Grant_AllowsScheduledNonEndedParty_BeforeEffectiveDate()
+    {
+        var scenario = await SeedScenarioAsync();
+        var businessDate = await BusinessDateAsync(scenario.PortfolioId);
+        var scheduledStart = businessDate.AddDays(25);
+        await _context.Db.LeaseManagementParties
+            .Where(party => party.Id == scenario.FirstPartyId)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(party => party.EffectiveFrom, scheduledStart)
+                .SetProperty(party => party.EffectiveThrough, (DateOnly?)null));
+        _context.Db.ChangeTracker.Clear();
+
+        var command = new GrantTenantUserAccessCommand(
+            scenario.PortfolioId,
+            scenario.FirstRelationshipId,
+            scenario.FirstPartyId,
+            "Invite resident before move-in",
+            "https://rentalcommand.test",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "scheduled-party-grant");
+        var result = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:scheduled-party-grant"),
+            command,
+            GrantCodec);
+
+        result.Value.Outcome.Should().Be(LeasePartyMutationOutcome.Applied);
+        result.Value.TenantUserAccessIds.Should().ContainSingle();
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.TenantUserAccesses.AsNoTracking()
+            .CountAsync(access => access.LeaseManagementPartyId == scenario.FirstPartyId
+                && access.RevokedAtUtc == null))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Grant_RejectsPartyEndedBeforeBusinessDate()
+    {
+        var scenario = await SeedScenarioAsync();
+        var businessDate = await BusinessDateAsync(scenario.PortfolioId);
+        await _context.Db.LeaseManagementParties
+            .Where(party => party.Id == scenario.FirstPartyId)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(party => party.EffectiveFrom, businessDate.AddDays(-30))
+                .SetProperty(party => party.EffectiveThrough, businessDate.AddDays(-1)));
+        _context.Db.ChangeTracker.Clear();
+
+        var command = new GrantTenantUserAccessCommand(
+            scenario.PortfolioId,
+            scenario.FirstRelationshipId,
+            scenario.FirstPartyId,
+            "Do not invite ended resident",
+            "https://rentalcommand.test",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "ended-party-grant");
+        var result = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:ended-party-grant"),
+            command,
+            GrantCodec);
+
+        result.Value.Outcome.Should().Be(LeasePartyMutationOutcome.InvalidParty);
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.TenantUserAccesses.AsNoTracking()
+            .AnyAsync(access => access.LeaseManagementPartyId == scenario.FirstPartyId))
+            .Should().BeFalse();
+    }
+
     private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+
+    private Task<DateOnly> BusinessDateAsync(int portfolioId) =>
+        _context.Db.Database
+            .SqlQuery<DateOnly>($"SELECT rc_business_date({portfolioId}) AS \"Value\"")
+            .SingleAsync();
 
     private async Task<Scenario> SeedScenarioAsync(
         string firstResidentEmail = "first-resident@example.test",

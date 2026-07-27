@@ -112,31 +112,7 @@ class PropertyDetailLoaderScreen extends ConsumerWidget {
         ),
       ),
       data: (detail) {
-        final property = detail.property;
-        final entry = resolvePropertyWorkspaceEntry(
-          propertyId: property.id,
-          rentalStructure: property.rentalStructure.wireValue,
-          serverEntry: detail.workspaceEntry,
-        );
-        if (entry.destination == PropertyWorkspaceDestination.unit) {
-          final unitId = entry.unitId;
-          if (unitId == null || unitId <= 0) {
-            return Scaffold(
-              appBar: AppBar(title: const Text('Rental')),
-              body: const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.',
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ),
-            );
-          }
-          return UnitCommandCenterLoaderScreen(unitId: unitId);
-        }
-        return PropertyDetailScreen(property: property);
+        return PropertyDetailScreen(property: detail.property);
       },
     );
   }

@@ -353,6 +353,7 @@ public enum ConfirmScanDraftOutcome
     DraftRejected,
     TargetMismatch,
     UnsupportedTarget,
+    DuplicateSourceContent,
 }
 
 public sealed record ConfirmScanDraftResult(

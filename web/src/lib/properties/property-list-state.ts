@@ -12,6 +12,13 @@ export type PropertyFormDraft = {
 	state: string;
 	postalCode: string;
 	ownerEntityId: string;
+	yearBuilt: string;
+	managementFeePercent: string;
+	notes: string;
+	purchasePrice: string;
+	landValue: string;
+	inServiceDate: string;
+	manualAnnualDepreciation: string;
 };
 
 export type PropertiesEmptyStateCopy = {
@@ -43,6 +50,13 @@ export function createEmptyPropertyDraft(filters: {
 		state: '',
 		postalCode: '',
 		ownerEntityId: '',
+		yearBuilt: '',
+		managementFeePercent: '',
+		notes: '',
+		purchasePrice: '',
+		landValue: '',
+		inServiceDate: '',
+		manualAnnualDepreciation: '',
 	};
 }
 

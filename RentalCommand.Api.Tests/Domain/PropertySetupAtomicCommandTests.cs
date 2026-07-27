@@ -244,6 +244,54 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         (await _ctx.Db.Units.CountAsync()).Should().Be(1);
     }
 
+    [Fact]
+    public async Task Ordinary_patch_persists_supported_property_financial_and_operations_fields_atomically()
+    {
+        var created = await _sut.SetupAsync(
+            _scope, SingleRentalRequest(), "patch-financial-fields-create");
+        var update = new UpdatePropertyRequest
+        {
+            Name = "Arbor House",
+            YearBuilt = 1998,
+            ManagementFeePercent = 8.5m,
+            Notes = "Simulation property P001.",
+            PurchasePrice = 350_000m,
+            LandValue = 50_000m,
+            InServiceDate = new DateTime(2024, 1, 15),
+            ManualAnnualDepreciation = 10_909m,
+        };
+
+        var saved = await _sut.UpdateAsync(
+            _scope,
+            created!.Property.Id,
+            update,
+            "patch-financial-fields");
+
+        saved.Should().NotBeNull();
+        saved!.Name.Should().Be("Arbor House");
+        saved.YearBuilt.Should().Be(1998);
+        saved.ManagementFeePercent.Should().Be(8.5m);
+        saved.Notes.Should().Be("Simulation property P001.");
+        saved.PurchasePrice.Should().Be(350_000m);
+        saved.LandValue.Should().Be(50_000m);
+        saved.InServiceDate.Should().NotBeNull();
+        DateOnly.FromDateTime(saved.InServiceDate!.Value).Should().Be(new DateOnly(2024, 1, 15));
+        saved.ManualAnnualDepreciation.Should().Be(10_909m);
+
+        var persisted = await _ctx.Db.Properties.AsNoTracking()
+            .SingleAsync(property => property.Id == created.Property.Id);
+        persisted.YearBuilt.Should().Be(1998);
+        persisted.ManagementFeePercent.Should().Be(8.5m);
+        persisted.Notes.Should().Be("Simulation property P001.");
+        persisted.PurchasePrice.Should().Be(350_000m);
+        persisted.LandValue.Should().Be(50_000m);
+        persisted.InServiceDate.Should().NotBeNull();
+        DateOnly.FromDateTime(persisted.InServiceDate!.Value).Should().Be(new DateOnly(2024, 1, 15));
+        persisted.ManualAnnualDepreciation.Should().Be(10_909m);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "rental.property.update")).Should().Be(1);
+    }
+
     private static SetupPropertyRequest SingleRentalRequest() => new()
     {
         Property = new CreatePropertyRequest

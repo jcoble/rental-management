@@ -116,6 +116,45 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
             return Snapshot(AtomicScanDraftClaimOutcome.TargetMismatch, draft);
         }
 
+        if (!string.IsNullOrWhiteSpace(draft.SourceContentSha256))
+        {
+            await AcquireSourceContentLockAsync(
+                draft.PortfolioId,
+                draft.TargetEntityType,
+                draft.SourceContentSha256,
+                ct);
+            var duplicate = await _db.ScanDrafts.AsNoTracking()
+                .Where(candidate =>
+                    candidate.PortfolioId == draft.PortfolioId
+                    && candidate.Id != draft.Id
+                    && candidate.Status == "Confirmed"
+                    && candidate.TargetEntityType == draft.TargetEntityType
+                    && candidate.SourceContentSha256 == draft.SourceContentSha256
+                    && candidate.ConfirmedEntityId > 0)
+                .OrderBy(candidate => candidate.ConfirmedAt ?? candidate.CreatedAt)
+                .ThenBy(candidate => candidate.Id)
+                .Select(candidate => new
+                {
+                    candidate.Id,
+                    candidate.TargetEntityType,
+                    candidate.ConfirmedEntityId,
+                })
+                .FirstOrDefaultAsync(ct);
+            if (duplicate is not null)
+            {
+                return new AtomicScanDraftClaim(
+                    AtomicScanDraftClaimOutcome.DuplicateSourceContent,
+                    draft.PortfolioId,
+                    draft.Id,
+                    draft.TargetEntityType,
+                    draft.SourceStoredFileId,
+                    draft.ExtractedFields,
+                    draft.SourceLabel,
+                    duplicate.TargetEntityType,
+                    duplicate.ConfirmedEntityId);
+            }
+        }
+
         draft.Status = "Confirming";
         _auditScope.BindSemantic(
             draft,
@@ -257,6 +296,23 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         int portfolioId,
         int draftId) =>
         new(outcome, portfolioId, draftId, string.Empty, null, null, null, null, null);
+
+    private async Task AcquireSourceContentLockAsync(
+        int portfolioId,
+        string targetEntityType,
+        string sourceContentSha256,
+        CancellationToken ct)
+    {
+        if (!_db.Database.IsNpgsql())
+        {
+            return;
+        }
+
+        var lockKey = $"{portfolioId}:{targetEntityType}:{sourceContentSha256}";
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({lockKey}, 754072))",
+            ct);
+    }
 
     private async Task ValidateSourceFileAsync(ScanDraft draft, CancellationToken ct)
     {

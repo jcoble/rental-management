@@ -1186,6 +1186,12 @@ public class ScanController : ManagementControllerBase
                 ConfirmationOk(result, atomicResult.Disposition),
             ConfirmScanDraftOutcome.DraftNotFound => NotFound(new { error = result.Error ?? "Scan draft not found." }),
             ConfirmScanDraftOutcome.DraftRejected => Conflict(new { error = result.Error ?? "Scan draft is rejected." }),
+            ConfirmScanDraftOutcome.DuplicateSourceContent => Conflict(new
+            {
+                error = result.Error ?? "This scan source has already been confirmed.",
+                entityType = result.TargetEntityType,
+                entityId = result.TargetEntityId,
+            }),
             _ => BadRequest(new { error = result.Error ?? "Scan draft could not be confirmed." }),
         };
     }

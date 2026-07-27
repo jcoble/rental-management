@@ -6,6 +6,7 @@ import {
   propertyWorkspaceRoute,
   propertyWorkspaceSections,
   resolvePropertyWorkspaceEntry,
+  unitCommandCenterRoute,
 } from "./property-workspace.ts";
 
 describe("property workspace", () => {
@@ -17,7 +18,7 @@ describe("property workspace", () => {
     "utf8"
   );
 
-  it("opens SingleRental directly", () => {
+  it("opens SingleRental property details while preserving its Unit command route", () => {
     const entry = resolvePropertyWorkspaceEntry({
       id: 41,
       rentalStructure: "SingleRental",
@@ -29,7 +30,9 @@ describe("property workspace", () => {
       },
     });
 
-    assert.equal(propertyWorkspaceRoute(entry), "/units/89");
+    assert.equal(entry.destination, "Property");
+    assert.equal(propertyWorkspaceRoute(entry), "/properties/41?area=summary");
+    assert.equal(unitCommandCenterRoute(entry), "/units/89");
   });
 
   it("shows six MultiRental areas", () => {
@@ -85,8 +88,9 @@ describe("property workspace", () => {
       rentalStructure: "SingleRental",
       workspaceEntry: null,
     });
-    assert.equal(incompleteSingleRental.destination, "Unit");
-    assert.equal(propertyWorkspaceRoute(incompleteSingleRental), null);
+    assert.equal(incompleteSingleRental.destination, "Property");
+    assert.equal(propertyWorkspaceRoute(incompleteSingleRental), "/properties/44?area=summary");
+    assert.equal(unitCommandCenterRoute(incompleteSingleRental), null);
   });
 
   it("stacks property documents and history without nested tabs", () => {
@@ -95,5 +99,20 @@ describe("property workspace", () => {
     assert.match(detailSource, /data-testid="property-documents-section"/);
     assert.match(detailSource, /data-testid="property-history-section"/);
     assert.doesNotMatch(detailSource, /property-documents-history-tabs/);
+  });
+
+  it("keeps the property detail editor available for SingleRental fields", () => {
+    assert.doesNotMatch(detailSource, /goto\(`\/units\/\$\{loaded\.workspaceEntry\.unitId\}`/);
+    assert.match(detailSource, /data-testid="property-detail-edit"/);
+    assert.match(detailSource, /propertyOperationsSchema/);
+    assert.match(detailSource, /propertyBasisSchema/);
+    assert.match(detailSource, /property-detail-year-built/);
+    assert.match(detailSource, /property-detail-management-fee/);
+    assert.match(detailSource, /property-detail-notes/);
+    assert.match(detailSource, /property-detail-purchase-price/);
+    assert.match(detailSource, /property-detail-land-value/);
+    assert.match(detailSource, /property-detail-in-service-date/);
+    assert.match(detailSource, /property-detail-manual-depreciation/);
+    assert.match(detailSource, /property-detail-accumulated-depreciation/);
   });
 });

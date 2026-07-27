@@ -592,7 +592,6 @@ public sealed class GrantTenantUserAccessHandler
             .Select(relationship => new GrantAccessTarget(
                 relationship,
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId
-                    && party.EffectiveFrom <= currentDate
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate)),
                 relationship.Parties.Where(party => party.Id == command.PartyId)
                     .Select(party => party.Tenant!.Email).FirstOrDefault(),
