@@ -102,6 +102,57 @@ void main() {
     );
   });
 
+  test('payment context conflict uses reviewer-corrected unit ids', () {
+    final draft = ScanDraft(
+      id: 83,
+      portfolioId: 1,
+      targetEntityType: 'Payment',
+      status: 'Reviewing',
+      fileUrl: '/api/v1/scans/83/file',
+      fields: const [
+        ScanField(name: 'property_id', value: '19', confidence: 0.96),
+        ScanField(name: 'unit_id', value: '26', confidence: 0.96),
+        ScanField(name: 'payer_name', value: 'Elena Vargas', confidence: 0.9),
+      ],
+      createdAt: DateTime(2027, 1, 8),
+      captureContext: const ScanCaptureContext(
+        tenantAccountId: 83,
+        sourceLabel: 'Walnut Duplex Unit B · Elena',
+      ),
+    );
+    const selectedAccount = TenantAccountOption(
+      tenantAccountId: 83,
+      leaseManagementId: 83,
+      propertyId: 19,
+      unitId: 27,
+      relationshipNumber: 'WAL-B',
+      propertyName: 'Walnut Duplex',
+      unitNumber: 'Unit B',
+      primaryTenantName: 'Elena Vargas',
+    );
+
+    expect(
+      paymentContextConflictMessage(
+        draft: draft,
+        selectedTenantAccountId: 83,
+        selectedTenantAccount: selectedAccount,
+      ),
+      contains('different rental account'),
+      reason: 'The original extracted Unit still blocks a genuine mismatch.',
+    );
+    expect(
+      paymentContextConflictMessage(
+        draft: draft,
+        selectedTenantAccountId: 83,
+        selectedTenantAccount: selectedAccount,
+        editedFields: const {'unit_id': '27'},
+      ),
+      isNull,
+      reason:
+          'The reviewer-corrected Unit is the effective ID validated by the payment gate.',
+    );
+  });
+
   test('scan review hides the shell quick action launcher', () {
     final review = File(
       'lib/features/scan/scan_review_screen.dart',

@@ -541,28 +541,31 @@ String? paymentContextConflictMessage({
   required ScanDraft draft,
   required int? selectedTenantAccountId,
   TenantAccountOption? selectedTenantAccount,
+  Map<String, String> editedFields = const {},
 }) {
   final selectedId =
       selectedTenantAccount?.tenantAccountId ?? selectedTenantAccountId;
   if (!draft.isPayment || selectedId == null) return null;
 
-  final extractedTenantAccountId = _positiveFieldInt(draft, const [
-    'tenantAccountId',
-    'tenant_account_id',
-  ]);
+  final extractedTenantAccountId = _effectivePositiveFieldInt(
+    draft,
+    editedFields,
+    const ['tenantAccountId', 'tenant_account_id'],
+  );
   if (extractedTenantAccountId != null &&
       extractedTenantAccountId != selectedId) {
     return _paymentContextConflictCorrection;
   }
 
-  if (selectedTenantAccount == null && _hasExtractedPaymentTargetIds(draft)) {
+  if (selectedTenantAccount == null &&
+      _hasReviewedPaymentTargetIds(draft, editedFields)) {
     return _paymentContextConflictCorrection;
   }
 
   if (selectedTenantAccount != null) {
     if (_conflictsWithCapture(
       capturedId: selectedTenantAccount.propertyId,
-      extractedId: _positiveFieldInt(draft, const [
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
         'propertyId',
         'property_id',
       ]),
@@ -571,13 +574,16 @@ String? paymentContextConflictMessage({
     }
     if (_conflictsWithCapture(
       capturedId: selectedTenantAccount.unitId,
-      extractedId: _positiveFieldInt(draft, const ['unitId', 'unit_id']),
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+        'unitId',
+        'unit_id',
+      ]),
     )) {
       return _paymentContextConflictCorrection;
     }
     if (_conflictsWithCapture(
       capturedId: selectedTenantAccount.leaseManagementId,
-      extractedId: _positiveFieldInt(draft, const [
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
         'leaseManagementId',
         'lease_management_id',
       ]),
@@ -597,13 +603,16 @@ String? paymentContextConflictMessage({
 
   if (_conflictsWithCapture(
     capturedId: capture.unitId,
-    extractedId: _positiveFieldInt(draft, const ['unitId', 'unit_id']),
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+      'unitId',
+      'unit_id',
+    ]),
   )) {
     return _paymentContextConflictCorrection;
   }
   if (_conflictsWithCapture(
     capturedId: capture.leaseManagementId,
-    extractedId: _positiveFieldInt(draft, const [
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
       'leaseManagementId',
       'lease_management_id',
     ]),
@@ -612,7 +621,7 @@ String? paymentContextConflictMessage({
   }
   if (_conflictsWithCapture(
     capturedId: capture.tenantLedgerEntryId,
-    extractedId: _positiveFieldInt(draft, const [
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
       'tenantLedgerEntryId',
       'tenant_ledger_entry_id',
     ]),
@@ -623,11 +632,21 @@ String? paymentContextConflictMessage({
   return null;
 }
 
-bool _hasExtractedPaymentTargetIds(ScanDraft draft) {
-  return _positiveFieldInt(draft, const ['propertyId', 'property_id']) !=
+bool _hasReviewedPaymentTargetIds(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  return _effectivePositiveFieldInt(draft, editedFields, const [
+            'propertyId',
+            'property_id',
+          ]) !=
           null ||
-      _positiveFieldInt(draft, const ['unitId', 'unit_id']) != null ||
-      _positiveFieldInt(draft, const [
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'unitId',
+            'unit_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
             'leaseManagementId',
             'lease_management_id',
           ]) !=
@@ -646,6 +665,20 @@ bool _conflictsWithCapture({
       extractedId != null &&
       extractedId > 0 &&
       capturedId != extractedId;
+}
+
+int? _effectivePositiveFieldInt(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      final value = int.tryParse(editedFields[name]?.trim() ?? '');
+      return value != null && value > 0 ? value : null;
+    }
+  }
+  return _positiveFieldInt(draft, names);
 }
 
 int? _positiveFieldInt(ScanDraft draft, List<String> names) {
@@ -1326,6 +1359,7 @@ class _ReviewBody extends ConsumerWidget {
       draft: draft,
       selectedTenantAccountId: selectedTenantAccountId,
       selectedTenantAccount: selectedTenantAccount,
+      editedFields: editedFields,
     );
     final confirmEnabled =
         !actionsLocked &&

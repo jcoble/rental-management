@@ -8,6 +8,8 @@ import type {
   UpdateMyAlertsRequest,
   MorningBriefingSettingsResponse,
   UpdateMorningBriefingSettingsRequest,
+  LateFeeAutomationSettingsResponse,
+  UpdateLateFeeAutomationSettingsRequest,
   TeamRoutingRuleResponse,
   TeamRoutingRuleRecipientResponse,
   TeamRoutingRecipientPreview,
@@ -114,6 +116,22 @@ export const notifications = {
         (operationKey) =>
           api.put<MorningBriefingSettingsResponse>(
             "/team-routing/morning-briefing",
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
+      ),
+  },
+  automationSettings: {
+    getLateFees: () =>
+      api.get<LateFeeAutomationSettingsResponse>(
+        "/automation-settings/late-fees"
+      ),
+    updateLateFees: (request: UpdateLateFeeAutomationSettingsRequest) =>
+      idempotentMutation(
+        `automation-settings:late-fees:${JSON.stringify(request)}`,
+        (operationKey) =>
+          api.put<LateFeeAutomationSettingsResponse>(
+            "/automation-settings/late-fees",
             request,
             { headers: { "Idempotency-Key": operationKey } }
           )

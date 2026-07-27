@@ -18,6 +18,7 @@ public sealed class NotificationRouteContractTests
     public void NotificationAreas_UseSeparateCanonicalControllerRoutes()
     {
         RouteOf<MyAlertsController>().Should().Be("api/v1/my-alerts");
+        RouteOf<AutomationSettingsController>().Should().Be("api/v1/automation-settings");
         RouteOf<TeamRoutingController>().Should().Be("api/v1/team-routing");
         RouteOf<TenantNoticePoliciesController>().Should().Be("api/v1/tenant-notices");
     }
@@ -31,6 +32,7 @@ public sealed class NotificationRouteContractTests
     }
 
     [Theory]
+    [InlineData(typeof(AutomationSettingsController))]
     [InlineData(typeof(TeamRoutingController))]
     [InlineData(typeof(TenantNoticePoliciesController))]
     public void AdministrativeAreas_RequireNotificationManagement(Type controllerType)
@@ -48,13 +50,15 @@ public sealed class NotificationRouteContractTests
     [Fact]
     public void TenantNoticeController_HasNoManualBlankTemplateSeedRoute()
     {
-        typeof(TenantNoticePoliciesController)
+        var postRoutes = typeof(TenantNoticePoliciesController)
             .GetMethods()
             .Select(method => method.GetCustomAttribute<HttpPostAttribute>()?.Template)
-            .Where(template => template is not null)
-            .Should().BeEquivalentTo(
-                "templates/{systemKey}/versions",
-                "templates/{systemKey}/restore-default");
+            .Where(template => template is not null);
+
+        postRoutes.Should().Contain("templates/{systemKey}/versions");
+        postRoutes.Should().Contain("templates/{systemKey}/restore-default");
+        postRoutes.Should().NotContain("tenant-notices/templates/seed");
+        postRoutes.Should().NotContain("templates/seed");
     }
 
     [Fact]
@@ -67,6 +71,24 @@ public sealed class NotificationRouteContractTests
 
         getRoutes.Should().Contain("{automationKey}/recipients");
         getRoutes.Should().Contain("templates/{systemKey}/merge-fields");
+    }
+
+    [Fact]
+    public void AutomationSettingsController_RestoresLateFeeControlsWithoutRentChargeToggle()
+    {
+        typeof(AutomationSettingsController).GetMethods()
+            .Single(method => method.Name == nameof(AutomationSettingsController.GetLateFees))
+            .GetCustomAttribute<HttpGetAttribute>()!.Template.Should().Be("late-fees");
+        typeof(AutomationSettingsController).GetMethods()
+            .Single(method => method.Name == nameof(AutomationSettingsController.UpdateLateFees))
+            .GetCustomAttribute<HttpPutAttribute>()!.Template.Should().Be("late-fees");
+
+        typeof(UpdateLateFeeAutomationSettingsRequest)
+            .GetProperties()
+            .Select(property => property.Name)
+            .Should().BeEquivalentTo(nameof(UpdateLateFeeAutomationSettingsRequest.EnableLateFees),
+                nameof(UpdateLateFeeAutomationSettingsRequest.LateFeeGraceDays));
+        typeof(UpdateLateFeeAutomationSettingsRequest).GetProperty("EnableRentCharges").Should().BeNull();
     }
 
     [Fact]

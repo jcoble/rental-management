@@ -19,6 +19,7 @@ public enum AtomicNotificationMutationDomain
     TemplateVersion,
     RestoreTemplate,
     MorningBriefingSettings,
+    LateFeeSettings,
     DeviceRegister,
     DeviceUnregister,
     LandlordConversationRead,
@@ -87,6 +88,8 @@ public sealed class AtomicNotificationMutationHandler
                 await CreateTemplateVersionAsync(command, attempt, now, restore: true, ct),
             AtomicNotificationMutationDomain.MorningBriefingSettings =>
                 await UpdateMorningBriefingSettingsAsync(command, attempt, now, ct),
+            AtomicNotificationMutationDomain.LateFeeSettings =>
+                await UpdateLateFeeAutomationSettingsAsync(command, attempt, now, ct),
             AtomicNotificationMutationDomain.DeviceRegister =>
                 await RegisterDeviceAsync(command, attempt, now, ct),
             AtomicNotificationMutationDomain.DeviceUnregister =>
@@ -478,11 +481,35 @@ public sealed class AtomicNotificationMutationHandler
         settings.MorningBriefingSendHourLocal = request.SendHourLocal;
         settings.MorningBriefingIncludeEmpty = request.IncludeEmpty;
         settings.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(settings, Audit(command, nameof(AutomationSettings), AuditLogOperation.Updated,
-            "Morning Briefing schedule updated", settings.Id));
         await attempt.FlushBusinessAsync(ct);
+        attempt.StageSemanticEvent(Audit(command, nameof(AutomationSettings), AuditLogOperation.Updated,
+            "Morning Briefing schedule updated", settings.Id), now);
         StageDataUpdate(attempt, command, nameof(AutomationSettings), settings.Id, now);
         var response = await MorningBriefingSettingsQuery(attempt.Persistence, command.PortfolioId).SingleAsync(ct);
+        return Applied(settings.Id, JsonSerializer.Serialize(response));
+    }
+
+    private static async Task<AtomicNotificationMutationResult> UpdateLateFeeAutomationSettingsAsync(
+        AtomicNotificationMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var request = Read<UpdateLateFeeAutomationSettingsRequest>(command);
+        if (request.LateFeeGraceDays is < 0 or > 31)
+            throw new InvalidOperationException("Late fee grace days must be between 0 and 31.");
+
+        var settings = await attempt.Persistence.Query<AutomationSettings>()
+            .SingleAsync(candidate => candidate.PortfolioId == command.PortfolioId, ct);
+        settings.EnableRentCharges = true;
+        settings.EnableLateFees = request.EnableLateFees;
+        settings.LateFeeGraceDays = request.LateFeeGraceDays;
+        settings.UpdatedAtUtc = now;
+        await attempt.FlushBusinessAsync(ct);
+        attempt.StageSemanticEvent(Audit(command, nameof(AutomationSettings), AuditLogOperation.Updated,
+            "Late fee automation settings updated", settings.Id), now);
+        StageDataUpdate(attempt, command, nameof(AutomationSettings), settings.Id, now);
+        var response = await LateFeeAutomationSettingsQuery(attempt.Persistence, command.PortfolioId).SingleAsync(ct);
         return Applied(settings.Id, JsonSerializer.Serialize(response));
     }
 
@@ -817,6 +844,18 @@ public sealed class AtomicNotificationMutationHandler
             settings.MorningBriefingSendHourLocal,
             settings.MorningBriefingIncludeEmpty,
             portfolio.TimeZone == "" ? "America/New_York" : portfolio.TimeZone);
+
+    private static IQueryable<LateFeeAutomationSettingsResponse> LateFeeAutomationSettingsQuery(
+        IAtomicPersistenceSession persistence,
+        int portfolioId) =>
+        from settings in persistence.Query<AutomationSettings>().AsNoTracking()
+        join portfolio in persistence.Query<Portfolio>().AsNoTracking()
+            on settings.PortfolioId equals portfolio.Id
+        where settings.PortfolioId == portfolioId && portfolio.DeletedAt == null
+        select new LateFeeAutomationSettingsResponse(
+            settings.EnableRentCharges,
+            settings.EnableLateFees,
+            settings.LateFeeGraceDays);
 
     private static IQueryable<MyAlertsResponse> MyAlertsQuery(
         IAtomicPersistenceSession persistence,
