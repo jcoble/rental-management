@@ -12,6 +12,8 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { units } from '$lib/api/endpoints/units';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import type { WorkOrder } from '$lib/types';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import {
@@ -86,7 +88,9 @@
 		refetchInterval: (q) => {
 			const s = q.state.data?.status;
 			return s === 'Pending' || s === 'Processing' ? 1500 : false;
-		}
+		},
+		refetchIntervalInBackground: true,
+		refetchOnReconnect: true
 	}));
 
 	const data = $derived(draftQuery.data);
@@ -147,14 +151,29 @@
 	// 'none' is the sentinel for "no property" (empty string conflicts with the
 	// Select's "nothing selected" state in bits-ui).
 	const NO_PROPERTY = 'none';
+	const NO_UNIT = 'none';
+	const NO_WORK_ORDER = 'none';
 	let selectedPropertyId = $state<string>(NO_PROPERTY);
+	let selectedExpenseUnitId = $state<string>(NO_UNIT);
+	let selectedExpenseWorkOrderId = $state<string>(NO_WORK_ORDER);
+	let selectedExpenseWorkOrderLabelText = $state('');
 	let propertySearch = $state('');
 	let propertySkip = $state(0);
 	let tenantSearch = $state('');
 	let tenantSkip = $state(0);
 	let unitSearch = $state('');
 	let unitSkip = $state(0);
+	let workOrderSearch = $state('');
+	let workOrderSkip = $state(0);
 	const CONTEXT_PAGE_SIZE = 20;
+
+	$effect(() => {
+		if (!draftId || !isProcessing) return;
+		const refresh = setInterval(() => {
+			if (!draftQuery.isFetching) void draftQuery.refetch();
+		}, 1500);
+		return () => clearInterval(refresh);
+	});
 
 	const tenantAccountOptionsQuery = createQuery(() => ({
 		queryKey: ['tenant-account-options', getCurrentPortfolioId(), tenantAccountSearch.trim(), tenantAccountSkip],
@@ -214,6 +233,74 @@
 		enabled: !isPayment
 	}));
 	const propertyChoices = $derived(propertiesQuery.data?.items ?? []);
+	const selectedExpensePropertyId = $derived(
+		selectedPropertyId !== NO_PROPERTY ? Number(selectedPropertyId) : null
+	);
+	const selectedExpenseUnitIdNumber = $derived(
+		selectedExpenseUnitId !== NO_UNIT ? Number(selectedExpenseUnitId) : null
+	);
+	const selectedExpenseWorkOrderIdNumber = $derived(
+		selectedExpenseWorkOrderId !== NO_WORK_ORDER ? Number(selectedExpenseWorkOrderId) : null
+	);
+
+	const expenseUnitsQuery = createQuery(() => ({
+		queryKey: [
+			'scan-expense-units',
+			getCurrentPortfolioId(),
+			selectedExpensePropertyId,
+			unitSearch.trim(),
+			unitSkip
+		],
+		queryFn: () =>
+			units.listWithHealthPage({
+				propertyId: selectedExpensePropertyId as number,
+				search: unitSearch.trim() || undefined,
+				sort: 'unitNumber',
+				skip: unitSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
+		enabled: !!data && isExpense && !!selectedExpensePropertyId
+	}));
+	const expenseUnitChoices = $derived(expenseUnitsQuery.data?.items ?? []);
+
+	const expenseWorkOrdersQuery = createQuery(() => ({
+		queryKey: [
+			'scan-expense-work-orders',
+			getCurrentPortfolioId(),
+			selectedExpensePropertyId,
+			selectedExpenseUnitIdNumber,
+			workOrderSearch.trim(),
+			workOrderSkip
+		],
+		queryFn: () =>
+			workOrders.listPage(getCurrentPortfolioId(), {
+				propertyId: selectedExpensePropertyId ?? undefined,
+				unitId: selectedExpenseUnitIdNumber ?? undefined,
+				search: workOrderSearch.trim() || undefined,
+				sort: '-requestedAt',
+				skip: workOrderSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
+		enabled: !!data && isExpense
+	}));
+	const selectedExpenseWorkOrderIsInPage = $derived(
+		!!selectedExpenseWorkOrderIdNumber &&
+		(expenseWorkOrdersQuery.data?.items.some((workOrder) => workOrder.id === selectedExpenseWorkOrderIdNumber) ?? false)
+	);
+	const selectedExpenseWorkOrderQuery = createQuery(() => ({
+		queryKey: ['scan-expense-work-order', getCurrentPortfolioId(), selectedExpenseWorkOrderIdNumber],
+		queryFn: () => workOrders.get(selectedExpenseWorkOrderIdNumber as number),
+		enabled: !!data && isExpense && !!selectedExpenseWorkOrderIdNumber && !selectedExpenseWorkOrderIsInPage,
+		retry: false
+	}));
+	const expenseWorkOrderChoices = $derived.by<WorkOrder[]>(() => {
+		const choices = [...(expenseWorkOrdersQuery.data?.items ?? [])];
+		const selected = selectedExpenseWorkOrderQuery.data;
+		if (selected && !choices.some((workOrder) => workOrder.id === selected.id)) {
+			choices.unshift(selected);
+		}
+		return choices;
+	});
 
 	// --- Lease draft selectors ---
 	// A Lease confirm needs a property + unit; tenant is optional (when omitted the server matches the
@@ -437,6 +524,67 @@
 		return sel ? sel.name : `Property #${selectedPropertyId}`;
 	});
 
+	const selectedExpenseUnitLabel = $derived.by(() => {
+		if (!selectedExpenseUnitId || selectedExpenseUnitId === NO_UNIT) return '— No unit —';
+		const selected = expenseUnitChoices.find((unit) => String(unit.id) === selectedExpenseUnitId);
+		return selected ? `Unit ${selected.unitNumber}` : `Unit #${selectedExpenseUnitId}`;
+	});
+
+	function expenseWorkOrderLabel(workOrder: WorkOrder): string {
+		const unit = workOrder.unitNumber ? ` · Unit ${workOrder.unitNumber}` : '';
+		return `${workOrder.title}${unit} · ${workOrder.status}`;
+	}
+
+	const selectedExpenseWorkOrderLabel = $derived.by(() => {
+		if (!selectedExpenseWorkOrderId || selectedExpenseWorkOrderId === NO_WORK_ORDER) return '— No work order —';
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		return selected
+			? expenseWorkOrderLabel(selected)
+			: selectedExpenseWorkOrderLabelText || `Work order #${selectedExpenseWorkOrderId}`;
+	});
+
+	function clearExpenseWorkOrderSelection() {
+		selectedExpenseWorkOrderId = NO_WORK_ORDER;
+		selectedExpenseWorkOrderLabelText = '';
+		workOrderSearch = '';
+		workOrderSkip = 0;
+	}
+
+	function selectContextPropertyId(value: string | undefined): void {
+		const next = value ?? NO_PROPERTY;
+		selectedPropertyId = next;
+		if (isExpense) {
+			selectedExpenseUnitId = NO_UNIT;
+			unitSearch = '';
+			unitSkip = 0;
+			clearExpenseWorkOrderSelection();
+		}
+	}
+
+	function selectExpenseUnitId(value: string | undefined): void {
+		selectedExpenseUnitId = value ?? NO_UNIT;
+		clearExpenseWorkOrderSelection();
+	}
+
+	function selectExpenseWorkOrder(value: string | undefined): void {
+		selectedExpenseWorkOrderId = value ?? NO_WORK_ORDER;
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		selectedExpenseWorkOrderLabelText = selected ? expenseWorkOrderLabel(selected) : '';
+		if (!selected) return;
+		selectedPropertyId = String(selected.propertyId);
+		selectedExpenseUnitId = selected.unitId ? String(selected.unitId) : NO_UNIT;
+	}
+
+	$effect(() => {
+		if (!isExpense || selectedExpenseWorkOrderId === NO_WORK_ORDER) return;
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		if (!selected) return;
+		selectedExpenseWorkOrderLabelText = expenseWorkOrderLabel(selected);
+		if (selectedPropertyId !== String(selected.propertyId)) selectedPropertyId = String(selected.propertyId);
+		const nextUnitId = selected.unitId ? String(selected.unitId) : NO_UNIT;
+		if (selectedExpenseUnitId !== nextUnitId) selectedExpenseUnitId = nextUnitId;
+	});
+
 	function tenantAccountLabel(account: TenantAccountChoice): string {
 		const tenantName = account.primaryTenantName;
 		const tenant = tenantName ? ` — ${tenantName}` : '';
@@ -569,12 +717,17 @@
 		tenantAccountSearch = '';
 		tenantAccountSkip = 0;
 		selectedPropertyId = NO_PROPERTY;
+		selectedExpenseUnitId = NO_UNIT;
+		selectedExpenseWorkOrderId = NO_WORK_ORDER;
+		selectedExpenseWorkOrderLabelText = '';
 		propertySearch = '';
 		propertySkip = 0;
 		tenantSearch = '';
 		tenantSkip = 0;
 		unitSearch = '';
 		unitSkip = 0;
+		workOrderSearch = '';
+		workOrderSkip = 0;
 		loanEscrowCoversTaxes = false;
 		loanEscrowCoversInsurance = false;
 		loanEscrowSeeded = false;
@@ -620,6 +773,14 @@
 					properties: propertyChoices
 				});
 				if (resolvedPropertyId) selectedPropertyId = resolvedPropertyId;
+			}
+			if (data.targetEntityType === 'Expense' && selectedExpenseWorkOrderId === NO_WORK_ORDER) {
+				const contextWorkOrderId = data.captureContext?.workOrderId ?? scanContext.workOrderId;
+				if (contextWorkOrderId) selectedExpenseWorkOrderId = String(contextWorkOrderId);
+			}
+			if (data.targetEntityType === 'Expense' && selectedExpenseUnitId === NO_UNIT) {
+				const contextUnitId = data.captureContext?.unitId ?? scanContext.unitId;
+				if (contextUnitId) selectedExpenseUnitId = String(contextUnitId);
 			}
 			// Loan drafts: seed the escrow-cover checkboxes from the extraction once.
 			if (data.targetEntityType === 'Loan' && !loanEscrowSeeded && data.fields.length > 0) {
@@ -1074,6 +1235,12 @@
 			// Optional property association (server honors `propertyId`).
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
+			}
+			if (selectedExpenseUnitId && selectedExpenseUnitId !== NO_UNIT) {
+				overrides['unitId'] = Number(selectedExpenseUnitId);
+			}
+			if (selectedExpenseWorkOrderId && selectedExpenseWorkOrderId !== NO_WORK_ORDER) {
+				overrides['workOrderId'] = Number(selectedExpenseWorkOrderId);
 			}
 			applyScanContextOverrides(overrides, scanContext, 'Expense');
 			// Include the (possibly edited) line items so corrections survive into the expense.
@@ -1928,7 +2095,7 @@
 										propertySkip = 0;
 									}}
 								/>
-								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedPropertyId} onValueChange={selectContextPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
 									</Select.Trigger>
@@ -1959,6 +2126,108 @@
 									</div>
 								{/if}
 							</div>
+							{#if isExpense}
+								<div class="mb-5 grid gap-3 rounded-md border border-border bg-muted/30 p-3 md:grid-cols-2" data-testid="scan-expense-work-order-scope">
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-expense-unit-select">
+											Unit <span class="font-normal text-muted-foreground">(optional)</span>
+										</label>
+										<Input
+											aria-label="Search units for expense"
+											placeholder={selectedPropertyId === NO_PROPERTY ? 'Select a property first' : 'Search units in this property'}
+											value={unitSearch}
+											disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}
+											oninput={(event) => {
+												unitSearch = (event.currentTarget as HTMLInputElement).value;
+												unitSkip = 0;
+											}}
+										/>
+										<Select.Root
+											type="single"
+											value={selectedExpenseUnitId}
+											onValueChange={selectExpenseUnitId}
+											disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-expense-unit-select" data-testid="scan-expense-unit-select" class="w-full" disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}>
+												{selectedExpenseUnitLabel}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_UNIT} label="— No unit —">— No unit —</Select.Item>
+												{#if expenseUnitsQuery.data}
+													{#each expenseUnitChoices as unit (unit.id)}
+														<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
+															Unit {unit.unitNumber}
+														</Select.Item>
+													{/each}
+												{/if}
+											</Select.Content>
+										</Select.Root>
+										{#if selectedPropertyId === NO_PROPERTY}
+											<p class="mt-1 text-xs text-muted-foreground">Pick a property to narrow units and work orders.</p>
+										{:else if expenseUnitsQuery.isLoading}
+											<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
+										{:else if expenseUnitsQuery.data}
+											<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+												<span>{expenseUnitsQuery.data.totalCount === 0 ? 'No matching units' : `${unitSkip + 1}–${Math.min(unitSkip + CONTEXT_PAGE_SIZE, expenseUnitsQuery.data.totalCount)} of ${expenseUnitsQuery.data.totalCount}`}</span>
+												<div class="flex gap-1">
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip === 0} onclick={() => (unitSkip = Math.max(0, unitSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip + CONTEXT_PAGE_SIZE >= expenseUnitsQuery.data.totalCount} onclick={() => (unitSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+												</div>
+											</div>
+										{/if}
+									</div>
+
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-expense-work-order-select">
+											Work order <span class="font-normal text-muted-foreground">(optional)</span>
+										</label>
+										<Input
+											aria-label="Search work orders for expense"
+											placeholder="Search work orders"
+											value={workOrderSearch}
+											disabled={reviewControlsDisabled}
+											oninput={(event) => {
+												workOrderSearch = (event.currentTarget as HTMLInputElement).value;
+												workOrderSkip = 0;
+											}}
+										/>
+										<Select.Root
+											type="single"
+											value={selectedExpenseWorkOrderId}
+											onValueChange={selectExpenseWorkOrder}
+											disabled={reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-expense-work-order-select" data-testid="scan-expense-work-order-select" class="w-full" disabled={reviewControlsDisabled}>
+												{selectedExpenseWorkOrderLabel}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_WORK_ORDER} label="— No work order —">— No work order —</Select.Item>
+												{#if expenseWorkOrdersQuery.data}
+													{#each expenseWorkOrderChoices as workOrder (workOrder.id)}
+														<Select.Item value={String(workOrder.id)} label={expenseWorkOrderLabel(workOrder)}>
+															{expenseWorkOrderLabel(workOrder)}
+														</Select.Item>
+													{/each}
+												{/if}
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Choosing a work order also chooses its property{selectedExpenseUnitId !== NO_UNIT ? ' and unit' : ''}.
+										</p>
+										{#if expenseWorkOrdersQuery.isLoading}
+											<p class="mt-1 text-xs text-muted-foreground">Loading work orders…</p>
+										{:else if expenseWorkOrdersQuery.data}
+											<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+												<span>{expenseWorkOrdersQuery.data.totalCount === 0 ? 'No matching work orders' : `${workOrderSkip + 1}–${Math.min(workOrderSkip + CONTEXT_PAGE_SIZE, expenseWorkOrdersQuery.data.totalCount)} of ${expenseWorkOrdersQuery.data.totalCount}`}</span>
+												<div class="flex gap-1">
+													<Button type="button" variant="outline" size="sm" disabled={workOrderSkip === 0} onclick={() => (workOrderSkip = Math.max(0, workOrderSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+													<Button type="button" variant="outline" size="sm" disabled={workOrderSkip + CONTEXT_PAGE_SIZE >= expenseWorkOrdersQuery.data.totalCount} onclick={() => (workOrderSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+												</div>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
 							{/if}
 					{/if}
 					{#if isLease || isApplication || isLoan}

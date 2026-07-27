@@ -168,49 +168,146 @@ class ScanRepository {
     String? sourceLabel,
     void Function(double progress)? onSendProgress,
   }) async {
+    final operationId = clientOperationId ?? const Uuid().v4();
     try {
-      final formData = FormData.fromMap({
-        'file': MultipartFile.fromBytes(
-          bytes,
-          filename: filename,
-          contentType: DioMediaType.parse(contentType),
-        ),
-        'targetEntityType': targetEntityType,
-        'clientOperationId': clientOperationId ?? const Uuid().v4(),
-        'propertyId': ?propertyId,
-        'unitId': ?unitId,
-        'leaseManagementId': ?leaseManagementId,
-        'leaseAgreementId': ?leaseAgreementId,
-        'tenantAccountId': ?tenantAccountId,
-        'tenantLedgerEntryId': ?tenantLedgerEntryId,
-        'workOrderId': ?workOrderId,
-        'applicationId': ?applicationId,
-        'rentalListingId': ?rentalListingId,
-        if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
-          'sourceLabel': sourceLabel.trim(),
-      });
-
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/scans',
-        data: formData,
-        onSendProgress: onSendProgress != null
-            ? (sent, total) {
-                if (total > 0) onSendProgress(sent / total);
-              }
-            : null,
+      return await _postScanUpload(
+        bytes,
+        filename,
+        contentType,
+        targetEntityType: targetEntityType,
+        clientOperationId: operationId,
+        propertyId: propertyId,
+        unitId: unitId,
+        leaseManagementId: leaseManagementId,
+        leaseAgreementId: leaseAgreementId,
+        tenantAccountId: tenantAccountId,
+        tenantLedgerEntryId: tenantLedgerEntryId,
+        workOrderId: workOrderId,
+        applicationId: applicationId,
+        rentalListingId: rentalListingId,
+        sourceLabel: sourceLabel,
+        onSendProgress: onSendProgress,
       );
-
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return ScanCreatedResponse.fromJson(data);
     } on DioException catch (e) {
+      if (e.type == DioExceptionType.receiveTimeout) {
+        try {
+          return await _postScanUpload(
+            bytes,
+            filename,
+            contentType,
+            targetEntityType: targetEntityType,
+            clientOperationId: operationId,
+            propertyId: propertyId,
+            unitId: unitId,
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: leaseAgreementId,
+            tenantAccountId: tenantAccountId,
+            tenantLedgerEntryId: tenantLedgerEntryId,
+            workOrderId: workOrderId,
+            applicationId: applicationId,
+            rentalListingId: rentalListingId,
+            sourceLabel: sourceLabel,
+            onSendProgress: null,
+          );
+        } on DioException catch (retryError) {
+          throw ApiException.fromDioException(retryError);
+        }
+      }
       throw ApiException.fromDioException(e);
     }
+  }
+
+  Future<ScanCreatedResponse> _postScanUpload(
+    Uint8List bytes,
+    String filename,
+    String contentType, {
+    required String targetEntityType,
+    required String clientOperationId,
+    int? propertyId,
+    int? unitId,
+    int? leaseManagementId,
+    int? leaseAgreementId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
+    int? workOrderId,
+    int? applicationId,
+    int? rentalListingId,
+    String? sourceLabel,
+    void Function(double progress)? onSendProgress,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/scans',
+      data: _scanUploadFormData(
+        bytes,
+        filename,
+        contentType,
+        targetEntityType: targetEntityType,
+        clientOperationId: clientOperationId,
+        propertyId: propertyId,
+        unitId: unitId,
+        leaseManagementId: leaseManagementId,
+        leaseAgreementId: leaseAgreementId,
+        tenantAccountId: tenantAccountId,
+        tenantLedgerEntryId: tenantLedgerEntryId,
+        workOrderId: workOrderId,
+        applicationId: applicationId,
+        rentalListingId: rentalListingId,
+        sourceLabel: sourceLabel,
+      ),
+      onSendProgress: onSendProgress != null
+          ? (sent, total) {
+              if (total > 0) onSendProgress(sent / total);
+            }
+          : null,
+    );
+
+    final data = response.data;
+    if (data == null) {
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Empty response from server.',
+      );
+    }
+    return ScanCreatedResponse.fromJson(data);
+  }
+
+  FormData _scanUploadFormData(
+    Uint8List bytes,
+    String filename,
+    String contentType, {
+    required String targetEntityType,
+    required String clientOperationId,
+    int? propertyId,
+    int? unitId,
+    int? leaseManagementId,
+    int? leaseAgreementId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
+    int? workOrderId,
+    int? applicationId,
+    int? rentalListingId,
+    String? sourceLabel,
+  }) {
+    return FormData.fromMap({
+      'file': MultipartFile.fromBytes(
+        bytes,
+        filename: filename,
+        contentType: DioMediaType.parse(contentType),
+      ),
+      'targetEntityType': targetEntityType,
+      'clientOperationId': clientOperationId,
+      'propertyId': ?propertyId,
+      'unitId': ?unitId,
+      'leaseManagementId': ?leaseManagementId,
+      'leaseAgreementId': ?leaseAgreementId,
+      'tenantAccountId': ?tenantAccountId,
+      'tenantLedgerEntryId': ?tenantLedgerEntryId,
+      'workOrderId': ?workOrderId,
+      'applicationId': ?applicationId,
+      'rentalListingId': ?rentalListingId,
+      if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
+        'sourceLabel': sourceLabel.trim(),
+    });
   }
 
   /// Uploads a recorded voice note and creates a reviewable AI draft.
