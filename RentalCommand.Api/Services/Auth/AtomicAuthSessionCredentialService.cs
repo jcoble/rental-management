@@ -94,18 +94,18 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
     private readonly IAtomicUnitOfWork _atomic;
     private readonly RefreshCredentialTokenFactory _tokens;
     private readonly AtomicAuthSessionCredentialOptions _options;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public AtomicAuthSessionCredentialService(
         IAtomicUnitOfWork atomic,
         RefreshCredentialTokenFactory tokens,
         IOptions<AtomicAuthSessionCredentialOptions> options,
-        TimeProvider timeProvider)
+        IAuthSecurityClock securityClock)
     {
         _atomic = atomic;
         _tokens = tokens;
         _options = options.Value;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
         ValidateLifetimePolicy(_options);
     }
 
@@ -130,7 +130,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
                 nameof(request));
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var now = _securityClock.UtcNow();
         var authSessionId = DeriveOperationGuid(request.OperationId, "session");
         var refreshTokenFamilyId = DeriveOperationGuid(request.OperationId, "family");
         var credentialId = DeriveOperationGuid(request.OperationId, "credential");
@@ -195,7 +195,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             throw new ArgumentOutOfRangeException(nameof(userId));
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var now = _securityClock.UtcNow();
         var challengeId = Guid.NewGuid();
         var challengeBearer = _tokens.CreateBearer(Guid.NewGuid());
         var expiresAt = now.AddMinutes(5);
@@ -238,7 +238,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
                 null);
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var now = _securityClock.UtcNow();
         var replacementCredentialId = Guid.NewGuid();
         var replacementCandidate = _tokens.CreateBearer(replacementCredentialId);
         var replacementExpiresAt = now.AddDays(_options.CredentialLifetimeDays);

@@ -28,6 +28,12 @@ public class TenantResponse
     /// </summary>
     public int LeaseHistoryCount { get; set; }
 
+    /// <summary>Current resident property context for selectors that must disambiguate duplicate names.</summary>
+    public int? CurrentPropertyId { get; set; }
+    public string? CurrentPropertyName { get; set; }
+    public int? CurrentUnitId { get; set; }
+    public string? CurrentUnitNumber { get; set; }
+
     /// <summary>True only when this tenant has no lease history and can be safely deleted.</summary>
     public bool CanDelete { get; set; } = true;
 

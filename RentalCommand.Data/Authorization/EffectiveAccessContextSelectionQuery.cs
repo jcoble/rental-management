@@ -14,7 +14,6 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
     public async Task<IReadOnlyList<EffectiveAccessContextOption>> ListAsync(
         int userId,
         int? selectedAccessContextId,
-        DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
         if (userId <= 0)
@@ -23,8 +22,14 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
         }
 
         var rows = await _db.Database.SqlQuery<EffectiveAccessContextOptionRow>($"""
+                WITH security_clock AS MATERIALIZED (
+                    SELECT clock_timestamp() AS "UtcNow"
+                )
                 SELECT option.*
-                FROM rc_list_effective_access_contexts({userId}, {utcNow}) option
+                FROM security_clock
+                CROSS JOIN LATERAL rc_list_effective_access_contexts(
+                    {userId},
+                    security_clock."UtcNow") option
                 WHERE {selectedAccessContextId}::integer IS NULL
                    OR option."AccessContextId" = {selectedAccessContextId}
                 """)

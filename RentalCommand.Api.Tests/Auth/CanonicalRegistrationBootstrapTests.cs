@@ -178,7 +178,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
 
         var preLoginOptions = await ExecuteAsApiDatabaseIdentityAsync(() =>
             new EffectiveAccessContextSelectionQuery(_ctx.Db)
-                .ListAsync(user.Id, null, DateTime.UtcNow));
+                .ListAsync(user.Id, null));
         preLoginOptions.Should().ContainSingle(option =>
             option.AccessContextId == context.Id &&
             option.AccessRevision == context.AccessRevision);
@@ -287,7 +287,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 })),
             _atomic,
             NullLogger<AuthService>.Instance,
-            TimeProvider.System);
+            new SystemAuthSecurityClock());
     }
 
     private static SignInManager<ApplicationUser> CreateSignInManager(

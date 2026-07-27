@@ -619,7 +619,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         _queryCapture!.Reset();
         var query = new EffectiveAccessContextSelectionQuery(db);
-        var options = await query.ListAsync(_userId, null, _now);
+        var options = await query.ListAsync(_userId, null);
 
         options.Should().HaveCount(2);
         options.Should().OnlyContain(item => item.TotalEffectiveContexts == 2);
@@ -631,11 +631,65 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
 
         _queryCapture.Reset();
-        var selected = await query.ListAsync(_userId, _secondContextId, _now);
+        var selected = await query.ListAsync(_userId, _secondContextId);
         selected.Should().ContainSingle(item =>
             item.AccessContextId == _secondContextId && item.TotalEffectiveContexts == 2);
         _queryCapture.ReaderCommands.Should().HaveCount(1);
         _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
+    }
+
+    [SkippableFact]
+    public async Task EffectiveContextSelection_UsesRealDatabaseClockUnderSimAheadAmbientClock()
+    {
+        SkipIfNoDocker();
+        await using var db = NewPlainContext();
+        var simAheadUtc = _now.AddYears(1);
+        var futurePortfolio = Portfolio("Future Simulation Workspace");
+        db.Add(futurePortfolio);
+        await db.SaveChangesAsync();
+
+        var future = CreateAccessRoot(
+            _userId,
+            futurePortfolio.Id,
+            WorkspaceExperience.Management,
+            simAheadUtc);
+        db.WorkspaceAccessContexts.Add(future.Context);
+        await db.SaveChangesAsync();
+        future.Membership.AccessContextId = future.Context.Id;
+        db.WorkspaceMemberships.Add(future.Membership);
+        await db.SaveChangesAsync();
+        future.Assignment.WorkspaceMembershipId = future.Membership.Id;
+        db.MembershipRoleAssignments.Add(future.Assignment);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var query = new EffectiveAccessContextSelectionQuery(db);
+
+        var options = await query.ListAsync(_userId, null);
+        var selectedFuture = await query.ListAsync(_userId, future.Context.Id);
+        var start = StartWithoutChallenge(future.Context.Id, future.Context.AccessRevision) with
+        {
+            IssuedAtUtc = simAheadUtc,
+            SessionExpiresAtUtc = simAheadUtc.AddDays(30),
+            CredentialExpiresAtUtc = simAheadUtc.AddDays(7),
+            AbsoluteFamilyExpiresAtUtc = simAheadUtc.AddDays(30),
+        };
+        var started = await Atomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            start,
+            StartCodec);
+        var currentChallenge = await IssueChallengeAsync();
+        var currentStarted = await Atomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            Start(currentChallenge),
+            StartCodec);
+
+        options.Should().NotContain(item => item.AccessContextId == future.Context.Id);
+        selectedFuture.Should().BeEmpty("the selector must use PostgreSQL real time, not simulated ambient time");
+        started.Value.Started.Should().BeFalse(
+            "the atomic session guard also revalidates eligibility with PostgreSQL real time");
+        currentStarted.Value.Started.Should().BeTrue(
+            "moving simulation time ahead must not break normal currently effective membership login");
     }
 
     [SkippableFact]
@@ -831,18 +885,27 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         var tenantAccess = new TenantUserAccess
         {
-            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
-            AccessContextId = tenantContext.Id, ApplicationUserId = tenantUser.Id,
-            LeaseManagementPartyId = party.Id, GrantedAtUtc = now,
-            GrantedByUserId = ownerUser.Id, Reason = "proof",
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            AccessContextId = tenantContext.Id,
+            ApplicationUserId = tenantUser.Id,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = now,
+            GrantedByUserId = ownerUser.Id,
+            Reason = "proof",
         };
         db.AddRange(
             new OwnerUserAccess
             {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
-                AccessContextId = ownerContext.Id, ApplicationUserId = ownerUser.Id,
-                OwnerEntityId = owner.Id, EffectiveFromUtc = now.AddMinutes(-1),
-                GrantedAtUtc = now, GrantedByUserId = ownerUser.Id, Reason = "proof",
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolio.Id,
+                AccessContextId = ownerContext.Id,
+                ApplicationUserId = ownerUser.Id,
+                OwnerEntityId = owner.Id,
+                EffectiveFromUtc = now.AddMinutes(-1),
+                GrantedAtUtc = now,
+                GrantedByUserId = ownerUser.Id,
+                Reason = "proof",
             },
             tenantAccess);
         await db.SaveChangesAsync();
@@ -875,9 +938,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         db.ChangeTracker.Clear();
 
         var ownerOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(ownerUser.Id, null, now);
+            .ListAsync(ownerUser.Id, null);
         var tenantOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(tenantUser.Id, null, now);
+            .ListAsync(tenantUser.Id, null);
         ownerOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Owner);
         tenantOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Tenant);
 
@@ -971,15 +1034,15 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         tenantAccess = await db.TenantUserAccesses.SingleAsync(item => item.Id == tenantAccess.Id);
         tenantContext = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == tenantContext.Id);
-        tenantAccess.RevokedAtUtc = now.AddMinutes(1);
+        tenantAccess.RevokedAtUtc = now.AddMinutes(-1);
         tenantAccess.RevokedByUserId = ownerUser.Id;
         tenantContext.AdvanceRevision(1);
-        tenantContext.UpdatedAtUtc = now.AddMinutes(1);
+        tenantContext.UpdatedAtUtc = now;
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
         (await new EffectiveAccessContextSelectionQuery(db).ListAsync(
-            tenantUser.Id, null, now.AddMinutes(1)))
+            tenantUser.Id, null))
             .Should().BeEmpty("revoking the relationship removes the relationship-only login context");
         (await ReadEnvelopeViewAsync(db, tenantUser.Id, tenantContext.Id)).Should().BeNull();
         (await db.EffectiveTenantAccess.AnyAsync(item => item.AccessContextId == tenantContext.Id))
@@ -1078,8 +1141,27 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _securityStamp = user.SecurityStamp!;
     }
 
-    private AccessRoot CreateAccessRoot(int userId, int portfolioId, WorkspaceExperience experience)
+    private StartAuthSessionCommand StartWithoutChallenge(int accessContextId, long accessRevision) =>
+        new(
+            _userId,
+            accessContextId,
+            accessRevision,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Hash(Guid.NewGuid().ToString("N")),
+            _now,
+            _now.AddDays(30),
+            _now.AddDays(7),
+            _now.AddDays(30));
+
+    private AccessRoot CreateAccessRoot(
+        int userId,
+        int portfolioId,
+        WorkspaceExperience experience,
+        DateTime? effectiveFromUtc = null)
     {
+        var effectiveFrom = effectiveFromUtc ?? _now.AddDays(-1);
         var context = new WorkspaceAccessContext
         {
             UserId = userId,
@@ -1093,7 +1175,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             PortfolioId = portfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = experience,
-            EffectiveFromUtc = _now.AddDays(-1),
+            EffectiveFromUtc = effectiveFrom,
             CreatedAtUtc = _now.AddDays(-1),
             UpdatedAtUtc = _now.AddDays(-1),
         };
@@ -1105,7 +1187,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             ScopeKind = experience == WorkspaceExperience.Leasing
                 ? MembershipRoleAssignmentScopeKind.SelectedProperties
                 : MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = _now.AddDays(-1),
+            EffectiveFromUtc = effectiveFrom,
             CreatedAtUtc = _now.AddDays(-1),
             UpdatedAtUtc = _now.AddDays(-1),
         };
@@ -1117,14 +1199,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         int portfolioId,
         WorkspaceExperience experience,
         DateTime now) => new()
-    {
-        UserId = userId,
-        PortfolioId = portfolioId,
-        Status = WorkspaceAccessContextStatus.Active,
-        LastAuthorizedExperience = experience,
-        CreatedAtUtc = now,
-        UpdatedAtUtc = now,
-    };
+        {
+            UserId = userId,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = experience,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
 
     private ApplicationUser User(string email, string displayName) => new()
     {

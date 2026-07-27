@@ -295,6 +295,49 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         }
     }
 
+    [SkippableTheory]
+    [InlineData(ScanConfirmationTargetKind.Expense, nameof(Expense))]
+    [InlineData(ScanConfirmationTargetKind.WorkOrder, nameof(WorkOrder))]
+    public async Task ScanConfirmation_RecordsOneBusinessTargetAuditAndKeepsScanAudit(
+        ScanConfirmationTargetKind kind,
+        string targetEntityType)
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(kind);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, $"single-target-audit-{kind}");
+        var command = Command(draftId, kind) with { SourceStoredFileId = sourceStoredFileId };
+
+        var result = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var attemptId = result.AttemptId;
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == targetEntityType
+            && row.EntityId == result.Value.TargetEntityId
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == nameof(ScanDraft)
+            && row.EntityId == draftId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(2);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == nameof(StoredFile)
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+    }
+
     [SkippableFact]
     public async Task ExpenseScanConfirmation_PersistsOperationalScopeMatchingTargetLocation()
     {
@@ -820,6 +863,15 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
             draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
         return draft.Id;
+    }
+
+    private async Task<int> SourceStoredFileIdAsync(int draftId)
+    {
+        await using var scope = Scope();
+        return await scope.Db.ScanDrafts.AsNoTracking()
+            .Where(row => row.Id == draftId)
+            .Select(row => row.SourceStoredFileId!.Value)
+            .SingleAsync();
     }
 
     private async Task<LeaseDraftSource> SeedLeaseDraftAsync(string sourceLabel)

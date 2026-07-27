@@ -372,7 +372,8 @@ public sealed record ScanConfirmationTargetWriteResult(
     int? UnitId = null,
     string? CanonicalEntityType = null,
     long? LedgerEntryId = null,
-    int? LeaseManagementId = null);
+    int? LeaseManagementId = null,
+    bool TargetAuditRecorded = false);
 
 /// <summary>
 /// Transaction-only target seam. Implementations must be sealed, data/persistence-only atomic
