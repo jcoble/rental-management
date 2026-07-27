@@ -27,6 +27,7 @@ public enum StoredDocumentTarget
 public enum StoredDocumentMutationOutcome
 {
     Created,
+    ReusedExisting,
     Deleted,
     NotFound,
 }

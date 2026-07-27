@@ -182,6 +182,62 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Duplicate_content_in_same_active_capture_context_reuses_existing_draft()
+    {
+        SkipIfNoDocker();
+        var first = await UploadAsync("same-scan-first", [Pdf("mortgage.pdf", "same")]);
+        await using (var markReviewing = NewContext())
+        {
+            await markReviewing.ScanDrafts
+                .Where(draft => draft.Id == first.Drafts.Single().DraftId)
+                .ExecuteUpdateAsync(update => update.SetProperty(draft => draft.Status, "Reviewing"));
+        }
+
+        var duplicate = await UploadAsync("same-scan-duplicate", [Pdf("mortgage.pdf", "same")]);
+
+        duplicate.Drafts.Should().BeEquivalentTo(first.Drafts.Select(draft =>
+            new FinalizedScanDraft(draft.DraftId, "Reviewing", draft.FilePath)));
+        await using var db = NewContext();
+        (await db.ScanDrafts.CountAsync()).Should().Be(1);
+        (await db.StoredFiles.CountAsync()).Should().Be(1);
+        var retainedSourceStoredFileId = await db.ScanDrafts
+            .Select(draft => draft.SourceStoredFileId)
+            .SingleAsync();
+        retainedSourceStoredFileId.Should().NotBeNull();
+        (await db.PendingFileUploads.CountAsync(upload =>
+            upload.State == PendingFileUploadState.Finalized
+            && upload.StoredFileId == retainedSourceStoredFileId)).Should().Be(2);
+        (await db.PendingFileUploads.CountAsync(upload =>
+            upload.State == PendingFileUploadState.Finalized)).Should().Be(2);
+        var duplicateCleanup = await db.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey.StartsWith("scan-upload-duplicate-blob:"));
+        duplicateCleanup.MessageType.Should().Be("blob-delete");
+        duplicateCleanup.Payload.Should().Contain("mortgage.pdf");
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey.StartsWith("scan-draft-created:"))).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Rejected_or_failed_scan_allows_legitimate_rescan()
+    {
+        SkipIfNoDocker();
+        var first = await UploadAsync("rescan-first", [Pdf("rescan.pdf", "same")]);
+        await using (var reject = NewContext())
+        {
+            await reject.ScanDrafts
+                .Where(draft => draft.Id == first.Drafts.Single().DraftId)
+                .ExecuteUpdateAsync(update => update.SetProperty(draft => draft.Status, "Rejected"));
+        }
+
+        var rescan = await UploadAsync("rescan-second", [Pdf("rescan.pdf", "same")]);
+
+        rescan.Drafts.Single().DraftId.Should().NotBe(first.Drafts.Single().DraftId);
+        await using var db = NewContext();
+        (await db.ScanDrafts.CountAsync()).Should().Be(2);
+        (await db.StoredFiles.CountAsync()).Should().Be(2);
+    }
+
+    [SkippableFact]
     public async Task Storage_failure_after_admission_leaves_no_business_rows_and_retry_recovers()
     {
         SkipIfNoDocker();

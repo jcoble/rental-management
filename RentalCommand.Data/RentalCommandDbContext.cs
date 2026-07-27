@@ -360,9 +360,14 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(260);
             entity.Property(e => e.FilePath).IsRequired().HasMaxLength(1024);
             entity.Property(e => e.ContentType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.ContentSha256).HasMaxLength(64).HasColumnType("char(64)");
             entity.Property(e => e.EntityType).HasMaxLength(120);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
+            entity.HasIndex(e => new { e.PortfolioId, e.EntityType, e.EntityId, e.ContentSha256 })
+                .IsUnique()
+                .HasFilter("\"DeletedAt\" IS NULL AND \"ContentSha256\" IS NOT NULL")
+                .HasDatabaseName("UX_StoredFiles_Active_Target_ContentSha256");
             // #7 ScanProcessingWorker polls StoredFiles.FirstOrDefaultAsync(f => f.FilePath == …) every
             // ~2s; the column was unindexed → sequential scan of an ever-growing table each poll.
             entity.HasIndex(e => e.FilePath).HasDatabaseName("IX_StoredFiles_FilePath");

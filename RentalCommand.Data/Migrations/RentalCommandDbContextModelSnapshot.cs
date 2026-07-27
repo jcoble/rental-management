@@ -7581,6 +7581,10 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
+                    b.Property<string>("ContentSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)");
+
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -7618,6 +7622,11 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("EntityType", "EntityId");
+
+                    b.HasIndex("PortfolioId", "EntityType", "EntityId", "ContentSha256")
+                        .IsUnique()
+                        .HasDatabaseName("UX_StoredFiles_Active_Target_ContentSha256")
+                        .HasFilter("\"DeletedAt\" IS NULL AND \"ContentSha256\" IS NOT NULL");
 
                     b.ToTable("StoredFiles");
                 });
