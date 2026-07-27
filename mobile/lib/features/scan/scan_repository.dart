@@ -455,8 +455,12 @@ class ScanRepository {
   /// Requeues a failed draft for extraction and returns the updated draft.
   Future<ScanDraft> retry(int id) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/scans/$id/retry',
+      final response = await IdempotentMutation.run(
+        'scan:retry:$id',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/scans/$id/retry',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
       final data = response.data;
       if (data == null) {
