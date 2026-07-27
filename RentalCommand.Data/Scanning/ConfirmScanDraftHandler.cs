@@ -94,6 +94,13 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                     existingReceipt?.UnitId ?? existingAgreement?.UnitId,
                     LedgerEntryId: existingReceipt?.LedgerEntryId,
                     LeaseManagementId: existingAgreement?.LeaseManagementId);
+            case AtomicScanDraftClaimOutcome.DuplicateSourceContent:
+                return new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.DuplicateSourceContent,
+                    command.DraftId,
+                    command.Target.EntityType,
+                    claim.CanonicalEntityId,
+                    Error: "This scan source has already been confirmed for this target. Open the existing record instead of confirming it again.");
             case AtomicScanDraftClaimOutcome.Claimed:
                 break;
             default:

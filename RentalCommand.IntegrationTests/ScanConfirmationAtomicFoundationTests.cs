@@ -264,6 +264,84 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task SimultaneousDifferentDraftsWithSameSourceHash_CreateOneTargetAndReturnConflict()
+    {
+        SkipIfDockerUnavailable();
+        const string duplicateHash = "3b50ed3f24f364bfce871e3da503c6560e5959fd9244785fe7b11de1cdee39a1";
+        var firstDraftId = await SeedReviewingDraftAsync("same-hash-first", duplicateHash);
+        var secondDraftId = await SeedReviewingDraftAsync("same-hash-second", duplicateHash);
+        var probe = Services.GetRequiredService<TestWriterProbe>();
+        probe.PauseDraft(firstDraftId);
+
+        var firstTask = UnitOfWork.ExecuteAsync(
+            Identity(firstDraftId, "same-hash-first"),
+            Command(firstDraftId, "same-hash-target"),
+            Codec);
+        await probe.WaitUntilEnteredAsync();
+        var secondTask = UnitOfWork.ExecuteAsync(
+            Identity(secondDraftId, "same-hash-second"),
+            Command(secondDraftId, "same-hash-target"),
+            Codec);
+        probe.Release();
+
+        var outcomes = await Task.WhenAll(firstTask, secondTask);
+
+        outcomes.Should().ContainSingle(outcome =>
+            outcome.Value.Outcome == ConfirmScanDraftOutcome.Confirmed);
+        var duplicate = outcomes.Should().ContainSingle(outcome =>
+            outcome.Value.Outcome == ConfirmScanDraftOutcome.DuplicateSourceContent).Subject;
+        duplicate.Value.Error.Should().Contain("already been confirmed");
+        duplicate.Value.TargetEntityId.Should().Be(outcomes.Single(outcome =>
+            outcome.Value.Outcome == ConfirmScanDraftOutcome.Confirmed).Value.TargetEntityId);
+        await using var verify = Scope();
+        (await verify.Db.Expenses.CountAsync(expense => expense.Description == "same-hash-target"))
+            .Should().Be(1);
+        (await verify.Db.ScanDrafts.CountAsync(draft =>
+            draft.PortfolioId == _portfolioId
+            && draft.SourceContentSha256 == duplicateHash
+            && draft.Status == "Confirmed")).Should().Be(1);
+        (await verify.Db.ScanDrafts.CountAsync(draft =>
+            draft.PortfolioId == _portfolioId
+            && draft.SourceContentSha256 == duplicateHash
+            && draft.Status == "Reviewing")).Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == "scan.confirm"
+            && row.CommandIdempotencyKey == $"{_portfolioId}:{secondDraftId}:same-hash-second"))
+            .Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync()).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RejectedSameSourceHash_DoesNotBlockLaterConfirmation()
+    {
+        SkipIfDockerUnavailable();
+        const string duplicateHash = "4b50ed3f24f364bfce871e3da503c6560e5959fd9244785fe7b11de1cdee39a2";
+        var rejectedDraftId = await SeedReviewingDraftAsync("same-hash-rejected", duplicateHash);
+        var confirmingDraftId = await SeedReviewingDraftAsync("same-hash-legitimate", duplicateHash);
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.ScanDrafts.Where(draft => draft.Id == rejectedDraftId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(draft => draft.Status, "Rejected")
+                    .SetProperty(draft => draft.ReviewedAt, CommandTime.AddMinutes(-1)));
+        }
+
+        var outcome = await UnitOfWork.ExecuteAsync(
+            Identity(confirmingDraftId, "same-hash-after-rejected"),
+            Command(confirmingDraftId, "same-hash-legitimate-target"),
+            Codec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        (await verify.Db.Expenses.CountAsync(expense =>
+            expense.Description == "same-hash-legitimate-target")).Should().Be(1);
+        (await verify.Db.ScanDrafts.CountAsync(draft =>
+            draft.PortfolioId == _portfolioId
+            && draft.SourceContentSha256 == duplicateHash
+            && draft.Status == "Confirmed")).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task InjectedCompanionFailure_RollsBackDraftTargetFileAuditAndReceipt()
     {
         SkipIfDockerUnavailable();
@@ -461,7 +539,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             ? ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, "foundation-default")
             : new AtomicCommandIdentity("scan.confirm", $"{_portfolioId}:{draftId}:{suffix}");
 
-    private async Task<int> SeedReviewingDraftAsync(string marker)
+    private async Task<int> SeedReviewingDraftAsync(string marker, string? sourceContentSha256 = null)
     {
         await using var scope = Scope();
         var path = $"scan/{marker}-{Guid.NewGuid():N}.jpg";
@@ -480,6 +558,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             FilePath = path,
             SourceStoredFile = file,
+            SourceContentSha256 = sourceContentSha256,
             TargetEntityType = "Expense",
             Status = "Reviewing",
             ExtractedFields = "{\"total\":{\"value\":\"125.00\"}}",
@@ -512,7 +591,22 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
     private void RememberPreparedFingerprint(ScanDraft draft) =>
         _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
-            draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
+            draft.TargetEntityType,
+            draft.SourceStoredFileId,
+            draft.ExtractedFields,
+            draft.SourceContentSha256,
+            draft.CaptureAccessContextId,
+            draft.CaptureAccessRevision,
+            draft.CapturePropertyId,
+            draft.CaptureUnitId,
+            draft.CaptureLeaseManagementId,
+            draft.CaptureLeaseAgreementId,
+            draft.CaptureTenantAccountId,
+            draft.CaptureTenantLedgerEntryId,
+            draft.CaptureWorkOrderId,
+            draft.CaptureApplicationId,
+            draft.CaptureRentalListingId,
+            draft.SourceLabel);
 
     private IAtomicUnitOfWork UnitOfWork => Services.GetRequiredService<IAtomicUnitOfWork>();
     private IServiceProvider Services => _services ?? throw new InvalidOperationException();

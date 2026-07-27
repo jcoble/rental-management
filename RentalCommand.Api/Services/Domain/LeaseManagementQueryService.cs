@@ -675,6 +675,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             EffectiveThrough = party.EffectiveThrough,
             IsCurrent = party.EffectiveFrom <= lifecycle.BusinessDate
                 && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate),
+            CanGrantTenantPortalAccess = party.EffectiveThrough == null
+                || party.EffectiveThrough >= lifecycle.BusinessDate,
             GuarantorLegalNoticeEligible = party.GuarantorLegalNoticeEligible,
         };
 
@@ -701,7 +703,6 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             on new { party.PortfolioId, LeaseManagementPartyId = party.Id }
             equals new { tenantAccess.PortfolioId, tenantAccess.LeaseManagementPartyId }
         where management.Id == leaseManagementId
-            && party.EffectiveFrom <= lifecycle.BusinessDate
             && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
             && tenantAccess.RevokedAtUtc == null
         orderby party.Role,

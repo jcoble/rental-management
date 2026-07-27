@@ -359,7 +359,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
       );
       if (result == null || !context.mounted) return;
-      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
+      final _ = await ref.refresh(leaseManagementDetailProvider(summary.id).future);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Lease ending decision recorded.')),
@@ -518,6 +518,7 @@ class _HouseholdCard extends ConsumerWidget {
               data: (value) => Column(
                 children: [
                   for (final party in value.parties)
+                    if (_canShowHouseholdAction(party))
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const CircleAvatar(
@@ -547,7 +548,8 @@ class _HouseholdCard extends ConsumerWidget {
                                   child: Text('End membership'),
                                 ),
                                 if (_accessFor(value, party.id) == null &&
-                                    party.email != null)
+                                    party.email != null &&
+                                    party.canGrantTenantPortalAccess)
                                   const PopupMenuItem(
                                     value: HouseholdAction.grantAccess,
                                     child: Text('Create resident login'),
@@ -572,7 +574,8 @@ class _HouseholdCard extends ConsumerWidget {
                         ),
                       ),
                     ),
-                  if (management.parties.any((party) => !party.isCurrent)) ...[
+                  if (management.parties
+                      .any((party) => !_canShowHouseholdAction(party))) ...[
                     const Divider(),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -582,7 +585,7 @@ class _HouseholdCard extends ConsumerWidget {
                       ),
                     ),
                     for (final party in management.parties)
-                      if (!party.isCurrent)
+                      if (!_canShowHouseholdAction(party))
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           leading: const Icon(Icons.history_outlined),
@@ -610,6 +613,9 @@ class _HouseholdCard extends ConsumerWidget {
     }
     return null;
   }
+
+  bool _canShowHouseholdAction(LeaseManagementParty party) =>
+      party.isCurrent || party.canGrantTenantPortalAccess;
 
   Future<void> _open(
     BuildContext context,

@@ -762,6 +762,7 @@ public enum AtomicScanDraftClaimOutcome
     TargetMismatch,
     StalePreparation,
     AlreadyConfirmed,
+    DuplicateSourceContent,
 }
 
 /// <summary>Data snapshot returned by the kernel-owned scan-draft claim operation.</summary>

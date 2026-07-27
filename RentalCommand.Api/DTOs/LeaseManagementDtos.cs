@@ -217,6 +217,7 @@ public sealed class LeaseManagementPartyResponse
     public DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveThrough { get; init; }
     public bool IsCurrent { get; init; }
+    public bool CanGrantTenantPortalAccess { get; init; }
     public bool GuarantorLegalNoticeEligible { get; init; }
 }
 

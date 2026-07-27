@@ -34,6 +34,7 @@ public sealed class LeaseHouseholdAccessContractTests
         typeof(GrantTenantUserAccessHandler)
             .Should().Implement<IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>>();
         typeof(GrantTenantUserAccessRequest).GetProperty("ApplicationUserId").Should().BeNull();
+        typeof(LeaseManagementPartyResponse).GetProperty("CanGrantTenantPortalAccess").Should().NotBeNull();
     }
 
     [Fact]
@@ -57,6 +58,9 @@ public sealed class LeaseHouseholdAccessContractTests
         source.Should().Contain("AtomicLockResource.TenantIdentityEmail");
         source.Should().Contain("EmailConfirmed = false");
         source.Should().Contain("/forgot-password?email=");
+        source.Should().Contain(
+            "relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId" + Environment.NewLine +
+            "                    && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate))");
         source.Should().NotContain("CreateTemporaryPassword");
         source.Should().NotContain("Temporary password:");
         source.Should().NotContain("HashPassword(user");

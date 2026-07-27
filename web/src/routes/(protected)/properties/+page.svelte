@@ -6,7 +6,7 @@
 	import type { Property } from '$lib/types';
 	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { propertySchema, parseForm } from '$lib/schemas';
+	import { propertySchema, propertyBasisSchema, propertyOperationsSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -72,10 +72,6 @@
 	function openProperty(p: PropertyWithWorkspaceEntry) {
 		const entry = resolvePropertyWorkspaceEntry(p);
 		const route = propertyWorkspaceRoute(entry);
-		if (!route) {
-			showError('This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.');
-			return;
-		}
 		const separator = route.includes('?') ? '&' : '?';
 		goto(`${route}${forwardUnitCoach ? `${separator}coach=add-unit` : ''}`);
 	}
@@ -166,11 +162,15 @@
 		{ id: 'identity', label: 'Identity', description: 'Name and rental setup' },
 		{ id: 'address', label: 'Address', description: 'Street and ZIP' },
 		{ id: 'setup', label: 'Setup', description: 'Status and owner' },
+		{ id: 'operations', label: 'Operations', description: 'Year, fee, and notes' },
+		{ id: 'basis', label: 'Tax basis', description: 'Cost and depreciation' },
 	];
 	const propertyStepFields = [
 		['name', 'type', 'rentalStructure'],
 		['addressLine1', 'city', 'state', 'postalCode'],
 		['status', 'addressLine2', 'ownerEntityId'],
+		['yearBuilt', 'managementFeePercent', 'notes'],
+		['purchasePrice', 'landValue', 'inServiceDate', 'manualAnnualDepreciation'],
 	] as const;
 
 	function clearPropertyError(field: string) {
@@ -238,6 +238,13 @@
 			state: p.state,
 			postalCode: p.postalCode,
 			ownerEntityId: p.ownerships.length === 1 ? String(p.ownerships[0].ownerEntityId) : '',
+			yearBuilt: p.yearBuilt != null ? String(p.yearBuilt) : '',
+			managementFeePercent: p.managementFeePercent != null ? String(p.managementFeePercent) : '',
+			notes: p.notes ?? '',
+			purchasePrice: p.purchasePrice != null ? String(p.purchasePrice) : '',
+			landValue: p.landValue != null ? String(p.landValue) : '',
+			inServiceDate: p.inServiceDate ? p.inServiceDate.slice(0, 10) : '',
+			manualAnnualDepreciation: p.manualAnnualDepreciation != null ? String(p.manualAnnualDepreciation) : '',
 		};
 		initialOwnerEntityId = form.ownerEntityId;
 		selectedOwnerLabel = p.ownerships.length === 1 ? p.ownerships[0].ownerName : null;
@@ -297,9 +304,12 @@
 		if (!canManageRentals) return;
 		if (editingId == null) return;
 		const result = parseForm(propertySchema, form);
-		if (result.errors) {
-			formErrors = result.errors;
-			const firstErrorStep = firstPropertyErrorStep(result.errors);
+		const operations = parseForm(propertyOperationsSchema, form);
+		const basis = parseForm(propertyBasisSchema, form);
+		if (result.errors || operations.errors || basis.errors) {
+			const errors = { ...(result.errors ?? {}), ...(operations.errors ?? {}), ...(basis.errors ?? {}) };
+			formErrors = errors;
+			const firstErrorStep = firstPropertyErrorStep(errors);
 			if (firstErrorStep >= 0) {
 				propertyStep = firstErrorStep;
 				markPropertyStepInvalid(firstErrorStep);
@@ -322,6 +332,8 @@
 			data: {
 				portfolioId,
 				...mutableProperty,
+				...operations.data,
+				...basis.data,
 				...ownershipChange,
 			},
 		});
@@ -518,7 +530,7 @@
 					<PropertyFields bind:form errors={formErrors} section="identity" rentalStructureLocked={editingId != null} />
 				{:else if propertyStep === 1}
 					<PropertyFields bind:form errors={formErrors} section="address" />
-				{:else}
+				{:else if propertyStep === 2}
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
 						<Select.Root type="single" bind:value={form.status}>
@@ -548,6 +560,43 @@
 						onValueChange={(_value, option) => (selectedOwnerLabel = option?.label ?? null)}
 						testid="property-owner-input"
 					/>
+				{:else if propertyStep === 3}
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Year built</span>
+						<Input data-testid="property-year-built-input" bind:value={form.yearBuilt} type="number" inputmode="numeric" placeholder="1998" />
+						{#if formErrors.yearBuilt}<p class="mt-1 text-xs text-destructive">{formErrors.yearBuilt}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Management fee %</span>
+						<Input data-testid="property-management-fee-input" bind:value={form.managementFeePercent} type="number" inputmode="decimal" placeholder="8" />
+						{#if formErrors.managementFeePercent}<p class="mt-1 text-xs text-destructive">{formErrors.managementFeePercent}</p>{/if}
+					</div>
+					<div class="md:col-span-2">
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Notes</span>
+						<textarea data-testid="property-notes-input" bind:value={form.notes} class="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" maxlength="2000"></textarea>
+						{#if formErrors.notes}<p class="mt-1 text-xs text-destructive">{formErrors.notes}</p>{/if}
+					</div>
+				{:else}
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Purchase price</span>
+						<Input data-testid="property-purchase-price-input" bind:value={form.purchasePrice} type="number" inputmode="decimal" />
+						{#if formErrors.purchasePrice}<p class="mt-1 text-xs text-destructive">{formErrors.purchasePrice}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Land value</span>
+						<Input data-testid="property-land-value-input" bind:value={form.landValue} type="number" inputmode="decimal" />
+						{#if formErrors.landValue}<p class="mt-1 text-xs text-destructive">{formErrors.landValue}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">In-service date</span>
+						<Input data-testid="property-in-service-date-input" bind:value={form.inServiceDate} type="date" />
+						{#if formErrors.inServiceDate}<p class="mt-1 text-xs text-destructive">{formErrors.inServiceDate}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Manual annual depreciation</span>
+						<Input data-testid="property-manual-depreciation-input" bind:value={form.manualAnnualDepreciation} type="number" inputmode="decimal" />
+						{#if formErrors.manualAnnualDepreciation}<p class="mt-1 text-xs text-destructive">{formErrors.manualAnnualDepreciation}</p>{/if}
+					</div>
 				{/if}
 			</div>
 		</FormStepper>

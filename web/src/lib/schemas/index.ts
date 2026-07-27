@@ -176,6 +176,15 @@ export const propertySchema = z.object({
 	ownerEntityId: idString,
 });
 
+export const propertyOperationsSchema = z.object({
+	yearBuilt: optionalNonNegative('Year built')
+		.refine((v) => v === undefined || v === null || Number.isInteger(v), 'Year built must be a whole number')
+		.refine((v) => v === undefined || v === null || (v >= 1800 && v <= 2200), 'Year built must be 1800-2200'),
+	managementFeePercent: optionalNonNegative('Management fee')
+		.refine((v) => v === undefined || v === null || v <= 100, 'Management fee must be 0-100'),
+	notes: optionalTextMax('Notes', 2000),
+});
+
 export const unitSchema = z.object({
 	// unitNumber: server [MaxLength(50)]
 	unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),

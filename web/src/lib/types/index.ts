@@ -504,6 +504,7 @@ export interface LeaseManagementParty {
 	effectiveThrough?: string | null;
 	guarantorLegalNoticeEligible: boolean;
 	isCurrent: boolean;
+	canGrantTenantPortalAccess: boolean;
 }
 
 export interface LeaseManagementDetail {

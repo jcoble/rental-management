@@ -16,6 +16,13 @@ describe('property list state', () => {
 			state: '',
 			postalCode: '',
 			ownerEntityId: '',
+			yearBuilt: '',
+			managementFeePercent: '',
+			notes: '',
+			purchasePrice: '',
+			landValue: '',
+			inServiceDate: '',
+			manualAnnualDepreciation: '',
 		});
 	});
 
