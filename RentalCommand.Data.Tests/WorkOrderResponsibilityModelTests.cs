@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Operations;
 
@@ -102,6 +103,23 @@ public sealed class WorkOrderResponsibilityModelTests
                 nameof(UpdateAssignedWorkOrderOutcome.Stale));
         typeof(UpdateAssignedWorkOrderResult).GetProperty(nameof(UpdateAssignedWorkOrderResult.Outcome))
             .Should().NotBeNull();
+    }
+
+    [Fact]
+    public void ResponsibilityCommands_UseAtomicDataOnlyRevisionExpectations()
+    {
+        typeof(WorkspaceAccessRevisionExpectation)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+        typeof(WorkspaceAccessRevisionExpectation)
+            .Should().BeAssignableTo<IAtomicResultData>();
+        typeof(AssignWorkOrderResponsibilityCommand)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+        typeof(CloseWorkOrderResponsibilityCommand)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+        typeof(AssignWorkOrderResponsibilityResult)
+            .Should().BeAssignableTo<IAtomicResultData>();
+        typeof(CloseWorkOrderResponsibilityResult)
+            .Should().BeAssignableTo<IAtomicResultData>();
     }
 
     [Fact]

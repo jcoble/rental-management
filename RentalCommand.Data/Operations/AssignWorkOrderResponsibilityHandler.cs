@@ -182,7 +182,9 @@ public sealed class AssignWorkOrderResponsibilityHandler
             command.MembershipRoleAssignmentId,
             command.Kind,
             now,
-            contexts.ToDictionary(context => context.Id, context => context.AccessRevision));
+            contexts
+                .Select(context => new WorkspaceAccessRevisionExpectation(context.Id, context.AccessRevision))
+                .ToArray());
     }
 
     public async Task AuthorizeReplayAsync(

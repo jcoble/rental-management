@@ -74,7 +74,7 @@ public sealed class CloseWorkOrderResponsibilityHandler
             NextAttemptAtUtc = now,
         });
         return new(command.ResponsibilityId, command.WorkOrderId, now,
-            new Dictionary<int, long> { [context.Id] = context.AccessRevision });
+            [new WorkspaceAccessRevisionExpectation(context.Id, context.AccessRevision)]);
     }
 
     public async Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command,
