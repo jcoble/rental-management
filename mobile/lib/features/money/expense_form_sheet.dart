@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/work_order.dart';
+import '../../core/time/app_clock.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../maintenance/work_orders_repository.dart';
 import '../vendors/vendors_models.dart';
@@ -62,13 +63,20 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
   WorkOrder? _selectedWorkOrder;
   ScheduleECategory _category = ScheduleECategory.repairs;
   ExpenseStatus _status = ExpenseStatus.paid;
-  DateTime _incurredAt = DateTime.now();
-  DateTime _paidAt = DateTime.now();
+  DateTime _incurredAt = DateTime.utc(2000);
+  DateTime _paidAt = DateTime.utc(2000);
   bool _incurredDateTouched = false;
   bool _paidDateTouched = false;
+  bool _datesInitialized = false;
   bool _billable = false;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_initializeDatesFromAppClock);
+  }
 
   @override
   void dispose() {
@@ -82,11 +90,34 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
     super.dispose();
   }
 
+  Future<void> _initializeDatesFromAppClock() async {
+    try {
+      final today = _dateOnly(await ref.read(appNowProvider.future));
+      if (!mounted) return;
+      setState(() {
+        if (!_incurredDateTouched) {
+          _incurredAt = today;
+        }
+        if (!_paidDateTouched) {
+          _paidAt = today;
+        }
+        _datesInitialized = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'The app clock could not be loaded.';
+        _datesInitialized = false;
+      });
+    }
+  }
+
   Future<void> _pickIncurredDate() async {
-    final now = DateTime.now();
+    final now = _dateOnly(await ref.read(appNowProvider.future));
+    if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
-      initialDate: _incurredAt,
+      initialDate: _datesInitialized ? _incurredAt : now,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
     );
@@ -102,10 +133,11 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
   }
 
   Future<void> _pickPaidDate() async {
-    final now = DateTime.now();
+    final now = _dateOnly(await ref.read(appNowProvider.future));
+    if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
-      initialDate: _paidAt,
+      initialDate: _datesInitialized ? _paidAt : now,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
     );
@@ -324,6 +356,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
   }
 
   Future<void> _submit() async {
+    if (!_datesInitialized) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() {
       _saving = true;
@@ -387,7 +420,7 @@ class _CreateExpenseSheetState extends ConsumerState<_CreateExpenseSheet> {
       child: TabbedFormSheet(
         title: 'Add expense',
         saveLabel: 'Save expense',
-        saving: _saving,
+        saving: _saving || !_datesInitialized,
         error: _error,
         onSave: _submit,
         tabs: [
