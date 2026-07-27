@@ -452,6 +452,25 @@ class ScanRepository {
     }
   }
 
+  /// Requeues a failed draft for extraction and returns the updated draft.
+  Future<ScanDraft> retry(int id) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/scans/$id/retry',
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Rejects a draft with an optional [reason].
   Future<void> reject(int id, {String? reason}) async {
     try {
