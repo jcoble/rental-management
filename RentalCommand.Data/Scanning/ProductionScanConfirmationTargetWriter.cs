@@ -397,7 +397,8 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             command.ExpectedAccessRevision,
             CapabilityKeys.MoneyPaymentsManage,
             $"scan-receipt:{command.DraftId}",
-            command.DeliveryIdempotencyKey);
+            command.DeliveryIdempotencyKey,
+            ToUtc(command.ConfirmedAtUtc));
         var result = await new RecordTenantReceiptHandler().HandleAsync(receiptCommand, attempt, ct);
         return new ScanConfirmationTargetWriteResult(
             target.TenantAccountId,

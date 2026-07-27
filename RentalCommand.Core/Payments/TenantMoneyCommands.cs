@@ -34,7 +34,8 @@ public sealed record RecordTenantReceiptCommand(
     long ExpectedAccessRevision,
     string RequiredCapability,
     string BusinessKey,
-    string DeliveryIdempotencyKey) : ITenantMoneyCommand;
+    string DeliveryIdempotencyKey,
+    DateTime RecordedAtUtc = default) : ITenantMoneyCommand;
 
 public sealed record RecordTenantReceiptResult(
     bool Found,

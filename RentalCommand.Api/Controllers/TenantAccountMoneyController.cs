@@ -24,8 +24,13 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
         new("tenant-account.deposit.mutation.v1");
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly TimeProvider _timeProvider;
 
-    public TenantAccountMoneyController(IAtomicUnitOfWork atomic) => _atomic = atomic;
+    public TenantAccountMoneyController(IAtomicUnitOfWork atomic, TimeProvider timeProvider)
+    {
+        _atomic = atomic;
+        _timeProvider = timeProvider;
+    }
 
     [HttpPost("receipts")]
     public async Task<IActionResult> RecordReceipt(int tenantAccountId,
@@ -40,7 +45,8 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.SourceStoredFileId, request.AllocateOldestCharges, envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
             CapabilityKeys.MoneyPaymentsManage, $"manual-receipt:{envelope.KeyDigest}",
-            $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}");
+            $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
+            _timeProvider.GetUtcNow().UtcDateTime);
         return await Execute("tenant-account.receipt.record", command.DeliveryIdempotencyKey,
             command, ReceiptCodec, ct);
     }
