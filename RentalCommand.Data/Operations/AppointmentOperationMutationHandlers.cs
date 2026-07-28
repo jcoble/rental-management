@@ -17,11 +17,12 @@ public sealed class CreateAppointmentHandler
         CreateAppointmentCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var capability = AppointmentOperationValidation.ManageCapability(command.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(
                 command.PortfolioId, command.Actor, command.PropertyId,
-                capability, attempt.Persistence, now, ct))
+                capability, attempt.Persistence, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, 0);
         if (!AppointmentOperationValidation.ValidRange(command.ScheduledStartUtc, command.ScheduledEndUtc))
             throw new DomainValidationException("The end time must be after the start time.");
@@ -37,15 +38,16 @@ public sealed class CreateAppointmentHandler
             TenantId = command.TenantId, Title = command.Title.Trim(), ProspectName = Clean(command.ProspectName),
             ProspectEmail = Clean(command.ProspectEmail), Type = command.Type, Status = command.Status,
             ScheduledStart = command.ScheduledStartUtc, ScheduledEnd = command.ScheduledEndUtc,
-            AssignedTo = Clean(command.AssignedTo), Notes = Clean(command.Notes), CreatedAt = now, UpdatedAt = now,
+            AssignedTo = Clean(command.AssignedTo), Notes = Clean(command.Notes),
+            CreatedAt = businessNow, UpdatedAt = businessNow,
         };
         attempt.Persistence.Add(entity);
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNow);
         attempt.BindSemanticAudit(entity, Audit(command, entity, AuditLogOperation.Created, 0));
         await attempt.FlushBusinessAsync(ct);
         var snapshot = await AppointmentSnapshot.LoadAsync(attempt.Persistence, command.PortfolioId, entity.Id, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
-            $"appointment-create:{command.DeliveryIdempotencyKey}", now));
+            $"appointment-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
@@ -78,15 +80,16 @@ public sealed class UpdateAppointmentHandler
         UpdateAppointmentCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, attempt.Persistence, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         var destinationProperty = command.PropertyId ?? entity.PropertyId;
         var destinationCapability = AppointmentOperationValidation.ManageCapability(command.Type ?? entity.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
-                destinationProperty, destinationCapability, attempt.Persistence, now, ct))
+                destinationProperty, destinationCapability, attempt.Persistence, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         var effectiveUnit = command.UnitId ?? entity.UnitId;
         var effectiveManagement = command.LeaseManagementId ?? entity.LeaseManagementId;
@@ -112,8 +115,8 @@ public sealed class UpdateAppointmentHandler
         if (command.Notes is not null) entity.Notes = CreateAppointmentHandler.Clean(command.Notes);
         if (!AppointmentOperationValidation.ValidRange(entity.ScheduledStart, entity.ScheduledEnd))
             throw new DomainValidationException("The end time must be after the start time.");
-        entity.UpdatedAt = now;
-        attempt.UseDatabaseWallClockForAudit(now);
+        entity.UpdatedAt = businessNow;
+        attempt.UseDatabaseWallClockForAudit(businessNow);
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(command.PortfolioId, nameof(Appointment), entity.Id,
             AuditLogOperation.Updated, command.Actor.UserId, NewValues: JsonSerializer.Serialize(new
             {
@@ -123,7 +126,7 @@ public sealed class UpdateAppointmentHandler
         await attempt.FlushBusinessAsync(ct);
         var snapshot = await AppointmentSnapshot.LoadAsync(attempt.Persistence, command.PortfolioId, entity.Id, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
-            $"appointment-update:{command.DeliveryIdempotencyKey}", now));
+            $"appointment-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
@@ -154,19 +157,20 @@ public sealed class DeleteAppointmentHandler
         IAtomicWriteAttempt attempt, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, attempt.Persistence, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
         if (entity is null || entity.PropertyId != command.ExpectedPropertyId)
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         attempt.Persistence.Remove(entity);
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNow);
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId, nameof(Appointment), entity.Id, AuditLogOperation.Deleted,
             command.Actor.UserId, ChangeReason: "Deleted appointment."));
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
-            $"appointment-delete:{command.DeliveryIdempotencyKey}", now, operation: "delete"));
+            $"appointment-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);
     }
 
@@ -182,6 +186,7 @@ public sealed class DeleteAppointmentHandler
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
 }
+
 
 internal static class AppointmentOperationValidation
 {

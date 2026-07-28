@@ -264,7 +264,7 @@ public class AppointmentService : IAppointmentService
             request.LeaseManagementId, request.RentalApplicationId, request.TenantId,
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart.ToUtc(), request.ScheduledEnd.ToUtc(),
-            request.AssignedTo, request.Notes, idempotencyKey);
+            request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("appointment.create", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -279,7 +279,7 @@ public class AppointmentService : IAppointmentService
             request.LeaseManagementId, request.RentalApplicationId, request.TenantId,
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart?.ToUtc(), request.ScheduledEnd.ToUtc(),
-            request.AssignedTo, request.Notes, idempotencyKey);
+            request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("appointment.update", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -290,7 +290,7 @@ public class AppointmentService : IAppointmentService
         CancellationToken ct = default)
     {
         var command = new DeleteAppointmentCommand(
-            scope.PortfolioId, Actor(scope), id, expectedPropertyId, idempotencyKey);
+            scope.PortfolioId, Actor(scope), id, expectedPropertyId, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("appointment.delete", idempotencyKey), command, MutationCodec, ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;

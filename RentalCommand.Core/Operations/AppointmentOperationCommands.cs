@@ -9,6 +9,7 @@ public sealed record CreateAppointmentCommand(
     string Title, string? ProspectName, string? ProspectEmail,
     AppointmentType Type, AppointmentStatus Status, DateTime ScheduledStartUtc,
     DateTime? ScheduledEndUtc, string? AssignedTo, string? Notes,
+    DateTime BusinessNowUtc,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record UpdateAppointmentCommand(
@@ -17,9 +18,11 @@ public sealed record UpdateAppointmentCommand(
     int? TenantId, string? Title, string? ProspectName, string? ProspectEmail,
     AppointmentType? Type, AppointmentStatus? Status, DateTime? ScheduledStartUtc,
     DateTime? ScheduledEndUtc, string? AssignedTo, string? Notes,
+    DateTime BusinessNowUtc,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record DeleteAppointmentCommand(
     int PortfolioId, StaffOperationActor Actor, int AppointmentId,
     int? ExpectedPropertyId,
+    DateTime BusinessNowUtc,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
