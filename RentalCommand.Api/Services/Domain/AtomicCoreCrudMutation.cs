@@ -487,12 +487,42 @@ public sealed class AtomicCoreCrudMutationHandler
                 && ownership.EffectiveFromUtc <= now
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
             .ToListAsync(ct);
+        var remainingReplacements = replacements.ToDictionary(ownership => ownership.OwnerEntityId);
+        var ended = new List<PropertyOwnership>();
+        var deleted = new List<PropertyOwnership>();
+        var updated = new List<PropertyOwnership>();
         foreach (var ownership in current)
-            ownership.EffectiveToUtc = now;
-        foreach (var ownership in replacements)
+        {
+            if (remainingReplacements.Remove(ownership.OwnerEntityId, out var requested))
+            {
+                ownership.OwnershipSharePercent = requested.OwnershipSharePercent;
+                ownership.StatementRecipientName = requested.StatementRecipientName;
+                ownership.StatementRecipientEmail = requested.StatementRecipientEmail;
+                ownership.PayeeName = requested.PayeeName;
+                updated.Add(ownership);
+                continue;
+            }
+
+            if (ownership.EffectiveFromUtc < now)
+            {
+                ownership.EffectiveToUtc = now;
+                ended.Add(ownership);
+            }
+            else
+            {
+                persistence.Remove(ownership);
+                deleted.Add(ownership);
+            }
+        }
+
+        foreach (var ownership in remainingReplacements.Values)
             persistence.Add(ownership);
 
-        return new OwnershipLifecycleChange(current, replacements);
+        return new OwnershipLifecycleChange(
+            ended,
+            deleted,
+            updated,
+            remainingReplacements.Values.ToList());
     }
 
     private static void StageOwnershipLifecycleAudits(
@@ -508,6 +538,16 @@ public sealed class AtomicCoreCrudMutationHandler
                 AuditLogOperation.Updated,
                 $"Property ownership for Property {propertyId} ended during owner replacement",
                 ownership.Id), occurredAtUtc);
+        foreach (var ownership in change.Deleted)
+            attempt.StageSemanticEvent(Audit(command, nameof(PropertyOwnership),
+                AuditLogOperation.Deleted,
+                $"Property ownership for Property {propertyId} removed during owner replacement",
+                ownership.Id), occurredAtUtc);
+        foreach (var ownership in change.Updated)
+            attempt.StageSemanticEvent(Audit(command, nameof(PropertyOwnership),
+                AuditLogOperation.Updated,
+                $"Property ownership for Property {propertyId} retained during owner replacement",
+                ownership.Id), occurredAtUtc);
         foreach (var ownership in change.Created)
             attempt.StageSemanticEvent(Audit(command, nameof(PropertyOwnership),
                 AuditLogOperation.Created,
@@ -517,6 +557,8 @@ public sealed class AtomicCoreCrudMutationHandler
 
     private sealed record OwnershipLifecycleChange(
         IReadOnlyList<PropertyOwnership> Ended,
+        IReadOnlyList<PropertyOwnership> Deleted,
+        IReadOnlyList<PropertyOwnership> Updated,
         IReadOnlyList<PropertyOwnership> Created);
 
     private static UnitResponse ToUnitResponse(Unit unit) => new()
