@@ -575,6 +575,164 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task AtomicMoneyMutation_PostLoanPayment_IsIdempotentAndRollsBackEveryRowOnFailure()
+    {
+        SkipIfNoDocker();
+        int loanId;
+        int firstPaymentId;
+        int secondPaymentId;
+        await using (var seed = NewContext())
+        {
+            var loan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Lender = "Posting proof lender",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 200_000m,
+                AnnualInterestRatePct = 6m,
+                TermMonths = 360,
+                StartDate = _now,
+                DayOfMonthDue = 1,
+                MonthlyPrincipalInterest = 1_200m,
+                MonthlyEscrow = 300m,
+                Status = LoanStatus.Active,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Loans.Add(loan);
+            await seed.SaveChangesAsync();
+            var first = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2027-01",
+                DueDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 1_000m,
+                PrincipalAmount = 200m,
+                EscrowAmount = 300m,
+                TotalAmount = 1_500m,
+                BalanceAfter = 199_800m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = _now,
+            };
+            var second = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 999m,
+                PrincipalAmount = 201m,
+                EscrowAmount = 300m,
+                TotalAmount = 1_500m,
+                BalanceAfter = 199_599m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = _now,
+            };
+            seed.LoanPayments.AddRange(first, second);
+            await seed.SaveChangesAsync();
+            loanId = loan.Id;
+            firstPaymentId = first.Id;
+            secondPaymentId = second.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var paidDate = new DateTime(2027, 1, 15, 0, 0, 0, DateTimeKind.Utc);
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, firstPaymentId,
+            "post-loan-payment-once", new PostLoanPaymentRequest { LoanId = loanId, PaidDate = paidDate });
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var firstOutcome = await AtomicUnitOfWork.ExecuteAsync(
+            identity, command, AtomicMoneyMutation.Codec);
+        var replay = await AtomicUnitOfWork.ExecuteAsync(
+            identity, command, AtomicMoneyMutation.Codec);
+
+        firstOutcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(firstOutcome.Value);
+        await using (var verify = NewContext())
+        {
+            var state = await verify.LoanPayments
+                .Where(payment => payment.Id == firstPaymentId)
+                .Select(payment => new
+                {
+                    payment.Status,
+                    payment.PaidDate,
+                    payment.Loan!.CurrentBalance,
+                })
+                .SingleAsync();
+            state.Status.Should().Be(LoanPaymentStatus.Paid);
+            state.PaidDate.Should().Be(paidDate);
+            state.CurrentBalance.Should().Be(199_800m);
+            (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+                receipt.CommandType == identity.CommandType &&
+                receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        }
+
+        await using (var inject = NewContext())
+        {
+            await inject.Database.ExecuteSqlRawAsync($"""
+                CREATE OR REPLACE FUNCTION fail_loan_payment_post() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."Id" = {secondPaymentId} AND NEW."Status" = 1 THEN
+                        RAISE EXCEPTION 'injected loan payment failure';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_loan_payment_post
+                BEFORE UPDATE ON "LoanPayments"
+                FOR EACH ROW EXECUTE FUNCTION fail_loan_payment_post();
+                """);
+        }
+
+        var failedCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, secondPaymentId,
+            "post-loan-payment-failure", new PostLoanPaymentRequest
+            {
+                LoanId = loanId,
+                PaidDate = paidDate.AddMonths(1),
+            });
+        var failedIdentity = AtomicMoneyMutation.Identity(failedCommand);
+        try
+        {
+            var act = () => AtomicUnitOfWork.ExecuteAsync(
+                failedIdentity, failedCommand, AtomicMoneyMutation.Codec);
+            await act.Should().ThrowAsync<Exception>();
+        }
+        finally
+        {
+            await using var cleanup = NewContext();
+            await cleanup.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_loan_payment_post ON "LoanPayments";
+                DROP FUNCTION IF EXISTS fail_loan_payment_post();
+                """);
+        }
+
+        await using (var verify = NewContext())
+        {
+            var state = await verify.LoanPayments
+                .Where(payment => payment.Id == secondPaymentId)
+                .Select(payment => new
+                {
+                    payment.Status,
+                    payment.PaidDate,
+                    payment.Loan!.CurrentBalance,
+                })
+                .SingleAsync();
+            state.Status.Should().Be(LoanPaymentStatus.Scheduled);
+            state.PaidDate.Should().BeNull();
+            state.CurrentBalance.Should().Be(199_800m);
+            (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+                receipt.CommandType == failedIdentity.CommandType &&
+                receipt.IdempotencyKey == failedIdentity.IdempotencyKey)).Should().Be(0);
+        }
+    }
+
+    [SkippableFact]
     public async Task AtomicMoneyMutation_DeleteReplaysAfterTheBusinessRowIsSoftDeleted()
     {
         SkipIfNoDocker();

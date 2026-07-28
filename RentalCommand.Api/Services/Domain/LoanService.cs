@@ -164,6 +164,23 @@ public class LoanService : ILoanService
         return outcome.Value.Found;
     }
 
+    public async Task<LoanPaymentResponse?> PostPaymentAsync(
+        WorkspaceReadScope scope,
+        int loanId,
+        int paymentId,
+        PostLoanPaymentRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        request.LoanId = loanId;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, paymentId, idempotencyKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        return ReadSnapshot<LoanPaymentResponse>(outcome.Value);
+    }
+
     private static TResponse ReadSnapshot<TResponse>(AtomicMoneyMutationResult result) where TResponse : class =>
         result.ResponseJson is { Length: > 0 } json
             ? System.Text.Json.JsonSerializer.Deserialize<TResponse>(json)

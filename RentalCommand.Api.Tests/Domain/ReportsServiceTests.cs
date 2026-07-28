@@ -1702,7 +1702,8 @@ public class ReportsServiceTests : IAsyncLifetime
             EscrowAmount = escrow,
             TotalAmount = total,
             BalanceAfter = balanceAfter,
-            Status = LoanPaymentStatus.Scheduled,
+            Status = LoanPaymentStatus.Paid,
+            PaidDate = dueDate,
             CreatedAt = DateTime.UtcNow,
         };
         _db.LoanPayments.Add(payment);

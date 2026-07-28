@@ -242,6 +242,32 @@ class PropertyLoansRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<LoanPayment> postLoanPayment({
+    required int loanId,
+    required int paymentId,
+  }) async {
+    try {
+      final response = await IdempotentMutation.run(
+        'loans:$loanId:payments:$paymentId:post',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/loans/$loanId/payments/$paymentId/post',
+          data: const <String, dynamic>{},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LoanPayment.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 const _propertyLoansPageSize = 20;

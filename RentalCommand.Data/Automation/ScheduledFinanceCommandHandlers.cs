@@ -53,8 +53,6 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             var openingBalance = tail is not null && tailPeriod.HasValue && tailPeriod.Value >= firstEligiblePeriod
                 ? tail.BalanceAfter
                 : loan.CurrentBalance;
-            var lastBalance = openingBalance;
-            var paidOff = false;
             var generatedForLoan = 0;
 
             var batchLastPeriod = Math.Min(
@@ -90,10 +88,8 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 generated.Add(payment);
                 generatedForLoan++;
                 openingBalance = split.BalanceAfter;
-                lastBalance = split.BalanceAfter;
                 if (split.PaidOff)
                 {
-                    paidOff = true;
                     break;
                 }
             }
@@ -101,9 +97,7 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             ClearClaim(loan);
             if (generatedForLoan > 0)
             {
-                loan.CurrentBalance = lastBalance;
                 loan.UpdatedAt = command.AppliedAtUtc;
-                if (paidOff) loan.Status = LoanStatus.PaidOff;
             }
 
             attempt.BindSemanticAudit(loan, new AtomicSemanticAudit(
@@ -114,7 +108,6 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 ActorLabel: "system:debt-service",
                 NewValues: JsonSerializer.Serialize(new
                 {
-                    loan.CurrentBalance,
                     loan.Status,
                     GeneratedPayments = generatedForLoan,
                     ClaimReleased = true,
