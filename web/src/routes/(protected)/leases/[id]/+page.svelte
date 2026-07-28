@@ -169,6 +169,13 @@
 		return party.canGrantTenantPortalAccess && Boolean(party.email) && !activeAccess(party.leaseManagementPartyId);
 	}
 
+	function loginStatus(access: ReturnPossessionActiveTenantUserAccess | undefined) {
+		if (!access) return 'not granted';
+		if (access.hasPendingActivationInvitation) return `pending for ${access.userEmail}`;
+		if (access.isPortalLoginReady || !access.requiresAccountActivation) return `active for ${access.userEmail}`;
+		return `setup required for ${access.userEmail}`;
+	}
+
 	async function handleSuccessorCreated(result: LeaseAgreementDraftMutationResponse) {
 		editAgreementSource = successorSelection?.source ?? null;
 		editAgreementCanCancel = true;
@@ -368,7 +375,7 @@
 								<div>
 									<p class="font-medium">{party.tenantName}</p>
 									<p class="text-sm text-muted-foreground">{party.email ?? party.phone ?? 'No contact information'}</p>
-									<p class="text-xs text-muted-foreground">{party.isCurrent ? `Effective since ${party.effectiveFrom}` : `Scheduled for ${party.effectiveFrom}`} · Login {access ? `active for ${access.userEmail}` : 'not granted'}</p>
+									<p class="text-xs text-muted-foreground">{party.isCurrent ? `Effective since ${party.effectiveFrom}` : `Scheduled for ${party.effectiveFrom}`} · Login {loginStatus(access)}</p>
 								</div>
 								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke login</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create login</Button>{/if}{/if}</div>
 							</div>

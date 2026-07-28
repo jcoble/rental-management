@@ -551,6 +551,9 @@ export interface ReturnPossessionActiveTenantUserAccess {
   userEmail: string;
   grantedAtUtc: string;
   reason: string;
+  requiresAccountActivation?: boolean;
+  hasPendingActivationInvitation?: boolean;
+  isPortalLoginReady?: boolean;
 }
 
 export interface LeaseManagementPageParams {

@@ -667,7 +667,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             LeaseManagementPartyId = party.Id,
             LeaseManagementId = party.LeaseManagementId,
             TenantId = party.TenantId,
-            TenantName = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+            TenantName = (party.Tenant!.FirstName + " " + party.Tenant!.LastName).Trim(),
             Email = party.Tenant.Email,
             Phone = party.Tenant.Phone,
             Role = party.Role,
@@ -705,6 +705,32 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         where management.Id == leaseManagementId
             && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
             && tenantAccess.RevokedAtUtc == null
+        let requiresAccountActivation = tenantAccess.ApplicationUser!.PasswordHash == null
+        let hasTenantPortalAuthority = _db.WorkspaceAccessContexts.AsNoTracking().Any(context =>
+            context.Id == tenantAccess.AccessContextId &&
+            context.UserId == tenantAccess.ApplicationUserId &&
+            context.PortfolioId == tenantAccess.PortfolioId &&
+            context.Status == WorkspaceAccessContextStatus.Active &&
+            context.SuspendedAtUtc == null &&
+            context.RevokedAtUtc == null &&
+            context.Membership != null &&
+            context.Membership.PortfolioId == tenantAccess.PortfolioId &&
+            context.Membership.DefaultExperience == WorkspaceExperience.Tenant &&
+            context.Membership.Status == WorkspaceMembershipStatus.Active &&
+            context.Membership.SuspendedAtUtc == null &&
+            context.Membership.RevokedAtUtc == null &&
+            context.Membership.EffectiveFromUtc <= lifecycle.EffectiveNowUtc &&
+            (context.Membership.EffectiveToUtc == null ||
+                context.Membership.EffectiveToUtc > lifecycle.EffectiveNowUtc) &&
+            context.Membership.RoleAssignments.Any(assignment =>
+                assignment.PortfolioId == tenantAccess.PortfolioId &&
+                assignment.RoleProfile!.Key == RoleProfileKeys.TenantPortal &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.EffectiveFromUtc <= lifecycle.EffectiveNowUtc &&
+                (assignment.EffectiveToUtc == null ||
+                    assignment.EffectiveToUtc > lifecycle.EffectiveNowUtc)))
         orderby party.Role,
             party.Tenant!.FirstName,
             party.Tenant!.LastName,
@@ -718,11 +744,21 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             LeaseManagementPartyId = tenantAccess.LeaseManagementPartyId,
             AccessContextId = tenantAccess.AccessContextId,
             ApplicationUserId = tenantAccess.ApplicationUserId,
-            TenantName = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+            TenantName = (party.Tenant!.FirstName + " " + party.Tenant!.LastName).Trim(),
             UserDisplayName = tenantAccess.ApplicationUser!.DisplayName,
             UserEmail = tenantAccess.ApplicationUser.Email ?? string.Empty,
             GrantedAtUtc = tenantAccess.GrantedAtUtc,
             Reason = tenantAccess.Reason,
+            RequiresAccountActivation = requiresAccountActivation,
+            HasPendingActivationInvitation = requiresAccountActivation && hasTenantPortalAuthority &&
+                _db.WorkspaceInvitations.AsNoTracking().Any(invitation =>
+                    invitation.PortfolioId == tenantAccess.PortfolioId &&
+                    invitation.WorkspaceMembership!.AccessContextId == tenantAccess.AccessContextId &&
+                    invitation.InvitedUserId == tenantAccess.ApplicationUserId &&
+                    invitation.AcceptedAtUtc == null &&
+                    invitation.RevokedAtUtc == null &&
+                    invitation.ExpiresAtUtc > lifecycle.EffectiveNowUtc),
+            IsPortalLoginReady = !requiresAccountActivation && hasTenantPortalAuthority,
         };
 
     internal IQueryable<LeaseAgreementDraftDetailReadRow> BuildAgreementDraftDetailQuery(
