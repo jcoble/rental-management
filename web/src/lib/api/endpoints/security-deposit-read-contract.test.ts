@@ -50,6 +50,14 @@ describe('security deposit tenant-account read contract', () => {
 		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-refund-date"/);
 	});
 
+	it('carries scanned source provenance into deposit funding from the scan handoff', () => {
+		assert.match(detailPageSource, /positiveQueryInt\(page\.url\.searchParams\.get\('sourceStoredFileId'\)\)/);
+		assert.match(detailPageSource, /positiveQueryInt\(page\.url\.searchParams\.get\('sourceDraftId'\)\)/);
+		assert.match(detailPageSource, /openFund\(\)/);
+		assert.match(detailPageSource, /data-testid="deposit-fund-source"/);
+		assert.match(detailPageSource, /body\.sourceStoredFileId = sourceStoredFileId/);
+	});
+
 	it('sends canonical database sort fields from the server-side grid', () => {
 		assert.match(listPageSource, /key: 'propertyName'/);
 		assert.match(listPageSource, /key: 'heldBalance'/);

@@ -57,4 +57,14 @@ describe("scan review reliability contract", () => {
     assert.match(source, /function selectContextPropertyId/);
     assert.match(source, /clearExpenseWorkOrderSelection\(\)/);
   });
+
+  it("routes payment receipts that are actually deposits through deposit funding with source provenance", () => {
+    assert.match(source, /data\?\.sourceStoredFileId/);
+    assert.match(source, /sourceStoredFileId:\s*String\(data\.sourceStoredFileId\)/);
+    assert.match(source, /sourceDraftId:\s*String\(data\.id\)/);
+    assert.match(source, /\/deposits\/\$\{accountId\}\?\$\{params\.toString\(\)\}/);
+    assert.match(source, /data-testid="scan-record-security-deposit"/);
+    assert.match(source, /Reclassified as a security deposit receipt/);
+    assert.match(source, /await scan\.reject\(/);
+  });
 });

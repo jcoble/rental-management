@@ -317,6 +317,15 @@ public class ScanControllerTests : IAsyncLifetime
             UpdatedAt = now,
             SubmittedAtUtc = now,
         });
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 16,
+            PortfolioId = 42,
+            FileName = "security-deposit-receipt.jpg",
+            FilePath = "uploads/security-deposit-receipt.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 256,
+        });
         _db.ScanDrafts.AddRange(
             new ScanDraft
             {
@@ -325,6 +334,7 @@ public class ScanControllerTests : IAsyncLifetime
                 TargetEntityType = "Payment",
                 Status = "Confirmed",
                 ConfirmedEntityId = 14,
+                SourceStoredFileId = 16,
                 FilePath = "uploads/payment.jpg",
                 CreatedAt = now,
             },
@@ -351,7 +361,8 @@ public class ScanControllerTests : IAsyncLifetime
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Payment" &&
             i.CreatedEntityId == 17 &&
-            i.CreatedUnitId == 11);
+            i.CreatedUnitId == 11 &&
+            i.SourceStoredFileId == 16);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Application" &&
             i.CreatedEntityId == 15 &&
