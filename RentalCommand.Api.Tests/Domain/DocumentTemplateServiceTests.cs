@@ -336,6 +336,88 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         (await postgres.Db.DocumentTemplates.CountAsync()).Should().Be(1);
     }
 
+    [Fact]
+    public async Task UpdateFieldAsync_SelectedPropertyManagerScopeUpdatesFieldWithServerSideJoin()
+    {
+        await using var postgres = await _postgres.CreateContextAsync();
+        var commands = new List<string>();
+        var selectedProperty = SeedProperty(postgres.Db, "Designer selected property");
+        var otherProperty = SeedProperty(postgres.Db, "Designer other property");
+        var template = SeedTemplate(postgres.Db, "Designer lease", DocumentTemplateKind.Lease, selectedProperty.Id);
+        var field = SeedTemplateField(postgres.Db, template.Id, "lease.monthlyRent", "Monthly rent", widthPct: 0.18);
+        var scope = postgres.Db.SeedPropertyManagerScope(
+            PortfolioId,
+            selectedProperty.Id,
+            nameof(UpdateFieldAsync_SelectedPropertyManagerScopeUpdatesFieldWithServerSideJoin));
+        var unauthorizedScope = postgres.Db.SeedPropertyManagerScope(
+            PortfolioId,
+            otherProperty.Id,
+            "unauthorized-designer-update");
+        await using var services = CreateAtomicServices(builder =>
+            builder.UseNpgsql(postgres.ConnectionString)
+                .AddInterceptors(new RecordingCommandInterceptor(commands)));
+        var sut = new DocumentTemplateService(
+            postgres.Db, _catalog, new InMemoryFileStorage(),
+            services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var result = await sut.UpdateFieldAsync(
+            scope,
+            template.Id,
+            field.Id,
+            new UpdateDocumentTemplateFieldRequest
+            {
+                WidthPct = 0.24,
+                HeightPct = 0.05,
+            },
+            "update-designer-field-width");
+        var retry = await sut.UpdateFieldAsync(
+            scope,
+            template.Id,
+            field.Id,
+            new UpdateDocumentTemplateFieldRequest
+            {
+                WidthPct = 0.24,
+                HeightPct = 0.05,
+            },
+            "update-designer-field-width");
+        var denied = await sut.UpdateFieldAsync(
+            unauthorizedScope,
+            template.Id,
+            field.Id,
+            new UpdateDocumentTemplateFieldRequest
+            {
+                WidthPct = 0.32,
+            },
+            "update-designer-field-width-denied");
+
+        result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        result.Value!.WidthPct.Should().Be(0.24);
+        result.Value.HeightPct.Should().Be(0.05);
+        retry.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        retry.Value!.WidthPct.Should().Be(0.24);
+        denied.Outcome.Should().Be(DocumentTemplateOperationOutcome.NotFound);
+
+        var storedField = await postgres.Db.DocumentTemplateFields
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == field.Id);
+        storedField.WidthPct.Should().Be(0.24);
+        storedField.HeightPct.Should().Be(0.05);
+        var storedTemplate = await postgres.Db.DocumentTemplates
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == template.Id);
+        storedTemplate.Version.Should().Be(2);
+        (await postgres.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.EntityType == nameof(DocumentTemplateField) &&
+            audit.EntityId == field.Id &&
+            audit.Operation == AuditLogOperation.Updated)).Should().Be(1);
+        commands.Should().Contain(sql =>
+            sql.Contains("DocumentTemplates", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DocumentTemplateFields", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("WHERE", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static ServiceProvider CreateAtomicServices(
         Action<DbContextOptionsBuilder> configureDatabase)
     {
@@ -355,6 +437,14 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
             RentalCommand.Core.Documents.DocumentTemplateMutationResult,
             AddDocumentTemplateFieldHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.UpdateDocumentTemplateFieldCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            UpdateDocumentTemplateFieldHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.DeleteDocumentTemplateFieldCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            DeleteDocumentTemplateFieldHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             configureDatabase(builder);
@@ -389,6 +479,13 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         string name,
         DocumentTemplateKind kind,
         int? propertyId = null)
+        => SeedTemplate(_ctx.Db, name, kind, propertyId);
+
+    private static DocumentTemplate SeedTemplate(
+        RentalCommandDbContext db,
+        string name,
+        DocumentTemplateKind kind,
+        int? propertyId = null)
     {
         var template = new DocumentTemplate
         {
@@ -401,9 +498,36 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
         };
-        _ctx.Db.DocumentTemplates.Add(template);
-        _ctx.Db.SaveChanges();
+        db.DocumentTemplates.Add(template);
+        db.SaveChanges();
         return template;
+    }
+
+    private static DocumentTemplateField SeedTemplateField(
+        RentalCommandDbContext db,
+        int templateId,
+        string fieldKey,
+        string label,
+        double widthPct)
+    {
+        var field = new DocumentTemplateField
+        {
+            PortfolioId = PortfolioId,
+            DocumentTemplateId = templateId,
+            FieldKey = fieldKey,
+            Label = label,
+            Kind = DocumentTemplateFieldKind.Currency,
+            SignerRole = DocumentTemplateSignerRole.None,
+            PageNumber = 1,
+            XPct = 0.12,
+            YPct = 0.2,
+            WidthPct = widthPct,
+            HeightPct = 0.04,
+            SortOrder = 10,
+        };
+        db.DocumentTemplateFields.Add(field);
+        db.SaveChanges();
+        return field;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

@@ -303,10 +303,9 @@ public sealed class UpdateDocumentTemplateFieldHandler
         DocumentTemplateCommandSupport.Validate(command);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargets(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
-            .SingleOrDefaultAsync(item => item.Template.Id == command.DocumentTemplateId
-                && item.Field.Id == command.FieldId, ct);
+        var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargetAsync(
+            command.PortfolioId, command.Actor, command.DocumentTemplateId, command.FieldId,
+            attempt.Persistence, now, tracking: true, ct);
         if (target is null)
             return DocumentTemplateCommandSupport.NotFound(
                 command.DocumentTemplateId, "Document template field not found", command.FieldId);
@@ -369,10 +368,9 @@ public sealed class DeleteDocumentTemplateFieldHandler
         DocumentTemplateCommandSupport.Validate(command);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargets(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
-            .SingleOrDefaultAsync(item => item.Template.Id == command.DocumentTemplateId
-                && item.Field.Id == command.FieldId, ct);
+        var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargetAsync(
+            command.PortfolioId, command.Actor, command.DocumentTemplateId, command.FieldId,
+            attempt.Persistence, now, tracking: true, ct);
         if (target is null)
             return DocumentTemplateCommandSupport.NotFound(
                 command.DocumentTemplateId, "Document template field not found", command.FieldId);
@@ -421,19 +419,35 @@ internal static class DocumentTemplateCommandSupport
         return tracking ? query : query.AsNoTracking();
     }
 
-    internal static IQueryable<DocumentTemplateFieldTarget> AuthorizedFieldTargets(
-        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence,
-        DateTime now, bool tracking)
+    internal static Task<DocumentTemplateFieldTarget?> AuthorizedFieldTargetAsync(
+        int portfolioId, StaffOperationActor actor, int documentTemplateId, int fieldId,
+        IAtomicPersistenceSession persistence, DateTime now, bool tracking, CancellationToken ct) =>
+        AuthorizedFieldTargetCoreAsync(
+            portfolioId, actor, documentTemplateId, fieldId, persistence, now, tracking, ct);
+
+    private static async Task<DocumentTemplateFieldTarget?> AuthorizedFieldTargetCoreAsync(
+        int portfolioId, StaffOperationActor actor, int documentTemplateId, int fieldId,
+        IAtomicPersistenceSession persistence, DateTime now, bool tracking, CancellationToken ct)
     {
-        var templates = AuthorizedTemplates(portfolioId, actor, persistence, now, tracking);
+        var templates = AuthorizedTemplates(portfolioId, actor, persistence, now, tracking)
+            .Where(template => template.Id == documentTemplateId);
         var fields = tracking
             ? persistence.Query<DocumentTemplateField>()
             : persistence.Query<DocumentTemplateField>().AsNoTracking();
-        return from template in templates
-               join field in fields
-                   on new { template.Id, template.PortfolioId }
-                   equals new { Id = field.DocumentTemplateId, field.PortfolioId }
-               select new DocumentTemplateFieldTarget(template, field);
+        fields = fields.Where(field => field.Id == fieldId);
+        var target = await (from template in templates
+                            join field in fields
+                                on new { template.Id, template.PortfolioId }
+                                equals new { Id = field.DocumentTemplateId, field.PortfolioId }
+                            select new
+                            {
+                                Template = template,
+                                Field = field,
+                            })
+            .SingleOrDefaultAsync(ct);
+        return target is null
+            ? null
+            : new DocumentTemplateFieldTarget(target.Template, target.Field);
     }
 
     internal static Task<bool> CanManageAsync(
