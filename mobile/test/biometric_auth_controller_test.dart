@@ -7,6 +7,7 @@ import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/auth/auth_repository.dart';
 import 'package:rental_command/core/auth/biometric_auth_service.dart';
 import 'package:rental_command/core/auth/token_store.dart';
+import 'package:rental_command/core/navigation/mobile_restoration_state.dart';
 import 'package:rental_command/core/push/push_service.dart';
 import 'package:rental_command/features/onboarding/onboarding_models.dart';
 import 'package:rental_command/features/onboarding/onboarding_repository.dart';
@@ -40,6 +41,20 @@ void main() {
     expect((state as AuthStateAuthenticated).user, _user);
     expect(harness.repository.currentUserCalls, 1);
     expect(harness.repository.currentAccessCalls, 1);
+    expect(harness.restorationStore.clearCalls, 1);
+  });
+
+  test('normal stored-session restore keeps the previous navigation', () async {
+    final harness = _Harness(biometricEnabled: false);
+    addTearDown(harness.dispose);
+
+    await harness.controller.restoreSession();
+
+    expect(
+      harness.container.read(authControllerProvider),
+      isA<AuthStateAuthenticated>(),
+    );
+    expect(harness.restorationStore.clearCalls, 0);
   });
 
   for (final result in [
@@ -87,6 +102,91 @@ void main() {
     },
   );
 
+  for (final error in [
+    const ApiException(
+      statusCode: 0,
+      message: 'Unable to connect. Check your network connection.',
+    ),
+    const ApiException(
+      statusCode: 408,
+      message: 'The request is taking longer than expected. Try again.',
+    ),
+    const ApiException(
+      statusCode: 503,
+      message: 'The server encountered an error. Please try again.',
+    ),
+  ]) {
+    test(
+      'transient ${error.statusCode} revalidation failure preserves the locked session',
+      () async {
+        final harness = _Harness(currentUserError: error);
+        addTearDown(harness.dispose);
+        await harness.controller.restoreSession();
+
+        await harness.controller.unlockBiometricSession();
+
+        expect(
+          harness.container.read(authControllerProvider),
+          isA<AuthStateBiometricLocked>(),
+        );
+        expect(harness.tokenStore.clearTokensCalls, 0);
+        expect(harness.biometric.clearEnabledCalls, 0);
+      },
+    );
+  }
+
+  test(
+    'transient access-envelope failure also preserves the locked session',
+    () async {
+      final harness = _Harness(
+        currentAccessError: const ApiException(
+          statusCode: 503,
+          message: 'The server encountered an error. Please try again.',
+        ),
+      );
+      addTearDown(harness.dispose);
+      await harness.controller.restoreSession();
+
+      await harness.controller.unlockBiometricSession();
+
+      expect(
+        harness.container.read(authControllerProvider),
+        isA<AuthStateBiometricLocked>(),
+      );
+      expect(harness.repository.currentUserCalls, 1);
+      expect(harness.repository.currentAccessCalls, 1);
+      expect(harness.tokenStore.clearTokensCalls, 0);
+      expect(harness.biometric.clearEnabledCalls, 0);
+    },
+  );
+
+  test(
+    'transient restore failure without biometric opt-in does not offer fingerprint',
+    () async {
+      final harness = _Harness(
+        biometricEnabled: false,
+        currentUserError: const ApiException(
+          statusCode: 503,
+          message: 'The server encountered an error. Please try again.',
+        ),
+      );
+      addTearDown(harness.dispose);
+
+      await harness.controller.restoreSession();
+
+      expect(
+        harness.container.read(authControllerProvider),
+        isNot(isA<AuthStateBiometricLocked>()),
+      );
+      expect(
+        harness.container.read(authControllerProvider),
+        isA<AuthStateUnauthenticated>(),
+      );
+      expect(harness.tokenStore.clearTokensCalls, 0);
+      expect(harness.biometric.clearEnabledCalls, 0);
+    },
+  );
+
   test('logout clears biometric eligibility with the local session', () async {
     final harness = _Harness();
     addTearDown(harness.dispose);
@@ -106,18 +206,26 @@ class _Harness {
   _Harness({
     BiometricAuthenticationResult biometricResult =
         BiometricAuthenticationResult.authenticated,
+    bool biometricEnabled = true,
     ApiException? currentUserError,
+    ApiException? currentAccessError,
   }) : tokenStore = _FakeTokenStore(),
-       biometric = _FakeBiometricAuthService(biometricResult),
+       biometric = _FakeBiometricAuthService(
+         biometricResult,
+         enabled: biometricEnabled,
+       ),
+       restorationStore = _FakeMobileRestorationStateStore(),
        repository = _FakeAuthRepository(
          tokenStore: _FakeTokenStore(),
          currentUserError: currentUserError,
+         currentAccessError: currentAccessError,
        ) {
     repository.tokenStore = tokenStore;
     container = ProviderContainer(
       overrides: [
         tokenStoreProvider.overrideWithValue(tokenStore),
         biometricAuthServiceProvider.overrideWithValue(biometric),
+        mobileRestorationStateStoreProvider.overrideWithValue(restorationStore),
         authRepositoryProvider.overrideWithValue(repository),
         onboardingRepositoryProvider.overrideWithValue(
           _FakeOnboardingRepository(),
@@ -129,6 +237,7 @@ class _Harness {
 
   final _FakeTokenStore tokenStore;
   final _FakeBiometricAuthService biometric;
+  final _FakeMobileRestorationStateStore restorationStore;
   final _FakeAuthRepository repository;
   late final ProviderContainer container;
 
@@ -136,6 +245,22 @@ class _Harness {
       container.read(authControllerProvider.notifier);
 
   void dispose() => container.dispose();
+}
+
+class _FakeMobileRestorationStateStore implements MobileRestorationStateStore {
+  int clearCalls = 0;
+
+  @override
+  Future<void> clear() async {
+    clearCalls++;
+  }
+
+  @override
+  Future<MobileRestorationStateLoadResult> load() async =>
+      const MobileRestorationStateLoadMissing();
+
+  @override
+  Future<void> save(MobileRestorationState state) async {}
 }
 
 class _FakeTokenStore implements TokenStore {
@@ -166,16 +291,18 @@ class _FakeTokenStore implements TokenStore {
 }
 
 class _FakeBiometricAuthService extends BiometricAuthService {
-  _FakeBiometricAuthService(this.result) : super(isAndroid: false);
+  _FakeBiometricAuthService(this.result, {required this.enabled})
+    : super(isAndroid: false);
 
   final BiometricAuthenticationResult result;
+  final bool enabled;
   int clearEnabledCalls = 0;
 
   @override
   Future<BiometricAuthenticationResult> authenticate() async => result;
 
   @override
-  Future<bool> isEnabled() async => true;
+  Future<bool> isEnabled() async => enabled;
 
   @override
   Future<void> clearEnabled() async {
@@ -184,11 +311,15 @@ class _FakeBiometricAuthService extends BiometricAuthService {
 }
 
 class _FakeAuthRepository extends AuthRepository {
-  _FakeAuthRepository({required super.tokenStore, this.currentUserError})
-    : super(dio: Dio());
+  _FakeAuthRepository({
+    required super.tokenStore,
+    this.currentUserError,
+    this.currentAccessError,
+  }) : super(dio: Dio());
 
   TokenStore? tokenStore;
   final ApiException? currentUserError;
+  final ApiException? currentAccessError;
   int currentUserCalls = 0;
   int currentAccessCalls = 0;
   int logoutCalls = 0;
@@ -204,6 +335,8 @@ class _FakeAuthRepository extends AuthRepository {
   @override
   Future<AccessEnvelope> currentAccess() async {
     currentAccessCalls++;
+    final error = currentAccessError;
+    if (error != null) throw error;
     return _access;
   }
 
