@@ -12,6 +12,7 @@
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { currentOwnerStatementYear, ownerStatementYearOptions } from '$lib/accounting/owner-statement-years';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -19,9 +20,8 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
+	import { onMount } from 'svelte';
 
-	const CURRENT_YEAR = new Date().getFullYear();
-	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
 		{ value: 'Check', label: 'Check' },
@@ -32,11 +32,18 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	let selectedYear = $state(String(CURRENT_YEAR));
+	let yearOptions = $state(ownerStatementYearOptions());
+	let selectedYear = $state(String(currentOwnerStatementYear()));
 	let selectedOwnerId = $state<number | null>(null);
 	let downloading = $state(false);
 	let distributionFormContext = $state('');
-	let distributionForm = $state(makeDistributionForm(CURRENT_YEAR));
+	let distributionForm = $state(makeDistributionForm(currentOwnerStatementYear()));
+
+	onMount(() => {
+		const businessYear = currentOwnerStatementYear();
+		yearOptions = ownerStatementYearOptions(businessYear);
+		selectedYear = String(businessYear);
+	});
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owner-statements', portfolioId, selectedYear],
@@ -245,7 +252,7 @@
 					{selectedYear}
 				</Select.Trigger>
 				<Select.Content>
-					{#each YEAR_OPTIONS as year}
+					{#each yearOptions as year}
 						<Select.Item value={String(year)} label={String(year)}>{year}</Select.Item>
 					{/each}
 				</Select.Content>

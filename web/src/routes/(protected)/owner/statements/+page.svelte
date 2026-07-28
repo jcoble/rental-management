@@ -7,15 +7,23 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { formatDate } from '$lib/utils/date';
+	import { currentOwnerStatementYear, ownerStatementYearOptions } from '$lib/accounting/owner-statement-years';
+	import { onMount } from 'svelte';
 
 	const pageSize = 20;
-	const currentYear = new Date().getFullYear();
-	const years = Array.from({ length: 5 }, (_, index) => currentYear - index);
-	let selectedYear = $state(String(currentYear));
+	let years = $state(ownerStatementYearOptions());
+	let selectedYear = $state(String(currentOwnerStatementYear()));
 	let selectedOwnerId = $state<number | null>(null);
 	let statementSkip = $state(0);
 	let distributionSkip = $state(0);
-	let lastYear = $state(selectedYear);
+	let lastYear = $state(currentOwnerStatementYear().toString());
+
+	onMount(() => {
+		const businessYear = currentOwnerStatementYear();
+		years = ownerStatementYearOptions(businessYear);
+		selectedYear = String(businessYear);
+	});
+
 	$effect(() => {
 		if (selectedYear !== lastYear) {
 			lastYear = selectedYear;
