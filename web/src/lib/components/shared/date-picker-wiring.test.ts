@@ -22,6 +22,8 @@ const calendarSelectSources = [
 describe('date picker wiring', () => {
 	it('uses the shared mask helper and exposes a compact Today shortcut', () => {
 		assert.match(datePickerSource, /maskDateInput/);
+		assert.match(datePickerSource, /todayValue\?: string/);
+		assert.match(datePickerSource, /todayValue\?\.trim\(\) \|\| today\(getLocalTimeZone\(\)\)\.toString\(\)/);
 		assert.match(datePickerSource, /data-testid=\{testid \? `\$\{testid\}-today` : undefined\}/);
 	});
 

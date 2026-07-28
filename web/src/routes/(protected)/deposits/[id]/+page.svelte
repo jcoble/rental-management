@@ -35,6 +35,7 @@
 
 	const deposit = $derived(depositQuery.data);
 	const securityDepositAccountId = $derived(deposit?.securityDepositAccountId ?? 0);
+	const businessDate = $derived(deposit?.businessDate?.slice(0, 10) || today());
 
 	function invalidateDeposit() {
 		queryClient.invalidateQueries({ queryKey: ['deposit', tenantAccountId] });
@@ -67,7 +68,7 @@
 
 	function openFund() {
 		fundAmount = '';
-		fundEffectiveOn = today();
+		fundEffectiveOn = businessDate;
 		fundDescription = 'Security deposit received';
 		fundPaymentMethod = '';
 		fundReference = '';
@@ -126,7 +127,7 @@
 		deductionReason = '';
 		deductionAmount = '';
 		deductionNotes = '';
-		deductionEffectiveOn = today();
+		deductionEffectiveOn = businessDate;
 		deductionErrors = {};
 		deductionOperation = { fingerprint: '', key: '' };
 		showDeductionForm = true;
@@ -183,7 +184,7 @@
 	function openRefund() {
 		if (!deposit || deposit.heldBalance <= 0) return;
 		refundAmount = '';
-		refundEffectiveOn = today();
+		refundEffectiveOn = businessDate;
 		refundDescription = 'Security deposit refund';
 		refundReference = '';
 		refundErrors = {};
@@ -369,7 +370,7 @@
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={fundAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if fundErrors.amount}<p class="mt-1 text-xs text-destructive">{fundErrors.amount}</p>{/if}</div>
 			<div>
 				<label for="deposit-fund-date" class="mb-1 block text-xs text-muted-foreground">Received date</label>
-				<DatePicker id="deposit-fund-date" bind:value={fundEffectiveOn} testid="deposit-fund-date" />
+				<DatePicker id="deposit-fund-date" bind:value={fundEffectiveOn} todayValue={businessDate} testid="deposit-fund-date" />
 				{#if fundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{fundErrors.effectiveOn}</p>{/if}
 			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Payment method</span><Input bind:value={fundPaymentMethod} placeholder="Check, cash, ACH…" />{#if fundErrors.paymentMethodSummary}<p class="mt-1 text-xs text-destructive">{fundErrors.paymentMethodSummary}</p>{/if}</div>
@@ -388,7 +389,7 @@
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={deductionAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive">{deductionErrors.amount}</p>{/if}</div>
 			<div>
 				<label for="deposit-deduction-date" class="mb-1 block text-xs text-muted-foreground">Deduction date</label>
-				<DatePicker id="deposit-deduction-date" bind:value={deductionEffectiveOn} testid="deposit-deduction-date" />
+				<DatePicker id="deposit-deduction-date" bind:value={deductionEffectiveOn} todayValue={businessDate} testid="deposit-deduction-date" />
 				{#if deductionErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{deductionErrors.effectiveOn}</p>{/if}
 			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span><textarea bind:value={deductionNotes} rows="2" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"></textarea></div>
@@ -404,7 +405,7 @@
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount (optional)</span><Input bind:value={refundAmount} inputmode="decimal" mask="currency" placeholder="Full held balance" />{#if refundErrors.amount}<p class="mt-1 text-xs text-destructive">{refundErrors.amount}</p>{/if}</div>
 			<div>
 				<label for="deposit-refund-date" class="mb-1 block text-xs text-muted-foreground">Refund date</label>
-				<DatePicker id="deposit-refund-date" bind:value={refundEffectiveOn} testid="deposit-refund-date" />
+				<DatePicker id="deposit-refund-date" bind:value={refundEffectiveOn} todayValue={businessDate} testid="deposit-refund-date" />
 				{#if refundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{refundErrors.effectiveOn}</p>{/if}
 			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Description</span><Input bind:value={refundDescription} />{#if refundErrors.description}<p class="mt-1 text-xs text-destructive">{refundErrors.description}</p>{/if}</div>
