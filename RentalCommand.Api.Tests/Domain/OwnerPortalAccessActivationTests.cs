@@ -278,6 +278,57 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DuplicateActivation_RepairsFutureEffectiveMembershipAndOwnerAccessForLogin()
+    {
+        var owner = SeedOwner("owner-future-effective@example.test");
+        var target = SeedOwnerPortalContextWithFutureEffectiveAccess(owner, "owner-future-effective@example.test");
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var securityBeforeUtc = await ReadDatabaseClockUtcAsync();
+        var first = await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-owner-future-effective-1");
+        var securityAfterUtc = await ReadDatabaseClockUtcAsync();
+        var second = await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-owner-future-effective-2");
+
+        first.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.AlreadyActive);
+        first.AccessRevision.Should().Be(2);
+        second.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.AlreadyActive);
+        second.AccessRevision.Should().Be(2);
+
+        var membership = await _ctx.Db.WorkspaceMemberships.AsNoTracking()
+            .SingleAsync(row => row.AccessContextId == target.Id);
+        membership.EffectiveFromUtc.Should().BeOnOrAfter(securityBeforeUtc);
+        membership.EffectiveFromUtc.Should().BeOnOrBefore(securityAfterUtc);
+        membership.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+
+        var access = await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(row => row.OwnerEntityId == owner.Id);
+        access.EffectiveFromUtc.Should().BeOnOrAfter(securityBeforeUtc);
+        access.EffectiveFromUtc.Should().BeOnOrBefore(securityAfterUtc);
+        access.GrantedAtUtc.Should().Be(FrozenBusinessNowUtc);
+
+        (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .CountAsync(row => row.OwnerEntityId == owner.Id)).Should().Be(1);
+        (await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .CountAsync(assignment =>
+                assignment.WorkspaceMembershipId == membership.Id &&
+                assignment.RoleProfile!.Key == RoleProfileKeys.OwnerPortal)).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(row => row.PortfolioId == PortfolioId &&
+                               row.IdempotencyKey.StartsWith($"owner-portal-invitation:{PortfolioId}:{owner.Id}:"))).Should().Be(0);
+
+        await AssertOwnerCanonicalLoginAccessAsync(target.UserId, target.Id);
+    }
+
+    [Fact]
     public async Task DuplicateActivation_ForPendingInvitationDoesNotDuplicateAccountAccessInvitationOrOutbox()
     {
         var owner = SeedOwner("pending-duplicate@example.test");
@@ -580,6 +631,47 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
             UpdatedAtUtc = now,
         };
         _ctx.Db.WorkspaceAccessContexts.Add(context);
+        return context;
+    }
+
+    private WorkspaceAccessContext SeedOwnerPortalContextWithFutureEffectiveAccess(OwnerEntity owner, string email)
+    {
+        var context = SeedTargetUserAndContext(email);
+        var now = DateTime.UtcNow;
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Owner,
+            EffectiveFromUtc = FrozenBusinessNowUtc,
+            CreatedAtUtc = FrozenBusinessNowUtc,
+            UpdatedAtUtc = FrozenBusinessNowUtc,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.OwnerPortal).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = FrozenBusinessNowUtc,
+            UpdatedAtUtc = FrozenBusinessNowUtc,
+        };
+        var access = new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = context,
+            ApplicationUser = context.User!,
+            OwnerEntity = owner,
+            EffectiveFromUtc = FrozenBusinessNowUtc,
+            GrantedAtUtc = FrozenBusinessNowUtc,
+            GrantedByUserId = ActorUserId,
+            Reason = "Legacy owner portal activation",
+        };
+        _ctx.Db.AddRange(membership, assignment, access);
         return context;
     }
 

@@ -222,6 +222,11 @@ public sealed class ActivateOwnerPortalAccessHandler
 
         var requiresAccountActivation = string.IsNullOrEmpty(user.PasswordHash);
         WorkspaceMembership? invitationMembership = context.Membership;
+        var accessEffectiveDatesRepaired = RepairFutureEffectiveOwnerPortalAccess(
+            invitationMembership,
+            existingAccess,
+            effectiveFromUtc,
+            changedAtUtc);
         var pendingInvitation = invitationMembership is null
             ? null
             : await attempt.Persistence.Query<WorkspaceInvitation>()
@@ -261,7 +266,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                 changedAtUtc,
                 ct);
 
-        if (existingAccess is not null && ownerAssignmentCreated)
+        if (existingAccess is not null && (ownerAssignmentCreated || accessEffectiveDatesRepaired))
         {
             context.AdvanceRevision(context.AccessRevision);
             context.UpdatedAtUtc = changedAtUtc;
@@ -401,6 +406,37 @@ public sealed class ActivateOwnerPortalAccessHandler
 
     private static DateTime Utc(DateTime value) =>
         value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static bool RepairFutureEffectiveOwnerPortalAccess(
+        WorkspaceMembership? membership,
+        OwnerUserAccess? access,
+        DateTime effectiveFromUtc,
+        DateTime changedAtUtc)
+    {
+        var changed = false;
+        if (membership is not null &&
+            membership.Status == WorkspaceMembershipStatus.Active &&
+            membership.SuspendedAtUtc is null &&
+            membership.RevokedAtUtc is null &&
+            membership.EffectiveFromUtc > effectiveFromUtc &&
+            (membership.EffectiveToUtc is null || membership.EffectiveToUtc > effectiveFromUtc))
+        {
+            membership.EffectiveFromUtc = effectiveFromUtc;
+            membership.UpdatedAtUtc = changedAtUtc;
+            changed = true;
+        }
+
+        if (access is not null &&
+            access.RevokedAtUtc is null &&
+            access.EffectiveFromUtc > effectiveFromUtc &&
+            (access.EffectiveToUtc is null || access.EffectiveToUtc > effectiveFromUtc))
+        {
+            access.EffectiveFromUtc = effectiveFromUtc;
+            changed = true;
+        }
+
+        return changed;
+    }
 
     private static async Task<bool> EnsureOwnerPortalRoleAssignmentAsync(
         IAtomicWriteAttempt attempt,
