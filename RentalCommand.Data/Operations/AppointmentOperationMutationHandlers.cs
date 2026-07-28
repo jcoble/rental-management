@@ -5,7 +5,9 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Operations;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Operations;
 
@@ -46,6 +48,8 @@ public sealed class CreateAppointmentHandler
         attempt.BindSemanticAudit(entity, Audit(command, entity, AuditLogOperation.Created, 0));
         await attempt.FlushBusinessAsync(ct);
         var snapshot = await AppointmentSnapshot.LoadAsync(attempt.Persistence, command.PortfolioId, entity.Id, ct);
+        await AppointmentTenantNotifications.StageAsync(
+            attempt, entity, AppointmentTenantNotificationLifecycle.Scheduled, businessNow, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
@@ -125,6 +129,14 @@ public sealed class UpdateAppointmentHandler
             }), ChangeReason: "Updated appointment."));
         await attempt.FlushBusinessAsync(ct);
         var snapshot = await AppointmentSnapshot.LoadAsync(attempt.Persistence, command.PortfolioId, entity.Id, ct);
+        await AppointmentTenantNotifications.StageAsync(
+            attempt,
+            entity,
+            entity.Status == AppointmentStatus.Cancelled
+                ? AppointmentTenantNotificationLifecycle.Cancelled
+                : AppointmentTenantNotificationLifecycle.Updated,
+            businessNow,
+            ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
@@ -169,6 +181,8 @@ public sealed class DeleteAppointmentHandler
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId, nameof(Appointment), entity.Id, AuditLogOperation.Deleted,
             command.Actor.UserId, ChangeReason: "Deleted appointment."));
+        await AppointmentTenantNotifications.StageAsync(
+            attempt, entity, AppointmentTenantNotificationLifecycle.Cancelled, businessNow, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(Appointment), entity.Id,
             $"appointment-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);
@@ -187,6 +201,142 @@ public sealed class DeleteAppointmentHandler
     }
 }
 
+internal enum AppointmentTenantNotificationLifecycle
+{
+    Scheduled,
+    Updated,
+    Cancelled,
+}
+
+internal static class AppointmentTenantNotifications
+{
+    internal static async Task StageAsync(
+        IAtomicWriteAttempt attempt,
+        Appointment appointment,
+        AppointmentTenantNotificationLifecycle lifecycle,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (appointment.TenantId is null)
+        {
+            return;
+        }
+
+        var notificationType = Type(lifecycle);
+        var recipients = await (
+                from access in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
+                where access.PortfolioId == appointment.PortfolioId
+                    && access.TenantId == appointment.TenantId.Value
+                    && (!appointment.LeaseManagementId.HasValue ||
+                        access.LeaseManagementId == appointment.LeaseManagementId.Value)
+                    && (!appointment.PropertyId.HasValue || access.PropertyId == appointment.PropertyId.Value)
+                    && (!appointment.UnitId.HasValue || access.UnitId == appointment.UnitId.Value)
+                    && access.AccessContextId == (
+                        from candidate in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
+                        where candidate.PortfolioId == access.PortfolioId
+                            && candidate.UserId == access.UserId
+                            && candidate.TenantId == access.TenantId
+                            && (!appointment.LeaseManagementId.HasValue ||
+                                candidate.LeaseManagementId == appointment.LeaseManagementId.Value)
+                            && (!appointment.PropertyId.HasValue ||
+                                candidate.PropertyId == appointment.PropertyId.Value)
+                            && (!appointment.UnitId.HasValue || candidate.UnitId == appointment.UnitId.Value)
+                        orderby candidate.AccessContextId
+                        select candidate.AccessContextId).First()
+                    && !attempt.Persistence.Query<Notification>().Any(notification =>
+                        notification.PortfolioId == appointment.PortfolioId
+                        && notification.UserId == access.UserId
+                        && notification.Type == notificationType
+                        && notification.RelatedEntityType == nameof(Appointment)
+                        && notification.RelatedEntityId == appointment.Id)
+                orderby access.UserId
+                select new AppointmentTenantNotificationRecipient(
+                    access.UserId,
+                    access.AccessContextId,
+                    access.AccessRevision))
+            .TagWith("YS-187 appointment lifecycle tenant notification recipients")
+            .ToListAsync(ct);
+
+        if (recipients.Count == 0)
+        {
+            return;
+        }
+
+        var notifications = recipients.Select(recipient => new Notification
+        {
+            PortfolioId = appointment.PortfolioId,
+            UserId = recipient.UserId,
+            Type = notificationType,
+            Title = Title(lifecycle),
+            Message = Message(lifecycle, appointment),
+            Severity = lifecycle == AppointmentTenantNotificationLifecycle.Cancelled ? "Warning" : "Info",
+            NavigationExperience = NavigationExperience.Tenant,
+            NavigationDestination = NavigationDestination.Home,
+            NavigationAccessContextId = recipient.AccessContextId,
+            NavigationAccessRevision = recipient.AccessRevision,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(7),
+            NavigationFallbackDestination = NavigationDestination.Home,
+            RelatedEntityType = nameof(Appointment),
+            RelatedEntityId = appointment.Id,
+            CreatedAt = now,
+        }).ToList();
+
+        attempt.Persistence.AddRange(notifications);
+        await attempt.FlushBusinessAsync(ct);
+        foreach (var notification in notifications)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                appointment.PortfolioId,
+                nameof(Notification),
+                notification.Id,
+                AuditLogOperation.Created,
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    notification.UserId,
+                    notification.Type,
+                    notification.RelatedEntityId,
+                }),
+                ChangeReason: "Appointment lifecycle tenant notification committed."));
+        }
+    }
+
+    private static string Type(AppointmentTenantNotificationLifecycle lifecycle) => lifecycle switch
+    {
+        AppointmentTenantNotificationLifecycle.Scheduled => "TenantAppointmentScheduled",
+        AppointmentTenantNotificationLifecycle.Updated => "TenantAppointmentUpdated",
+        AppointmentTenantNotificationLifecycle.Cancelled => "TenantAppointmentCancelled",
+        _ => throw new ArgumentOutOfRangeException(nameof(lifecycle), lifecycle, "Unknown appointment notification lifecycle."),
+    };
+
+    private static string Title(AppointmentTenantNotificationLifecycle lifecycle) => lifecycle switch
+    {
+        AppointmentTenantNotificationLifecycle.Scheduled => "Appointment scheduled",
+        AppointmentTenantNotificationLifecycle.Updated => "Appointment updated",
+        AppointmentTenantNotificationLifecycle.Cancelled => "Appointment canceled",
+        _ => throw new ArgumentOutOfRangeException(nameof(lifecycle), lifecycle, "Unknown appointment notification lifecycle."),
+    };
+
+    private static string Message(AppointmentTenantNotificationLifecycle lifecycle, Appointment appointment)
+    {
+        var scheduled = appointment.ScheduledStart.ToString("MMM d, yyyy 'at' h:mm tt 'UTC'");
+        return lifecycle switch
+        {
+            AppointmentTenantNotificationLifecycle.Scheduled =>
+                $"Your appointment \"{appointment.Title}\" is scheduled for {scheduled}.",
+            AppointmentTenantNotificationLifecycle.Updated =>
+                $"Your appointment \"{appointment.Title}\" was updated. It is scheduled for {scheduled}.",
+            AppointmentTenantNotificationLifecycle.Cancelled =>
+                $"Your appointment \"{appointment.Title}\" was canceled.",
+            _ => throw new ArgumentOutOfRangeException(nameof(lifecycle), lifecycle, "Unknown appointment notification lifecycle."),
+        };
+    }
+
+    private sealed record AppointmentTenantNotificationRecipient(
+        int UserId,
+        int AccessContextId,
+        long AccessRevision);
+}
 
 internal static class AppointmentOperationValidation
 {
