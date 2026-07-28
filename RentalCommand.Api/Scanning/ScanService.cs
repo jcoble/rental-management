@@ -411,7 +411,10 @@ public sealed class ScanService : IScanService
                 fields.PropertyId, fields.Lender, fields.OriginalAmount, fields.CurrentBalance,
                 fields.AnnualInterestRatePct, fields.TermMonths, fields.StartDate, fields.DayOfMonthDue,
                 fields.MonthlyPrincipalInterest, fields.MonthlyEscrow, fields.EscrowCoversTaxes,
-                fields.EscrowCoversInsurance, fields.Notes));
+                fields.EscrowCoversInsurance, fields.Notes, fields.ExistingLoanId,
+                fields.ExistingLoanPaymentId, fields.StatementPrincipalAmount,
+                fields.StatementInterestAmount, fields.StatementEscrowAmount,
+                fields.StatementTotalAmount, fields.StatementEffectiveDate));
         }
 
         return new(
@@ -1716,6 +1719,11 @@ public sealed class ScanService : IScanService
             fields.Lender = ReadFieldValue(root, "lender");
             fields.OriginalAmount = ParseDecimalField(root, "original_amount") ?? ParseDecimalField(root, "originalAmount");
             fields.CurrentBalance = ParseDecimalField(root, "current_balance") ?? ParseDecimalField(root, "currentBalance");
+            fields.StatementPrincipalAmount = ParseDecimalField(root, "statement_principal_amount") ?? ParseDecimalField(root, "statementPrincipalAmount");
+            fields.StatementInterestAmount = ParseDecimalField(root, "statement_interest_amount") ?? ParseDecimalField(root, "statementInterestAmount");
+            fields.StatementEscrowAmount = ParseDecimalField(root, "statement_escrow_amount") ?? ParseDecimalField(root, "statementEscrowAmount");
+            fields.StatementTotalAmount = ParseDecimalField(root, "statement_total_amount") ?? ParseDecimalField(root, "statementTotalAmount");
+            fields.StatementEffectiveDate = ParseDateField(root, "statement_effective_date") ?? ParseDateField(root, "statementEffectiveDate");
             fields.AnnualInterestRatePct = ParseDecimalField(root, "annual_interest_rate_pct") ?? ParseDecimalField(root, "annualInterestRatePct");
             fields.TermMonths = ParseIntField(root, "term_months") ?? ParseIntField(root, "termMonths");
             fields.StartDate = ParseDateField(root, "start_date") ?? ParseDateField(root, "startDate");
@@ -1769,6 +1777,21 @@ public sealed class ScanService : IScanService
                 fields.OriginalAmount = original;
             if (TryGetOverrideDecimal(root, out var balance, "currentBalance", "current_balance"))
                 fields.CurrentBalance = balance;
+            if (TryGetOverrideDecimal(root, out var statementPrincipal, "statementPrincipalAmount", "statement_principal_amount"))
+                fields.StatementPrincipalAmount = statementPrincipal;
+            if (TryGetOverrideDecimal(root, out var statementInterest, "statementInterestAmount", "statement_interest_amount"))
+                fields.StatementInterestAmount = statementInterest;
+            if (TryGetOverrideDecimal(root, out var statementEscrow, "statementEscrowAmount", "statement_escrow_amount"))
+                fields.StatementEscrowAmount = statementEscrow;
+            if (TryGetOverrideDecimal(root, out var statementTotal, "statementTotalAmount", "statement_total_amount"))
+                fields.StatementTotalAmount = statementTotal;
+            if (TryGetOverrideString(root, out var statementEffectiveStr, "statementEffectiveDate", "statement_effective_date") &&
+                DateTime.TryParse(statementEffectiveStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var statementEffective))
+            {
+                fields.StatementEffectiveDate = statementEffective;
+            }
             if (TryGetOverrideDecimal(root, out var rate, "annualInterestRatePct", "annual_interest_rate_pct"))
                 fields.AnnualInterestRatePct = rate;
             if (TryGetOverrideInt(root, out var term, "termMonths", "term_months"))
@@ -1792,6 +1815,10 @@ public sealed class ScanService : IScanService
                 fields.EscrowCoversInsurance = coversInsurance;
             if (TryGetOverrideString(root, out var notes, "notes"))
                 fields.Notes = notes;
+            if (TryGetOverrideNullableInt(root, out var existingLoanId, "existingLoanId", "existing_loan_id"))
+                fields.ExistingLoanId = existingLoanId is > 0 ? existingLoanId : null;
+            if (TryGetOverrideNullableInt(root, out var existingLoanPaymentId, "existingLoanPaymentId", "existing_loan_payment_id"))
+                fields.ExistingLoanPaymentId = existingLoanPaymentId is > 0 ? existingLoanPaymentId : null;
         }
         catch (Exception ex)
         {
@@ -2038,6 +2065,13 @@ public sealed class ScanService : IScanService
         public bool? EscrowCoversTaxes { get; set; }
         public bool? EscrowCoversInsurance { get; set; }
         public string? Notes { get; set; }
+        public int? ExistingLoanId { get; set; }
+        public int? ExistingLoanPaymentId { get; set; }
+        public decimal? StatementPrincipalAmount { get; set; }
+        public decimal? StatementInterestAmount { get; set; }
+        public decimal? StatementEscrowAmount { get; set; }
+        public decimal? StatementTotalAmount { get; set; }
+        public DateTime? StatementEffectiveDate { get; set; }
     }
 }
 

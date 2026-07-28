@@ -24,6 +24,8 @@ public interface ILoanService
         string idempotencyKey, CancellationToken ct = default);
 
     /// <summary>The loan's amortization rows (oldest first), or null when the loan is out of scope.</summary>
-    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default);
-    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(WorkspaceReadScope scope, int loanId, CancellationToken ct = default);
+    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default);
+    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default);
 }

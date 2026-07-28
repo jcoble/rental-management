@@ -1214,7 +1214,7 @@ public class ScanController : ManagementControllerBase
             "Payment" => Ok(new { receiptId = result.LedgerEntryId, tenantAccountId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
-            "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Loan" => Ok(new { loanId = result.TargetEntityId, loanPaymentId = result.LoanPaymentId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             nameof(LeaseAgreement) => Ok(new { leaseManagementId = result.LeaseManagementId, agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };

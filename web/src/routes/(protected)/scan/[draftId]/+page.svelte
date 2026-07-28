@@ -13,6 +13,11 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { units } from '$lib/api/endpoints/units';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import {
+		loans,
+		type Loan,
+		type LoanPayment
+	} from '$lib/api/endpoints/loans';
 	import type { WorkOrder } from '$lib/types';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
@@ -166,6 +171,10 @@
 	let workOrderSearch = $state('');
 	let workOrderSkip = $state(0);
 	const CONTEXT_PAGE_SIZE = 20;
+	type LoanReviewMode = 'match' | 'create';
+	let loanReviewMode = $state<LoanReviewMode>('match');
+	let selectedExistingLoanId = $state('');
+	let selectedExistingLoanPaymentId = $state('');
 
 	$effect(() => {
 		if (!draftId || !isProcessing) return;
@@ -242,6 +251,44 @@
 	const selectedExpenseWorkOrderIdNumber = $derived(
 		selectedExpenseWorkOrderId !== NO_WORK_ORDER ? Number(selectedExpenseWorkOrderId) : null
 	);
+	const selectedLoanPropertyIdNumber = $derived(
+		selectedPropertyId !== NO_PROPERTY ? Number(selectedPropertyId) : null
+	);
+
+	const existingLoansQuery = createQuery(() => ({
+		queryKey: ['scan-loans', getCurrentPortfolioId(), selectedLoanPropertyIdNumber],
+		queryFn: () => loans.listPage({
+			propertyId: selectedLoanPropertyIdNumber as number,
+			sort: 'lender',
+			skip: 0,
+			take: 50
+		}),
+		enabled: isLoan && loanReviewMode === 'match' && !!selectedLoanPropertyIdNumber
+	}));
+	const existingLoanChoices = $derived(existingLoansQuery.data?.items ?? []);
+	const selectedExistingLoan = $derived.by<Loan | null>(() =>
+		existingLoanChoices.find((loan) => String(loan.id) === selectedExistingLoanId) ?? null
+	);
+	const existingLoanPaymentsQuery = createQuery(() => ({
+		queryKey: ['scan-loan-payments', getCurrentPortfolioId(), selectedExistingLoanId],
+		queryFn: () => loans.payments(Number(selectedExistingLoanId), {
+			sort: 'dueDate',
+			skip: 0,
+			take: 50
+		}),
+		enabled: isLoan && loanReviewMode === 'match' && !!selectedExistingLoanId
+	}));
+	const existingLoanPaymentChoices = $derived(existingLoanPaymentsQuery.data ?? []);
+	const selectedExistingLoanPayment = $derived.by<LoanPayment | null>(() =>
+		existingLoanPaymentChoices.find(
+			(payment) => String(payment.id) === selectedExistingLoanPaymentId
+		) ?? null
+	);
+
+	function loanPaymentLabel(payment: LoanPayment): string {
+		const dueDate = new Date(payment.dueDate).toLocaleDateString();
+		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${payment.status}`;
+	}
 
 	const expenseUnitsQuery = createQuery(() => ({
 		queryKey: [
@@ -472,6 +519,15 @@
 		{ name: 'monthly_principal_interest', label: 'Monthly P&I', type: 'number' },
 		{ name: 'monthly_escrow', label: 'Monthly escrow', type: 'number' }
 	];
+	const LOAN_STATEMENT_FIELDS: { name: string; label: string; type: 'date' | 'number'; required: boolean }[] = [
+		{ name: 'current_balance', label: 'Opening balance', type: 'number', required: true },
+		{ name: 'statement_principal_amount', label: 'Principal', type: 'number', required: true },
+		{ name: 'statement_interest_amount', label: 'Interest', type: 'number', required: true },
+		{ name: 'monthly_principal_interest', label: 'P&I', type: 'number', required: true },
+		{ name: 'statement_escrow_amount', label: 'Escrow', type: 'number', required: true },
+		{ name: 'statement_total_amount', label: 'Total cash', type: 'number', required: true },
+		{ name: 'statement_effective_date', label: 'Statement due/payment date', type: 'date', required: false }
+	];
 
 	// Loan escrow-cover flags are booleans (not in the string-keyed editedFields). Seeded once from the
 	// extraction, then owned by the user; reset per-draft alongside the other editable state.
@@ -487,8 +543,16 @@
 	// reviewer can change it). Mirrors leaseSelectionInvalid / applicationInvalid.
 	const loanInvalid = $derived.by(() => {
 		if (!isLoan) return false;
-		if (!(editedFields['lender'] ?? '').trim()) return true;
-		return !selectedPropertyId || selectedPropertyId === NO_PROPERTY;
+		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return true;
+		if (loanReviewMode === 'match') {
+			return !selectedExistingLoanId ||
+				!selectedExistingLoanPaymentId ||
+				(selectedExistingLoanPayment?.status !== 'Scheduled'
+					&& selectedExistingLoanPayment?.status !== 'Paid') ||
+				LOAN_STATEMENT_FIELDS.some((field) =>
+					field.required && parseAmount(editedFields[field.name]) == null);
+		}
+		return !(editedFields['lender'] ?? '').trim();
 	});
 
 	// Lease term fields shown as editable inputs (in display order).
@@ -559,6 +623,17 @@
 			unitSkip = 0;
 			clearExpenseWorkOrderSelection();
 		}
+	}
+
+	function selectLoanPropertyId(value: string | undefined): void {
+		selectedPropertyId = value ?? NO_PROPERTY;
+		selectedExistingLoanId = '';
+		selectedExistingLoanPaymentId = '';
+	}
+
+	function selectExistingLoanId(value: string | undefined): void {
+		selectedExistingLoanId = value ?? '';
+		selectedExistingLoanPaymentId = '';
 	}
 
 	function selectExpenseUnitId(value: string | undefined): void {
@@ -731,6 +806,9 @@
 		loanEscrowCoversTaxes = false;
 		loanEscrowCoversInsurance = false;
 		loanEscrowSeeded = false;
+		loanReviewMode = 'match';
+		selectedExistingLoanId = '';
+		selectedExistingLoanPaymentId = '';
 		resetLeaseReviewState();
 	});
 
@@ -958,7 +1036,11 @@
 				: 'Create one rental relationship and agreement for the selected unit';
 		}
 		if (isApplication) return 'Create one rental application';
-		if (isLoan) return 'Add one loan to the selected property';
+		if (isLoan) {
+			return loanReviewMode === 'match'
+				? 'Match this statement and record one scheduled loan payment'
+				: 'Add one loan to the selected property';
+		}
 		return 'Create one expense and attach this source document';
 	});
 	const proposedDestination = $derived.by(() => {
@@ -975,6 +1057,13 @@
 				: scanContext.unitId
 					? `Unit #${scanContext.unitId}`
 					: 'Applications queue';
+		}
+		if (isLoan && loanReviewMode === 'match') {
+			const loan = selectedExistingLoan;
+			const payment = selectedExistingLoanPayment;
+			return loan && payment
+				? `${selectedPropertyLabel} · ${loan.lender} · ${payment.periodKey}`
+				: selectedPropertyLabel;
 		}
 		if (isWorkOrder || isLoan || isExpense) return selectedPropertyLabel;
 		return 'Review required';
@@ -1055,7 +1144,7 @@
 			// Loan drafts attach to a property (no standalone loan page) — go back to that property,
 			// where PropertyLoansSection shows the new loan.
 			if (isLoan) {
-				toast.success('Loan added');
+				toast.success(loanReviewMode === 'match' ? 'Loan payment matched and recorded' : 'Loan added');
 				const propertyId = selectedPropertyId && selectedPropertyId !== NO_PROPERTY
 					? Number(selectedPropertyId)
 					: scanContext.propertyId;
@@ -1199,11 +1288,16 @@
 		if (isLoan) {
 			// The edited loan scalar fields (lender, original_amount, current_balance,
 			// annual_interest_rate_pct, term_months, start_date, day_of_month_due,
-			// monthly_principal_interest, monthly_escrow, notes) are already in `overrides` as snake_case
-			// keys, which the server's ApplyLoanOverrides accepts directly. Add the required property and
+			// monthly_principal_interest, monthly_escrow, notes) and the statement-match fields
+			// are already in `overrides` as snake_case keys, which the server's ApplyLoanOverrides accepts
+			// directly. Add the required property and
 			// the escrow-cover flags (booleans the checkboxes own, not in the string-keyed editedFields).
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
+			}
+			if (loanReviewMode === 'match') {
+				overrides['existingLoanId'] = Number(selectedExistingLoanId);
+				overrides['existingLoanPaymentId'] = Number(selectedExistingLoanPaymentId);
 			}
 			overrides['escrowCoversTaxes'] = loanEscrowCoversTaxes;
 			overrides['escrowCoversInsurance'] = loanEscrowCoversInsurance;
@@ -1987,9 +2081,33 @@
 							</div>
 						</div>
 					{:else if isLoan}
-						<!-- Loan review — a property selector (required) + editable loan fields. Confirming creates
-						     a Loan on the property; the Engine's DebtServiceWorker then generates the schedule. -->
+						<!-- Mortgage documents can either match an existing scheduled payment or create a new loan.
+						     Statement scans default to matching so confirming never silently duplicates a mortgage. -->
 						{#if !isTerminal}
+							<div class="mb-4 grid grid-cols-2 rounded-md border border-border bg-muted p-1" data-testid="scan-loan-review-mode">
+								<button
+									type="button"
+									class="rounded px-3 py-2 text-sm font-medium {loanReviewMode === 'match' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}"
+									disabled={reviewControlsDisabled}
+									onclick={() => {
+										loanReviewMode = 'match';
+									}}
+								>
+									Match existing payment
+								</button>
+								<button
+									type="button"
+									class="rounded px-3 py-2 text-sm font-medium {loanReviewMode === 'create' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}"
+									disabled={reviewControlsDisabled}
+									onclick={() => {
+										loanReviewMode = 'create';
+										selectedExistingLoanId = '';
+										selectedExistingLoanPaymentId = '';
+									}}
+								>
+									Add new loan
+								</button>
+							</div>
 							<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-loan-property-select">
 									Which property is this loan for? <span class="text-[var(--m3c-error)]">*</span>
@@ -2004,7 +2122,7 @@
 										propertySkip = 0;
 									}}
 								/>
-								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedPropertyId} onValueChange={selectLoanPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-loan-property-select" data-testid="scan-loan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
 									</Select.Trigger>
@@ -2022,7 +2140,7 @@
 								{#if propertiesQuery.isLoading}
 									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
 								{:else if selectedPropertyId === NO_PROPERTY}
-									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this loan.</p>
+									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to continue.</p>
 								{/if}
 								{#if propertiesQuery.data}
 									<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -2035,6 +2153,103 @@
 								{/if}
 							</div>
 						{/if}
+						{#if loanReviewMode === 'match' && !isTerminal}
+							<div class="mb-5 space-y-4 rounded-md border border-border p-4" data-testid="scan-loan-payment-match">
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-existing-loan-select">
+										Existing loan <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Select.Root
+										type="single"
+										value={selectedExistingLoanId}
+										onValueChange={selectExistingLoanId}
+										disabled={reviewControlsDisabled || !selectedLoanPropertyIdNumber}
+									>
+										<Select.Trigger id="scan-existing-loan-select" data-testid="scan-existing-loan-select" class="w-full">
+											{selectedExistingLoan ? `${selectedExistingLoan.lender} · ${formatUsd(selectedExistingLoan.currentBalance)} balance` : '— Select an existing loan —'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each existingLoanChoices as loan (loan.id)}
+												<Select.Item value={String(loan.id)} label={loan.lender}>
+													{loan.lender} · {formatUsd(loan.currentBalance)} balance
+												</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+									{#if existingLoansQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading loans…</p>
+									{:else if selectedLoanPropertyIdNumber && existingLoansQuery.data?.totalCount === 0}
+										<p class="mt-1 text-xs text-[var(--warning)]">No loans exist for this property. Choose “Add new loan” for an origination document.</p>
+									{/if}
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-existing-loan-payment-select">
+										Scheduled payment <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Select.Root
+										type="single"
+										bind:value={selectedExistingLoanPaymentId}
+										disabled={reviewControlsDisabled || !selectedExistingLoanId}
+									>
+										<Select.Trigger id="scan-existing-loan-payment-select" data-testid="scan-existing-loan-payment-select" class="w-full">
+											{selectedExistingLoanPayment ? loanPaymentLabel(selectedExistingLoanPayment) : '— Select the statement period —'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each existingLoanPaymentChoices as payment (payment.id)}
+												<Select.Item value={String(payment.id)} label={loanPaymentLabel(payment)}>
+													{loanPaymentLabel(payment)}
+												</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+									{#if existingLoanPaymentsQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading scheduled payments…</p>
+									{:else if selectedExistingLoanId && existingLoanPaymentChoices.length === 0}
+										<p class="mt-1 text-xs text-[var(--warning)]">This loan has no scheduled payments available to match.</p>
+									{/if}
+								</div>
+								{#if selectedExistingLoanPayment}
+									<div class="space-y-2 rounded bg-muted/50 p-3 text-sm">
+										<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Scheduled values</p>
+										<div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
+											<span>Principal {formatUsd(selectedExistingLoanPayment.principalAmount)}</span>
+											<span>Interest {formatUsd(selectedExistingLoanPayment.interestAmount)}</span>
+											<span>Escrow {formatUsd(selectedExistingLoanPayment.escrowAmount)}</span>
+											<span>Total {formatUsd(selectedExistingLoanPayment.totalAmount)}</span>
+											<span>Balance {formatUsd(selectedExistingLoanPayment.balanceAfter)}</span>
+										</div>
+									</div>
+								{/if}
+								<div>
+									<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Statement values</h2>
+									<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+										{#each LOAN_STATEMENT_FIELDS as statementField (statementField.name)}
+											{@const field = data.fields.find((f) => f.name === statementField.name)}
+											{@const level = field ? confidenceLevel(field.confidence) : 'high'}
+											<div class="{statementField.name === 'current_balance' || statementField.name === 'statement_effective_date' ? 'col-span-2 sm:col-span-1' : ''}">
+												<div class="mb-1 flex items-center justify-between">
+													<label class="text-xs font-medium {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}" for="loan-statement-{statementField.name}">
+														{statementField.label}{#if statementField.required}<span class="text-[var(--m3c-error)]"> *</span>{/if}
+													</label>
+													{#if field && level !== 'high'}
+														<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
+															{confidenceLabel(field.confidence)}
+														</span>
+													{/if}
+												</div>
+												<Input
+													id="loan-statement-{statementField.name}"
+													data-testid="scan-field-{statementField.name}"
+													type={statementField.type}
+													bind:value={editedFields[statementField.name]}
+													disabled={reviewControlsDisabled}
+												/>
+											</div>
+										{/each}
+									</div>
+								</div>
+							</div>
+						{:else}
 						<div class="mb-5" data-testid="scan-loan-fields">
 							<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Loan details</h2>
 							<div class="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -2078,6 +2293,7 @@
 								<Input id="loan-notes" data-testid="scan-field-notes" type="text" bind:value={editedFields['notes']} disabled={reviewControlsDisabled} />
 							</div>
 						</div>
+						{/if}
 					{:else}
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						{#if !isTerminal}
@@ -2488,7 +2704,7 @@
 								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || leaseRentTrackingInvalid || applicationInvalid || loanInvalid || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? 'Add Loan' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? loanReviewMode === 'match' ? 'Match & Record Payment' : 'Add Loan' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -2532,7 +2748,9 @@
 						{/if}
 						{#if loanInvalid && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-loan-error">
-								Enter a lender and pick a property above to add this loan.
+								{loanReviewMode === 'match'
+									? 'Pick the loan, scheduled payment, and reviewed statement amounts above to match this statement.'
+									: 'Enter a lender and pick a property above to add this loan.'}
 							</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}

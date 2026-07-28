@@ -150,7 +150,14 @@ public sealed record ScanLoanTargetData(
     decimal? MonthlyEscrow,
     bool? EscrowCoversTaxes,
     bool? EscrowCoversInsurance,
-    string? Notes) : IAtomicCommandData;
+    string? Notes,
+    int? ExistingLoanId = null,
+    int? ExistingLoanPaymentId = null,
+    decimal? StatementPrincipalAmount = null,
+    decimal? StatementInterestAmount = null,
+    decimal? StatementEscrowAmount = null,
+    decimal? StatementTotalAmount = null,
+    DateTime? StatementEffectiveDate = null) : IAtomicCommandData;
 
 /// <summary>
 /// Sealed discriminated envelope accepted by the atomic admission validator. Exactly the member named
@@ -364,7 +371,8 @@ public sealed record ConfirmScanDraftResult(
     int? UnitId = null,
     string? Error = null,
     long? LedgerEntryId = null,
-    int? LeaseManagementId = null) : IAtomicResultData;
+    int? LeaseManagementId = null,
+    int? LoanPaymentId = null) : IAtomicResultData;
 
 /// <summary>Internal writer result; the handler turns it into the stable receipt result contract.</summary>
 public sealed record ScanConfirmationTargetWriteResult(
@@ -373,6 +381,7 @@ public sealed record ScanConfirmationTargetWriteResult(
     string? CanonicalEntityType = null,
     long? LedgerEntryId = null,
     int? LeaseManagementId = null,
+    int? LoanPaymentId = null,
     bool TargetAuditRecorded = false);
 
 /// <summary>

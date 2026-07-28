@@ -86,6 +86,16 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                             UnitId = (int?)agreement.LeaseManagement!.UnitId,
                         }).SingleOrDefaultAsync(ct)
                     : null;
+                var existingLoanPaymentId = command.Target.Kind == ScanConfirmationTargetKind.Loan
+                    && command.Target.Loan?.ExistingLoanPaymentId is int requestedPaymentId
+                    ? await attempt.Persistence.Query<LoanPayment>()
+                        .Where(payment =>
+                            payment.Id == requestedPaymentId
+                            && payment.LoanId == claim.CanonicalEntityId
+                            && payment.PortfolioId == command.PortfolioId)
+                        .Select(payment => (int?)payment.Id)
+                        .SingleOrDefaultAsync(ct)
+                    : null;
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
                     command.DraftId,
@@ -93,7 +103,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                     claim.CanonicalEntityId,
                     existingReceipt?.UnitId ?? existingAgreement?.UnitId,
                     LedgerEntryId: existingReceipt?.LedgerEntryId,
-                    LeaseManagementId: existingAgreement?.LeaseManagementId);
+                    LeaseManagementId: existingAgreement?.LeaseManagementId,
+                    LoanPaymentId: existingLoanPaymentId);
             case AtomicScanDraftClaimOutcome.DuplicateSourceContent:
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.DuplicateSourceContent,
@@ -142,7 +153,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             target.EntityId,
             target.UnitId,
             LedgerEntryId: target.LedgerEntryId,
-            LeaseManagementId: target.LeaseManagementId);
+            LeaseManagementId: target.LeaseManagementId,
+            LoanPaymentId: target.LoanPaymentId);
     }
 
     private static ConfirmScanDraftResult Result(

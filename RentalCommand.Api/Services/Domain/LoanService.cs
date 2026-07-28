@@ -187,7 +187,8 @@ public class LoanService : ILoanService
                 ?? throw new AtomicReceiptInvariantException("The money receipt snapshot is invalid.")
             : throw new AtomicReceiptInvariantException("The money receipt snapshot is missing.");
 
-    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
     {
         // Confirm the loan is in-portfolio before returning its schedule (IDOR guard).
         var loanInScope = await _db.Loans
@@ -196,30 +197,15 @@ public class LoanService : ILoanService
         if (!loanInScope)
             return null;
 
-        return await _db.LoanPayments
-            .AsNoTracking()
-            .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId)
-            .OrderBy(p => p.PeriodKey)
-            .Select(payment => new LoanPaymentResponse
-            {
-                Id = payment.Id,
-                LoanId = payment.LoanId,
-                PeriodKey = payment.PeriodKey,
-                DueDate = payment.DueDate,
-                PaidDate = payment.PaidDate,
-                InterestAmount = payment.InterestAmount,
-                PrincipalAmount = payment.PrincipalAmount,
-                EscrowAmount = payment.EscrowAmount,
-                TotalAmount = payment.TotalAmount,
-                BalanceAfter = payment.BalanceAfter,
-                Status = payment.Status,
-                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
-            })
+        return await BuildPaymentQuery(
+                _db.LoanPayments.AsNoTracking()
+                    .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId),
+                query)
             .ToListAsync(ct);
     }
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
-        WorkspaceReadScope scope, int loanId, CancellationToken ct = default)
+        WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
     {
         var loanInScope = await _db.Loans.AsNoTracking()
             .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow())
@@ -227,24 +213,49 @@ public class LoanService : ILoanService
         if (!loanInScope)
             return null;
 
-        return await _db.LoanPayments.AsNoTracking()
-            .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId)
-            .OrderBy(payment => payment.PeriodKey)
-            .Select(payment => new LoanPaymentResponse
-            {
-                Id = payment.Id,
-                LoanId = payment.LoanId,
-                PeriodKey = payment.PeriodKey,
-                DueDate = payment.DueDate,
-                PaidDate = payment.PaidDate,
-                InterestAmount = payment.InterestAmount,
-                PrincipalAmount = payment.PrincipalAmount,
-                EscrowAmount = payment.EscrowAmount,
-                TotalAmount = payment.TotalAmount,
-                BalanceAfter = payment.BalanceAfter,
-                Status = payment.Status,
-                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
-            })
+        return await BuildPaymentQuery(
+                _db.LoanPayments.AsNoTracking()
+                    .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId),
+                query)
             .ToListAsync(ct);
+    }
+
+    private static IQueryable<LoanPaymentResponse> BuildPaymentQuery(
+        IQueryable<LoanPayment> payments,
+        LoanPaymentQuery? query)
+    {
+        query ??= new LoanPaymentQuery();
+        if (query.Status is { } status)
+            payments = payments.Where(payment => payment.Status == status);
+
+        var ordered = query.SortField switch
+        {
+            "duedate" => query.SortDescending
+                ? payments.OrderByDescending(payment => payment.DueDate).ThenByDescending(payment => payment.Id)
+                : payments.OrderBy(payment => payment.DueDate).ThenBy(payment => payment.Id),
+            _ => query.SortDescending
+                ? payments.OrderByDescending(payment => payment.PeriodKey).ThenByDescending(payment => payment.Id)
+                : payments.OrderBy(payment => payment.PeriodKey).ThenBy(payment => payment.Id),
+        };
+
+        var paged = ordered.Skip(query.NormalizedSkip);
+        if (query.NormalizedTake is int take)
+            paged = paged.Take(take);
+
+        return paged.Select(payment => new LoanPaymentResponse
+        {
+            Id = payment.Id,
+            LoanId = payment.LoanId,
+            PeriodKey = payment.PeriodKey,
+            DueDate = payment.DueDate,
+            PaidDate = payment.PaidDate,
+            InterestAmount = payment.InterestAmount,
+            PrincipalAmount = payment.PrincipalAmount,
+            EscrowAmount = payment.EscrowAmount,
+            TotalAmount = payment.TotalAmount,
+            BalanceAfter = payment.BalanceAfter,
+            Status = payment.Status,
+            PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+        });
     }
 }

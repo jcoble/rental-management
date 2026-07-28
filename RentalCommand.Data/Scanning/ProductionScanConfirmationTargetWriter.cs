@@ -377,6 +377,15 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         decimal Amount,
         ScheduleECategory Category);
 
+    private sealed record ReviewedLoanStatementFacts(
+        decimal OpeningBalance,
+        decimal PrincipalAmount,
+        decimal InterestAmount,
+        decimal EscrowAmount,
+        decimal TotalAmount,
+        decimal BalanceAfter,
+        DateTime EffectiveDate);
+
     private static void AddDefaultExpenseAllocation(
         int portfolioId,
         Expense expense,
@@ -596,6 +605,16 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        if (target.ExistingLoanId.HasValue != target.ExistingLoanPaymentId.HasValue)
+        {
+            throw new ScanConfirmationValidationException(
+                "Select both an existing loan and an existing scheduled payment to match this scan.");
+        }
+        if (target.ExistingLoanId.HasValue)
+        {
+            return await MatchExistingLoanPaymentAsync(command, target, attempt, ct);
+        }
+
         if (!await IsPropertyInPortfolioAsync(
                 command.PortfolioId, target.PropertyId, attempt.Persistence, ct))
         {
@@ -636,6 +655,173 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         var flush = await attempt.FlushBusinessAsync(ct);
         EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, loan);
         return new ScanConfirmationTargetWriteResult(loan.Id, TargetAuditRecorded: true);
+    }
+
+    private static async Task<ScanConfirmationTargetWriteResult> MatchExistingLoanPaymentAsync(
+        ConfirmScanDraftCommand command,
+        ScanLoanTargetData target,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        if (target.ExistingLoanId is not int loanId || target.ExistingLoanPaymentId is not int paymentId)
+        {
+            throw new ScanConfirmationValidationException(
+                "Select both an existing loan and an existing scheduled payment to match this scan.");
+        }
+
+        var payment = await attempt.Persistence.Query<LoanPayment>()
+            .Include(row => row.Loan)
+            .Where(row =>
+                row.Id == paymentId
+                && row.LoanId == loanId
+                && row.PortfolioId == command.PortfolioId
+                && row.Loan != null
+                && row.Loan.PortfolioId == command.PortfolioId
+                && row.Loan.PropertyId == target.PropertyId
+                && row.Loan.DeletedAt == null
+                && attempt.Persistence.Query<Property>().Any(property =>
+                    property.Id == row.Loan.PropertyId
+                    && property.PortfolioId == command.PortfolioId
+                    && property.DeletedAt == null))
+            .SingleOrDefaultAsync(ct);
+        if (payment?.Loan is null)
+        {
+            throw new ScanConfirmationValidationException(
+                "Selected loan payment is not in this portfolio or property.");
+        }
+
+        var reviewed = RequireReviewedLoanStatementFacts(command, target);
+
+        if (payment.Status != LoanPaymentStatus.Paid)
+        {
+            var hasEarlierUnpaid = await attempt.Persistence.Query<LoanPayment>()
+                .AnyAsync(row =>
+                    row.LoanId == payment.LoanId
+                    && row.PortfolioId == command.PortfolioId
+                    && row.Id != payment.Id
+                    && (row.DueDate < reviewed.EffectiveDate
+                        || (row.DueDate == reviewed.EffectiveDate && row.Id < payment.Id))
+                    && row.Status != LoanPaymentStatus.Paid, ct);
+            if (hasEarlierUnpaid)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Earlier scheduled loan payments must be posted first.");
+            }
+            if (payment.Loan.CurrentBalance != reviewed.OpeningBalance)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Statement opening unpaid principal must match the loan's current live balance before matching.");
+            }
+
+            var paidAt = reviewed.EffectiveDate;
+            payment.DueDate = reviewed.EffectiveDate;
+            payment.Status = LoanPaymentStatus.Paid;
+            payment.PaidDate = paidAt;
+            payment.PrincipalAmount = reviewed.PrincipalAmount;
+            payment.InterestAmount = reviewed.InterestAmount;
+            payment.EscrowAmount = reviewed.EscrowAmount;
+            payment.TotalAmount = reviewed.TotalAmount;
+            payment.BalanceAfter = reviewed.BalanceAfter;
+            payment.Loan.CurrentBalance = reviewed.BalanceAfter;
+            payment.Loan.UpdatedAt = paidAt;
+            if (reviewed.BalanceAfter == 0m)
+                payment.Loan.Status = LoanStatus.PaidOff;
+
+            attempt.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(Loan),
+                payment.Loan.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Scan draft #{command.DraftId} matched loan payment {payment.Id} and reduced the live balance."));
+            await attempt.FlushBusinessAsync(ct);
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(LoanPayment),
+                payment.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Posted from scan draft #{command.DraftId}."));
+        }
+        else
+        {
+            var impliedOpeningBalance = payment.BalanceAfter + payment.PrincipalAmount;
+            if (payment.PrincipalAmount != reviewed.PrincipalAmount
+                || payment.InterestAmount != reviewed.InterestAmount
+                || payment.EscrowAmount != reviewed.EscrowAmount
+                || payment.TotalAmount != reviewed.TotalAmount
+                || payment.BalanceAfter != reviewed.BalanceAfter
+                || impliedOpeningBalance != reviewed.OpeningBalance)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Reviewed statement values must match the already-paid loan payment.");
+            }
+        }
+
+        return new ScanConfirmationTargetWriteResult(
+            payment.Loan.Id,
+            CanonicalEntityType: nameof(Loan),
+            LoanPaymentId: payment.Id,
+            TargetAuditRecorded: true);
+    }
+
+    private static ReviewedLoanStatementFacts RequireReviewedLoanStatementFacts(
+        ConfirmScanDraftCommand command,
+        ScanLoanTargetData target)
+    {
+        var openingBalance = NormalizeDecimal(
+            target.CurrentBalance, "Statement opening unpaid principal balance", 0m, 999_999_999m, 2);
+        var principal = NormalizeDecimal(
+            target.StatementPrincipalAmount, "Statement principal amount", 0m, 999_999_999m, 2);
+        var interest = NormalizeDecimal(
+            target.StatementInterestAmount, "Statement interest amount", 0m, 999_999_999m, 2);
+        var escrow = NormalizeDecimal(
+            target.StatementEscrowAmount, "Statement escrow amount", 0m, 999_999_999m, 2);
+        var total = NormalizeDecimal(
+            target.StatementTotalAmount, "Statement total amount", 0m, 999_999_999m, 2);
+        var missing = new List<string>();
+        if (openingBalance is null) missing.Add("opening unpaid principal balance");
+        if (principal is null) missing.Add("statement principal");
+        if (interest is null) missing.Add("statement interest");
+        if (escrow is null) missing.Add("statement escrow");
+        if (total is null) missing.Add("statement total");
+        if (missing.Count > 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "Review " + string.Join(", ", missing) + " before matching this loan statement.");
+        }
+
+        var principalAndInterest = principal!.Value + interest!.Value;
+        var expectedTotal = principalAndInterest + escrow!.Value;
+        if (total!.Value != expectedTotal)
+        {
+            throw new ScanConfirmationValidationException(
+                "Statement total must equal principal plus interest plus escrow.");
+        }
+
+        var reviewedPi = NormalizeDecimal(
+            target.MonthlyPrincipalInterest, "Statement principal and interest", 0m, 999_999_999m, 2);
+        if (reviewedPi is not null && reviewedPi.Value != principalAndInterest)
+        {
+            throw new ScanConfirmationValidationException(
+                "Statement principal and interest must equal principal plus interest.");
+        }
+
+        var balanceAfter = openingBalance!.Value - principal.Value;
+        if (balanceAfter < 0m)
+        {
+            throw new ScanConfirmationValidationException(
+                "Statement principal cannot exceed the opening unpaid principal balance.");
+        }
+
+        return new ReviewedLoanStatementFacts(
+            openingBalance.Value,
+            principal.Value,
+            interest.Value,
+            escrow.Value,
+            total.Value,
+            balanceAfter,
+            ToUtc(target.StatementEffectiveDate) ?? ToUtc(command.ConfirmedAtUtc));
     }
 
     private static void EnrichCreatedTargetAudit(
