@@ -40,6 +40,17 @@ describe('canonical portal money contract', () => {
 		assert.doesNotMatch(pageSource, /\.sort\(/);
 	});
 
+	it('preserves notification account and ledger-entry focus without client-side filtering', () => {
+		assert.match(pageSource, /page\.url\.searchParams\.get\('account'\)/);
+		assert.match(pageSource, /page\.url\.searchParams\.get\('entry'\)/);
+		assert.match(pageSource, /charge\.tenantLedgerEntryId === focusedLedgerEntryId/);
+		assert.match(pageSource, /id=\{`portal-ledger-entry-\$\{charge\.tenantLedgerEntryId\}`\}/);
+		assert.match(pageSource, /data-focused=\{isFocusedCharge\(charge\)\}/);
+		assert.match(pageSource, /url\.searchParams\.delete\('entry'\)/);
+		assert.doesNotMatch(pageSource, /chargesQuery\.data\?\.items\.filter/);
+		assert.doesNotMatch(pageSource, /chargesQuery\.data\?\.items\.find/);
+	});
+
 	it('keeps online-payment availability gentle and account-scoped', () => {
 		assert.match(endpointSource, /onlinePaymentsAvailable: boolean/);
 		assert.match(pageSource, /autopayQuery\.data\?\.onlinePaymentsAvailable === false/);

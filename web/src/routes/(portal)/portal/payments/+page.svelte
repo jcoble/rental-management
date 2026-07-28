@@ -18,9 +18,12 @@
 	const pageSize = 20;
 	let chargeSkip = $state(0);
 	const requestedAccountId = Number(page.url.searchParams.get('account'));
+	const requestedEntryId = Number(page.url.searchParams.get('entry'));
 	let selectedAccountId = $state<number | null>(
 		Number.isInteger(requestedAccountId) && requestedAccountId > 0 ? requestedAccountId : null
 	);
+	const focusedLedgerEntryId =
+		Number.isInteger(requestedEntryId) && requestedEntryId > 0 ? requestedEntryId : null;
 
 	const accountsQuery = createQuery(() => ({
 		queryKey: ['portal-tenant-accounts', 'payments'],
@@ -66,7 +69,12 @@
 		const url = new URL(page.url);
 		if (selectedAccountId == null) url.searchParams.delete('account');
 		else url.searchParams.set('account', String(selectedAccountId));
+		url.searchParams.delete('entry');
 		goto(url.pathname + url.search, { replaceState: true, noScroll: true, keepFocus: true });
+	}
+
+	function isFocusedCharge(charge: PortalTenantCharge): boolean {
+		return charge.tenantLedgerEntryId === focusedLedgerEntryId;
 	}
 
 	function isStripeOff(err: unknown): boolean {
@@ -237,7 +245,12 @@
 			<Tooltip.Provider delayDuration={150}>
 				<div class="space-y-3">
 					{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
-					<div class="rounded-lg border border-border bg-card p-4" data-testid="portal-payment-row">
+					<div
+						id={`portal-ledger-entry-${charge.tenantLedgerEntryId}`}
+						class="rounded-lg border bg-card p-4 {isFocusedCharge(charge) ? 'border-primary ring-2 ring-primary/30' : 'border-border'}"
+						data-focused={isFocusedCharge(charge)}
+						data-testid="portal-payment-row"
+					>
 						<div class="flex flex-wrap items-center justify-between gap-2">
 							<div class="flex items-center gap-1.5">
 								<p class="font-medium">{charge.description} · {money(charge.openAmount, charge.currency)}</p>
