@@ -16,7 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, UserCheck } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -105,6 +105,15 @@
 		onSuccess: () => {
 			showSuccess('Owner deleted.');
 			ownerDeleteTarget = null;
+			invalidateOwners();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const activatePortalMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.activatePortalAccess(id),
+		onSuccess: (result) => {
+			showSuccess(result.message);
 			invalidateOwners();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -231,6 +240,13 @@
 			accessor: (o) => o.phone ?? '—',
 		},
 		{
+			key: 'portal',
+			title: 'Portal',
+			mobileRole: 'meta',
+			accessor: (o) => o.hasActiveOwnerPortalAccess ? 'Active' : 'Not active',
+			cell: ownerPortalCell,
+		},
+		{
 			key: 'actions',
 			title: '',
 			mobileRole: 'hidden',
@@ -243,6 +259,27 @@
 
 {#snippet ownerNameCell(o: Owner)}
 	<span data-testid="owner-name">{o.name}</span>
+{/snippet}
+
+{#snippet ownerPortalCell(o: Owner)}
+	<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} role="none">
+		{#if o.hasActiveOwnerPortalAccess}
+			<span class="text-xs font-medium text-emerald-700" data-testid="owner-portal-active">Active</span>
+		{:else}
+			<button
+				type="button"
+				data-testid="owner-portal-activate"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Activate owner portal access"
+				disabled={!o.email || o.isPrimary || activatePortalMutation.isPending}
+				title={!o.email ? 'Add an owner email before activation' : o.isPrimary ? 'Primary owners use the management account' : 'Activate owner portal access'}
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Activate
+			</button>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet ownerActionsCell(o: Owner)}

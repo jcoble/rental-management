@@ -10,6 +10,17 @@ export interface OwnerListResponse {
 	take: number;
 }
 
+export interface ActivateOwnerPortalAccessResponse {
+	outcome: 'Activated' | 'AlreadyActive' | 'MissingOwnerEmail' | 'MissingUserAccount' | 'MissingWorkspaceAccess' | 'InactiveWorkspaceAccess' | 'PrimaryOwnerNotSupported' | 'NotFound' | 'Invalid';
+	ownerEntityId: number;
+	ownerEmail?: string | null;
+	targetAccessContextId?: number | null;
+	ownerUserAccessId?: number | null;
+	accessRevision?: number | null;
+	replayed: boolean;
+	message: string;
+}
+
 export const owners = {
 	list: (portfolioId: number, params?: ListParams) =>
 		api.get<Owner[]>(`/owner-entities${buildListQuery(params, { portfolioId })}`),
@@ -27,6 +38,12 @@ export const owners = {
 	delete: (id: number) =>
 		idempotentMutation(`owners:delete:${id}`, (key) =>
 			api.delete(`/owner-entities/${id}`, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	activatePortalAccess: (id: number) =>
+		idempotentMutation(`owners:portal-access:activate:${id}`, (key) =>
+			api.post<ActivateOwnerPortalAccessResponse>(`/owner-entities/${id}/portal-access/activate`, {}, {
 				headers: { 'Idempotency-Key': key }
 			})
 		),
