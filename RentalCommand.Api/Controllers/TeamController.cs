@@ -152,6 +152,10 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
                 item.Status,
                 item.ScopeKind,
                 item.SelectedProperties.Count(),
+                item.SelectedProperties
+                    .OrderBy(scope => scope.PropertyId)
+                    .Select(scope => scope.PropertyId)
+                    .ToArray(),
                 item.EffectiveFromUtc,
                 item.EffectiveToUtc))
             .ToListAsync(ct);

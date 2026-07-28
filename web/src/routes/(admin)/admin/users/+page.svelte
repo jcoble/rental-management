@@ -235,7 +235,7 @@
 		editingAssignment = assignment;
 		assignmentRoleProfileKey = assignment.roleProfileKey;
 		assignmentScopeKind = 'SelectedProperties';
-		assignmentPropertyIds = [];
+		assignmentPropertyIds = assignment.selectedPropertyIds.toSorted((a, b) => a - b);
 		resetPropertyPicker();
 		showAssignmentEditor = true;
 	}
