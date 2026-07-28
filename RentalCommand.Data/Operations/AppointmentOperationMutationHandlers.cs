@@ -7,7 +7,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Operations;
-using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Operations;
 
@@ -223,37 +222,84 @@ internal static class AppointmentTenantNotifications
         }
 
         var notificationType = Type(lifecycle);
+        var businessDate = DateOnly.FromDateTime(now);
         var recipients = await (
-                from access in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
+                from access in attempt.Persistence.Query<TenantUserAccess>().AsNoTracking()
+                join context in attempt.Persistence.Query<WorkspaceAccessContext>().AsNoTracking()
+                    on new { access.AccessContextId, access.PortfolioId }
+                    equals new { AccessContextId = context.Id, context.PortfolioId }
+                join party in attempt.Persistence.Query<LeaseManagementParty>().AsNoTracking()
+                    on new { LeaseManagementPartyId = access.LeaseManagementPartyId, access.PortfolioId }
+                    equals new { LeaseManagementPartyId = party.Id, party.PortfolioId }
+                join relationship in attempt.Persistence.Query<LeaseManagement>().AsNoTracking()
+                    on new { party.LeaseManagementId, party.PortfolioId }
+                    equals new { LeaseManagementId = relationship.Id, relationship.PortfolioId }
                 where access.PortfolioId == appointment.PortfolioId
-                    && access.TenantId == appointment.TenantId.Value
+                    && access.RevokedAtUtc == null
+                    && context.UserId == access.ApplicationUserId
+                    && context.Status == WorkspaceAccessContextStatus.Active
+                    && context.SuspendedAtUtc == null
+                    && context.RevokedAtUtc == null
+                    && party.TenantId == appointment.TenantId.Value
+                    && party.EffectiveFrom <= businessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= businessDate)
                     && (!appointment.LeaseManagementId.HasValue ||
-                        access.LeaseManagementId == appointment.LeaseManagementId.Value)
-                    && (!appointment.PropertyId.HasValue || access.PropertyId == appointment.PropertyId.Value)
-                    && (!appointment.UnitId.HasValue || access.UnitId == appointment.UnitId.Value)
+                        party.LeaseManagementId == appointment.LeaseManagementId.Value)
+                    && (!appointment.PropertyId.HasValue || relationship.PropertyId == appointment.PropertyId.Value)
+                    && (!appointment.UnitId.HasValue || relationship.UnitId == appointment.UnitId.Value)
                     && access.AccessContextId == (
-                        from candidate in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
-                        where candidate.PortfolioId == access.PortfolioId
-                            && candidate.UserId == access.UserId
-                            && candidate.TenantId == access.TenantId
+                        from candidateAccess in attempt.Persistence.Query<TenantUserAccess>().AsNoTracking()
+                        join candidateContext in attempt.Persistence.Query<WorkspaceAccessContext>().AsNoTracking()
+                            on new { candidateAccess.AccessContextId, candidateAccess.PortfolioId }
+                            equals new { AccessContextId = candidateContext.Id, candidateContext.PortfolioId }
+                        join candidateParty in attempt.Persistence.Query<LeaseManagementParty>().AsNoTracking()
+                            on new
+                            {
+                                LeaseManagementPartyId = candidateAccess.LeaseManagementPartyId,
+                                candidateAccess.PortfolioId,
+                            }
+                            equals new
+                            {
+                                LeaseManagementPartyId = candidateParty.Id,
+                                candidateParty.PortfolioId,
+                            }
+                        join candidateRelationship in attempt.Persistence.Query<LeaseManagement>().AsNoTracking()
+                            on new { candidateParty.LeaseManagementId, candidateParty.PortfolioId }
+                            equals new
+                            {
+                                LeaseManagementId = candidateRelationship.Id,
+                                candidateRelationship.PortfolioId,
+                            }
+                        where candidateAccess.PortfolioId == access.PortfolioId
+                            && candidateAccess.ApplicationUserId == access.ApplicationUserId
+                            && candidateAccess.RevokedAtUtc == null
+                            && candidateContext.UserId == candidateAccess.ApplicationUserId
+                            && candidateContext.Status == WorkspaceAccessContextStatus.Active
+                            && candidateContext.SuspendedAtUtc == null
+                            && candidateContext.RevokedAtUtc == null
+                            && candidateParty.TenantId == party.TenantId
+                            && candidateParty.EffectiveFrom <= businessDate
+                            && (candidateParty.EffectiveThrough == null ||
+                                candidateParty.EffectiveThrough >= businessDate)
                             && (!appointment.LeaseManagementId.HasValue ||
-                                candidate.LeaseManagementId == appointment.LeaseManagementId.Value)
+                                candidateParty.LeaseManagementId == appointment.LeaseManagementId.Value)
                             && (!appointment.PropertyId.HasValue ||
-                                candidate.PropertyId == appointment.PropertyId.Value)
-                            && (!appointment.UnitId.HasValue || candidate.UnitId == appointment.UnitId.Value)
-                        orderby candidate.AccessContextId
-                        select candidate.AccessContextId).First()
+                                candidateRelationship.PropertyId == appointment.PropertyId.Value)
+                            && (!appointment.UnitId.HasValue ||
+                                candidateRelationship.UnitId == appointment.UnitId.Value)
+                        orderby candidateAccess.AccessContextId
+                        select candidateAccess.AccessContextId).First()
                     && !attempt.Persistence.Query<Notification>().Any(notification =>
                         notification.PortfolioId == appointment.PortfolioId
-                        && notification.UserId == access.UserId
+                        && notification.UserId == context.UserId
                         && notification.Type == notificationType
                         && notification.RelatedEntityType == nameof(Appointment)
                         && notification.RelatedEntityId == appointment.Id)
-                orderby access.UserId
+                orderby context.UserId
                 select new AppointmentTenantNotificationRecipient(
-                    access.UserId,
+                    context.UserId,
                     access.AccessContextId,
-                    access.AccessRevision))
+                    context.AccessRevision))
             .TagWith("YS-187 appointment lifecycle tenant notification recipients")
             .ToListAsync(ct);
 

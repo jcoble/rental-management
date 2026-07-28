@@ -84,7 +84,8 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
             .Should().Be(1);
         _commands.Should().Contain(command =>
             command.Contains("YS-187 appointment lifecycle tenant notification recipients", StringComparison.Ordinal)
-            && command.Contains("vw_effective_tenant_access", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("\"TenantUserAccesses\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("\"LeaseManagementParties\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase));
     }
 
