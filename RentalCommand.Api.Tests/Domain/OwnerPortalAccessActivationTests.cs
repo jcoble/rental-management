@@ -131,11 +131,13 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         var owner = SeedOwner("missing-account@example.test");
         await _ctx.Db.SaveChangesAsync();
 
+        var securityBeforeUtc = await ReadDatabaseClockUtcAsync();
         var result = await _sut.ActivateOwnerPortalAccessAsync(
             _scope,
             owner.Id,
             new ActivateOwnerPortalAccessRequest(),
             "activate-owner-missing-account");
+        var securityAfterUtc = await ReadDatabaseClockUtcAsync();
 
         result.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.InvitationPending);
         result.RequiresAccountActivation.Should().BeTrue();
@@ -159,15 +161,30 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         context.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
         context.Membership.Should().NotBeNull();
         context.Membership!.DefaultExperience.Should().Be(WorkspaceExperience.Owner);
-        context.Membership.EffectiveFromUtc.Should().Be(FrozenBusinessNowUtc);
+        context.Membership.EffectiveFromUtc.Should().BeOnOrAfter(securityBeforeUtc);
+        context.Membership.EffectiveFromUtc.Should().BeOnOrBefore(securityAfterUtc);
         context.Membership.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
         context.Membership.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+
+        var ownerAssignment = await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .Include(assignment => assignment.RoleProfile)
+            .SingleAsync(assignment => assignment.WorkspaceMembershipId == context.Membership.Id);
+        ownerAssignment.RoleProfile!.Key.Should().Be(RoleProfileKeys.OwnerPortal);
+        ownerAssignment.RoleProfile.DefaultExperience.Should().Be(WorkspaceExperience.Owner);
+        ownerAssignment.ScopeKind.Should().Be(MembershipRoleAssignmentScopeKind.AllProperties);
+        ownerAssignment.EffectiveFromUtc.Should().BeOnOrAfter(securityBeforeUtc);
+        ownerAssignment.EffectiveFromUtc.Should().BeOnOrBefore(securityAfterUtc);
+        ownerAssignment.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        ownerAssignment.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        (await _ctx.Db.RoleProfileCapabilities.AsNoTracking()
+            .CountAsync(capability => capability.RoleProfileId == ownerAssignment.RoleProfileId)).Should().Be(0);
 
         var access = await _ctx.Db.OwnerUserAccesses.AsNoTracking()
             .SingleAsync(row => row.OwnerEntityId == owner.Id);
         access.AccessContextId.Should().Be(context.Id);
         access.ApplicationUserId.Should().Be(invitedUser.Id);
-        access.EffectiveFromUtc.Should().Be(FrozenBusinessNowUtc);
+        access.EffectiveFromUtc.Should().BeOnOrAfter(securityBeforeUtc);
+        access.EffectiveFromUtc.Should().BeOnOrBefore(securityAfterUtc);
         access.GrantedAtUtc.Should().Be(FrozenBusinessNowUtc);
 
         var invitation = await _ctx.Db.WorkspaceInvitations.AsNoTracking()
@@ -232,6 +249,8 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         projected = await ProjectOwnerForGridAsync(owner.Id);
         projected.HasPendingOwnerPortalInvitation.Should().BeFalse();
         projected.HasActiveOwnerPortalAccess.Should().BeTrue();
+
+        await AssertOwnerCanonicalLoginAccessAsync(invitedUser.Id, context.Id);
     }
 
     [Fact]
@@ -292,6 +311,10 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
             .CountAsync(row => row.OwnerEntityId == owner.Id)).Should().Be(1);
         (await _ctx.Db.WorkspaceInvitations.AsNoTracking()
             .CountAsync(row => row.InvitedUser!.NormalizedEmail == "PENDING-DUPLICATE@EXAMPLE.TEST")).Should().Be(1);
+        (await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .CountAsync(assignment =>
+                assignment.WorkspaceMembership!.AccessContext!.User!.NormalizedEmail == "PENDING-DUPLICATE@EXAMPLE.TEST" &&
+                assignment.RoleProfile!.Key == RoleProfileKeys.OwnerPortal)).Should().Be(1);
         (await _ctx.Db.OutboxMessages.AsNoTracking()
             .CountAsync(row => row.IdempotencyKey.StartsWith($"owner-portal-invitation:{PortfolioId}:{owner.Id}:"))).Should().Be(1);
     }
@@ -331,6 +354,9 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         (await _ctx.Db.WorkspaceInvitations.AsNoTracking()
             .CountAsync(row => row.PortfolioId == PortfolioId &&
                                row.InvitedUser!.NormalizedEmail == "ROLLBACK-OWNER@EXAMPLE.TEST")).Should().Be(0);
+        (await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .CountAsync(assignment =>
+                assignment.WorkspaceMembership!.AccessContext!.User!.NormalizedEmail == "ROLLBACK-OWNER@EXAMPLE.TEST")).Should().Be(0);
         (await _ctx.Db.OutboxMessages.AsNoTracking()
             .CountAsync(row => row.PortfolioId == PortfolioId &&
                                row.IdempotencyKey.StartsWith($"owner-portal-invitation:{PortfolioId}:{owner.Id}:"))).Should().Be(0);
@@ -618,6 +644,59 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         ])!;
         return await query.SingleAsync();
     }
+
+    private async Task AssertOwnerCanonicalLoginAccessAsync(int userId, int accessContextId)
+    {
+        var securityNowUtc = await ReadDatabaseClockUtcAsync();
+        var selection = await new EffectiveAccessContextSelectionQuery(_ctx.Db)
+            .ListAsync(userId, null);
+        selection.Should().ContainSingle(option =>
+            option.AccessContextId == accessContextId &&
+            option.DefaultExperience == WorkspaceExperience.Owner);
+
+        var context = await _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
+            .SingleAsync(row => row.Id == accessContextId);
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            ActiveAccessContextId = accessContextId,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = FrozenBusinessNowUtc,
+            LastSeenAtUtc = FrozenBusinessNowUtc,
+            ExpiresAtUtc = FrozenBusinessNowUtc.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
+        await _ctx.Db.SaveChangesAsync();
+
+        await _ctx.Db.Database.OpenConnectionAsync();
+        try
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync("SET SESSION AUTHORIZATION rentalcommand_api;");
+            var envelope = await new AccessEnvelopeQuery(_ctx.Db)
+                .GetAsync(session.Id, userId, accessContextId, context.AccessRevision, securityNowUtc);
+
+            envelope.Should().NotBeNull();
+            envelope!.DefaultExperience.Should().Be(WorkspaceExperience.Owner);
+            envelope.AvailableExperiences.Should().ContainSingle(experience => experience == WorkspaceExperience.Owner);
+            envelope.Assignments.Should().ContainSingle(assignment =>
+                assignment.RoleProfileKey == RoleProfileKeys.OwnerPortal &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.Scope.Kind == MembershipRoleAssignmentScopeKind.AllProperties);
+            envelope.Navigation.Should().OnlyContain(navigation =>
+                navigation.Experience == WorkspaceExperience.Owner &&
+                navigation.CapabilityKeys.Count == 0);
+        }
+        finally
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
+            await _ctx.Db.Database.CloseConnectionAsync();
+        }
+    }
+
+    private async Task<DateTime> ReadDatabaseClockUtcAsync() =>
+        await _ctx.Db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
+            .SingleAsync();
 
     private sealed class ThrowOnOwnerPortalInvitationOutboxInterceptor : DbCommandInterceptor
     {
