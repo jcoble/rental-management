@@ -38,6 +38,19 @@ test('assignment controls use effective lifecycle rather than stored status alon
 	assert.doesNotMatch(pageSource, /canManageTeam && assignment\.status === 'Active'/);
 });
 
+test('property-scope replacement starts from the assignment current selected property ids', () => {
+	const replaceStart = pageSource.indexOf('function beginReplaceProperties');
+	const replaceEnd = pageSource.indexOf('function chooseAssignmentRole', replaceStart);
+	const replaceFunction = pageSource.slice(replaceStart, replaceEnd);
+
+	assert.match(endpointSource, /selectedPropertyIds: number\[\]/);
+	assert.match(
+		replaceFunction,
+		/assignmentPropertyIds = assignment\.selectedPropertyIds\.toSorted\(\(a, b\) => a - b\)/
+	);
+	assert.doesNotMatch(replaceFunction, /assignmentPropertyIds = \[\]/);
+});
+
 test('active assignment is display-ended once its effective end is at or before app time', () => {
 	const asOfUtc = new Date('2027-01-19T05:00:00.000Z');
 	const endedAtAppTime = {
