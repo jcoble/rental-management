@@ -33,18 +33,9 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
         var onboardingProperties = AuthorizedProperties(scope, CapabilityKeys.LeasingOnboardingManage, now);
         var conversations = AuthorizedConversations(scope, now);
 
-        return _db.AuthSessions
+        return _db.Portfolios
             .AsNoTracking()
-            .Where(session =>
-                session.Id == scope.SessionId &&
-                session.UserId == scope.UserId &&
-                session.ActiveAccessContextId == scope.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > now &&
-                session.ActiveAccessContext != null &&
-                session.ActiveAccessContext.AccessRevision == scope.AccessRevision &&
-                session.ActiveAccessContext.PortfolioId == scope.PortfolioId)
+            .Where(portfolio => portfolio.Id == scope.PortfolioId)
             .Select(_ => new LeasingTodayResponse
             {
                 ApplicationsToReview = applications.Count(application =>

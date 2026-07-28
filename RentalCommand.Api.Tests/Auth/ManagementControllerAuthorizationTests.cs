@@ -105,6 +105,19 @@ public sealed class ManagementControllerAuthorizationTests
     }
 
     [Fact]
+    public void GettingStartedSummary_IsReadOnlySecuritySetup_NotDestructiveAccountAuthority()
+    {
+        var method = typeof(PortfolioController).GetMethod(nameof(PortfolioController.GettingStarted))!;
+
+        method.GetCustomAttributes<AuthorizeAttribute>(inherit: true)
+            .Should().ContainSingle(attribute =>
+                attribute.Policy == CapabilityPolicy.For(CapabilityKeys.SecurityManage));
+        method.GetCustomAttributes<AuthorizeAttribute>(inherit: true)
+            .Should().NotContain(attribute =>
+                attribute.Policy == CapabilityPolicy.For(CapabilityKeys.AccountDestructiveActions));
+    }
+
+    [Fact]
     public async Task CanonicalAdministratorAssignment_AdmitsManagementWithoutRoleClaims()
     {
         using var sqlite = new SqliteTestContext();

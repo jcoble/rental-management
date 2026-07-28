@@ -58,6 +58,27 @@ public sealed class LeasingExperienceContractTests
     }
 
     [Fact]
+    public void LeasingTodayUsesCanonicalScopeAndCapabilityScopedCounts()
+    {
+        var source = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+
+        source.Should().Contain("public Task<LeasingTodayResponse?> GetTodayAsync");
+        source.Should().Contain("_db.Portfolios");
+        source.Should().Contain("portfolio.Id == scope.PortfolioId");
+        source.Should().NotContain("_db.AuthSessions");
+        source.Should().Contain("scope, CapabilityKeys.LeasingApplicationsManage, now");
+        source.Should().Contain("scope, CapabilityKeys.LeasingListingsManage, now");
+        source.Should().Contain("scope, CapabilityKeys.LeasingShowingsManage, now");
+        source.Should().Contain("[CapabilityKeys.LeasingOnboardingManage], now");
+        source.Should().Contain("ApplicationsToReview = applications.Count");
+        source.Should().Contain("ListingsNeedingAttention = _db.RentalListings.Count");
+        source.Should().Contain("ShowingsToday = _db.Appointments.Count");
+        source.Should().Contain("UpcomingMoveIns = _db.LeaseManagements.Count");
+        source.Should().Contain("UnreadConversations = conversations.Count");
+    }
+
+    [Fact]
     public void LeasingDetailsStayOnPurposeBuiltRoutesAndManagementRecordsAreDenied()
     {
         var listPage = ReadSource(
@@ -91,8 +112,9 @@ public sealed class LeasingExperienceContractTests
 
         var listingTab = ReadSource(
             "web", "src", "lib", "components", "unit", "tabs", "ListingTab.svelte");
-        listingTab.Should().Contain("let { unitId }: { unitId: number } = $props();");
-        listingTab.Should().NotContain("UnitDashboard");
+        listingTab.Should().Contain("let { unitId: propUnitId, dashboard }");
+        listingTab.Should().Contain("const unitId = $derived(dashboard?.unit.id ?? propUnitId ?? 0);");
+        detailPage.Should().NotContain("dashboard={");
     }
 
     [Fact]

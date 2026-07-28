@@ -11,6 +11,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { labelForType } from './appointments/calendar-utils';
@@ -32,6 +33,7 @@
 		queryKey: ['dashboard-work-orders', getCurrentPortfolioId()],
 		queryFn: () => workOrders.list(getCurrentPortfolioId(), { take: 10, sort: '-requestedAt' }),
 	}));
+	const canOpenGettingStarted = $derived(hasCapability('security.manage'));
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
@@ -236,7 +238,9 @@
 		<!-- Persistent "Getting started" checklist nudge. Self-managing: shows progress + the next steps
 		     (each deep-links and spotlights the exact control) and hides once everything is done. Works
 		     in both Sandbox and Live; supersedes the old empty-only "finish setup" banner. -->
-		<GettingStartedCard />
+		{#if canOpenGettingStarted}
+			<GettingStartedCard />
+		{/if}
 
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
 		<Card.Root class="m3-expressive-card m3-expressive-card--success m3-expressive-card--bars m3-motion-enter mb-6 gap-0 py-0" style="--m3-motion-index: 2" data-testid="dashboard-money-snapshot">
