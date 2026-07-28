@@ -61,6 +61,27 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForAppointmentsPostgreSql(
+        string connectionString,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        services.AddAtomicCommandHandler<
+            CreateAppointmentCommand,
+            OperationMutationResult,
+            CreateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateAppointmentCommand,
+            OperationMutationResult,
+            UpdateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            DeleteAppointmentCommand,
+            OperationMutationResult,
+            DeleteAppointmentHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForWorkOrdersPostgreSql(
         string connectionString,
         TimeProvider? timeProvider = null)
