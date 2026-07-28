@@ -86,6 +86,7 @@ export interface LeasingApplicationDetail {
 	notes?: string | null;
 	consentGiven: boolean;
 	submittedAtUtc: string;
+	approvedTenantId?: number | null;
 }
 
 export interface LeasingAppointmentDetail extends LeasingCalendarItem {
