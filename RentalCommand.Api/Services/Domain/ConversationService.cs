@@ -25,7 +25,7 @@ public class ConversationService : IConversationService
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
+    private readonly IRealtimeInvalidationQueue _realtimeQueue;
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILogger<ConversationService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -35,14 +35,14 @@ public class ConversationService : IConversationService
 
     public ConversationService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
+        IRealtimeInvalidationQueue realtimeQueue,
         IFairHousingReviewService fairHousing,
         ILogger<ConversationService> logger,
         TimeProvider timeProvider,
         IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
+        _realtimeQueue = realtimeQueue;
         _fairHousing = fairHousing;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -542,20 +542,7 @@ public class ConversationService : IConversationService
         }
 
         // Remote broadcasts happen only after the atomic command has committed (or replayed its receipt).
-        if (outcome.Value.NotificationIds.Count > 0)
-        {
-            var notifications = await _db.Notifications
-                .AsNoTracking()
-                .Where(notification => notification.PortfolioId == command.PortfolioId
-                    && outcome.Value.NotificationIds.Contains(notification.Id))
-                .OrderBy(notification => notification.Id)
-                .ToListAsync(ct);
-            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, notifications, ct);
-        }
-        else
-        {
-            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, [], ct);
-        }
+        EnqueueConversationUpdates(command.PortfolioId, detail, outcome.Value.NotificationIds);
 
         return detail;
     }
@@ -681,41 +668,27 @@ public class ConversationService : IConversationService
             command.PortfolioId, outcome.Value.ConversationId, tenantId, tenantViewer: true, ct);
         if (detail is null) return null;
 
-        if (outcome.Value.NotificationIds.Count > 0)
-        {
-            var notifications = await _db.Notifications
-                .AsNoTracking()
-                .Where(notification => notification.PortfolioId == command.PortfolioId
-                    && outcome.Value.NotificationIds.Contains(notification.Id))
-                .OrderBy(notification => notification.Id)
-                .ToListAsync(ct);
-            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, notifications, ct);
-        }
-        else
-        {
-            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, [], ct);
-        }
+        EnqueueConversationUpdates(command.PortfolioId, detail, outcome.Value.NotificationIds);
 
         return detail;
     }
 
-    private Task BroadcastConversationUpdatesAsync(
+    private void EnqueueConversationUpdates(
         int portfolioId,
         ConversationDetail detail,
-        IReadOnlyList<Notification> notifications,
-        CancellationToken ct)
+        IReadOnlyList<int> notificationIds)
     {
-        var updates = new List<EntityUpdateBroadcast>(notifications.Count + 1)
+        var updates = new List<EntityUpdateBroadcast>(notificationIds.Count + 1)
         {
             new(portfolioId, EntityType, detail.Id, detail),
         };
-        updates.AddRange(notifications.Select(notification =>
+        updates.AddRange(notificationIds.Select(notificationId =>
             new EntityUpdateBroadcast(
                 portfolioId,
                 "Notification",
-                notification.Id,
-                NotificationResponse.FromEntity(notification))));
-        return _dataUpdate.BroadcastEntityUpdatesAsync(updates, ct);
+                notificationId,
+                new SavedContextNotificationRealtimeHint())));
+        _realtimeQueue.EnqueueEntityUpdates(updates);
     }
 
     // ===========================================================================================

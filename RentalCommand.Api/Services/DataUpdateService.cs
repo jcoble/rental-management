@@ -90,8 +90,7 @@ public sealed class DataUpdateService : IDataUpdateService
             var batchedUpdateIndexes = new HashSet<int>();
             foreach (var group in updates
                 .Select((update, index) => new { update, index })
-                .Where(item => item.update.EntityType == "Notification"
-                    && item.update.Data is NotificationResponse { NavigationIntent: not null })
+                .Where(item => IsSavedContextNotificationUpdate(item.update))
                 .GroupBy(item => item.update.PortfolioId))
             {
                 var batchSends = await BuildSavedContextNotificationPendingSendsAsync(
@@ -332,6 +331,11 @@ public sealed class DataUpdateService : IDataUpdateService
 
         return sends;
     }
+
+    private static bool IsSavedContextNotificationUpdate(EntityUpdateBroadcast update) =>
+        update.EntityType == "Notification"
+        && update.Data is SavedContextNotificationRealtimeHint
+            or NotificationResponse { NavigationIntent: not null };
 
     private async Task<bool> SendPendingAsync(PendingRealtimeSend send, CancellationToken ct)
     {
