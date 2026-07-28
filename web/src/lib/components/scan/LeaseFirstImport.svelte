@@ -599,7 +599,7 @@
 	{:else if step === 3}
 		<div class="space-y-3" data-testid="new-rental-step-lease">
 			<h2 class="text-base font-semibold text-foreground">Lease</h2>
-			<LeaseTermFields bind:form={leaseForm} errors={leaseErrors} {autoFilled} {confidence} testidPrefix="new-rental-lease" />
+			<LeaseTermFields bind:form={leaseForm} errors={leaseErrors} {autoFilled} {confidence} showLifecycleFields={false} testidPrefix="new-rental-lease" />
 			<div class="grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
 				<div class={rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
 					<label class="mb-1 block text-xs font-semibold text-foreground" for="new-rental-rent-tracking-mode">
