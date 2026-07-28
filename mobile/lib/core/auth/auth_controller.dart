@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
+import '../navigation/mobile_restoration_state.dart';
 import '../push/push_service.dart';
 import '../../features/onboarding/onboarding_repository.dart';
 import 'auth_models.dart';
@@ -138,7 +139,7 @@ class AuthController extends Notifier<AuthState> {
       return;
     }
 
-    await _revalidateStoredSession();
+    await _revalidateStoredSession(fromBiometricUnlock: false);
   }
 
   /// Prompts for biometrics and revalidates the existing server session on success.
@@ -151,14 +152,22 @@ class AuthController extends Notifier<AuthState> {
       return;
     }
 
-    await _revalidateStoredSession();
+    await _revalidateStoredSession(fromBiometricUnlock: true);
   }
 
-  Future<void> _revalidateStoredSession() async {
+  Future<void> _revalidateStoredSession({
+    required bool fromBiometricUnlock,
+  }) async {
     try {
       final user = await _repository.currentUser();
       final access = await _repository.currentAccess();
       final onboarding = await _resolveOnboardingPending();
+      if (fromBiometricUnlock) {
+        // A biometric cold start is a fresh app entry, not a continuation of
+        // the previous navigation stack. Clear only the saved navigation; the
+        // authenticated server session remains intact.
+        await ref.read(mobileRestorationStateStoreProvider).clear();
+      }
       state = AuthStateAuthenticated(
         user,
         access,
@@ -166,11 +175,24 @@ class AuthController extends Notifier<AuthState> {
         onboardingPending: onboarding.pending,
         onboardingResolved: onboarding.resolved,
       );
-    } on ApiException {
-      // Stored token is invalid or expired and refresh also failed.
-      await _tokenStore.clearTokens();
-      await _biometric.clearEnabled();
-      state = const AuthStateUnauthenticated();
+    } on ApiException catch (error) {
+      if (error.statusCode == 401) {
+        // The server definitively rejected both the stored access token and its
+        // refresh path. Only that confirmed auth failure may destroy the saved
+        // session and its biometric opt-in.
+        await _tokenStore.clearTokens();
+        await _biometric.clearEnabled();
+        state = const AuthStateUnauthenticated();
+        return;
+      }
+
+      // Offline, timeout, 5xx, and malformed-response failures do not prove the
+      // session is invalid. Preserve the compact Fingerprint retry only when
+      // this revalidation followed biometric unlock; normal stored sessions
+      // must never gain biometric eligibility from a network failure.
+      state = fromBiometricUnlock
+          ? const AuthStateBiometricLocked()
+          : AuthStateUnauthenticated(error: error.message);
     }
   }
 
