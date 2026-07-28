@@ -41,6 +41,7 @@
 		rentalStructureOptions
 	} from '$lib/properties/property-labels';
 	import { propertyUpdateFields } from '$lib/properties/property-update-payload';
+	import { propertyYearBuiltBusinessYearError } from '$lib/properties/property-year-built';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -121,6 +122,12 @@
 			sort: '-updatedAt'
 		}),
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0 && activeArea === 'property-work',
+	}));
+
+	const businessDateQuery = createQuery(() => ({
+		queryKey: ['portfolio-business-date', portfolioId],
+		queryFn: () => leaseManagements.prepareMoveInContext(),
+		enabled: canManageRentals && portfolioId > 0,
 	}));
 
 	const expensesQuery = createQuery(() => ({
@@ -256,6 +263,14 @@
 		const basis = parseForm(propertyBasisSchema, propertyForm);
 		if (result.errors || operations.errors || basis.errors) {
 			propertyFormErrors = { ...(result.errors ?? {}), ...(operations.errors ?? {}), ...(basis.errors ?? {}) };
+			return;
+		}
+		const yearBuiltError = propertyYearBuiltBusinessYearError(
+			operations.data.yearBuilt,
+			businessDateQuery.data?.businessDate
+		);
+		if (yearBuiltError) {
+			propertyFormErrors = { yearBuilt: yearBuiltError };
 			return;
 		}
 		propertyFormErrors = {};
