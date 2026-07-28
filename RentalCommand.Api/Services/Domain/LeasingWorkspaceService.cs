@@ -214,6 +214,14 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
             {
                 PropertyId = unit.PropertyId,
                 UnitId = unit.Id,
+                LeaseManagementId = unit.LeaseManagements
+                    .Where(management => management.CanceledAtUtc == null &&
+                        management.PossessionReturnedAtUtc == null)
+                    .OrderByDescending(management => management.PossessionGivenAtUtc != null)
+                    .ThenBy(management => management.PlannedPossessionAtUtc)
+                    .ThenByDescending(management => management.Id)
+                    .Select(management => (int?)management.Id)
+                    .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
                 Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
@@ -394,6 +402,14 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
             {
                 PropertyId = unit.PropertyId,
                 UnitId = unit.Id,
+                LeaseManagementId = unit.LeaseManagements
+                    .Where(management => management.CanceledAtUtc == null &&
+                        management.PossessionReturnedAtUtc == null)
+                    .OrderByDescending(management => management.PossessionGivenAtUtc != null)
+                    .ThenBy(management => management.PlannedPossessionAtUtc)
+                    .ThenByDescending(management => management.Id)
+                    .Select(management => (int?)management.Id)
+                    .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
                 Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
