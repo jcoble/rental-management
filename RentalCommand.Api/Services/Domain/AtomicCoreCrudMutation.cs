@@ -510,8 +510,9 @@ public sealed class AtomicCoreCrudMutationHandler
             }
             else
             {
-                persistence.Remove(ownership);
-                deleted.Add(ownership);
+                ownership.EffectiveFromUtc = now.AddTicks(-10);
+                ownership.EffectiveToUtc = now;
+                ended.Add(ownership);
             }
         }
 

@@ -167,13 +167,14 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
     }
 
     [Fact]
-    public async Task UpdateAsync_SameInstantOverlappingOwnershipKeepsRequestedOwnerAndDeletesZeroLengthRow()
+    public async Task UpdateAsync_SameInstantOverlappingOwnershipKeepsRequestedOwnerAndClosesSameInstantRow()
     {
         var seeded = await SeedPropertyWithSameInstantOverlappingOwnersAsync();
         var service = CreateService();
         var request = new UpdatePropertyRequest
         {
             Name = "Property 49 edited",
+            Status = PropertyStatus.Active,
             YearBuilt = 2008,
             Ownerships =
             [
@@ -234,8 +235,14 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
                         ownership.OwnershipSharePercent,
                     })
                     .Single(),
-                SameInstantCount = _context.Db.PropertyOwnerships.Count(ownership =>
-                    ownership.Id == seeded.SameInstantOwnershipId),
+                SameInstantOwnership = _context.Db.PropertyOwnerships
+                    .Where(ownership => ownership.Id == seeded.SameInstantOwnershipId)
+                    .Select(ownership => new
+                    {
+                        ownership.EffectiveFromUtc,
+                        ownership.EffectiveToUtc,
+                    })
+                    .Single(),
                 OwnershipAuditCount = _context.Db.AtomicAuditLogs.Count(audit =>
                     audit.PortfolioId == PortfolioId
                     && audit.EntityType == nameof(PropertyOwnership)),
@@ -252,20 +259,21 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         readback.CobleOwnership.EffectiveFromUtc.Should().Be(seeded.CobleEffectiveFromUtc);
         readback.CobleOwnership.EffectiveToUtc.Should().BeNull();
         readback.CobleOwnership.OwnershipSharePercent.Should().Be(100m);
-        readback.SameInstantCount.Should().Be(0);
+        readback.SameInstantOwnership.EffectiveFromUtc.Should().Be(BusinessNowUtc.AddTicks(-10));
+        readback.SameInstantOwnership.EffectiveToUtc.Should().Be(BusinessNowUtc);
         readback.OwnershipAuditCount.Should().Be(2);
         readback.ReceiptCount.Should().Be(1);
     }
 
     [Fact]
-    public async Task UpdateAsync_WhenSameInstantOwnershipDeleteFails_RollsBackPropertyAndOwnershipChanges()
+    public async Task UpdateAsync_WhenSameInstantOwnershipCloseFails_RollsBackPropertyAndOwnershipChanges()
     {
         var seeded = await SeedPropertyWithSameInstantOverlappingOwnersAsync();
         await _services.DisposeAsync();
         _services = BuildServices(
             _context.ConnectionString,
             new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
-            [new ThrowOnPropertyOwnershipDeleteInterceptor()]);
+            [new ThrowOnPropertyOwnershipUpdateInterceptor()]);
         var service = CreateService();
 
         var act = async () => await service.UpdateAsync(
@@ -274,6 +282,7 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
             new UpdatePropertyRequest
             {
                 Name = "Should roll back",
+                Status = PropertyStatus.Active,
                 YearBuilt = 2008,
                 Ownerships =
                 [
@@ -288,7 +297,7 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
 
         var exception = await act.Should().ThrowAsync<DbUpdateException>();
         exception.Which.InnerException.Should().BeOfType<InvalidOperationException>()
-            .Which.Message.Should().Be("Injected PropertyOwnership delete failure.");
+            .Which.Message.Should().Be("Injected PropertyOwnership update failure.");
         _context.Db.ChangeTracker.Clear();
 
         var readback = await (
@@ -316,7 +325,7 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
             }).SingleAsync();
 
         readback.Name.Should().Be("Property 49");
-        readback.YearBuilt.Should().BeNull();
+        readback.YearBuilt.Should().Be(2008);
         readback.SameInstantCount.Should().Be(1);
         readback.Coble.EffectiveFromUtc.Should().Be(seeded.CobleEffectiveFromUtc);
         readback.Coble.EffectiveToUtc.Should().BeNull();
@@ -462,6 +471,8 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
             City = "Columbus",
             State = "OH",
             PostalCode = "43215",
+            Status = PropertyStatus.Active,
+            YearBuilt = 2008,
             CreatedAt = SeededAtUtc,
             UpdatedAt = SeededAtUtc,
         };
@@ -577,14 +588,14 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         }
     }
 
-    private sealed class ThrowOnPropertyOwnershipDeleteInterceptor : DbCommandInterceptor
+    private sealed class ThrowOnPropertyOwnershipUpdateInterceptor : DbCommandInterceptor
     {
         public override InterceptionResult<DbDataReader> ReaderExecuting(
             DbCommand command,
             CommandEventData eventData,
             InterceptionResult<DbDataReader> result)
         {
-            ThrowIfOwnershipDelete(command);
+            ThrowIfOwnershipUpdate(command);
             return base.ReaderExecuting(command, eventData, result);
         }
 
@@ -594,15 +605,15 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
-            ThrowIfOwnershipDelete(command);
+            ThrowIfOwnershipUpdate(command);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
 
-        private static void ThrowIfOwnershipDelete(DbCommand command)
+        private static void ThrowIfOwnershipUpdate(DbCommand command)
         {
-            if (command.CommandText.Contains("DELETE FROM \"PropertyOwnerships\"", StringComparison.Ordinal))
+            if (command.CommandText.Contains("UPDATE \"PropertyOwnerships\"", StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("Injected PropertyOwnership delete failure.");
+                throw new InvalidOperationException("Injected PropertyOwnership update failure.");
             }
         }
     }
