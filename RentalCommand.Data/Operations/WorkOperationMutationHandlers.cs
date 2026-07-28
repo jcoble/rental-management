@@ -308,7 +308,7 @@ public sealed class CreateTenantWorkOrderHandler
     public async Task<OperationMutationResult> HandleAsync(
         CreateTenantWorkOrderCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = command.RequestedAtUtc;
         var relationship = await TenantWorkOrderAuthorization.CurrentRelationship(command, attempt.Persistence, now)
             .FirstOrDefaultAsync(ct);
         if (relationship is null) return new(OperationMutationOutcome.NotFound, 0);
@@ -344,7 +344,7 @@ public sealed class CreateTenantWorkOrderHandler
     public async Task AuthorizeReplayAsync(
         CreateTenantWorkOrderCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = command.RequestedAtUtc;
         if (!await TenantWorkOrderAuthorization.CurrentRelationship(command, persistence, now).AnyAsync(ct))
             throw new UnauthorizedAccessException("The tenant relationship is no longer active.");
     }

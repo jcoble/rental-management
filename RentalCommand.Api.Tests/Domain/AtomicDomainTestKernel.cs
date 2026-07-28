@@ -32,6 +32,30 @@ internal static class AtomicDomainTestKernel
             UpdateWorkOrderCommand,
             OperationMutationResult,
             UpdateWorkOrderHandler>();
+        services.AddAtomicCommandHandler<
+            CreateTenantWorkOrderCommand,
+            OperationMutationResult,
+            CreateTenantWorkOrderHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForWorkOrdersPostgreSql(
+        string connectionString,
+        TimeProvider? timeProvider = null)
+    {
+        var services = CorePostgreSql(connectionString, timeProvider);
+        services.AddAtomicCommandHandler<
+            CreateWorkOrderCommand,
+            OperationMutationResult,
+            CreateWorkOrderHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateWorkOrderCommand,
+            OperationMutationResult,
+            UpdateWorkOrderHandler>();
+        services.AddAtomicCommandHandler<
+            CreateTenantWorkOrderCommand,
+            OperationMutationResult,
+            CreateTenantWorkOrderHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -158,10 +182,14 @@ internal static class AtomicDomainTestKernel
         return services;
     }
 
-    private static ServiceCollection CorePostgreSql(string connectionString)
+    private static ServiceCollection CorePostgreSql(string connectionString, TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
