@@ -83,21 +83,16 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         notification.NavigationFallbackDestination.Should().Be(NavigationDestination.Home);
         notification.CreatedAt.Should().Be(BusinessNowUtc);
 
-        (await _context.Db.AtomicAuditLogs.AsNoTracking()
-                .CountAsync(row => row.EntityType == nameof(Notification)
-                    && row.EntityId == notification.Id
-                    && row.ChangeReason == "Appointment lifecycle tenant notification committed."))
-            .Should().Be(1);
+        await AssertEveryAppointmentNotificationHasExactlyOneCreatedAuditAsync(created.Id);
         _commands.Should().Contain(command =>
             command.Contains("YS-187 appointment lifecycle tenant notification recipients", StringComparison.Ordinal)
             && command.Contains("\"TenantUserAccesses\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("\"LeaseManagementParties\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("\"Portfolios\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase));
+            && command.Contains("\"Portfolios\"", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task UpdateAuthorizedAsync_NotifiesTenantForUpdateAndCancellationLifecycle()
+    public async Task UpdateAuthorizedAsync_DistinctUpdateCommandsNotifyAndReplayDoesNotDuplicate()
     {
         var scenario = await SeedLeasedTenantAppointmentScenarioAsync();
         var service = Service(_services);
@@ -106,9 +101,19 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
             Request(scenario),
             "appointment-create-before-update-notification");
 
-        await service.UpdateAuthorizedAsync(
+        var firstUpdate = await service.UpdateAuthorizedAsync(
             _scope,
             created!.Id,
+            new UpdateAppointmentRequest
+            {
+                Title = "Move-in walkthrough rescheduled",
+                ScheduledStart = new DateTime(2027, 1, 26, 15, 0, 0, DateTimeKind.Utc),
+                ScheduledEnd = new DateTime(2027, 1, 26, 16, 0, 0, DateTimeKind.Utc),
+            },
+            "appointment-update-tenant-notification");
+        var firstReplay = await service.UpdateAuthorizedAsync(
+            _scope,
+            created.Id,
             new UpdateAppointmentRequest
             {
                 Title = "Move-in walkthrough rescheduled",
@@ -119,28 +124,36 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         await service.UpdateAuthorizedAsync(
             _scope,
             created.Id,
-            new UpdateAppointmentRequest { Status = AppointmentStatus.Cancelled },
-            "appointment-cancel-tenant-notification");
+            new UpdateAppointmentRequest
+            {
+                Title = "Move-in walkthrough confirmed",
+                ScheduledStart = new DateTime(2027, 1, 26, 16, 0, 0, DateTimeKind.Utc),
+                ScheduledEnd = new DateTime(2027, 1, 26, 17, 0, 0, DateTimeKind.Utc),
+            },
+            "appointment-second-update-tenant-notification");
 
+        firstReplay!.Id.Should().Be(firstUpdate!.Id);
         _context.Db.ChangeTracker.Clear();
-        var notificationTypes = await _context.Db.Notifications.AsNoTracking()
-            .Where(row => row.RelatedEntityType == nameof(Appointment)
-                && row.RelatedEntityId == created.Id)
-            .OrderBy(row => row.Type)
-            .Select(row => row.Type)
-            .ToListAsync();
-        notificationTypes.Should().BeEquivalentTo(
-            "TenantAppointmentScheduled",
-            "TenantAppointmentUpdated",
-            "TenantAppointmentCancelled");
-        var updatedMessage = await _context.Db.Notifications.AsNoTracking()
-            .Where(row => row.RelatedEntityType == nameof(Appointment)
-                && row.RelatedEntityId == created.Id
-                && row.Type == "TenantAppointmentUpdated")
-            .Select(row => row.Message)
-            .SingleAsync();
-        updatedMessage.Should().Contain("Jan 26, 2027 at 10:00 AM America/New_York (UTC-05:00)");
-        updatedMessage.Should().NotContain("3:00 PM UTC");
+        (await CountAppointmentNotificationsAsync(created.Id, "TenantAppointmentScheduled"))
+            .Should().Be(1);
+        (await CountAppointmentNotificationsAsync(created.Id, "TenantAppointmentUpdated"))
+            .Should().Be(2);
+        (await _context.Db.Notifications.AsNoTracking()
+                .CountAsync(row => row.RelatedEntityType == nameof(Appointment)
+                    && row.RelatedEntityId == created.Id
+                    && row.Type == "TenantAppointmentUpdated"
+                    && row.Message.Contains("Jan 26, 2027 at 10:00 AM America/New_York (UTC-05:00)")))
+            .Should().Be(1);
+        (await _context.Db.Notifications.AsNoTracking()
+                .CountAsync(row => row.RelatedEntityType == nameof(Appointment)
+                    && row.RelatedEntityId == created.Id
+                    && row.Type == "TenantAppointmentUpdated"
+                    && row.Message.Contains("Jan 26, 2027 at 11:00 AM America/New_York (UTC-05:00)")))
+            .Should().Be(1);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking()
+                .CountAsync(row => row.CommandType == "appointment.update"))
+            .Should().Be(2);
+        await AssertEveryAppointmentNotificationHasExactlyOneCreatedAuditAsync(created.Id);
     }
 
     [Fact]
@@ -168,6 +181,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         (await _context.Db.AtomicCommandReceipts.AsNoTracking()
                 .CountAsync(row => row.CommandType == "appointment.create"))
             .Should().Be(1);
+        await AssertEveryAppointmentNotificationHasExactlyOneCreatedAuditAsync(first.Id);
     }
 
     [Fact]
@@ -210,6 +224,37 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         Mock.Of<IDataUpdateService>(),
         new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
         services.GetRequiredService<IAtomicUnitOfWork>());
+
+    private async Task<int> CountAppointmentNotificationsAsync(int appointmentId, string type)
+    {
+        return await _context.Db.Notifications.AsNoTracking()
+            .CountAsync(row => row.RelatedEntityType == nameof(Appointment)
+                && row.RelatedEntityId == appointmentId
+                && row.Type == type);
+    }
+
+    private async Task AssertEveryAppointmentNotificationHasExactlyOneCreatedAuditAsync(int appointmentId)
+    {
+        var notifications = _context.Db.Notifications.AsNoTracking()
+            .Where(row => row.RelatedEntityType == nameof(Appointment)
+                && row.RelatedEntityId == appointmentId);
+        var notificationCount = await notifications.CountAsync();
+        var notificationsWithOneCreatedAudit = await notifications.CountAsync(notification =>
+            _context.Db.AtomicAuditLogs.AsNoTracking()
+                .Count(audit => audit.EntityType == nameof(Notification)
+                    && audit.EntityId == notification.Id
+                    && audit.Operation == AuditLogOperation.Created) == 1);
+
+        notificationsWithOneCreatedAudit.Should().Be(notificationCount);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+                .CountAsync(audit => audit.EntityType == nameof(Notification)
+                    && audit.ChangeReason == "Appointment lifecycle tenant notification committed."
+                    && _context.Db.Notifications.AsNoTracking().Any(notification =>
+                        notification.Id == audit.EntityId
+                        && notification.RelatedEntityType == nameof(Appointment)
+                        && notification.RelatedEntityId == appointmentId)))
+            .Should().Be(0);
+    }
 
     private async Task<TenantAppointmentScenario> SeedLeasedTenantAppointmentScenarioAsync()
     {

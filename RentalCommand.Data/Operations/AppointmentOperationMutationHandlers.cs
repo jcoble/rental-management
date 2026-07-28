@@ -292,12 +292,6 @@ internal static class AppointmentTenantNotifications
                                 candidateRelationship.UnitId == appointment.UnitId.Value)
                         orderby candidateAccess.AccessContextId
                         select candidateAccess.AccessContextId).First()
-                    && !attempt.Persistence.Query<Notification>().Any(notification =>
-                        notification.PortfolioId == appointment.PortfolioId
-                        && notification.UserId == context.UserId
-                        && notification.Type == notificationType
-                        && notification.RelatedEntityType == nameof(Appointment)
-                        && notification.RelatedEntityId == appointment.Id)
                 orderby context.UserId
                 select new AppointmentTenantNotificationRecipient(
                     context.UserId,
@@ -334,21 +328,6 @@ internal static class AppointmentTenantNotifications
 
         attempt.Persistence.AddRange(notifications);
         await attempt.FlushBusinessAsync(ct);
-        foreach (var notification in notifications)
-        {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
-                appointment.PortfolioId,
-                nameof(Notification),
-                notification.Id,
-                AuditLogOperation.Created,
-                NewValues: JsonSerializer.Serialize(new
-                {
-                    notification.UserId,
-                    notification.Type,
-                    notification.RelatedEntityId,
-                }),
-                ChangeReason: "Appointment lifecycle tenant notification committed."));
-        }
     }
 
     private static string Type(AppointmentTenantNotificationLifecycle lifecycle) => lifecycle switch
