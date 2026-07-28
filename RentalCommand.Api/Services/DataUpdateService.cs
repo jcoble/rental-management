@@ -18,6 +18,7 @@ namespace RentalCommand.Api.Services;
 /// </summary>
 public sealed class DataUpdateService : IDataUpdateService
 {
+    private static readonly TimeSpan DefaultHubSendTimeout = TimeSpan.FromSeconds(2);
     private static readonly string[] RentalReadCapabilities =
         [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingTermsRead, CapabilityKeys.LeasingOnboardingManage];
     private static readonly string[] WorkReadCapabilities = [CapabilityKeys.WorkRead];
@@ -30,17 +31,34 @@ public sealed class DataUpdateService : IDataUpdateService
     private readonly IHubContext<DataUpdateHub> _hubContext;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DataUpdateService> _logger;
+    private readonly TimeSpan _hubSendTimeout;
 
     public DataUpdateService(
         RentalCommandDbContext db,
         IHubContext<DataUpdateHub> hubContext,
         TimeProvider timeProvider,
         ILogger<DataUpdateService> logger)
+        : this(db, hubContext, timeProvider, logger, DefaultHubSendTimeout)
     {
+    }
+
+    internal DataUpdateService(
+        RentalCommandDbContext db,
+        IHubContext<DataUpdateHub> hubContext,
+        TimeProvider timeProvider,
+        ILogger<DataUpdateService> logger,
+        TimeSpan hubSendTimeout)
+    {
+        if (hubSendTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hubSendTimeout), "Realtime send timeout must be positive.");
+        }
+
         _db = db;
         _hubContext = hubContext;
         _timeProvider = timeProvider;
         _logger = logger;
+        _hubSendTimeout = hubSendTimeout;
     }
 
     public Task BroadcastEntityUpdateAsync(
@@ -105,7 +123,10 @@ public sealed class DataUpdateService : IDataUpdateService
                     Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
                 };
 
-            await _hubContext.Clients.Groups(groupNames).SendAsync(eventName, payload, ct);
+            if (!await TrySendHubAsync(groupNames, eventName, payload, ct))
+            {
+                return;
+            }
 
             _logger.LogDebug(
                 "Sent scoped {EventName} invalidation for {EntityType} {EntityId} to {RecipientCount} current session revisions",
@@ -124,6 +145,39 @@ public sealed class DataUpdateService : IDataUpdateService
                 entityType,
                 entityId,
                 portfolioId);
+        }
+    }
+
+    private async Task<bool> TrySendHubAsync(
+        IReadOnlyList<string> groupNames,
+        string eventName,
+        object payload,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _hubContext.Clients.Groups(groupNames)
+                .SendAsync(eventName, payload, ct)
+                .WaitAsync(_hubSendTimeout, ct);
+            return true;
+        }
+        catch (TimeoutException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Timed out after {TimeoutMilliseconds} ms sending scoped {EventName} invalidation to {RecipientCount} current session revisions",
+                _hubSendTimeout.TotalMilliseconds,
+                eventName,
+                groupNames.Count);
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug(
+                "Cancelled scoped {EventName} invalidation to {RecipientCount} current session revisions",
+                eventName,
+                groupNames.Count);
+            return false;
         }
     }
 
