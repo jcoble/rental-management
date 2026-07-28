@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Core.Time;
 using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Workers;
@@ -43,6 +44,12 @@ public abstract class EngineWorkerBase : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("{WorkerName} starting (poll interval {Interval})", WorkerName, PollInterval);
+
+        if (!await WaitForSimulationClockStartupAsync(stoppingToken))
+        {
+            _logger.LogInformation("{WorkerName} stopped before simulation clock startup completed", WorkerName);
+            return;
+        }
 
         // Record start in the heartbeat table so the health check and watchdog
         // see this worker immediately rather than waiting for the first cycle.
@@ -141,6 +148,70 @@ public abstract class EngineWorkerBase : BackgroundService
     /// still reports "alive" regularly (only a genuine hang then goes stale).
     /// </summary>
     protected virtual TimeSpan HeartbeatInterval => TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// In simulation-enabled hosts, the ambient <see cref="TimeProvider"/> starts with a safe default
+    /// real-clock state until the persisted <c>SimulationClock</c> row is loaded. Engine workers mutate
+    /// durable rows, so they must not run a cycle until that first persisted state is authoritative.
+    /// </summary>
+    private async Task<bool> WaitForSimulationClockStartupAsync(CancellationToken stoppingToken)
+    {
+        IClockStateProvider? clockState;
+        try
+        {
+            clockState = _serviceProvider.GetService<IClockStateProvider>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{WorkerName} failed to resolve simulation clock state provider", WorkerName);
+            return false;
+        }
+
+        if (clockState is null || clockState.HasLoadedPersistedState)
+        {
+            return true;
+        }
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await clockState.EnsureInitializedAsync(stoppingToken);
+                _logger.LogInformation("{WorkerName} loaded persisted simulation clock state before first cycle", WorkerName);
+                return true;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{WorkerName} is waiting for persisted simulation clock state before processing", WorkerName);
+
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var reporter = scope.ServiceProvider.GetRequiredService<EngineStatusReporter>();
+                    await reporter.ReportErrorAsync(ex, WorkerName, stoppingToken);
+                }
+                catch (Exception reportEx)
+                {
+                    _logger.LogWarning(reportEx, "{WorkerName} failed to report simulation clock startup error", WorkerName);
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), TimeProvider.System, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Sleeps for <see cref="PollInterval"/>, broken into <see cref="HeartbeatInterval"/> slices,

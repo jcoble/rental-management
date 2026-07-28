@@ -16,15 +16,20 @@ namespace RentalCommand.Api.Simulation;
 public sealed class ClockStateProvider : IClockStateProvider
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly SemaphoreSlim _initializationLock = new(1, 1);
 
     // Reference assignment is atomic and ClockState is an immutable record, so the hot Current read
     // never needs a lock; `volatile` publishes a freshly-refreshed snapshot to reader threads at once.
     private volatile ClockState _current = ClockState.RealTime;
+    private volatile bool _hasLoadedPersistedState;
 
     public ClockStateProvider(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
 
     /// <inheritdoc />
     public ClockState Current => _current;
+
+    /// <inheritdoc />
+    public bool HasLoadedPersistedState => _hasLoadedPersistedState;
 
     /// <inheritdoc />
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -42,5 +47,35 @@ public sealed class ClockStateProvider : IClockStateProvider
         }
 
         _current = new ClockState(row.Mode, row.SimAnchorUtc, row.RealAnchorUtc, row.TimeZoneId);
+        _hasLoadedPersistedState = true;
+    }
+
+    /// <inheritdoc />
+    public async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
+    {
+        if (_hasLoadedPersistedState)
+        {
+            return;
+        }
+
+        await _initializationLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_hasLoadedPersistedState)
+            {
+                return;
+            }
+
+            await RefreshAsync(cancellationToken);
+
+            if (!_hasLoadedPersistedState)
+            {
+                throw new InvalidOperationException("SimulationClock row 1 was not found; refusing to use the default real clock as an initialized simulation state.");
+            }
+        }
+        finally
+        {
+            _initializationLock.Release();
+        }
     }
 }

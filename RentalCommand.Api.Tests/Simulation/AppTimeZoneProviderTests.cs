@@ -44,6 +44,10 @@ public class AppTimeZoneProviderTests
 
         public ClockState Current { get; }
 
+        public bool HasLoadedPersistedState => true;
+
         public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task EnsureInitializedAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }
