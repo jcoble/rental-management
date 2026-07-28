@@ -300,6 +300,42 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         files.Count.Should().Be(1);
     }
 
+    [Fact]
+    public async Task UploadPdfAsync_SelectedPropertyScopeCreatesPortfolioTemplateWithNullTarget()
+    {
+        await using var postgres = await _postgres.CreateContextAsync();
+        var selectedProperty = SeedProperty(postgres.Db, "Morgan selected property");
+        SeedProperty(postgres.Db, "Morgan unselected property");
+        var scope = postgres.Db.SeedLeasingAgentScope(
+            PortfolioId,
+            selectedProperty.Id,
+            nameof(UploadPdfAsync_SelectedPropertyScopeCreatesPortfolioTemplateWithNullTarget));
+        await using var services = CreateAtomicServices(builder =>
+            builder.UseNpgsql(postgres.ConnectionString));
+        var files = new InMemoryFileStorage();
+        var sut = new DocumentTemplateService(
+            postgres.Db, _catalog, files,
+            services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
+        await using var content = new MemoryStream("%PDF-1.7 morgan selected scope lease"u8.ToArray());
+
+        var result = await sut.UploadPdfAsync(
+            scope,
+            content,
+            "scn-0001-lease.pdf",
+            "application/pdf",
+            content.Length,
+            "SCN-0001 Lease",
+            "Uploaded by a selected-property leasing user.",
+            defaultForPortfolio: false,
+            propertyId: null,
+            idempotencyKey: "upload-scn-0001-selected-scope-lease");
+
+        result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        result.Value!.PropertyId.Should().BeNull();
+        (await postgres.Db.DocumentTemplates.CountAsync()).Should().Be(1);
+    }
+
     private static ServiceProvider CreateAtomicServices(
         Action<DbContextOptionsBuilder> configureDatabase)
     {
@@ -329,6 +365,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     }
 
     private Property SeedProperty(string name)
+        => SeedProperty(_ctx.Db, name);
+
+    private static Property SeedProperty(RentalCommandDbContext db, string name)
     {
         var property = new Property
         {
@@ -341,8 +380,8 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
-        _ctx.Db.Properties.Add(property);
-        _ctx.Db.SaveChanges();
+        db.Properties.Add(property);
+        db.SaveChanges();
         return property;
     }
 

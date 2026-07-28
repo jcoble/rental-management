@@ -406,14 +406,12 @@ internal static class DocumentTemplateCommandSupport
     {
         var properties = StaffOperationAuthorization.AuthorizedProperties(
             portfolioId, actor, CapabilityKeys.LeasingAgreementsPrepare, persistence, now);
-        var allProperties = StaffOperationAuthorization.ActiveAssignments(
-                portfolioId, actor, CapabilityKeys.LeasingAgreementsPrepare, persistence, now)
-            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+        var templateScopes = AuthorizedTemplateScopes(portfolioId, actor, persistence, now);
         var query = persistence.Query<DocumentTemplate>().Where(template =>
             template.PortfolioId == portfolioId &&
             (template.PropertyId.HasValue
                 ? properties.Any(property => property.Id == template.PropertyId.Value)
-                : allProperties.Any()));
+                : templateScopes.Any()));
         return tracking ? query : query.AsNoTracking();
     }
 
@@ -434,10 +432,26 @@ internal static class DocumentTemplateCommandSupport
 
     internal static Task<bool> CanManageAsync(
         int portfolioId, StaffOperationActor actor, int? propertyId,
-        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
-        StaffOperationAuthorization.CanManageNullablePropertyAsync(
-            portfolioId, actor, propertyId, CapabilityKeys.LeasingAgreementsPrepare,
-            persistence, now, ct);
+        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+    {
+        if (propertyId.HasValue)
+        {
+            return StaffOperationAuthorization.CanManagePropertyAsync(
+                portfolioId, actor, propertyId.Value, CapabilityKeys.LeasingAgreementsPrepare,
+                persistence, now, ct);
+        }
+
+        return AuthorizedTemplateScopes(portfolioId, actor, persistence, now).AnyAsync(ct);
+    }
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedTemplateScopes(
+        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence, DateTime now) =>
+        StaffOperationAuthorization.ActiveAssignments(
+                portfolioId, actor, CapabilityKeys.LeasingAgreementsPrepare, persistence, now)
+            .Where(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId));
 
     internal static async Task<bool> ReferencesValidAsync(
         IAtomicPersistenceSession persistence, int portfolioId,

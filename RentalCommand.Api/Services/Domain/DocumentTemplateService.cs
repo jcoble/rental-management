@@ -612,7 +612,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             template.PortfolioId == scope.PortfolioId &&
             (template.PropertyId.HasValue
                 ? authorizedProperties.Any(property => property.Id == template.PropertyId.Value)
-                : allProperties.Any()));
+                : allProperties.Any() || authorizedProperties.Any()));
     }
 
 }
