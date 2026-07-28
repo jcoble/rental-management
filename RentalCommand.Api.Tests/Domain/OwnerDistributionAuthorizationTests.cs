@@ -590,3 +590,215 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
+
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class OwnerPortalDistributionPostgreSqlTests : IAsyncLifetime
+{
+    private const int PortfolioId = 1;
+    private const int UserId = 1;
+    private static readonly DateTime NowUtc = new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
+
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<string> _commands = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private OwnerPortalService _service = null!;
+
+    public OwnerPortalDistributionPostgreSqlTests(MigratedPostgreSqlFixture fixture) => _fixture = fixture;
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _service = new OwnerPortalService(_ctx.Db, new FixedTimeProvider(new DateTimeOffset(NowUtc)));
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ListDistributionsPageAsync_NormalizesDateFiltersAndKeepsCountAndPageDbSide()
+    {
+        var scenario = await SeedOwnerPortalDistributionScenarioAsync();
+        _commands.Clear();
+
+        var page = await _service.ListDistributionsPageAsync(
+            scenario.Scope,
+            new ListQuery
+            {
+                From = new DateTime(2027, 1, 1),
+                To = new DateTime(2027, 12, 31),
+                Sort = "-date",
+                Skip = 0,
+                Take = 1,
+            });
+
+        page.TotalCount.Should().Be(2);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        var row = page.Items.Should().ContainSingle().Subject;
+        row.OwnerEntityId.Should().Be(scenario.RiverbendOwnerId);
+        row.PropertyId.Should().Be(scenario.RiverbendPropertyId);
+        row.Amount.Should().Be(4_200m);
+        page.Items.Should().NotContain(item => item.OwnerEntityId == scenario.OtherOwnerId);
+
+        _commands.Should().HaveCount(2);
+        _commands[0].Should().ContainEquivalentOf("COUNT");
+        _commands[0].Should().Contain("vw_effective_owner_access");
+        _commands[1].Should().Contain("vw_effective_owner_access");
+        _commands[1].Should().ContainEquivalentOf("ORDER BY");
+        _commands[1].Should().ContainEquivalentOf("LIMIT");
+        _commands[1].Should().ContainEquivalentOf("OFFSET");
+        _commands.Should().OnlyContain(command =>
+            command.Count(character => character == ';') <= 1,
+            "count and page must each translate to one SQL command");
+    }
+
+    private async Task<OwnerPortalDistributionScenario> SeedOwnerPortalDistributionScenarioAsync()
+    {
+        var user = await _ctx.Db.Users.SingleAsync(candidate => candidate.Id == UserId);
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Owner,
+            CreatedAtUtc = NowUtc,
+            UpdatedAtUtc = NowUtc,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(context);
+
+        var riverbendOwner = Owner("Riverbend Ownership");
+        var otherOwner = Owner("Other Ownership");
+        _ctx.Db.OwnerEntities.AddRange(riverbendOwner, otherOwner);
+        await _ctx.Db.SaveChangesAsync();
+
+        var riverbend = Property("Riverbend");
+        var otherProperty = Property("Other Property");
+        _ctx.Db.Properties.AddRange(riverbend, otherProperty);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.PropertyOwnerships.AddRange(
+            Ownership(riverbend.Id, riverbendOwner.Id, SecurityEffectiveFromUtc()),
+            Ownership(otherProperty.Id, otherOwner.Id, SecurityEffectiveFromUtc()));
+        _ctx.Db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContextId = context.Id,
+            ApplicationUserId = UserId,
+            OwnerEntityId = riverbendOwner.Id,
+            EffectiveFromUtc = SecurityEffectiveFromUtc(),
+            GrantedAtUtc = NowUtc,
+            GrantedByUserId = UserId,
+            Reason = "Owner portal distribution paging test",
+        });
+        _ctx.Db.OwnerDistributions.AddRange(
+            Distribution(riverbendOwner.Id, riverbend.Id, new DateTime(2027, 1, 25, 0, 0, 0, DateTimeKind.Utc), 4_100m),
+            Distribution(riverbendOwner.Id, riverbend.Id, new DateTime(2027, 7, 1, 0, 0, 0, DateTimeKind.Utc), 4_200m),
+            Distribution(riverbendOwner.Id, riverbend.Id, new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc), 3_900m),
+            Distribution(riverbendOwner.Id, riverbend.Id, new DateTime(2028, 1, 1, 0, 0, 0, DateTimeKind.Utc), 4_300m),
+            Distribution(otherOwner.Id, otherProperty.Id, new DateTime(2027, 7, 1, 0, 0, 0, DateTimeKind.Utc), 9_999m));
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        return new OwnerPortalDistributionScenario(
+            new OwnerPortalReadScope(PortfolioId, UserId, context.Id, context.AccessRevision),
+            riverbendOwner.Id,
+            otherOwner.Id,
+            riverbend.Id);
+    }
+
+    private static OwnerEntity Owner(string name) => new()
+    {
+        PortfolioId = PortfolioId,
+        OwnerEntityType = OwnerEntityType.LLC,
+        Name = name,
+        CreatedAt = NowUtc,
+        UpdatedAt = NowUtc,
+    };
+
+    private static Property Property(string name) => new()
+    {
+        PortfolioId = PortfolioId,
+        Name = name,
+        AddressLine1 = "1 Main St",
+        City = "Columbus",
+        State = "OH",
+        PostalCode = "43215",
+        CreatedAt = NowUtc,
+        UpdatedAt = NowUtc,
+    };
+
+    private static PropertyOwnership Ownership(
+        int propertyId,
+        int ownerEntityId,
+        DateTime securityEffectiveFromUtc) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = propertyId,
+        OwnerEntityId = ownerEntityId,
+        OwnershipSharePercent = 100m,
+        EffectiveFromUtc = securityEffectiveFromUtc,
+        StatementRecipientName = "Owner",
+        PayeeName = "Owner",
+    };
+
+    private static DateTime SecurityEffectiveFromUtc() => DateTime.UtcNow.AddDays(-1);
+
+    private static OwnerDistribution Distribution(
+        int ownerEntityId,
+        int propertyId,
+        DateTime date,
+        decimal amount) => new()
+    {
+        PortfolioId = PortfolioId,
+        OwnerEntityId = ownerEntityId,
+        PropertyId = propertyId,
+        Date = date,
+        Amount = amount,
+        Method = DistributionMethod.Ach,
+        Status = OwnerDistributionStatus.Approved,
+        ApprovedAt = NowUtc,
+        ApprovedBusinessDate = NowUtc.Date,
+        ApprovedByUserId = UserId,
+        BankReference = $"BANK-{amount:0}",
+        ExportReference = $"EXPORT-{amount:0}",
+        ExportedAt = NowUtc,
+        CreatedAt = NowUtc,
+        UpdatedAt = NowUtc,
+    };
+
+    private sealed record OwnerPortalDistributionScenario(
+        OwnerPortalReadScope Scope,
+        int RiverbendOwnerId,
+        int OtherOwnerId,
+        int RiverbendPropertyId);
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+}
