@@ -9,10 +9,12 @@ using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -87,6 +89,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
     }
 
@@ -101,6 +104,14 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var first = await SeedScenarioAsync("rent-replay", FrozenNow);
+        await AddTenantAccessAsync(first, "rent-replay-cotenant", LeaseManagementPartyRole.CoTenant, FrozenNow);
+        await AddTenantAccessAsync(
+            first,
+            "rent-replay-disabled",
+            LeaseManagementPartyRole.Occupant,
+            FrozenNow,
+            enableInApp: false);
+        await AddRevokedTenantAccessAsync(first, "rent-replay-revoked", FrozenNow);
         Recorder.Clear();
         var command = RentCommand("rent-replay");
         var identity = Identity("scheduled-tenant-charges.rent.apply", "rent-replay");
@@ -131,11 +142,78 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
             (await verify.AtomicAuditLogs.CountAsync(row =>
                 row.CommandType == identity.CommandType
-                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+                && row.CommandIdempotencyKey == identity.IdempotencyKey
+                && row.EntityType == nameof(TenantAccount)
+                && row.EntityId == first.AccountId)).Should().Be(1);
             (await verify.OutboxMessages.CountAsync(row =>
                 row.IdempotencyKey == OutboxIdempotency.Create(
                     "scheduled-tenant-charge",
                     $"{first.AccountId}:{entry.BusinessKey}"))).Should().Be(1);
+            var notifications = await verify.Notifications
+                .Where(row =>
+                    row.PortfolioId == first.PortfolioId
+                    && row.Type == "ScheduledRentCharge"
+                    && row.RelatedEntityType == nameof(TenantLedgerEntry)
+                    && row.RelatedEntityId == entry.Id)
+                .OrderBy(row => row.UserId)
+                .ToListAsync();
+            notifications.Select(row => row.UserId).Should().Equal(
+                first.UserId,
+                first.CoTenantUserId!.Value,
+                first.DisabledInAppUserId!.Value);
+            var notification = notifications.Single(row => row.UserId == first.UserId);
+            var coTenantNotification = notifications.Single(row => row.UserId == first.CoTenantUserId.Value);
+            coTenantNotification.NavigationAccessContextId.Should().Be(first.CoTenantAccessContextId!.Value);
+            coTenantNotification.NavigationAccessRevision.Should().Be(first.CoTenantAccessRevision!.Value);
+            notification.Title.Should().Be("Rent charge posted");
+            notification.Message.Should().Contain("A rent charge");
+            notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
+            notification.NavigationDestination.Should().Be(NavigationDestination.TenantLedgerEntry);
+            notification.NavigationAccessContextId.Should().Be(first.AccessContextId);
+            notification.NavigationAccessRevision.Should().Be(first.AccessRevision);
+            notification.NavigationResourceKind.Should().Be(nameof(TenantLedgerEntry));
+            notification.NavigationResourceId.Should().Be((int)entry.Id);
+            notification.NavigationParentResourceKind.Should().Be(nameof(TenantAccount));
+            notification.NavigationParentResourceId.Should().Be(first.AccountId);
+            (await verify.Notifications.CountAsync(row =>
+                row.PortfolioId == first.PortfolioId && row.UserId == first.RevokedUserId)).Should().Be(0,
+                "revoked tenant access must not receive charge notifications");
+            var outboxTypes = await verify.OutboxMessages
+                .Where(row => row.PortfolioId == first.PortfolioId
+                    && row.IdempotencyKey.Contains("scheduled-rent-charge-notification"))
+                .OrderBy(row => row.MessageType)
+                .Select(row => row.MessageType)
+                .ToListAsync();
+            outboxTypes.Should().Equal(
+                "data-update",
+                "data-update",
+                "data-update",
+                "email",
+                "email",
+                "email",
+                "push",
+                "push",
+                "push",
+                "sms",
+                "sms",
+                "sms");
+            (await verify.OutboxMessages.CountAsync(row =>
+                row.PortfolioId == first.PortfolioId
+                && row.MessageType == "email"
+                && row.IdempotencyKey == OutboxIdempotency.Create(
+                    "scheduled-rent-charge-notification",
+                    $"{first.AccountId}:{entry.BusinessKey}:{first.DisabledInAppUserId!.Value}:email:{DestinationHash("tenant-access-rent-replay-disabled@example.test")}"))).Should().Be(1,
+                "email delivery remains independently enabled when in-app is disabled");
+            var pushPayloads = await verify.OutboxMessages
+                .Where(row => row.PortfolioId == first.PortfolioId && row.MessageType == "push")
+                .Select(row => row.Payload)
+                .ToListAsync();
+            pushPayloads.Should().OnlyContain(payload => !payload.Contains("2200", StringComparison.Ordinal));
+            var smsPayloads = await verify.OutboxMessages
+                .Where(row => row.PortfolioId == first.PortfolioId && row.MessageType == "sms")
+                .Select(row => row.Payload)
+                .ToListAsync();
+            smsPayloads.Should().OnlyContain(payload => !payload.Contains("2200", StringComparison.Ordinal));
         }
 
         var raced = await SeedScenarioAsync("rent-race", FrozenNow);
@@ -286,6 +364,47 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         recovered.Value.RentChargeCount.Should().Be(1);
     }
 
+    [SkippableFact]
+    public async Task RentBatch_NotificationFailureRollsBackLedgerAuditOutboxNotificationAndReceipt()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("notification-rollback", FrozenNow);
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "notification-rollback");
+        var command = RentCommand("notification-rollback");
+        Failures.FailNotifications = true;
+
+        var failure = await FluentActions
+            .Invoking(() => Atomic.ExecuteAsync(identity, command, Codec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.WithInnerException<InvalidOperationException>()
+            .WithMessage("injected scheduled tenant-charge notification failure");
+
+        await using (var failed = NewContext())
+        {
+            (await failed.TenantLedgerEntries.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+            (await failed.Notifications.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId)).Should().Be(0);
+            (await failed.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            (await failed.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            (await failed.OutboxMessages.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId)).Should().Be(0);
+        }
+
+        Failures.FailNotifications = false;
+        var recovered = await Atomic.ExecuteAsync(identity, command, Codec);
+        recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        recovered.Value.RentChargeCount.Should().Be(1);
+        await using var verify = NewContext();
+        (await verify.Notifications.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.Type == "ScheduledRentCharge")).Should().Be(1);
+    }
+
     private async Task<Scenario> SeedScenarioAsync(
         string suffix,
         DateTime frozenAtUtc,
@@ -339,12 +458,45 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             NormalizedUserName = $"BILLING-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
             Email = $"billing-{suffix}@example.test",
             NormalizedEmail = $"BILLING-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
+            PhoneNumber = "+15555550100",
             DisplayName = $"Billing {suffix}",
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = frozenAtUtc,
         };
         db.Users.Add(user);
+        await db.SaveChangesAsync();
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = frozenAtUtc,
+            UpdatedAtUtc = frozenAtUtc,
+        };
+        db.WorkspaceAccessContexts.Add(accessContext);
+        await db.SaveChangesAsync();
+        db.UserAlertPreferences.Add(new UserAlertPreference
+        {
+            PortfolioId = portfolio.Id,
+            UserId = user.Id,
+            EnableInApp = true,
+            EnableMobilePush = true,
+            EnableEmail = true,
+            EnableSms = true,
+            CreatedAtUtc = frozenAtUtc,
+            UpdatedAtUtc = frozenAtUtc,
+        });
+        db.DeviceTokens.Add(new DeviceToken
+        {
+            PortfolioId = portfolio.Id,
+            UserId = user.Id,
+            Token = $"push-token-{suffix}",
+            Platform = "android",
+            CreatedAt = frozenAtUtc,
+            LastSeenAt = frozenAtUtc,
+        });
         await db.SaveChangesAsync();
 
         var property = new Property
@@ -415,6 +567,18 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         };
         db.LeaseManagements.Add(management);
         await db.SaveChangesAsync();
+        var tenant = new Tenant
+        {
+            PortfolioId = portfolio.Id,
+            FirstName = "Tenant",
+            LastName = suffix,
+            Email = $"tenant-{suffix}@example.test",
+            Phone = "+15555550200",
+            CreatedAt = frozenAtUtc,
+            UpdatedAt = frozenAtUtc,
+        };
+        db.Tenants.Add(tenant);
+        await db.SaveChangesAsync();
         var account = new TenantAccount
         {
             PortfolioId = portfolio.Id,
@@ -423,6 +587,17 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             Currency = "USD",
             RentTrackingStartOn = rentTrackingStartOn,
             OpenedAtUtc = frozenAtUtc,
+            CreatedAtUtc = frozenAtUtc,
+            CreatedByUserId = user.Id,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = portfolio.Id,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = termStartOn ?? new DateOnly(2026, 7, 10),
+            ChangeReason = "integration tenant access",
             CreatedAtUtc = frozenAtUtc,
             CreatedByUserId = user.Id,
         };
@@ -455,9 +630,177 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             UpdatedAtUtc = frozenAtUtc,
             CreatedByUserId = user.Id,
         };
-        db.AddRange(account, agreement);
+        db.AddRange(account, party, agreement);
         await db.SaveChangesAsync();
-        return new Scenario(portfolio.Id, account.Id, agreement.PublicId);
+        db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            AccessContextId = accessContext.Id,
+            ApplicationUserId = user.Id,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = frozenAtUtc,
+            GrantedByUserId = user.Id,
+            Reason = "integration tenant portal access",
+        });
+        await db.SaveChangesAsync();
+        return new Scenario(
+            portfolio.Id,
+            account.Id,
+            agreement.PublicId,
+            management.Id,
+            party.Id,
+            user.Id,
+            accessContext.Id,
+            accessContext.AccessRevision,
+            null);
+    }
+
+    private async Task AddTenantAccessAsync(
+        Scenario scenario,
+        string suffix,
+        LeaseManagementPartyRole role,
+        DateTime now,
+        bool enableInApp = true)
+    {
+        await using var db = NewContext();
+        var user = new ApplicationUser
+        {
+            UserName = $"tenant-access-{suffix}@example.test",
+            NormalizedUserName = $"TENANT-ACCESS-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
+            Email = $"tenant-access-{suffix}@example.test",
+            NormalizedEmail = $"TENANT-ACCESS-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
+            PhoneNumber = "+15555550101",
+            DisplayName = $"Tenant access {suffix}",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = scenario.PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        db.WorkspaceAccessContexts.Add(accessContext);
+        await db.SaveChangesAsync();
+        db.UserAlertPreferences.Add(new UserAlertPreference
+        {
+            PortfolioId = scenario.PortfolioId,
+            UserId = user.Id,
+            EnableInApp = enableInApp,
+            EnableMobilePush = true,
+            EnableEmail = true,
+            EnableSms = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        db.DeviceTokens.Add(new DeviceToken
+        {
+            PortfolioId = scenario.PortfolioId,
+            UserId = user.Id,
+            Token = $"push-token-{suffix}",
+            Platform = "android",
+            CreatedAt = now,
+            LastSeenAt = now,
+        });
+        var tenant = new Tenant
+        {
+            PortfolioId = scenario.PortfolioId,
+            FirstName = "Tenant",
+            LastName = suffix,
+            Email = $"tenant-{suffix}@example.test",
+            Phone = "+15555550201",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.Tenants.Add(tenant);
+        await db.SaveChangesAsync();
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = scenario.PortfolioId,
+            LeaseManagementId = scenario.LeaseManagementId,
+            TenantId = tenant.Id,
+            Role = role,
+            EffectiveFrom = new DateOnly(2026, 7, 10),
+            ChangeReason = "integration tenant access",
+            CreatedAtUtc = now,
+            CreatedByUserId = scenario.UserId,
+        };
+        db.LeaseManagementParties.Add(party);
+        await db.SaveChangesAsync();
+        db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = scenario.PortfolioId,
+            AccessContextId = accessContext.Id,
+            ApplicationUserId = user.Id,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = now,
+            GrantedByUserId = scenario.UserId,
+            Reason = "integration tenant portal access",
+        });
+        await db.SaveChangesAsync();
+
+        if (role == LeaseManagementPartyRole.CoTenant)
+        {
+            scenario.CoTenantUserId = user.Id;
+            scenario.CoTenantAccessContextId = accessContext.Id;
+            scenario.CoTenantAccessRevision = accessContext.AccessRevision;
+        }
+        if (!enableInApp)
+        {
+            scenario.DisabledInAppUserId = user.Id;
+        }
+    }
+
+    private async Task AddRevokedTenantAccessAsync(Scenario scenario, string suffix, DateTime now)
+    {
+        await using var db = NewContext();
+        var revoked = new ApplicationUser
+        {
+            UserName = $"revoked-{suffix}@example.test",
+            NormalizedUserName = $"REVOKED-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
+            Email = $"revoked-{suffix}@example.test",
+            NormalizedEmail = $"REVOKED-{suffix.ToUpperInvariant()}@EXAMPLE.TEST",
+            DisplayName = $"Revoked {suffix}",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        db.Users.Add(revoked);
+        await db.SaveChangesAsync();
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = revoked.Id,
+            PortfolioId = scenario.PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        db.WorkspaceAccessContexts.Add(accessContext);
+        await db.SaveChangesAsync();
+        db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = scenario.PortfolioId,
+            AccessContextId = accessContext.Id,
+            ApplicationUserId = revoked.Id,
+            LeaseManagementPartyId = scenario.LeaseManagementPartyId,
+            GrantedAtUtc = now,
+            RevokedAtUtc = now.AddMinutes(1),
+            GrantedByUserId = scenario.UserId,
+            RevokedByUserId = scenario.UserId,
+            Reason = "integration revoked tenant portal access",
+        });
+        await db.SaveChangesAsync();
+        scenario.RevokedUserId = revoked.Id;
     }
 
     private async Task FreezeAtAsync(DateTime instant)
@@ -511,6 +854,12 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
 
     private static AtomicCommandIdentity Identity(string type, string suffix) => new(type, suffix);
 
+    private static string DestinationHash(string destination) =>
+        Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(destination.Trim().ToLowerInvariant())))
+            .ToLowerInvariant();
+
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private CompanionFailureInterceptor Failures =>
@@ -555,6 +904,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     private sealed class CompanionFailureInterceptor : DbCommandInterceptor
     {
         public bool FailAtomicAudit { get; set; }
+        public bool FailNotifications { get; set; }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
@@ -566,6 +916,11 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 && command.CommandText.Contains("INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("injected scheduled tenant-charge audit failure");
+            }
+            if (FailNotifications
+                && command.CommandText.Contains("INSERT INTO \"Notifications\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("injected scheduled tenant-charge notification failure");
             }
 
             return ValueTask.FromResult(result);
@@ -582,10 +937,31 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             {
                 throw new InvalidOperationException("injected scheduled tenant-charge audit failure");
             }
+            if (FailNotifications
+                && command.CommandText.Contains("INSERT INTO \"Notifications\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("injected scheduled tenant-charge notification failure");
+            }
 
             return ValueTask.FromResult(result);
         }
     }
 
-    private sealed record Scenario(int PortfolioId, int AccountId, Guid AgreementPublicId);
+    private sealed record Scenario(
+        int PortfolioId,
+        int AccountId,
+        Guid AgreementPublicId,
+        int LeaseManagementId,
+        int LeaseManagementPartyId,
+        int UserId,
+        int AccessContextId,
+        long AccessRevision,
+        int? InitialRevokedUserId)
+    {
+        public int? RevokedUserId { get; set; } = InitialRevokedUserId;
+        public int? CoTenantUserId { get; set; }
+        public int? CoTenantAccessContextId { get; set; }
+        public long? CoTenantAccessRevision { get; set; }
+        public int? DisabledInAppUserId { get; set; }
+    }
 }
