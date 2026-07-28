@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -17,6 +19,8 @@ namespace RentalCommand.Api.Services.Domain;
 public class OwnerEntityService : IOwnerEntityService
 {
     private const string EntityType = "OwnerEntity";
+    private static readonly AtomicJsonResultCodec<OwnerRelationshipAccessMutationResult> OwnerAccessCodec =
+        new("owner-relationship-access.mutation.v1");
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -73,6 +77,220 @@ public class OwnerEntityService : IOwnerEntityService
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return outcome.Value.Found;
+    }
+
+    public async Task<ActivateOwnerPortalAccessResponse> ActivateOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        ActivateOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var owner = await _db.OwnerEntities
+            .AsNoTracking()
+            .Where(candidate => candidate.PortfolioId == scope.PortfolioId &&
+                                candidate.Id == id &&
+                                candidate.DeletedAt == null)
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.Email,
+                candidate.IsPrimary,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (owner is null)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.NotFound,
+                id,
+                null,
+                null,
+                null,
+                null,
+                false,
+                "Owner entity not found.");
+        }
+        if (owner.IsPrimary)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.PrimaryOwnerNotSupported,
+                owner.Id,
+                owner.Email,
+                null,
+                null,
+                null,
+                false,
+                "Primary owners already use the management account and cannot be activated as a separate owner portal identity.");
+        }
+
+        var email = owner.Email?.Trim();
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.MissingOwnerEmail,
+                owner.Id,
+                owner.Email,
+                null,
+                null,
+                null,
+                false,
+                "Add an email address to this owner before activating owner portal access.");
+        }
+
+        var normalizedEmail = email.ToUpperInvariant();
+        var userExists = await _db.Users.AsNoTracking()
+            .AnyAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
+        if (!userExists)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.MissingUserAccount,
+                owner.Id,
+                email,
+                null,
+                null,
+                null,
+                false,
+                "No Rental Command user account exists for this owner email. Create or invite the account first, then retry activation.");
+        }
+
+        var target = await BuildOwnerPortalActivationTargetQuery(
+                scope.PortfolioId,
+                owner.Id,
+                normalizedEmail)
+            .SingleOrDefaultAsync(ct);
+        if (target is null)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.MissingWorkspaceAccess,
+                owner.Id,
+                email,
+                null,
+                null,
+                null,
+                false,
+                "The matching user does not have a workspace access context for this portfolio. Add that account to the workspace before retrying.");
+        }
+        if (!target.IsActive)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.InactiveWorkspaceAccess,
+                owner.Id,
+                email,
+                target.TargetAccessContextId,
+                null,
+                target.TargetAccessRevision,
+                false,
+                "The matching user's workspace access is not active. Reactivate or restore that account before retrying.");
+        }
+        if (target.ExistingOwnerUserAccessId is not null)
+        {
+            return Activation(
+                ActivateOwnerPortalAccessOutcome.AlreadyActive,
+                owner.Id,
+                email,
+                target.TargetAccessContextId,
+                target.ExistingOwnerUserAccessId,
+                target.TargetAccessRevision,
+                false,
+                "Owner portal access is already active for this owner.");
+        }
+
+        var command = new GrantOwnerUserAccessCommand(
+            scope.PortfolioId,
+            owner.Id,
+            target.TargetAccessContextId,
+            target.TargetAccessRevision,
+            _timeProvider.UtcNow(),
+            request.EffectiveToUtc,
+            string.IsNullOrWhiteSpace(request.Reason)
+                ? "Owner portal access activated from owner management"
+                : request.Reason.Trim(),
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision);
+        var keyDigest = Digest(operationKey);
+        var outcome = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "owner-entity.portal-access.activate",
+                $"{scope.PortfolioId}:{owner.Id}:{target.TargetAccessContextId}:{keyDigest}"),
+            command,
+            OwnerAccessCodec,
+            ct);
+        return outcome.Value.Outcome switch
+        {
+            OwnerRelationshipAccessMutationOutcome.Applied => Activation(
+                ActivateOwnerPortalAccessOutcome.Activated,
+                owner.Id,
+                email,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                outcome.Disposition == AtomicCommandDisposition.Replayed,
+                "Owner portal access activated."),
+            OwnerRelationshipAccessMutationOutcome.AlreadyActive => Activation(
+                ActivateOwnerPortalAccessOutcome.AlreadyActive,
+                owner.Id,
+                email,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                outcome.Disposition == AtomicCommandDisposition.Replayed,
+                "Owner portal access is already active for this owner."),
+            OwnerRelationshipAccessMutationOutcome.Invalid => Activation(
+                ActivateOwnerPortalAccessOutcome.Invalid,
+                owner.Id,
+                email,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                outcome.Disposition == AtomicCommandDisposition.Replayed,
+                "Owner portal access could not be activated with the requested effective period."),
+            _ => Activation(
+                ActivateOwnerPortalAccessOutcome.NotFound,
+                owner.Id,
+                email,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                outcome.Disposition == AtomicCommandDisposition.Replayed,
+                "Owner portal access could not be activated because the owner or target access context was not found."),
+        };
+    }
+
+    internal IQueryable<OwnerPortalActivationTarget> BuildOwnerPortalActivationTargetQuery(
+        int portfolioId,
+        int ownerEntityId,
+        string normalizedEmail)
+    {
+        return from owner in _db.OwnerEntities.AsNoTracking()
+               join user in _db.Users.AsNoTracking()
+                   on owner.Email!.ToUpper() equals user.NormalizedEmail
+               join context in _db.WorkspaceAccessContexts.AsNoTracking()
+                   on new { UserId = user.Id, owner.PortfolioId }
+                   equals new { context.UserId, context.PortfolioId }
+               where owner.PortfolioId == portfolioId &&
+                     owner.Id == ownerEntityId &&
+                     owner.DeletedAt == null &&
+                     !owner.IsPrimary &&
+                     owner.Email != null &&
+                     user.NormalizedEmail == normalizedEmail
+               select new OwnerPortalActivationTarget(
+                   context.Id,
+                   context.UserId,
+                   context.AccessRevision,
+                   context.Status == WorkspaceAccessContextStatus.Active &&
+                   context.SuspendedAtUtc == null &&
+                   context.RevokedAtUtc == null,
+                   _db.OwnerUserAccesses
+                       .Where(access =>
+                           access.PortfolioId == portfolioId &&
+                           access.AccessContextId == context.Id &&
+                           access.ApplicationUserId == context.UserId &&
+                           access.OwnerEntityId == owner.Id &&
+                           access.RevokedAtUtc == null)
+                       .Select(access => (int?)access.Id)
+                       .FirstOrDefault());
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
@@ -160,6 +378,10 @@ public class OwnerEntityService : IOwnerEntityService
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
                 && authorizedProperties.Any(property => property.Id == ownership.PropertyId)),
             IsPrimary = o.IsPrimary,
+            HasActiveOwnerPortalAccess = _db.OwnerUserAccesses.Any(access =>
+                access.PortfolioId == o.PortfolioId
+                && access.OwnerEntityId == o.Id
+                && access.RevokedAtUtc == null),
             CreatedAt = o.CreatedAt,
             UpdatedAt = o.UpdatedAt,
         });
@@ -236,4 +458,32 @@ public class OwnerEntityService : IOwnerEntityService
                   && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
                   && !authorizedProperties.Any(authorized => authorized.Id == ownership.PropertyId)))));
     }
+
+    private static ActivateOwnerPortalAccessResponse Activation(
+        ActivateOwnerPortalAccessOutcome outcome,
+        int ownerEntityId,
+        string? ownerEmail,
+        int? targetAccessContextId,
+        int? ownerUserAccessId,
+        long? accessRevision,
+        bool replayed,
+        string message) => new(
+        outcome,
+        ownerEntityId,
+        ownerEmail,
+        targetAccessContextId,
+        ownerUserAccessId,
+        accessRevision,
+        replayed,
+        message);
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    internal sealed record OwnerPortalActivationTarget(
+        int TargetAccessContextId,
+        int TargetUserId,
+        long TargetAccessRevision,
+        bool IsActive,
+        int? ExistingOwnerUserAccessId);
 }

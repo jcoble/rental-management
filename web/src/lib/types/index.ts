@@ -76,6 +76,8 @@ export interface Owner {
 	phone?: string;
 	email?: string;
 	assignedPropertyCount?: number;
+	isPrimary?: boolean;
+	hasActiveOwnerPortalAccess?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
