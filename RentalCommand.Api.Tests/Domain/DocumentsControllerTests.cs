@@ -100,6 +100,35 @@ public sealed class DocumentsControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task GetFile_WithPortfolioDocumentTemplateSourceAndSelectedPropertyManager_ReturnsSourcePdf()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource(propertyScoped: false);
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(storedFile);
+
+        var storage = new Mock<IFileStorage>();
+        storage
+            .Setup(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream("%PDF-1.7 portfolio source"u8.ToArray()));
+
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<FileStreamResult>()
+            .Which.ContentType.Should().Be("application/pdf");
+        storage.Verify(s => s.DownloadAsync(storedFile.FilePath, It.IsAny<CancellationToken>()), Times.Once);
+        template.PropertyId.Should().BeNull();
+        template.OriginalStoredFileId.Should().Be(storedFile.Id);
+    }
+
+    [Fact]
     public async Task GetFile_WithDocumentTemplateOutsideSelectedPropertyScope_DeniesBeforeStorage()
     {
         var (storedFile, _, authorizedPropertyId) = SeedDocumentTemplateSource();
@@ -1158,7 +1187,8 @@ public sealed class DocumentsControllerTests : IDisposable
         return vendor.Id;
     }
 
-    private (StoredFile StoredFile, DocumentTemplate Template, int PropertyId) SeedDocumentTemplateSource()
+    private (StoredFile StoredFile, DocumentTemplate Template, int PropertyId) SeedDocumentTemplateSource(
+        bool propertyScoped = true)
     {
         var now = DateTime.UtcNow;
         var property = SeedProperty("Template source property");
@@ -1178,7 +1208,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var template = new DocumentTemplate
         {
             PortfolioId = PortfolioId,
-            PropertyId = property.Id,
+            PropertyId = propertyScoped ? property.Id : null,
             Kind = DocumentTemplateKind.Lease,
             Status = DocumentTemplateStatus.Draft,
             RenderMode = DocumentTemplateRenderMode.Overlay,

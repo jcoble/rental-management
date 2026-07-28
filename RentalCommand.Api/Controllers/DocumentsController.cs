@@ -640,7 +640,10 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                         selected.PortfolioId == scope.PortfolioId &&
                         selected.PropertyId == template.PropertyId.Value))
                 : assignments.Any(assignment =>
-                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties)), ct);
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == scope.PortfolioId))), ct);
     }
 
 
