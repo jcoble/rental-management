@@ -161,6 +161,27 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 first.UserId,
                 first.CoTenantUserId!.Value,
                 first.DisabledInAppUserId!.Value);
+            var notificationIds = notifications.Select(row => row.Id).ToArray();
+            var notificationAuditCounts = await verify.AtomicAuditLogs
+                .Where(row =>
+                    row.CommandType == identity.CommandType
+                    && row.CommandIdempotencyKey == identity.IdempotencyKey
+                    && row.EntityType == nameof(Notification)
+                    && row.Operation == AuditLogOperation.Created
+                    && notificationIds.Contains(row.EntityId))
+                .GroupBy(row => row.EntityId)
+                .Select(group => new { NotificationId = group.Key, Count = group.Count() })
+                .ToListAsync();
+            notificationAuditCounts.Should().HaveCount(notificationIds.Length);
+            notificationAuditCounts.Should().OnlyContain(row => row.Count == 1,
+                "each scheduled rent notification is a tracked auditable create and must not also stage a duplicate semantic create");
+            (await verify.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey
+                && row.EntityType == nameof(Notification)
+                && row.Operation == AuditLogOperation.Created
+                && row.ChangeReason == "Posted scheduled rent charge tenant notification.")).Should()
+                .Be(notificationIds.Length);
             var notification = notifications.Single(row => row.UserId == first.UserId);
             var coTenantNotification = notifications.Single(row => row.UserId == first.CoTenantUserId.Value);
             coTenantNotification.NavigationAccessContextId.Should().Be(first.CoTenantAccessContextId!.Value);
