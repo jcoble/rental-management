@@ -151,15 +151,17 @@ public sealed class AtomicCoreCrudMutationHandler
 
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
             throw new ArgumentException("Unsupported Property mutation operation.");
+        var mutationNow = command.ChangedAtUtc ?? now;
         var update = Read<UpdatePropertyRequest>(command);
+        OwnershipLifecycleChange? ownershipChange = null;
         var ownershipRequests = RequestedOwnerships(
             update.Ownerships, update.ClearOwnership);
         if (ownershipRequests is not null)
         {
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, ownershipRequests, now, persistence, ct);
-            await ReplaceCurrentOwnershipsAsync(
-                command.PortfolioId, property.Id, ownerships, now, persistence, ct);
+                command.PortfolioId, property.Id, ownershipRequests, mutationNow, persistence, ct);
+            ownershipChange = await ReplaceCurrentOwnershipsAsync(
+                command, property.Id, ownerships, mutationNow, attempt, ct);
         }
         if (update.Status == PropertyStatus.Inactive && property.Status != PropertyStatus.Inactive)
             await EnsurePropertyHasNoCurrentOccupancyAsync(command.PortfolioId, property.Id, persistence, ct);
@@ -179,13 +181,14 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.LandValue.HasValue) property.LandValue = update.LandValue;
         if (update.InServiceDate.HasValue) property.InServiceDate = Utc(update.InServiceDate);
         if (update.ManualAnnualDepreciation.HasValue) property.ManualAnnualDepreciation = update.ManualAnnualDepreciation;
-        property.UpdatedAt = now;
+        property.UpdatedAt = mutationNow;
         attempt.BindSemanticAudit(property, Audit(command, entityType,
             AuditLogOperation.Updated, $"Property {property.Name} updated"));
 
         await attempt.FlushBusinessAsync(ct);
-        StageDataUpdate(attempt, command, entityType, property.Id, now, "property");
-        return Applied(property.Id, await SnapshotPropertyAsync(property, persistence, ct));
+        StageOwnershipLifecycleAudits(attempt, command, property.Id, ownershipChange, mutationNow);
+        StageDataUpdate(attempt, command, entityType, property.Id, mutationNow, "property");
+        return Applied(property.Id, await SnapshotPropertyAsync(property, persistence, ct, mutationNow));
     }
 
     private static async Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
@@ -262,10 +265,12 @@ public sealed class AtomicCoreCrudMutationHandler
             ApplyPropertySetup(property, request, mutationNow);
             var ownerships = await BuildOwnershipsAsync(
                 command.PortfolioId, property.Id, requestedOwnerships, mutationNow, persistence, ct);
-            await ReplaceCurrentOwnershipsAsync(
-                command.PortfolioId, property.Id, ownerships, mutationNow, persistence, ct);
+            var ownershipChange = await ReplaceCurrentOwnershipsAsync(
+                command, property.Id, ownerships, mutationNow, attempt, ct);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
                 AuditLogOperation.Updated, $"Property {property.Name} updated during Guided Setup", property.Id));
+            await attempt.FlushBusinessAsync(ct);
+            StageOwnershipLifecycleAudits(attempt, command, property.Id, ownershipChange, mutationNow);
         }
         else
         {
@@ -286,7 +291,8 @@ public sealed class AtomicCoreCrudMutationHandler
         if (request.RentalStructure == RentalStructure.MultiRental && totalUnitCount < 1)
             throw Conflict("A MultiRental Property must contain at least one Unit.");
 
-        await attempt.FlushBusinessAsync(ct);
+        if (!updated)
+            await attempt.FlushBusinessAsync(ct);
 
         if (!updated && requestedOwnerships.Count > 0)
         {
@@ -408,17 +414,15 @@ public sealed class AtomicCoreCrudMutationHandler
         if (requests.Sum(request => request.OwnershipSharePercent) != 100m)
             throw new ArgumentException("Current Property ownership shares must total exactly 100 percent.");
 
-        var ownersQuery = persistence.Query<OwnerEntity>().AsNoTracking()
+        var owners = await persistence.Query<OwnerEntity>().AsNoTracking()
             .Where(owner => owner.PortfolioId == portfolioId
                 && ownerIds.Contains(owner.Id)
-                && owner.DeletedAt == null);
-        var ownerCount = await ownersQuery.CountAsync(ct);
-        if (ownerCount != ownerIds.Length)
-            throw new AtomicReceiptInvariantException(
-                "One or more OwnerEntities are missing or outside this workspace.");
-        var owners = await ownersQuery
+                && owner.DeletedAt == null)
             .Select(owner => new { owner.Id, owner.Name, owner.Email })
             .ToListAsync(ct);
+        if (owners.Count != ownerIds.Length)
+            throw new AtomicReceiptInvariantException(
+                "One or more OwnerEntities are missing or outside this workspace.");
 
         var ownerById = owners.ToDictionary(owner => owner.Id);
         var result = new List<PropertyOwnership>(requests.Count);
@@ -451,16 +455,17 @@ public sealed class AtomicCoreCrudMutationHandler
         return result;
     }
 
-    private static async Task ReplaceCurrentOwnershipsAsync(
-        int portfolioId,
+    private static async Task<OwnershipLifecycleChange> ReplaceCurrentOwnershipsAsync(
+        AtomicCoreCrudMutationCommand command,
         int propertyId,
         IReadOnlyList<PropertyOwnership> replacements,
         DateTime now,
-        IAtomicPersistenceSession persistence,
+        IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        var persistence = attempt.Persistence;
         var current = await persistence.Query<PropertyOwnership>()
-            .Where(ownership => ownership.PortfolioId == portfolioId
+            .Where(ownership => ownership.PortfolioId == command.PortfolioId
                 && ownership.PropertyId == propertyId
                 && ownership.EffectiveFromUtc <= now
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
@@ -469,7 +474,33 @@ public sealed class AtomicCoreCrudMutationHandler
             ownership.EffectiveToUtc = now;
         foreach (var ownership in replacements)
             persistence.Add(ownership);
+
+        return new OwnershipLifecycleChange(current, replacements);
     }
+
+    private static void StageOwnershipLifecycleAudits(
+        IAtomicWriteAttempt attempt,
+        AtomicCoreCrudMutationCommand command,
+        int propertyId,
+        OwnershipLifecycleChange? change,
+        DateTime occurredAtUtc)
+    {
+        if (change is null) return;
+        foreach (var ownership in change.Ended)
+            attempt.StageSemanticEvent(Audit(command, nameof(PropertyOwnership),
+                AuditLogOperation.Updated,
+                $"Property ownership for Property {propertyId} ended during owner replacement",
+                ownership.Id), occurredAtUtc);
+        foreach (var ownership in change.Created)
+            attempt.StageSemanticEvent(Audit(command, nameof(PropertyOwnership),
+                AuditLogOperation.Created,
+                $"Property ownership for Property {propertyId} created during owner replacement",
+                ownership.Id), occurredAtUtc);
+    }
+
+    private sealed record OwnershipLifecycleChange(
+        IReadOnlyList<PropertyOwnership> Ended,
+        IReadOnlyList<PropertyOwnership> Created);
 
     private static UnitResponse ToUnitResponse(Unit unit) => new()
     {
