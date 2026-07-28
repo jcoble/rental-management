@@ -371,11 +371,21 @@ internal static class StaffOperationAuthorization
     internal static Task<bool> CanManagePropertyAsync(
         int portfolioId, StaffOperationActor actor, int propertyId, string capability,
         IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
-        AuthorizedProperties(portfolioId, actor, capability, persistence, now)
+        CanManagePropertyAsync(portfolioId, actor, propertyId, [capability], persistence, now, ct);
+
+    internal static Task<bool> CanManagePropertyAsync(
+        int portfolioId, StaffOperationActor actor, int propertyId, IReadOnlyCollection<string> capabilities,
+        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
+        AuthorizedProperties(portfolioId, actor, capabilities, persistence, now)
             .AnyAsync(property => property.Id == propertyId, ct);
 
     internal static IQueryable<Property> AuthorizedProperties(
         int portfolioId, StaffOperationActor actor, string capability,
+        IAtomicPersistenceSession persistence, DateTime now) =>
+        AuthorizedProperties(portfolioId, actor, [capability], persistence, now);
+
+    internal static IQueryable<Property> AuthorizedProperties(
+        int portfolioId, StaffOperationActor actor, IReadOnlyCollection<string> capabilities,
         IAtomicPersistenceSession persistence, DateTime now)
     {
         return persistence.Query<Property>().Where(property =>
@@ -398,7 +408,7 @@ internal static class StaffOperationAuthorization
                     assignment.EffectiveFromUtc <= now &&
                     (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
                     assignment.RoleProfile!.Capabilities.Any(item =>
-                        item.CapabilityDefinition!.Key == capability &&
+                        capabilities.Contains(item.CapabilityDefinition!.Key) &&
                         item.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property) &&
                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                      (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
@@ -408,6 +418,11 @@ internal static class StaffOperationAuthorization
 
     internal static IQueryable<MembershipRoleAssignment> ActiveAssignments(
         int portfolioId, StaffOperationActor actor, string capability,
+        IAtomicPersistenceSession persistence, DateTime now) =>
+        ActiveAssignments(portfolioId, actor, [capability], persistence, now);
+
+    internal static IQueryable<MembershipRoleAssignment> ActiveAssignments(
+        int portfolioId, StaffOperationActor actor, IReadOnlyCollection<string> capabilities,
         IAtomicPersistenceSession persistence, DateTime now)
     {
         return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
@@ -426,7 +441,7 @@ internal static class StaffOperationAuthorization
             assignment.RevokedAtUtc == null && assignment.EffectiveFromUtc <= now &&
             (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
             assignment.RoleProfile!.Capabilities.Any(item =>
-                item.CapabilityDefinition!.Key == capability &&
+                capabilities.Contains(item.CapabilityDefinition!.Key) &&
                 item.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property) &&
             persistence.Query<AuthSession>().Any(session =>
                 session.Id == actor.AuthSessionId && session.UserId == actor.UserId &&

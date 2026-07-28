@@ -301,15 +301,15 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UploadPdfAsync_SelectedPropertyScopeCreatesPortfolioTemplateWithNullTarget()
+    public async Task UploadPdfAsync_SelectedPropertyManagerScopeCreatesPortfolioTemplateWithNullTarget()
     {
         await using var postgres = await _postgres.CreateContextAsync();
         var selectedProperty = SeedProperty(postgres.Db, "Morgan selected property");
         SeedProperty(postgres.Db, "Morgan unselected property");
-        var scope = postgres.Db.SeedLeasingAgentScope(
+        var scope = postgres.Db.SeedPropertyManagerScope(
             PortfolioId,
             selectedProperty.Id,
-            nameof(UploadPdfAsync_SelectedPropertyScopeCreatesPortfolioTemplateWithNullTarget));
+            nameof(UploadPdfAsync_SelectedPropertyManagerScopeCreatesPortfolioTemplateWithNullTarget));
         await using var services = CreateAtomicServices(builder =>
             builder.UseNpgsql(postgres.ConnectionString));
         var files = new InMemoryFileStorage();
@@ -326,7 +326,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             "application/pdf",
             content.Length,
             "SCN-0001 Lease",
-            "Uploaded by a selected-property leasing user.",
+            "Uploaded by a selected-property property manager.",
             defaultForPortfolio: false,
             propertyId: null,
             idempotencyKey: "upload-scn-0001-selected-scope-lease");

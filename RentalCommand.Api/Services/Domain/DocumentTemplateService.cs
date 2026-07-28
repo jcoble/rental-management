@@ -21,6 +21,12 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IDocumentTemplateService"/>
 public sealed class DocumentTemplateService : IDocumentTemplateService
 {
+    private static readonly string[] TemplateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
+
     private static readonly AtomicJsonResultCodec<DocumentTemplateMutationResult> MutationCodec =
         new("document-template.mutation.v1");
     private readonly RentalCommandDbContext _db;
@@ -422,7 +428,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             && agreement.DraftCanceledAtUtc == null
             && agreement.VoidedAtUtc == null
             && _db.Properties.AsNoTracking()
-                .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
+                .WhereAuthorized(_db, scope, TemplateCapabilityKeys, _timeProvider.UtcNow())
                 .Any(property => property.Id == agreement.LeaseManagement!.PropertyId)
         select new LeaseAgreementPreviewReadRow
         {
@@ -601,10 +607,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     {
         var authorizedProperties = _db.Properties
             .AsNoTracking()
-            .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow());
+            .WhereAuthorized(_db, scope, TemplateCapabilityKeys, _timeProvider.UtcNow());
         var allProperties = _db.AuthorizedWorkspaceAssignments(
             scope,
-            [CapabilityKeys.LeasingAgreementsPrepare],
+            TemplateCapabilityKeys,
             CapabilityAuthorizationTargetKind.Property,
             _timeProvider.UtcNow());
 

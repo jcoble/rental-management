@@ -400,12 +400,18 @@ public sealed class DeleteDocumentTemplateFieldHandler
 
 internal static class DocumentTemplateCommandSupport
 {
+    private static readonly string[] TemplateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
+
     internal static IQueryable<DocumentTemplate> AuthorizedTemplates(
         int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence,
         DateTime now, bool tracking)
     {
         var properties = StaffOperationAuthorization.AuthorizedProperties(
-            portfolioId, actor, CapabilityKeys.LeasingAgreementsPrepare, persistence, now);
+            portfolioId, actor, TemplateCapabilityKeys, persistence, now);
         var templateScopes = AuthorizedTemplateScopes(portfolioId, actor, persistence, now);
         var query = persistence.Query<DocumentTemplate>().Where(template =>
             template.PortfolioId == portfolioId &&
@@ -437,7 +443,7 @@ internal static class DocumentTemplateCommandSupport
         if (propertyId.HasValue)
         {
             return StaffOperationAuthorization.CanManagePropertyAsync(
-                portfolioId, actor, propertyId.Value, CapabilityKeys.LeasingAgreementsPrepare,
+                portfolioId, actor, propertyId.Value, TemplateCapabilityKeys,
                 persistence, now, ct);
         }
 
@@ -447,7 +453,7 @@ internal static class DocumentTemplateCommandSupport
     private static IQueryable<MembershipRoleAssignment> AuthorizedTemplateScopes(
         int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence, DateTime now) =>
         StaffOperationAuthorization.ActiveAssignments(
-                portfolioId, actor, CapabilityKeys.LeasingAgreementsPrepare, persistence, now)
+                portfolioId, actor, TemplateCapabilityKeys, persistence, now)
             .Where(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
