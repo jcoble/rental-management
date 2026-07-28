@@ -27,13 +27,23 @@ public sealed class FinalizeNativeEsignRequestHandler
             ?? request.LeaseAddendum!.LeaseManagementId;
         await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, leaseManagementId, ct);
         if (request.Status == SignatureRequestStatus.Completed && request.ExecutedArtifactId.HasValue)
+        {
+            if (request.LeaseAgreementId is { } completedAgreementId)
+            {
+                var completedTimes = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+                await attempt.Leasing.ReconcileInitialSecurityDepositChargeAsync(
+                    request.PortfolioId, completedAgreementId, completedTimes.EffectiveNowUtc, ct);
+            }
             return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId,
                 request.ExecutedArtifactId.Value);
+        }
         if (request.Status != SignatureRequestStatus.ExecutionPending)
             throw new DomainValidationException("The signature request is not ready for execution.");
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (request.ExecutionClaimToken != command.ClaimToken || request.ExecutionClaimExpiresAtUtc <= now)
+        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var securityNowUtc = times.WallClockUtc;
+        var businessNowUtc = times.EffectiveNowUtc;
+        if (request.ExecutionClaimToken != command.ClaimToken || request.ExecutionClaimExpiresAtUtc <= securityNowUtc)
             throw new NativeEsignExecutionClaimLostException(request.Id);
         if (await attempt.Persistence.Query<SignatureSigner>().AnyAsync(signer => signer.SignatureRequestId == request.Id
                 && signer.IsRequired && signer.Status != SignatureSignerStatus.Signed, ct))
@@ -57,7 +67,7 @@ public sealed class FinalizeNativeEsignRequestHandler
             FileSize = command.FileSize,
             EntityType = request.LeaseAgreementId.HasValue ? nameof(LeaseAgreement) : nameof(LeaseAddendum),
             EntityId = request.LeaseAgreementId ?? request.LeaseAddendumId!.Value,
-            UploadedAt = now,
+            UploadedAt = businessNowUtc,
         };
         attempt.Persistence.Add(storedFile);
         await attempt.FlushBusinessAsync(ct);
@@ -73,7 +83,7 @@ public sealed class FinalizeNativeEsignRequestHandler
             ContentType = "application/pdf",
             ByteLength = command.FileSize,
             ContentSha256 = command.ContentSha256,
-            CreatedAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
             CreatedByUserId = request.CreatedByUserId,
         };
         attempt.Persistence.Add(artifact);
@@ -82,9 +92,9 @@ public sealed class FinalizeNativeEsignRequestHandler
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
         pending.SizeBytes = command.FileSize;
-        pending.UpdatedAtUtc = now;
+        pending.UpdatedAtUtc = businessNowUtc;
         request.ExecutedArtifactId = artifact.Id;
-        request.CompletedAtUtc = now;
+        request.CompletedAtUtc = businessNowUtc;
         request.Status = SignatureRequestStatus.Completed;
         request.ExecutionClaimOwner = null;
         request.ExecutionClaimToken = null;
@@ -96,7 +106,7 @@ public sealed class FinalizeNativeEsignRequestHandler
             request.LeaseAgreementId,
             request.LeaseAddendumId,
             artifact.Id,
-            now,
+            businessNowUtc,
             ct);
         if (transition.Outcome != AtomicLegalExecutionTransitionOutcome.Applied)
         {
@@ -107,8 +117,8 @@ public sealed class FinalizeNativeEsignRequestHandler
         {
             attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAgreement), agreementId, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = now }),
-                ChangeReason: "Finalized immutable executed Agreement artifact."), now);
+                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = businessNowUtc }),
+                ChangeReason: "Finalized immutable executed Agreement artifact."), businessNowUtc);
             if (transition.PredecessorId is { } predecessorId)
             {
                 attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
@@ -118,7 +128,7 @@ public sealed class FinalizeNativeEsignRequestHandler
                         SupersededEffectiveOn = request.LeaseAgreement!.GoverningFromOn,
                         SupersededByAgreementId = agreementId,
                     }),
-                    ChangeReason: "Executed successor Agreement recorded its governing transition."), now);
+                    ChangeReason: "Executed successor Agreement recorded its governing transition."), businessNowUtc);
             }
         }
         else
@@ -126,15 +136,15 @@ public sealed class FinalizeNativeEsignRequestHandler
             var addendumId = request.LeaseAddendumId!.Value;
             attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAddendum), addendumId, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = now }),
-                ChangeReason: "Finalized immutable executed Addendum artifact."), now);
+                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = businessNowUtc }),
+                ChangeReason: "Finalized immutable executed Addendum artifact."), businessNowUtc);
         }
         foreach (var supersededAddendumId in transition.SupersededAddendumIds)
         {
             attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAddendum), supersededAddendumId, AuditLogOperation.Updated,
                 ActorLabel: "esign-system",
-                ChangeReason: "Applied the executed legal artifact's atomic Addendum supersession transition."), now);
+                ChangeReason: "Applied the executed legal artifact's atomic Addendum supersession transition."), businessNowUtc);
         }
         if (request.LeaseAgreement?.ChangeType is LeaseAgreementChangeType.Renewal
             or LeaseAgreementChangeType.MonthToMonth)
@@ -144,7 +154,7 @@ public sealed class FinalizeNativeEsignRequestHandler
                 attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                     nameof(LeaseAddendum), reissuedAddendumId, AuditLogOperation.Updated,
                     ActorLabel: "esign-system",
-                    ChangeReason: "Activated the fully executed Addendum reissue with its executed base renewal."), now);
+                    ChangeReason: "Activated the fully executed Addendum reissue with its executed base renewal."), businessNowUtc);
             }
         }
 
@@ -153,13 +163,13 @@ public sealed class FinalizeNativeEsignRequestHandler
             PortfolioId = request.PortfolioId,
             SignatureRequestId = request.Id,
             Type = SignatureAuditEventType.Completed,
-            OccurredAtUtc = now,
+            OccurredAtUtc = businessNowUtc,
             Detail = $"Every required signer signed; executed artifact SHA-256 {command.ContentSha256}.",
         });
         attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
             nameof(SignatureRequest), request.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
             NewValues: JsonSerializer.Serialize(new { Status = request.Status.ToString(), request.ExecutedArtifactId, request.CompletedAtUtc }),
-            ChangeReason: "Completed canonical legal-artifact signature packet."), now);
+            ChangeReason: "Completed canonical legal-artifact signature packet."), businessNowUtc);
         attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = request.PortfolioId,
@@ -172,8 +182,8 @@ public sealed class FinalizeNativeEsignRequestHandler
                 action = request.LeaseAgreementId.HasValue ? "agreement-executed" : "addendum-executed",
             }),
             IdempotencyKey = $"legal-artifact:{request.Id}:executed:{artifact.Id}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            NextAttemptAtUtc = businessNowUtc,
         });
         return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId, artifact.Id);
     }

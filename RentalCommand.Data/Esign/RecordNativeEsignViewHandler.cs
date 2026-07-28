@@ -41,9 +41,11 @@ public sealed class RecordNativeEsignViewHandler
                     && candidate.SignatureRequestId == target.SignatureRequestId,
                 ct);
         var request = signer.SignatureRequest!;
-        var occurredAtUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var securityNowUtc = times.WallClockUtc;
+        var occurredAtUtc = times.EffectiveNowUtc;
 
-        if (signer.TokenExpiresAtUtc <= occurredAtUtc
+        if (signer.TokenExpiresAtUtc <= securityNowUtc
             && signer.Status is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
             && request.Status is not (SignatureRequestStatus.Completed
                 or SignatureRequestStatus.Declined

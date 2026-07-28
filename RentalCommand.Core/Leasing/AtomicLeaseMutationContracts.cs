@@ -67,6 +67,20 @@ public sealed record AtomicTransferLeaseManagementMutationResult(
     IReadOnlyList<long> TenantLedgerEntryIds,
     IReadOnlyList<long> SecurityDepositEntryIds);
 
+public sealed class AtomicInitialSecurityDepositCharge
+{
+    public long LedgerEntryId { get; set; }
+    public int PortfolioId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseAgreementId { get; set; }
+    public decimal Amount { get; set; }
+    public DateOnly EffectiveOn { get; set; }
+    public DateOnly DueOn { get; set; }
+    public string BusinessKey { get; set; } = string.Empty;
+    public int CreatedByUserId { get; set; }
+    public DateTime PostedAtUtc { get; set; }
+}
+
 public sealed record AtomicAgreementDraftSignerInput(
     int? LeaseManagementPartyId,
     int? TenantId,
@@ -194,6 +208,17 @@ public interface IAtomicLeaseMutationPersistence
         int executedArtifactId,
         DateTime executedAtUtc,
         CancellationToken ct = default);
+
+    Task<int> ReconcileInitialSecurityDepositChargeAsync(
+        int portfolioId,
+        int leaseAgreementId,
+        DateTime postedAtUtc,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
+        ReconcileCompletedNativeEsignInitialSecurityDepositChargesAsync(
+            int batchSize,
+            CancellationToken ct = default);
 
     Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
         int portfolioId,
