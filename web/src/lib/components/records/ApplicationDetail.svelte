@@ -59,11 +59,13 @@
 		onDeleted,
 		expectedUnitId,
 		onUnitMismatch,
+		prepareMoveInBasePath = '/applications',
 	}: {
 		applicationId: number;
 		onDeleted: () => void;
 		expectedUnitId?: number;
 		onUnitMismatch?: () => void;
+		prepareMoveInBasePath?: string;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -626,7 +628,7 @@
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
-					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '')} data-testid="application-prepare-move-in">
+					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '', prepareMoveInBasePath)} data-testid="application-prepare-move-in">
 						<Home class="h-4 w-4" /> Prepare move-in <ArrowRight class="h-4 w-4" />
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
