@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/auth_repository.dart';
+import '../../core/auth/biometric_auth_service.dart';
 import '../../core/auth/google_sign_in_service.dart';
 import '../../core/api/api_exception.dart';
 
@@ -24,6 +25,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _isGoogleLoading = false;
+  bool _isBiometricUnlocking = false;
+  bool _automaticBiometricPromptShown = false;
   bool _isResendingVerification = false;
   bool _resendSucceeded = false;
   String? _errorMessage;
@@ -36,6 +39,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   /// True while either sign-in path is in flight — disables all actions.
   bool get _busy => _isLoading || _isGoogleLoading;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _automaticBiometricPromptShown) return;
+      if (ref.read(authControllerProvider) is AuthStateBiometricLocked) {
+        _automaticBiometricPromptShown = true;
+        _unlockWithBiometrics();
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -140,6 +155,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
+  Future<void> _unlockWithBiometrics() async {
+    if (_isBiometricUnlocking) return;
+    setState(() => _isBiometricUnlocking = true);
+    await ref.read(authControllerProvider.notifier).unlockBiometricSession();
+    if (mounted) setState(() => _isBiometricUnlocking = false);
+  }
+
   void _fillDevLogin() {
     _emailController.text = 'admin@rentalcommand.local';
     _passwordController.text = 'Admin123!';
@@ -208,6 +230,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ),
                           textAlign: TextAlign.center,
                         ),
+                        if (authState is AuthStateBiometricLocked) ...[
+                          const SizedBox(height: 24),
+                          _BiometricUnlockCard(
+                            result: authState.lastResult,
+                            isUnlocking: _isBiometricUnlocking,
+                            onRetry: _unlockWithBiometrics,
+                          ),
+                        ],
                         const SizedBox(height: 32),
 
                         if (_accessContexts.length > 1) ...[
@@ -466,4 +496,74 @@ class _OrDivider extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Compact biometric affordance shown only for an opted-in stored session.
+///
+/// The Android system prompt remains the authentication surface. This control
+/// is deliberately styled like the other login actions instead of a status
+/// card so returning users can scan it as another sign-in method.
+class _BiometricUnlockCard extends StatelessWidget {
+  const _BiometricUnlockCard({
+    required this.result,
+    required this.isUnlocking,
+    required this.onRetry,
+  });
+
+  final BiometricAuthenticationResult? result;
+  final bool isUnlocking;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Column(
+      children: [
+        TextButton.icon(
+          key: const Key('biometric-login-action'),
+          onPressed: isUnlocking ? null : onRetry,
+          icon: isUnlocking
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.fingerprint, size: 28),
+          label: const Text('Fingerprint'),
+          style: TextButton.styleFrom(
+            foregroundColor: colorScheme.primary,
+            textStyle: theme.textTheme.titleSmall,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          ),
+        ),
+        if (result != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            _biometricFallbackCopy(result),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+String _biometricFallbackCopy(BiometricAuthenticationResult? result) {
+  return switch (result) {
+    null => 'Confirm it’s you, or use your password or Google below.',
+    BiometricAuthenticationResult.authenticated =>
+      'Confirm it’s you, or use your password or Google below.',
+    BiometricAuthenticationResult.canceled =>
+      'Biometric sign-in was canceled. Use your password or Google, or try again.',
+    BiometricAuthenticationResult.lockedOut =>
+      'Biometric sign-in is temporarily locked. Unlock your phone or use your password or Google.',
+    BiometricAuthenticationResult.notEnrolled =>
+      'No fingerprint or other biometric is set up on this device. Use your password or Google.',
+    BiometricAuthenticationResult.unavailable =>
+      'Biometric sign-in isn’t available on this device. Use your password or Google.',
+  };
 }
