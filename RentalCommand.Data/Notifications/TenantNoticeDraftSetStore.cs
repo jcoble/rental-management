@@ -605,6 +605,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         ),
         resolved AS (
           SELECT candidate."WorkItemId",
+                 candidate."EffectiveNowUtc" AS "AppliedAtUtc",
                  upserted.*
           FROM candidates AS candidate
           INNER JOIN upserted
@@ -637,6 +638,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                resolved."Body",
                resolved."Reason",
                resolved."TriggerDate",
+               resolved."AppliedAtUtc",
                resolved."ConversationId",
                resolved."ApprovedChannels",
                resolved."CreatedAt",

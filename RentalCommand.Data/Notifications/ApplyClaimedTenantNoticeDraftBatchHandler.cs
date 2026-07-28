@@ -27,11 +27,11 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
 
         var generated = await attempt.NoticeDrafts.GenerateClaimedBatchAsync(command.ClaimToken, ct);
         var createdCount = generated.FirstOrDefault()?.CreatedCount ?? 0;
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         foreach (var draft in generated)
         {
             var operation = draft.WasCreated ? AuditLogOperation.Created : AuditLogOperation.Updated;
             var operationText = draft.WasCreated ? "create" : "resolve";
+            var appliedAtUtc = draft.AppliedAtUtc;
 
             attempt.StageSemanticEvent(new AtomicSemanticAudit(
                 draft.PortfolioId,
@@ -53,7 +53,7 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
                 ChangeReason: draft.WasCreated
                     ? "Generated a claimed tenant notice draft."
                     : "Resolved an existing claimed tenant notice draft."),
-                now);
+                appliedAtUtc);
             attempt.StageOutbox(new OutboxMessage
             {
                 PortfolioId = draft.PortfolioId,
@@ -77,8 +77,8 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
                     command.ClaimToken,
                     draft.WorkItemId,
                     draft.DraftId),
-                CreatedAtUtc = now,
-                NextAttemptAtUtc = now,
+                CreatedAtUtc = appliedAtUtc,
+                NextAttemptAtUtc = appliedAtUtc,
             });
         }
 

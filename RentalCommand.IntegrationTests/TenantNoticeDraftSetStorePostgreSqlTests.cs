@@ -88,6 +88,113 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task ClaimedBatch_UsesFrozenEffectiveClock_ForDraftAuditAndOutboxChronology()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL notice-draft proof skipped.");
+
+        var setupNow = new DateTime(2026, 7, 10, 12, 0, 0, DateTimeKind.Utc);
+        var effectiveNow = new DateTime(2027, 1, 26, 5, 0, 0, DateTimeKind.Utc);
+        var token = Guid.NewGuid();
+        int portfolioId;
+        int leaseManagementId;
+        long ledgerEntryId;
+
+        await using (var setup = NewContext())
+        {
+            var actor = new ApplicationUser
+            {
+                UserName = "notice-clock-owner@example.test",
+                NormalizedUserName = "NOTICE-CLOCK-OWNER@EXAMPLE.TEST",
+                Email = "notice-clock-owner@example.test",
+                NormalizedEmail = "NOTICE-CLOCK-OWNER@EXAMPLE.TEST",
+                DisplayName = "Notice Clock Owner",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = setupNow,
+            };
+            var portfolio = new Portfolio
+            {
+                Name = "Notice Clock Workspace",
+                ManagementCompanyName = "Notice Clock Workspace",
+                TimeZone = "UTC",
+                Currency = "USD",
+                Status = PortfolioStatus.Active,
+                CreatedAt = setupNow,
+                UpdatedAt = setupNow,
+            };
+            setup.AddRange(actor, portfolio);
+            await setup.SaveChangesAsync();
+            var scope = await SeedAdministratorScopeAsync(setup, portfolio.Id, actor, setupNow);
+            setup.SimulationClocks.Add(new SimulationClock
+            {
+                Id = 1,
+                Mode = ClockMode.Frozen,
+                SimAnchorUtc = effectiveNow,
+                RealAnchorUtc = setupNow,
+                TimeZoneId = "UTC",
+                UpdatedAtRealUtc = setupNow,
+            });
+            await setup.SaveChangesAsync();
+
+            var relationship = await SeedRelationshipAsync(setup, portfolio, actor, "Frozen", setupNow);
+            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            await foundation.SeedSuppliedTemplatesAsync(
+                scope, "seed-frozen-notice-draft-templates", CancellationToken.None);
+            var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
+                row.PortfolioId == portfolio.Id && row.AutomationKey == "rent-reminder");
+            policy.Mode = TenantNoticeMode.Draft;
+
+            var work = ClaimedWork(
+                portfolio.Id,
+                policy.Id,
+                relationship.LeaseManagementId,
+                relationship.PartyId,
+                relationship.LedgerEntryId,
+                token,
+                "notice-clock-frozen",
+                effectiveNow);
+            setup.Add(work);
+            await setup.SaveChangesAsync();
+
+            portfolioId = portfolio.Id;
+            leaseManagementId = relationship.LeaseManagementId;
+            ledgerEntryId = relationship.LedgerEntryId;
+        }
+
+        var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
+        var identity = TenantNoticeDraftAutomation.Identity(command);
+        var outcome = await Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec);
+
+        outcome.Value.CreatedCount.Should().Be(1);
+        outcome.Value.Drafts.Should().ContainSingle();
+        outcome.Value.Drafts[0].AppliedAtUtc.Should().Be(effectiveNow);
+        outcome.Value.Drafts[0].CreatedAt.Should().Be(effectiveNow);
+        outcome.Value.Drafts[0].UpdatedAt.Should().Be(effectiveNow);
+
+        await using var verify = NewContext();
+        var persisted = await verify.NoticeDrafts.SingleAsync(row =>
+            row.PortfolioId == portfolioId &&
+            row.LeaseManagementId == leaseManagementId &&
+            row.TenantLedgerEntryId == ledgerEntryId &&
+            row.NoticeType == "rent-reminder");
+        persisted.CreatedAt.Should().Be(effectiveNow);
+        persisted.UpdatedAt.Should().Be(effectiveNow);
+
+        var audit = await verify.AtomicAuditLogs.SingleAsync(row =>
+            row.CommandType == identity.CommandType &&
+            row.CommandIdempotencyKey == identity.IdempotencyKey &&
+            row.PortfolioId == portfolioId &&
+            row.EntityType == nameof(NoticeDraft));
+        audit.Timestamp.Should().Be(effectiveNow);
+
+        var outbox = await verify.OutboxMessages.SingleAsync(row =>
+            row.PortfolioId == portfolioId &&
+            row.IdempotencyKey.StartsWith("tenant-notice-draft-worker:"));
+        outbox.CreatedAtUtc.Should().Be(effectiveNow);
+        outbox.NextAttemptAtUtc.Should().Be(effectiveNow);
+    }
+
+    [SkippableFact]
     public async Task ClaimedBatch_IsOneSetCommand_AndConcurrentReplayReturnsOnlyExactLedgerDraft()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL notice-draft proof skipped.");
@@ -195,6 +302,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                 because: "receipt replay must return the first exact canonical draft result");
         concurrent.SelectMany(outcome => outcome.Value.Drafts)
             .Should().NotContain(row => row.WorkItemId == mismatchedWorkId);
+        concurrent.SelectMany(outcome => outcome.Value.Drafts)
+            .Should().OnlyContain(row => row.AppliedAtUtc == now);
 
         var noticeCommands = recorder.ReaderCommands
             .Where(sql => sql.Contains("INSERT INTO \"NoticeDrafts\"", StringComparison.Ordinal))
@@ -323,6 +432,22 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         (await verify.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == identity.CommandType &&
             receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        var auditLogs = await verify.AtomicAuditLogs
+            .Where(audit =>
+                audit.CommandType == identity.CommandType &&
+                audit.PortfolioId == portfolioId &&
+                audit.EntityType == nameof(NoticeDraft))
+            .ToArrayAsync();
+        auditLogs.Should().ContainSingle();
+        auditLogs[0].Timestamp.Should().Be(now);
+        var outboxMessages = await verify.OutboxMessages
+            .Where(message =>
+                message.PortfolioId == portfolioId &&
+                message.IdempotencyKey.StartsWith("tenant-notice-draft-worker:"))
+            .ToArrayAsync();
+        outboxMessages.Should().ContainSingle();
+        outboxMessages[0].CreatedAtUtc.Should().Be(now);
+        outboxMessages[0].NextAttemptAtUtc.Should().Be(now);
         (await verify.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == identity.CommandType &&
             audit.PortfolioId == portfolioId &&
@@ -336,6 +461,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             row.NoticeType == "rent-reminder");
         persisted.TenantLedgerEntryId.Should().Be(validLedgerId);
         persisted.Status.Should().Be("Draft");
+        persisted.CreatedAt.Should().Be(now);
+        persisted.UpdatedAt.Should().Be(now);
         persisted.Subject.Should().Contain("Upcoming rent reminder");
         persisted.Body.Should().Contain("Casey A",
             because: "each durable notice draft is rendered for one exact eligible relationship party");

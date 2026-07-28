@@ -328,6 +328,7 @@ public sealed class AtomicGeneratedTenantNoticeDraft : IAtomicResultData
     public string Body { get; init; } = string.Empty;
     public string Reason { get; init; } = string.Empty;
     public DateTime TriggerDate { get; init; }
+    public DateTime AppliedAtUtc { get; init; }
     public int? ConversationId { get; init; }
     public string? ApprovedChannels { get; init; }
     public DateTime CreatedAt { get; init; }
