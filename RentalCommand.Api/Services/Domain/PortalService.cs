@@ -525,7 +525,6 @@ public class PortalService : IPortalService
                 equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
             where account.Id == tenantAccountId
                 && balance.OpenAmount > 0m
-                && balance.DueOn <= balance.BusinessDate
             select new PortalTenantChargeResponse
             {
                 TenantAccountId = account.Id,

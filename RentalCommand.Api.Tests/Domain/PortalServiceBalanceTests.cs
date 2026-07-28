@@ -106,8 +106,8 @@ public sealed class PortalServiceBalanceTests
         }
         chargeSql.Should().Contain("vw_tenant_charge_balances");
         chargeSql.Should().Contain("\"OpenAmount\" > 0.0");
-        chargeSql.Should().Contain("\"DueOn\" <= ");
-        chargeSql.Should().Contain("\"BusinessDate\"");
+        chargeSql.Should().NotContain("\"DueOn\" <= ");
+        chargeSql.Should().NotContain("\"BusinessDate\"");
         entrySql.Should().Contain("DESC", "unknown entry sorts retain newest-first ordering");
     }
 
@@ -310,7 +310,7 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ChargePage_ReturnsOnlyDueOpenCharge_AndCountsAndPagesInSql()
+    public async Task ChargePage_ReturnsAuthorizedOpenChargesIncludingFutureDue_AndCountsAndPagesInSql()
     {
         var scenario = await SeedScenarioAsync();
         _commands.Clear();
@@ -323,9 +323,12 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
                 new PortalTenantChargeListQuery { Take = 20 });
 
         page.Should().NotBeNull();
-        page!.TotalCount.Should().Be(1);
-        page.Items.Should().ContainSingle(item =>
-            item.TenantLedgerEntryId == scenario.DueOpenRentId);
+        page!.TotalCount.Should().Be(2);
+        page.Items.Select(item => item.TenantLedgerEntryId).Should().Equal(
+            scenario.DueOpenRentId,
+            scenario.FutureOpenRentId);
+        page.Items.Single(item => item.TenantLedgerEntryId == scenario.FutureOpenRentId)
+            .OpenAmount.Should().Be(1000m);
 
         _commands.Should().HaveCount(3,
             "the endpoint uses one identity query, one count query, and one bounded page query");
@@ -335,13 +338,47 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         chargeCommands.Should().HaveCount(2);
         chargeCommands.Should().OnlyContain(sql =>
             sql.Contains("\"OpenAmount\" > 0.0", StringComparison.Ordinal)
-            && sql.Contains("\"DueOn\" <= ", StringComparison.Ordinal)
-            && sql.Contains("\"BusinessDate\"", StringComparison.Ordinal));
+            && !sql.Contains("\"DueOn\" <= ", StringComparison.Ordinal)
+            && !sql.Contains("\"BusinessDate\"", StringComparison.Ordinal));
         chargeCommands.Should().ContainSingle(sql =>
             sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase));
         chargeCommands.Should().ContainSingle(sql =>
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var focusedLedgerPage = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .ListTenantAccountEntriesPageAsync(
+                scenario.Scope,
+                scenario.TenantAccountId,
+                new PortalTenantLedgerEntryListQuery
+                {
+                    Search = "future-open-rent",
+                    Take = 20,
+                });
+
+        focusedLedgerPage.Should().NotBeNull();
+        focusedLedgerPage!.Items.Should().ContainSingle(item =>
+            item.TenantLedgerEntryId == scenario.FutureOpenRentId);
+        _commands.Should().HaveCount(3,
+            "the focused ledger entry read keeps identity, count, and page work DB-side");
+        _commands.Should().Contain(sql =>
+            sql.Contains("TenantLedgerEntries", StringComparison.Ordinal)
+            && sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var deniedPage = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .ListTenantAccountChargesPageAsync(
+                scenario.Scope,
+                scenario.UnauthorizedTenantAccountId,
+                new PortalTenantChargeListQuery { Take = 20 });
+
+        deniedPage.Should().BeNull();
+        _commands.Should().ContainSingle("unauthorized account lookup stops before charge queries");
     }
 
     private async Task<Scenario> SeedScenarioAsync()
@@ -407,7 +444,19 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             CreatedByUserId = userId,
             RowVersion = Guid.NewGuid(),
         };
-        _context.Db.Add(management);
+        var unauthorizedManagement = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "LM-PAYABLE-CHARGES-DENIED",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = userId,
+            RowVersion = Guid.NewGuid(),
+        };
+        _context.Db.AddRange(management, unauthorizedManagement);
         await _context.Db.SaveChangesAsync();
 
         var account = new TenantAccount
@@ -416,6 +465,17 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             PortfolioId = portfolioId,
             LeaseManagementId = management.Id,
             AccountNumber = "TA-PAYABLE-CHARGES",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = userId,
+        };
+        var unauthorizedAccount = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = unauthorizedManagement.Id,
+            AccountNumber = "TA-PAYABLE-CHARGES-DENIED",
             Currency = "USD",
             OpenedAtUtc = now,
             CreatedAtUtc = now,
@@ -432,7 +492,7 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             CreatedAtUtc = now,
             CreatedByUserId = userId,
         };
-        _context.Db.AddRange(account, party);
+        _context.Db.AddRange(account, unauthorizedAccount, party);
         await _context.Db.SaveChangesAsync();
 
         var agreement = new LeaseAgreement
@@ -501,11 +561,22 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         var dueOpenRent = Charge(
             account.Id, agreement.Id, TenantLedgerEntryType.RentCharge, 1100m,
             businessDate, "due-open-rent");
+        var reversedManualCharge = Charge(
+            account.Id, agreement.Id, TenantLedgerEntryType.ManualCharge, 750m,
+            businessDate, "reversed-manual-charge");
+        var unauthorizedFutureOpenRent = Charge(
+            unauthorizedAccount.Id, null, TenantLedgerEntryType.ManualCharge, 1200m,
+            businessDate.AddDays(1), "unauthorized-future-open-rent");
         var depositReceipt = Receipt(account.Id, 500m, businessDate, "deposit-receipt");
         var rentReceipt = Receipt(account.Id, 900m, businessDate, "rent-receipt");
         _context.Db.TenantLedgerEntries.AddRange(
             settledDeposit, settledRent, futureOpenRent, dueOpenRent,
-            depositReceipt, rentReceipt);
+            reversedManualCharge, unauthorizedFutureOpenRent, depositReceipt, rentReceipt);
+        await _context.Db.SaveChangesAsync();
+
+        var reversal = Reversal(account.Id, reversedManualCharge.Id, 750m, businessDate,
+            "reversed-manual-charge");
+        _context.Db.TenantLedgerEntries.Add(reversal);
         await _context.Db.SaveChangesAsync();
 
         _context.Db.TenantLedgerAllocations.AddRange(
@@ -518,7 +589,9 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             new PortalTenantReadScope(
                 portfolioId, userId, accessContext.Id, accessContext.AccessRevision),
             account.Id,
-            dueOpenRent.Id);
+            dueOpenRent.Id,
+            futureOpenRent.Id,
+            unauthorizedAccount.Id);
     }
 
     private static TenantLedgerEntry Charge(
@@ -542,6 +615,28 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         PostedAtUtc = DateTime.UtcNow,
         Description = key,
         BusinessKey = $"portal-payable:{key}",
+        CreatedByUserId = 1,
+    };
+
+    private static TenantLedgerEntry Reversal(
+        int accountId,
+        long reversesEntryId,
+        decimal amount,
+        DateOnly effectiveOn,
+        string key) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = 1,
+        TenantAccountId = accountId,
+        EntryType = TenantLedgerEntryType.Reversal,
+        Direction = TenantLedgerDirection.Credit,
+        Amount = amount,
+        Currency = "USD",
+        EffectiveOn = effectiveOn,
+        PostedAtUtc = DateTime.UtcNow,
+        Description = $"{key} reversal",
+        BusinessKey = $"portal-payable:{key}:reversal",
+        ReversesEntryId = reversesEntryId,
         CreatedByUserId = 1,
     };
 
@@ -608,5 +703,7 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
     private sealed record Scenario(
         PortalTenantReadScope Scope,
         int TenantAccountId,
-        long DueOpenRentId);
+        long DueOpenRentId,
+        long FutureOpenRentId,
+        int UnauthorizedTenantAccountId);
 }
