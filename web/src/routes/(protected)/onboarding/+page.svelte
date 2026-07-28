@@ -67,6 +67,7 @@
 		NEW_ONBOARDING_PROPERTY_VALUE,
 		buildOnboardingPropertyPayload,
 		onboardingPropertyFormFromProperty,
+		onboardingPropertyPrefillCandidate,
 		onboardingPropertyRecordOptions,
 	} from '$lib/onboarding/property-payload';
 	import { defaultLeaseNumber } from '$lib/leases/lease-number';
@@ -568,6 +569,7 @@
 	let propertyDeleteTarget = $state<Property | null>(null);
 	let unitDeleteTarget = $state<Unit | null>(null);
 	let propertySelectionPrefilled = false;
+	let propertySelectionTouched = false;
 	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
 		createdProperty,
 		existingProperties: propertiesQuery.data?.items ?? []
@@ -597,6 +599,7 @@
 	}
 
 	function selectPropertyRecord(value: string | undefined) {
+		propertySelectionTouched = true;
 		selectedPropertyId = value || NEW_ONBOARDING_PROPERTY_VALUE;
 		propertyErrors = {};
 		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
@@ -626,6 +629,7 @@
 	}
 
 	async function selectRemotePropertyRecord(value: string) {
+		propertySelectionTouched = true;
 		if (!value) {
 			selectedRemoteProperty = null;
 			selectPropertyRecord(NEW_ONBOARDING_PROPERTY_VALUE);
@@ -652,7 +656,11 @@
 
 	$effect(() => {
 		if (propertySelectionPrefilled) return;
-		const property = createdProperty ?? propertyRecordOptions[0] ?? null;
+		const property = onboardingPropertyPrefillCandidate({
+			createdProperty,
+			propertyRecordOptions,
+			selectionTouched: propertySelectionTouched
+		});
 		if (!property) return;
 		propertySelectionPrefilled = true;
 		selectedPropertyId = String(property.id);

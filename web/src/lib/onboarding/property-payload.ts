@@ -88,6 +88,19 @@ export function onboardingPropertyRecordOptions({
 	return options;
 }
 
+export function onboardingPropertyPrefillCandidate({
+	createdProperty,
+	propertyRecordOptions,
+	selectionTouched
+}: {
+	createdProperty: PropertyLike | null | undefined;
+	propertyRecordOptions: readonly PropertyLike[];
+	selectionTouched: boolean;
+}): PropertyLike | null {
+	if (selectionTouched) return null;
+	return createdProperty ?? propertyRecordOptions[0] ?? null;
+}
+
 export function onboardingPropertyFormFromProperty(property: PropertyLike): OnboardingPropertyForm {
 	return {
 		name: property.name ?? '',
