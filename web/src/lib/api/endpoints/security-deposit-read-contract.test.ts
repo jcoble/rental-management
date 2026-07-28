@@ -40,6 +40,16 @@ describe('security deposit tenant-account read contract', () => {
 		assert.doesNotMatch(detailPageSource, /deposit\.id/);
 	});
 
+	it('uses the API business date for deposit money date defaults and Today shortcuts', () => {
+		assert.match(detailPageSource, /const businessDate = \$derived\(deposit\?\.businessDate\?\.slice\(0, 10\) \|\| today\(\)\)/);
+		assert.match(detailPageSource, /fundEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /deductionEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /refundEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-fund-date"/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-deduction-date"/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-refund-date"/);
+	});
+
 	it('sends canonical database sort fields from the server-side grid', () => {
 		assert.match(listPageSource, /key: 'propertyName'/);
 		assert.match(listPageSource, /key: 'heldBalance'/);

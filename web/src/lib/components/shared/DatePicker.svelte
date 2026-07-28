@@ -25,6 +25,7 @@
     disabled?   boolean
     min?        string  ISO `yyyy-MM-dd` — earliest selectable date (inclusive).
     max?        string  ISO `yyyy-MM-dd` — latest selectable date (inclusive).
+    todayValue? string  ISO `yyyy-MM-dd` — override for the Today shortcut.
     testid?     string  applied as data-testid on the text input for E2E.
     id?         string  id for the text input (label `for=` association).
 -->
@@ -55,6 +56,7 @@
 		disabled = false,
 		min,
 		max,
+		todayValue,
 		testid,
 		id
 	}: {
@@ -64,6 +66,7 @@
 		disabled?: boolean;
 		min?: string;
 		max?: string;
+		todayValue?: string;
 		testid?: string;
 		id?: string;
 	} = $props();
@@ -190,7 +193,7 @@
 	}
 
 	function setToday() {
-		const iso = today(getLocalTimeZone()).toString();
+		const iso = todayValue?.trim() || today(getLocalTimeZone()).toString();
 		if (!isInRange(iso)) {
 			invalid = true;
 			return;
