@@ -200,20 +200,24 @@ public class NotificationService : INotificationService
                 notification.NavigationExpiresAtUtc > nowUtc &&
                 notification.NavigationDestination != null &&
                 notification.NavigationAction != null &&
-                notification.NavigationParentResourceKind == null &&
-                notification.NavigationParentResourceId == null &&
-                notification.NavigationChildResourceKind == null &&
-                notification.NavigationChildResourceId == null &&
                 (notification.NavigationFallbackDestination == NavigationDestination.Home ||
                  notification.NavigationFallbackDestination == NavigationDestination.Notifications) &&
                 (
                     ((notification.NavigationDestination == NavigationDestination.Home ||
                       notification.NavigationDestination == NavigationDestination.Notifications) &&
                      notification.NavigationResourceKind == null &&
-                     notification.NavigationResourceId == null) ||
+                     notification.NavigationResourceId == null &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null) ||
                     (notification.NavigationDestination == NavigationDestination.Message &&
                      notification.NavigationResourceKind == nameof(Conversation) &&
                      notification.NavigationResourceId != null &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
                      (experience == NavigationExperience.Management ||
                       experience == NavigationExperience.Leasing ||
                       experience == NavigationExperience.Tenant) &&
@@ -226,6 +230,10 @@ public class NotificationService : INotificationService
                       experience == NavigationExperience.Maintenance)) &&
                      notification.NavigationResourceKind == nameof(WorkOrder) &&
                      notification.NavigationResourceId != null &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
                      _db.WorkOrders.Any(workOrder =>
                          workOrder.PortfolioId == portfolioId &&
                          workOrder.Id == notification.NavigationResourceId) ||
@@ -233,18 +241,38 @@ public class NotificationService : INotificationService
                      experience == NavigationExperience.Management &&
                      notification.NavigationResourceKind == nameof(OwnerEntity) &&
                      notification.NavigationResourceId != null &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
                      _db.OwnerEntities.Any(owner =>
                          owner.PortfolioId == portfolioId &&
                          owner.Id == notification.NavigationResourceId)) ||
                     (notification.NavigationDestination == NavigationDestination.Money &&
                      experience == NavigationExperience.Management &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
                      ((notification.NavigationResourceKind == null &&
                        notification.NavigationResourceId == null) ||
                       (notification.NavigationResourceKind == nameof(BankConnection) &&
                        notification.NavigationResourceId != null &&
                        _db.BankConnections.Any(connection =>
                            connection.PortfolioId == portfolioId &&
-                           connection.Id == notification.NavigationResourceId))))
+                           connection.Id == notification.NavigationResourceId)))) ||
+                    (notification.NavigationDestination == NavigationDestination.TenantLedgerEntry &&
+                     experience == NavigationExperience.Tenant &&
+                     notification.NavigationResourceKind == nameof(TenantLedgerEntry) &&
+                     notification.NavigationResourceId != null &&
+                     notification.NavigationParentResourceKind == nameof(TenantAccount) &&
+                     notification.NavigationParentResourceId != null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
+                     _db.TenantLedgerEntries.Any(entry =>
+                         entry.PortfolioId == portfolioId &&
+                         entry.Id == notification.NavigationResourceId &&
+                         entry.TenantAccountId == notification.NavigationParentResourceId))
                 )
                     ? new NavigationIntentDto
                     {
