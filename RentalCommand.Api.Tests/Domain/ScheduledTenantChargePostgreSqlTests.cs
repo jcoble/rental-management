@@ -52,6 +52,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             new AtomicCommandIdentity("scheduled-tenant-charges.rent.apply", Guid.NewGuid().ToString("N")),
             new ApplyScheduledTenantChargeBatchCommand(
                 Guid.NewGuid(),
+                SeededAtUtc,
                 200,
                 IncludeRentCharges: true,
                 IncludeLateFeeCharges: false,

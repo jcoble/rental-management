@@ -10,6 +10,9 @@ namespace RentalCommand.Engine.Tests.Automation;
 
 public sealed class LateFeeServiceTests
 {
+    private static readonly DateTime BusinessNowUtc =
+        new(2027, 01, 22, 09, 15, 00, DateTimeKind.Utc);
+
     [Fact]
     public async Task Assess_DelegatesToCanonicalAtomicLateFeeBatch_WithCaps()
     {
@@ -24,6 +27,7 @@ public sealed class LateFeeServiceTests
         };
         var service = new LateFeeService(
             atomic,
+            new FixedTimeProvider(BusinessNowUtc),
             Options.Create(config),
             NullLogger<LateFeeService>.Instance);
 
@@ -33,6 +37,12 @@ public sealed class LateFeeServiceTests
         var command = atomic.Command.Should().BeOfType<ApplyScheduledTenantChargeBatchCommand>().Subject;
         command.IncludeRentCharges.Should().BeFalse();
         command.IncludeLateFeeCharges.Should().BeTrue();
+        command.BusinessNowUtc.Should().Be(BusinessNowUtc);
         command.StateLateFeeCapsJson.Should().Contain("CA").And.Contain("75");
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }

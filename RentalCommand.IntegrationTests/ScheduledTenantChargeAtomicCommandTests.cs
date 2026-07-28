@@ -291,6 +291,62 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task RentBatch_UsesFrozenBusinessClockForLedgerAuditNotificationAndOutboxTimestamps()
+    {
+        SkipIfNoDocker();
+        var businessNow = new DateTime(2027, 1, 22, 12, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "rent-business-clock",
+            businessNow,
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31));
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "rent-business-clock");
+        var command = RentCommand("rent-business-clock", businessNow);
+        Recorder.Clear();
+
+        var result = await Atomic.ExecuteAsync(identity, command, Codec);
+
+        result.Value.RentChargeCount.Should().Be(1);
+        await using var verify = NewContext();
+        var entry = await verify.TenantLedgerEntries.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge);
+        entry.EffectiveOn.Should().Be(new DateOnly(2027, 1, 1));
+        entry.PostedAtUtc.Should().Be(businessNow);
+
+        var auditTimes = await verify.AtomicAuditLogs
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .ToListAsync();
+        auditTimes.Should().NotBeEmpty();
+        auditTimes.Should().OnlyContain(timestamp => timestamp == businessNow);
+
+        var notifications = await verify.Notifications
+            .Where(row => row.PortfolioId == scenario.PortfolioId
+                && row.RelatedEntityType == nameof(TenantLedgerEntry)
+                && row.RelatedEntityId == entry.Id)
+            .ToListAsync();
+        notifications.Should().ContainSingle();
+        notifications.Should().OnlyContain(notification =>
+            notification.CreatedAt == businessNow
+            && notification.NavigationExpiresAtUtc == businessNow.AddDays(30));
+
+        var outboxRows = await verify.OutboxMessages
+            .Where(row => row.PortfolioId == scenario.PortfolioId
+                && row.CreatedAtUtc == businessNow)
+            .ToListAsync();
+        outboxRows.Should().NotBeEmpty();
+        outboxRows.Should().OnlyContain(row =>
+            row.CreatedAtUtc == businessNow
+            && row.NextAttemptAtUtc == businessNow);
+
+        Recorder.Commands.Should().Contain(sql =>
+            sql.Contains("INSERT INTO \"TenantLedgerEntries\"", StringComparison.Ordinal)
+            && !sql.Contains("clock_timestamp()", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
     public async Task LateFeeBatch_UsesOpenChargeBusinessDateGraceAndStateCap_AndDoesNotMutateRent()
     {
         SkipIfNoDocker();
@@ -303,7 +359,12 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
 
         var caps = "[{\"State\":\"OH\",\"MaxFlat\":500,\"MaxPercentOfRent\":5}]";
         var command = new ApplyScheduledTenantChargeBatchCommand(
-            Guid.NewGuid(), 200, false, true, caps);
+            Guid.NewGuid(),
+            new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
+            200,
+            false,
+            true,
+            caps);
         var first = await Atomic.ExecuteAsync(
             Identity("scheduled-tenant-charges.late-fee.apply", "late-fee-first"),
             command,
@@ -409,7 +470,8 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         string suffix,
         DateTime frozenAtUtc,
         DateOnly? termStartOn = null,
-        DateOnly? rentTrackingStartOn = null)
+        DateOnly? rentTrackingStartOn = null,
+        DateOnly? termEndOn = null)
     {
         await using var db = NewContext();
         var portfolio = await db.Portfolios.FirstOrDefaultAsync();
@@ -611,7 +673,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             ChangeType = LeaseAgreementChangeType.Initial,
             TermType = LeaseAgreementTermType.FixedTerm,
             TermStartOn = termStartOn ?? new DateOnly(2026, 7, 10),
-            TermEndOn = new DateOnly(2026, 8, 31),
+            TermEndOn = termEndOn ?? new DateOnly(2026, 8, 31),
             GoverningFromOn = termStartOn ?? new DateOnly(2026, 7, 10),
             BaseRentAmount = 3100m,
             RentDueDay = 1,
@@ -849,8 +911,10 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         CreatedByUserId = userId,
     };
 
-    private static ApplyScheduledTenantChargeBatchCommand RentCommand(string _) => new(
-        Guid.NewGuid(), 200, true, false, "[]");
+    private static ApplyScheduledTenantChargeBatchCommand RentCommand(
+        string _,
+        DateTime? businessNowUtc = null) => new(
+        Guid.NewGuid(), businessNowUtc ?? FrozenNow, 200, true, false, "[]");
 
     private static AtomicCommandIdentity Identity(string type, string suffix) => new(type, suffix);
 

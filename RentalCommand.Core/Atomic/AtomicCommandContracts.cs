@@ -642,6 +642,7 @@ public interface IAtomicTenantMoneyPersistence
     /// </summary>
     Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledRentChargesAsync(
         int batchSize,
+        DateTime postedAtUtc,
         CancellationToken ct = default);
 
     /// <summary>
@@ -651,6 +652,7 @@ public interface IAtomicTenantMoneyPersistence
     Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledLateFeesAsync(
         int batchSize,
         string stateCapsJson,
+        DateTime postedAtUtc,
         CancellationToken ct = default);
 
     Task<AtomicLedgerAllocationSummary> AllocateOldestChargesAsync(
