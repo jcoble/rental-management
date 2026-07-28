@@ -178,11 +178,17 @@ describe('experience route policy', () => {
 	it('keeps workspace setup with the Workspace Administrator', () => {
 		const administrator = new Set([CAPABILITY.securityManage, CAPABILITY.rentalsManage]);
 		const propertyManager = new Set([CAPABILITY.rentalsManage, CAPABILITY.rentalsRead]);
+		const securityOnlyManager = new Set([CAPABILITY.securityManage]);
 
 		assert.equal(canAccessRoute('/onboarding', 'Management', administrator), true);
 		assert.equal(canAccessRoute('/get-started', 'Management', administrator), true);
+		assert.equal(canAccessRoute('/get-started', 'Management', securityOnlyManager), true);
 		assert.equal(canAccessRoute('/onboarding', 'Management', propertyManager), false);
 		assert.equal(canAccessRoute('/get-started', 'Management', propertyManager), false);
+
+		const dashboardPage = readFileSync(new URL('../../routes/(protected)/+page.svelte', import.meta.url), 'utf8');
+		assert.match(dashboardPage, /hasCapability\('security\.manage'\)/);
+		assert.match(dashboardPage, /\{#if canOpenGettingStarted\}[\s\S]*<GettingStartedCard \/>/);
 	});
 
 	it('splits operational reconciliation from bank administration', () => {
