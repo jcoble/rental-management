@@ -153,6 +153,8 @@ public sealed class AtomicCoreCrudMutationHandler
             throw new ArgumentException("Unsupported Property mutation operation.");
         var mutationNow = command.ChangedAtUtc ?? now;
         var update = Read<UpdatePropertyRequest>(command);
+        await EnsurePropertyYearBuiltIsNotFutureAsync(
+            update.YearBuilt, command.PortfolioId, persistence, ct);
         OwnershipLifecycleChange? ownershipChange = null;
         var ownershipRequests = RequestedOwnerships(
             update.Ownerships, update.ClearOwnership);
@@ -217,6 +219,8 @@ public sealed class AtomicCoreCrudMutationHandler
         }
 
         var request = setup.Property;
+        await EnsurePropertyYearBuiltIsNotFutureAsync(
+            request.YearBuilt, command.PortfolioId, persistence, ct);
         var requestedOwnerships = RequestedOwnerships(
             request.Ownerships, request.ClearOwnership) ?? [];
         if (requestedOwnerships.Count == 0 && !request.ClearOwnership)
@@ -387,6 +391,19 @@ public sealed class AtomicCoreCrudMutationHandler
         property.InServiceDate = Utc(request.InServiceDate);
         property.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
         property.UpdatedAt = now;
+    }
+
+    private static async Task EnsurePropertyYearBuiltIsNotFutureAsync(
+        int? yearBuilt,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (yearBuilt is not { } requestedYear) return;
+        var times = await persistence.ReadCommandTimesAsync(portfolioId, ct);
+        var businessYear = times.BusinessDate.Year;
+        if (requestedYear > businessYear)
+            throw Conflict($"Year built cannot be later than the portfolio business year ({businessYear}).");
     }
 
     private static IReadOnlyList<PropertyOwnershipRequest>? RequestedOwnerships(

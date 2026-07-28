@@ -87,6 +87,10 @@ export interface LeaseAgreementEffectiveAddendumSeries {
   series: LeaseAgreementEffectiveAddendumSeriesItem[];
 }
 
+export interface PrepareMoveInContextResponse {
+  businessDate: string;
+}
+
 export interface LeaseAgreementDraftSigner {
   leaseAgreementSignerId: number;
   leaseManagementPartyId: number | null;
@@ -614,6 +618,10 @@ function lifecycleActionJson<T>(
 }
 
 export const leaseManagements = {
+  prepareMoveInContext: () =>
+    api.get<PrepareMoveInContextResponse>(
+      "/lease-managements/prepare-move-in-context"
+    ),
   prepareMoveIn: (request: PrepareMoveInRequest, operationKey: string) =>
     fetchApi<PrepareMoveInResponse>("/lease-managements/prepare-move-in", {
       method: "POST",
