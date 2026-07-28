@@ -216,16 +216,14 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
             }))
             .ToList();
         attempt.Persistence.AddRange(notifications.Select(projection => projection.Notification));
-        await attempt.FlushBusinessAsync(ct);
-
         foreach (var projection in notifications)
         {
             var row = projection.Recipient;
             var notification = projection.Notification;
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            attempt.BindSemanticAudit(notification, new AtomicSemanticAudit(
                 row.PortfolioId,
                 nameof(Notification),
-                notification.Id,
+                0,
                 AuditLogOperation.Created,
                 ActorLabel: "system:scheduled-tenant-billing",
                 NewValues: JsonSerializer.Serialize(new
@@ -235,8 +233,14 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                     row.BusinessKey,
                     row.UserId,
                 }),
-                ChangeReason: "Posted scheduled rent charge tenant notification."),
-                now);
+                ChangeReason: "Posted scheduled rent charge tenant notification."));
+        }
+        await attempt.FlushBusinessAsync(ct);
+
+        foreach (var projection in notifications)
+        {
+            var row = projection.Recipient;
+            var notification = projection.Notification;
             attempt.StageOutbox(new OutboxMessage
             {
                 PortfolioId = row.PortfolioId,
