@@ -72,7 +72,7 @@ public sealed class DocumentsControllerTests : IDisposable
     [Fact]
     public async Task GetFile_WithAuthorizedDocumentTemplateSource_ReturnsSourcePdf()
     {
-        var (storedFile, template, _) = SeedDocumentTemplateSource();
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
         var documents = new Mock<IDocumentService>();
         documents
             .Setup(d => d.FindAsync(PortfolioId, storedFile.Id, It.IsAny<CancellationToken>()))
@@ -87,6 +87,7 @@ public sealed class DocumentsControllerTests : IDisposable
             documents.Object,
             storage.Object,
             isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
 
         var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
 
@@ -113,7 +114,7 @@ public sealed class DocumentsControllerTests : IDisposable
             documents.Object,
             storage.Object,
             isManagement: true);
-        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.LeasingAgent, foreignPropertyId);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, foreignPropertyId);
 
         var result = await controller.GetFile(storedFile.Id, thumb: false, CancellationToken.None);
 
@@ -125,7 +126,7 @@ public sealed class DocumentsControllerTests : IDisposable
     [Fact]
     public async Task GetFile_WithDocumentTemplateEntityButUnlinkedStoredFile_DeniesBeforeStorage()
     {
-        var (storedFile, template, _) = SeedDocumentTemplateSource();
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
         var unlinkedFile = new StoredFile
         {
             PortfolioId = PortfolioId,
@@ -150,8 +151,46 @@ public sealed class DocumentsControllerTests : IDisposable
             documents.Object,
             storage.Object,
             isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
 
         var result = await controller.GetFile(unlinkedFile.Id, thumb: false, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        storedFile.Id.Should().Be(template.OriginalStoredFileId);
+    }
+
+    [Fact]
+    public async Task GetFile_WithDocumentTemplateEntityButDifferentLinkedFile_DeniesBeforeStorage()
+    {
+        var (storedFile, template, propertyId) = SeedDocumentTemplateSource();
+        var otherLinkedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "DocumentTemplate",
+            EntityId = template.Id,
+            FileName = "different-linked.pdf",
+            FilePath = "stored/different-linked.pdf",
+            ContentType = "application/pdf",
+            FileSize = 17,
+            UploadedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.StoredFiles.Add(otherLinkedFile);
+        _ctx.Db.SaveChanges();
+
+        var documents = new Mock<IDocumentService>();
+        documents
+            .Setup(d => d.FindAsync(PortfolioId, otherLinkedFile.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherLinkedFile);
+
+        var storage = new Mock<IFileStorage>();
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: true);
+        RestrictManagementAssignmentToSelectedProperty(RoleProfileKeys.PropertyManager, propertyId);
+
+        var result = await controller.GetFile(otherLinkedFile.Id, thumb: false, CancellationToken.None);
 
         result.Should().BeOfType<NotFoundObjectResult>();
         storage.Verify(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
