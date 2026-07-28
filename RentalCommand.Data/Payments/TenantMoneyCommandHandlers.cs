@@ -666,6 +666,7 @@ public sealed class FundSecurityDepositHandler
                 "The deposit funding amount exceeds the tenant account's open security-deposit charges.");
         }
 
+        var businessNowUtc = times.EffectiveNowUtc;
         var paymentAttempt = TenantMoneyCommandSupport.ManualAttempt(
             command, target.Currency, command.Amount, command.PaymentMethodSummary,
             command.ExternalReference, null, null, null, times.WallClockUtc);
@@ -675,14 +676,14 @@ public sealed class FundSecurityDepositHandler
         var receipt = TenantMoneyCommandSupport.Ledger(
             command, TenantLedgerEntryType.PaymentReceipt, TenantLedgerDirection.Credit,
             command.Amount, target.Currency, command.EffectiveOn, null,
-            command.Description, $"{command.BusinessKey}:tenant-receipt", times.WallClockUtc,
+            command.Description, $"{command.BusinessKey}:tenant-receipt", businessNowUtc,
             providerAttemptId: paymentAttempt.Id, sourceStoredFileId: command.SourceStoredFileId);
         attempt.Persistence.Add(receipt);
         await attempt.FlushBusinessAsync(ct);
 
         var allocation = await TenantMoneyCommandSupport.AllocateOldestAsync(
             command.PortfolioId, command.TenantAccountId, receipt.Id, command.Amount,
-            $"{command.BusinessKey}:allocation", command.ActorUserId, times.WallClockUtc,
+            $"{command.BusinessKey}:allocation", command.ActorUserId, businessNowUtc,
             attempt, ct, TenantLedgerEntryType.DepositCharge);
         if (allocation.AllocatedAmount != command.Amount)
         {
@@ -693,10 +694,10 @@ public sealed class FundSecurityDepositHandler
         var deposit = TenantMoneyCommandSupport.DepositEntry(
             command, SecurityDepositEntryType.Receipt, SecurityDepositDirection.Increase,
             command.Amount, target.Currency, command.EffectiveOn, command.Description,
-            command.BusinessKey, times.WallClockUtc, receipt.Id, command.SourceStoredFileId);
+            command.BusinessKey, businessNowUtc, receipt.Id, command.SourceStoredFileId);
         attempt.Persistence.Add(deposit);
         await attempt.FlushBusinessAsync(ct);
-        TenantMoneyCommandSupport.StageMutation(attempt, command, times.WallClockUtc,
+        TenantMoneyCommandSupport.StageMutation(attempt, command, businessNowUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit funded",
             new
             {
