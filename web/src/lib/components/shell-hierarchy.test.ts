@@ -18,7 +18,7 @@ const mobileHomeShell = readFileSync(
 );
 
 describe('tenant shell hierarchy', () => {
-	test('shows exactly five tenant destinations', () => {
+	test('keeps mobile tenant hierarchy compact and exposes web appointment navigation', () => {
 		const declarationStart = mobileDestination.indexOf('const tenantShellDestinations');
 		const declarationEnd = mobileDestination.indexOf(
 			'const gettingStartedDestination',
@@ -58,7 +58,8 @@ describe('tenant shell hierarchy', () => {
 		const portalStart = appShell.indexOf('const portalNavItems: NavItem[] = [');
 		const portalEnd = appShell.indexOf('const portalUtilityItems: NavItem[] = [', portalStart);
 		const portalNav = appShell.slice(portalStart, portalEnd);
-		assert.equal(portalNav.match(/\{ href:/g)?.length, 5);
+		assert.equal(portalNav.match(/\{ href:/g)?.length, 6);
+		assert.match(portalNav, /href: '\/portal\/appointments'/);
 		assert.doesNotMatch(portalNav, /role="tablist"|aria-selected|data-tabs/);
 	});
 
@@ -76,6 +77,7 @@ describe('tenant shell hierarchy', () => {
 			'/portal',
 			'/portal/account',
 			'/portal/maintenance',
+			'/portal/appointments',
 			'/portal/messages',
 			'/portal/profile'
 		]) {

@@ -14,16 +14,16 @@ test('relationship users get purpose-built security routes instead of staff sett
 	assert.doesNotMatch(source, /href="\/settings\/security"/);
 });
 
-test('tenant shell uses five plain-language destinations while subpages retain title context', () => {
+test('tenant shell uses plain-language destinations while subpages retain title context', () => {
 	const portalNavStart = source.indexOf('const portalNavItems: NavItem[] = [');
 	const portalUtilityStart = source.indexOf('const portalUtilityItems: NavItem[] = [');
 	const portalNavBlock = source.slice(portalNavStart, portalUtilityStart);
 
 	assert.match(source, /const portalUtilityItems: NavItem\[\] = \[/);
-	for (const label of ['Home', 'Account & lease', 'Maintenance', 'Messages', 'Profile']) {
+	for (const label of ['Home', 'Account & lease', 'Maintenance', 'Appointments', 'Messages', 'Profile']) {
 		assert.match(portalNavBlock, new RegExp(`label: '${label}'`));
 	}
-	assert.equal(portalNavBlock.match(/\{ href:/g)?.length, 5);
+	assert.equal(portalNavBlock.match(/\{ href:/g)?.length, 6);
 	assert.match(source, /\{ href: '\/portal\/security', label: 'Profile', icon: Shield \}/);
 	assert.match(source, /portalUser\s+\?\s+\[\.\.\.visiblePortalNavItems, \.\.\.portalUtilityItems\]/);
 	assert.doesNotMatch(portalNavBlock, /href: '\/portal\/security'/);
