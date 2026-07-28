@@ -18,6 +18,7 @@ namespace RentalCommand.Data.Scanning;
 public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTargetWriter
 {
     private static readonly JsonSerializerOptions ReceiptJsonOptions = new(JsonSerializerDefaults.Web);
+    private const decimal PaidStatementComponentCorrectionTolerance = 1.00m;
 
     public ProductionScanConfirmationTargetWriter() { }
 
@@ -746,15 +747,67 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         else
         {
             var impliedOpeningBalance = payment.BalanceAfter + payment.PrincipalAmount;
-            if (payment.PrincipalAmount != reviewed.PrincipalAmount
-                || payment.InterestAmount != reviewed.InterestAmount
-                || payment.EscrowAmount != reviewed.EscrowAmount
+            if (payment.EscrowAmount != reviewed.EscrowAmount
                 || payment.TotalAmount != reviewed.TotalAmount
-                || payment.BalanceAfter != reviewed.BalanceAfter
                 || impliedOpeningBalance != reviewed.OpeningBalance)
             {
                 throw new ScanConfirmationValidationException(
                     "Reviewed statement values must match the already-paid loan payment.");
+            }
+
+            var principalCorrection = reviewed.PrincipalAmount - payment.PrincipalAmount;
+            var interestCorrection = reviewed.InterestAmount - payment.InterestAmount;
+            var balanceCorrection = reviewed.BalanceAfter - payment.BalanceAfter;
+            var requiresComponentCorrection = principalCorrection != 0m
+                || interestCorrection != 0m
+                || balanceCorrection != 0m;
+            if (requiresComponentCorrection)
+            {
+                if (principalCorrection + interestCorrection != 0m
+                    || Math.Abs(principalCorrection) >= PaidStatementComponentCorrectionTolerance
+                    || Math.Abs(interestCorrection) >= PaidStatementComponentCorrectionTolerance)
+                {
+                    throw new ScanConfirmationValidationException(
+                        "Reviewed statement values must match the already-paid loan payment.");
+                }
+
+                var hasLaterPaid = await attempt.Persistence.Query<LoanPayment>()
+                    .AnyAsync(row =>
+                        row.LoanId == payment.LoanId
+                        && row.PortfolioId == command.PortfolioId
+                        && row.Id != payment.Id
+                        && (row.DueDate > payment.DueDate
+                            || (row.DueDate == payment.DueDate && row.Id > payment.Id))
+                        && row.Status == LoanPaymentStatus.Paid, ct);
+                if (hasLaterPaid || payment.Loan.CurrentBalance != payment.BalanceAfter)
+                {
+                    throw new ScanConfirmationValidationException(
+                        "Already-paid loan payment corrections require the selected payment to be the latest posted payment.");
+                }
+
+                payment.PrincipalAmount = reviewed.PrincipalAmount;
+                payment.InterestAmount = reviewed.InterestAmount;
+                payment.BalanceAfter = reviewed.BalanceAfter;
+                payment.Loan.CurrentBalance = reviewed.BalanceAfter;
+                payment.Loan.UpdatedAt = reviewed.EffectiveDate;
+                if (reviewed.BalanceAfter == 0m)
+                    payment.Loan.Status = LoanStatus.PaidOff;
+
+                attempt.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
+                    command.PortfolioId,
+                    nameof(Loan),
+                    payment.Loan.Id,
+                    AuditLogOperation.Updated,
+                    UserId: command.ConfirmedByUserId,
+                    ChangeReason: $"Scan draft #{command.DraftId} corrected posted loan payment {payment.Id} to the reviewed statement balance."));
+                await attempt.FlushBusinessAsync(ct);
+                attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                    command.PortfolioId,
+                    nameof(LoanPayment),
+                    payment.Id,
+                    AuditLogOperation.Updated,
+                    UserId: command.ConfirmedByUserId,
+                    ChangeReason: $"Corrected posted statement split from scan draft #{command.DraftId}."));
             }
         }
 
