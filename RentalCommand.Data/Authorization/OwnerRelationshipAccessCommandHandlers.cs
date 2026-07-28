@@ -100,6 +100,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
             command, attempt, null, ct);
         var changedAtUtc = Utc(command.EffectiveFromUtc);
+        var effectiveFromUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         attempt.UseDatabaseWallClockForAudit(changedAtUtc);
         await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.EmailLockId, ct);
 
@@ -235,8 +236,40 @@ public sealed class ActivateOwnerPortalAccessHandler
                 .OrderByDescending(invitation => invitation.CreatedAtUtc)
                 .Select(invitation => new PendingInvitation(invitation.ExpiresAtUtc))
                 .FirstOrDefaultAsync(ct);
+
+        if (requiresAccountActivation && invitationMembership is null)
+        {
+            invitationMembership = new WorkspaceMembership
+            {
+                AccessContext = context,
+                PortfolioId = command.PortfolioId,
+                Status = WorkspaceMembershipStatus.Active,
+                DefaultExperience = WorkspaceExperience.Owner,
+                EffectiveFromUtc = effectiveFromUtc,
+                CreatedAtUtc = changedAtUtc,
+                UpdatedAtUtc = changedAtUtc,
+            };
+            attempt.Persistence.Add(invitationMembership);
+        }
+
+        var ownerAssignmentCreated = invitationMembership is not null &&
+            await EnsureOwnerPortalRoleAssignmentAsync(
+                attempt,
+                invitationMembership,
+                command.PortfolioId,
+                effectiveFromUtc,
+                changedAtUtc,
+                ct);
+
+        if (existingAccess is not null && ownerAssignmentCreated)
+        {
+            context.AdvanceRevision(context.AccessRevision);
+            context.UpdatedAtUtc = changedAtUtc;
+        }
+
         if (existingAccess is not null && (!requiresAccountActivation || pendingInvitation is not null))
         {
+            await attempt.FlushBusinessAsync(ct);
             return Result(
                 requiresAccountActivation
                     ? ActivateOwnerPortalAccessMutationOutcome.InvitationPending
@@ -251,21 +284,6 @@ public sealed class ActivateOwnerPortalAccessHandler
                 pendingInvitation?.ExpiresAtUtc);
         }
 
-        if (requiresAccountActivation && invitationMembership is null)
-        {
-            invitationMembership = new WorkspaceMembership
-            {
-                AccessContext = context,
-                PortfolioId = command.PortfolioId,
-                Status = WorkspaceMembershipStatus.Active,
-                DefaultExperience = WorkspaceExperience.Owner,
-                EffectiveFromUtc = changedAtUtc,
-                CreatedAtUtc = changedAtUtc,
-                UpdatedAtUtc = changedAtUtc,
-            };
-            attempt.Persistence.Add(invitationMembership);
-        }
-
         OwnerUserAccess access = existingAccess ?? new()
         {
             PublicId = Guid.NewGuid(),
@@ -273,7 +291,7 @@ public sealed class ActivateOwnerPortalAccessHandler
             AccessContext = context,
             ApplicationUser = user,
             OwnerEntityId = owner.Id,
-            EffectiveFromUtc = changedAtUtc,
+            EffectiveFromUtc = effectiveFromUtc,
             EffectiveToUtc = command.EffectiveToUtc,
             GrantedAtUtc = changedAtUtc,
             GrantedByUserId = command.ActorUserId,
@@ -383,6 +401,48 @@ public sealed class ActivateOwnerPortalAccessHandler
 
     private static DateTime Utc(DateTime value) =>
         value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static async Task<bool> EnsureOwnerPortalRoleAssignmentAsync(
+        IAtomicWriteAttempt attempt,
+        WorkspaceMembership membership,
+        int portfolioId,
+        DateTime effectiveFromUtc,
+        DateTime changedAtUtc,
+        CancellationToken ct)
+    {
+        if (membership.DefaultExperience != WorkspaceExperience.Owner)
+        {
+            return false;
+        }
+
+        var ownerRoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.OwnerPortal).Id;
+        if (membership.Id > 0 && await attempt.Persistence.Query<MembershipRoleAssignment>().AnyAsync(assignment =>
+                assignment.WorkspaceMembershipId == membership.Id &&
+                assignment.PortfolioId == portfolioId &&
+                assignment.RoleProfileId == ownerRoleProfileId &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.EffectiveFromUtc <= effectiveFromUtc &&
+                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > effectiveFromUtc),
+                ct))
+        {
+            return false;
+        }
+
+        attempt.Persistence.Add(new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = ownerRoleProfileId,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = effectiveFromUtc,
+            CreatedAtUtc = changedAtUtc,
+            UpdatedAtUtc = changedAtUtc,
+        });
+        return true;
+    }
 
     private static ActivateOwnerPortalAccessMutationResult Result(
         ActivateOwnerPortalAccessMutationOutcome outcome,
