@@ -688,6 +688,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
     RentalCommand.Data.Authorization.GrantOwnerUserAccessHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.ActivateOwnerPortalAccessCommand,
+    RentalCommand.Core.Authorization.ActivateOwnerPortalAccessMutationResult,
+    RentalCommand.Data.Authorization.ActivateOwnerPortalAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Authorization.RevokeOwnerUserAccessCommand,
     RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
     RentalCommand.Data.Authorization.RevokeOwnerUserAccessHandler>();

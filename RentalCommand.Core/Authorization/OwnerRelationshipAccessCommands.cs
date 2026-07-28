@@ -28,6 +28,19 @@ public sealed record GrantOwnerUserAccessCommand(
     int ActorAccessContextId,
     long ActorAccessRevision) : IOwnerRelationshipAccessCommand;
 
+public sealed record ActivateOwnerPortalAccessCommand(
+    int PortfolioId,
+    int OwnerEntityId,
+    DateTime EffectiveFromUtc,
+    DateTime? EffectiveToUtc,
+    string Reason,
+    int ActorUserId,
+    Guid ActorAuthSessionId,
+    int ActorAccessContextId,
+    long ActorAccessRevision,
+    Guid EmailLockId,
+    string WebBaseUrl) : IWorkspaceTeamAuthorityCommand;
+
 public sealed record RevokeOwnerUserAccessCommand(
     int PortfolioId,
     int OwnerEntityId,
@@ -49,9 +62,32 @@ public enum OwnerRelationshipAccessMutationOutcome
     NotFound,
 }
 
+public enum ActivateOwnerPortalAccessMutationOutcome
+{
+    Activated,
+    InvitationPending,
+    AlreadyActive,
+    MissingOwnerEmail,
+    InactiveWorkspaceAccess,
+    PrimaryOwnerNotSupported,
+    Invalid,
+    NotFound,
+}
+
 public sealed record OwnerRelationshipAccessMutationResult(
     OwnerRelationshipAccessMutationOutcome Outcome,
     int OwnerEntityId,
     int TargetAccessContextId,
     int? OwnerUserAccessId,
     long AccessRevision) : IAtomicResultData;
+
+public sealed record ActivateOwnerPortalAccessMutationResult(
+    ActivateOwnerPortalAccessMutationOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int? UserId,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool RequiresAccountActivation,
+    DateTime? InvitationExpiresAtUtc) : IAtomicResultData;

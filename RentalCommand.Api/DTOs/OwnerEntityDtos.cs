@@ -30,6 +30,9 @@ public class OwnerEntityResponse
     /// <summary>True when this owner already has at least one active owner-portal relationship.</summary>
     public bool HasActiveOwnerPortalAccess { get; set; }
 
+    /// <summary>True when owner portal access exists but the invited passwordless account is still pending activation.</summary>
+    public bool HasPendingOwnerPortalInvitation { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -53,6 +56,7 @@ public class OwnerEntityResponse
         AssignedPropertyCount = assignedPropertyCount,
         IsPrimary = e.IsPrimary,
         HasActiveOwnerPortalAccess = e.UserAccesses.Any(access => access.RevokedAtUtc == null),
+        HasPendingOwnerPortalInvitation = false,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
@@ -65,6 +69,7 @@ public sealed record ActivateOwnerPortalAccessRequest(
 public enum ActivateOwnerPortalAccessOutcome
 {
     Activated,
+    InvitationPending,
     AlreadyActive,
     MissingOwnerEmail,
     MissingUserAccount,
@@ -83,6 +88,8 @@ public sealed record ActivateOwnerPortalAccessResponse(
     int? OwnerUserAccessId,
     long? AccessRevision,
     bool Replayed,
+    bool RequiresAccountActivation,
+    DateTime? InvitationExpiresAtUtc,
     string Message);
 
 public class OwnerEntityListResponse

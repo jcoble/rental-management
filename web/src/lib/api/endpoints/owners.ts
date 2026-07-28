@@ -11,13 +11,15 @@ export interface OwnerListResponse {
 }
 
 export interface ActivateOwnerPortalAccessResponse {
-	outcome: 'Activated' | 'AlreadyActive' | 'MissingOwnerEmail' | 'MissingUserAccount' | 'MissingWorkspaceAccess' | 'InactiveWorkspaceAccess' | 'PrimaryOwnerNotSupported' | 'NotFound' | 'Invalid';
+	outcome: 'Activated' | 'InvitationPending' | 'AlreadyActive' | 'MissingOwnerEmail' | 'MissingUserAccount' | 'MissingWorkspaceAccess' | 'InactiveWorkspaceAccess' | 'PrimaryOwnerNotSupported' | 'NotFound' | 'Invalid';
 	ownerEntityId: number;
 	ownerEmail?: string | null;
 	targetAccessContextId?: number | null;
 	ownerUserAccessId?: number | null;
 	accessRevision?: number | null;
 	replayed: boolean;
+	requiresAccountActivation: boolean;
+	invitationExpiresAtUtc?: string | null;
 	message: string;
 }
 

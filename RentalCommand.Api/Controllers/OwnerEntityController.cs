@@ -109,6 +109,7 @@ public class OwnerEntityController : ManagementControllerBase
             return result.Outcome switch
             {
                 ActivateOwnerPortalAccessOutcome.Activated or
+                    ActivateOwnerPortalAccessOutcome.InvitationPending or
                     ActivateOwnerPortalAccessOutcome.AlreadyActive => Ok(result),
                 ActivateOwnerPortalAccessOutcome.NotFound => NotFound(result),
                 ActivateOwnerPortalAccessOutcome.Invalid or
