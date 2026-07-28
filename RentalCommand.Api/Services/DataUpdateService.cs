@@ -26,6 +26,12 @@ public sealed class DataUpdateService : IDataUpdateService
     private static readonly string[] ApplicationReadCapabilities = [CapabilityKeys.LeasingApplicationsManage];
     private static readonly string[] ListingReadCapabilities = [CapabilityKeys.LeasingListingsManage];
     private static readonly string[] ShowingReadCapabilities = [CapabilityKeys.LeasingShowingsManage];
+    private sealed record PendingRealtimeSend(
+        string EntityType,
+        int EntityId,
+        IReadOnlyList<string> GroupNames,
+        string EventName,
+        object Payload);
 
     private readonly RentalCommandDbContext _db;
     private readonly IHubContext<DataUpdateHub> _hubContext;
@@ -65,6 +71,49 @@ public sealed class DataUpdateService : IDataUpdateService
         int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default) =>
         BroadcastAsync(portfolioId, entityType, entityId, data, "EntityUpdated", ct);
 
+    public async Task BroadcastEntityUpdatesAsync(
+        IReadOnlyList<EntityUpdateBroadcast> updates,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (updates.Count == 0)
+            {
+                return;
+            }
+
+            var sends = new List<PendingRealtimeSend>(updates.Count);
+            foreach (var update in updates)
+            {
+                var pending = await BuildPendingSendAsync(
+                    update.PortfolioId,
+                    update.EntityType,
+                    update.EntityId,
+                    update.Data,
+                    "EntityUpdated",
+                    ct);
+                if (pending is not null)
+                {
+                    sends.Add(pending);
+                }
+            }
+
+            if (sends.Count == 0)
+            {
+                return;
+            }
+
+            await Task.WhenAll(sends.Select(send => SendPendingAsync(send, ct)));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed scoped realtime invalidation batch with {UpdateCount} updates",
+                updates.Count);
+        }
+    }
+
     public Task BroadcastEntityDeleteAsync(
         int portfolioId, string entityType, int entityId, CancellationToken ct = default) =>
         BroadcastAsync(portfolioId, entityType, entityId, null, "EntityDeleted", ct);
@@ -79,62 +128,11 @@ public sealed class DataUpdateService : IDataUpdateService
     {
         try
         {
-            var recipients = entityType switch
-            {
-                "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId, data),
-                "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
-                _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
-            };
-
-            if (recipients is null)
-            {
-                _logger.LogWarning(
-                    "Suppressed unscoped realtime invalidation {EntityType} {EntityId} for portfolio {PortfolioId}",
-                    entityType,
-                    entityId,
-                    portfolioId);
-                return;
-            }
-
-            // Authorization, resource mapping, capability matching, session validity, and revision
-            // selection all execute in this one SQL statement. Formatting already-authorized group
-            // coordinates after materialization does not perform an authorization filter.
-            var recipientRows = await recipients
-                .Distinct()
-                .ToListAsync(ct);
-            if (recipientRows.Count == 0)
+            var pending = await BuildPendingSendAsync(portfolioId, entityType, entityId, data, eventName, ct);
+            if (pending is null || !await SendPendingAsync(pending, ct))
             {
                 return;
             }
-
-            var groupNames = recipientRows
-                .Select(row => DataUpdateHub.SessionRevisionGroup(row.SessionId, row.AccessRevision))
-                .ToArray();
-            object payload = eventName == "EntityDeleted"
-                ? new EntityDeletePayload
-                {
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
-                }
-                : new EntityUpdatePayload
-                {
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
-                };
-
-            if (!await TrySendHubAsync(groupNames, eventName, payload, ct))
-            {
-                return;
-            }
-
-            _logger.LogDebug(
-                "Sent scoped {EventName} invalidation for {EntityType} {EntityId} to {RecipientCount} current session revisions",
-                eventName,
-                entityType,
-                entityId,
-                groupNames.Length);
         }
         catch (Exception ex)
         {
@@ -147,6 +145,78 @@ public sealed class DataUpdateService : IDataUpdateService
                 entityId,
                 portfolioId);
         }
+    }
+
+    private async Task<PendingRealtimeSend?> BuildPendingSendAsync(
+        int portfolioId,
+        string entityType,
+        int entityId,
+        object? data,
+        string eventName,
+        CancellationToken ct)
+    {
+        var recipients = entityType switch
+        {
+            "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId, data),
+            "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
+            _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
+        };
+
+        if (recipients is null)
+        {
+            _logger.LogWarning(
+                "Suppressed unscoped realtime invalidation {EntityType} {EntityId} for portfolio {PortfolioId}",
+                entityType,
+                entityId,
+                portfolioId);
+            return null;
+        }
+
+        // Authorization, resource mapping, capability matching, session validity, and revision
+        // selection all execute in this one SQL statement. Formatting already-authorized group
+        // coordinates after materialization does not perform an authorization filter.
+        var recipientRows = await recipients
+            .Distinct()
+            .ToListAsync(ct);
+        if (recipientRows.Count == 0)
+        {
+            return null;
+        }
+
+        var groupNames = recipientRows
+            .Select(row => DataUpdateHub.SessionRevisionGroup(row.SessionId, row.AccessRevision))
+            .ToArray();
+        object payload = eventName == "EntityDeleted"
+            ? new EntityDeletePayload
+            {
+                EntityType = entityType,
+                EntityId = entityId,
+                Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
+            }
+            : new EntityUpdatePayload
+            {
+                EntityType = entityType,
+                EntityId = entityId,
+                Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
+            };
+
+        return new PendingRealtimeSend(entityType, entityId, groupNames, eventName, payload);
+    }
+
+    private async Task<bool> SendPendingAsync(PendingRealtimeSend send, CancellationToken ct)
+    {
+        if (!await TrySendHubAsync(send.GroupNames, send.EventName, send.Payload, ct))
+        {
+            return false;
+        }
+
+        _logger.LogDebug(
+            "Sent scoped {EventName} invalidation for {EntityType} {EntityId} to {RecipientCount} current session revisions",
+            send.EventName,
+            send.EntityType,
+            send.EntityId,
+            send.GroupNames.Count);
+        return true;
     }
 
     private async Task<bool> TrySendHubAsync(

@@ -542,8 +542,6 @@ public class ConversationService : IConversationService
         }
 
         // Remote broadcasts happen only after the atomic command has committed (or replayed its receipt).
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            command.PortfolioId, EntityType, detail.Id, detail, ct);
         if (outcome.Value.NotificationIds.Count > 0)
         {
             var notifications = await _db.Notifications
@@ -552,12 +550,11 @@ public class ConversationService : IConversationService
                     && outcome.Value.NotificationIds.Contains(notification.Id))
                 .OrderBy(notification => notification.Id)
                 .ToListAsync(ct);
-            foreach (var notification in notifications)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    command.PortfolioId, "Notification", notification.Id,
-                    NotificationResponse.FromEntity(notification), ct);
-            }
+            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, notifications, ct);
+        }
+        else
+        {
+            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, [], ct);
         }
 
         return detail;
@@ -684,8 +681,6 @@ public class ConversationService : IConversationService
             command.PortfolioId, outcome.Value.ConversationId, tenantId, tenantViewer: true, ct);
         if (detail is null) return null;
 
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            command.PortfolioId, EntityType, detail.Id, detail, ct);
         if (outcome.Value.NotificationIds.Count > 0)
         {
             var notifications = await _db.Notifications
@@ -694,15 +689,33 @@ public class ConversationService : IConversationService
                     && outcome.Value.NotificationIds.Contains(notification.Id))
                 .OrderBy(notification => notification.Id)
                 .ToListAsync(ct);
-            foreach (var notification in notifications)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    command.PortfolioId, "Notification", notification.Id,
-                    NotificationResponse.FromEntity(notification), ct);
-            }
+            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, notifications, ct);
+        }
+        else
+        {
+            await BroadcastConversationUpdatesAsync(command.PortfolioId, detail, [], ct);
         }
 
         return detail;
+    }
+
+    private Task BroadcastConversationUpdatesAsync(
+        int portfolioId,
+        ConversationDetail detail,
+        IReadOnlyList<Notification> notifications,
+        CancellationToken ct)
+    {
+        var updates = new List<EntityUpdateBroadcast>(notifications.Count + 1)
+        {
+            new(portfolioId, EntityType, detail.Id, detail),
+        };
+        updates.AddRange(notifications.Select(notification =>
+            new EntityUpdateBroadcast(
+                portfolioId,
+                "Notification",
+                notification.Id,
+                NotificationResponse.FromEntity(notification))));
+        return _dataUpdate.BroadcastEntityUpdatesAsync(updates, ct);
     }
 
     // ===========================================================================================
