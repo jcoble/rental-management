@@ -243,7 +243,7 @@
 			key: 'portal',
 			title: 'Portal',
 			mobileRole: 'meta',
-			accessor: (o) => o.hasActiveOwnerPortalAccess ? 'Active' : 'Not active',
+			accessor: (o) => o.hasPendingOwnerPortalInvitation ? 'Pending invitation' : o.hasActiveOwnerPortalAccess ? 'Active' : 'Not active',
 			cell: ownerPortalCell,
 		},
 		{
@@ -263,7 +263,21 @@
 
 {#snippet ownerPortalCell(o: Owner)}
 	<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} role="none">
-		{#if o.hasActiveOwnerPortalAccess}
+		{#if o.hasPendingOwnerPortalInvitation}
+			<span class="text-xs font-medium text-amber-700" data-testid="owner-portal-pending">Pending invitation</span>
+			<button
+				type="button"
+				data-testid="owner-portal-retry-invitation"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Retry owner portal invitation"
+				disabled={activatePortalMutation.isPending}
+				title="Retry owner portal invitation"
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Retry
+			</button>
+		{:else if o.hasActiveOwnerPortalAccess}
 			<span class="text-xs font-medium text-emerald-700" data-testid="owner-portal-active">Active</span>
 		{:else}
 			<button

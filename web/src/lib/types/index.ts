@@ -78,6 +78,7 @@ export interface Owner {
 	assignedPropertyCount?: number;
 	isPrimary?: boolean;
 	hasActiveOwnerPortalAccess?: boolean;
+	hasPendingOwnerPortalInvitation?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
