@@ -12,7 +12,11 @@
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import { currentOwnerStatementYear, ownerStatementYearOptions } from '$lib/accounting/owner-statement-years';
+	import {
+		currentOwnerStatementYear,
+		ownerStatementYearOptions,
+		watchOwnerStatementYear
+	} from '$lib/accounting/owner-statement-years';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -39,11 +43,12 @@
 	let distributionFormContext = $state('');
 	let distributionForm = $state(makeDistributionForm(currentOwnerStatementYear()));
 
-	onMount(() => {
-		const businessYear = currentOwnerStatementYear();
+	function applyBusinessYear(businessYear: number) {
 		yearOptions = ownerStatementYearOptions(businessYear);
 		selectedYear = String(businessYear);
-	});
+	}
+
+	onMount(() => watchOwnerStatementYear(applyBusinessYear));
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owner-statements', portfolioId, selectedYear],
