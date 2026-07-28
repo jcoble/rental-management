@@ -24,6 +24,7 @@ public sealed class IssueLeaseAddendumHandler
         Validate(command);
         await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var businessNowUtc = times.EffectiveNowUtc;
         var candidate = await LeaseAddendumCommandSupport.AuthorizedRelationships(
                 command, attempt.Persistence, times.WallClockUtc)
             .SelectMany(item => item.Addenda)
@@ -137,7 +138,7 @@ public sealed class IssueLeaseAddendumHandler
         {
             PortfolioId = command.PortfolioId, FileName = command.FileName, FilePath = command.StorageKey,
             ContentType = "application/pdf", FileSize = command.FileSize, EntityType = nameof(LeaseAddendum),
-            EntityId = addendum.Id, UploadedAt = times.WallClockUtc,
+            EntityId = addendum.Id, UploadedAt = businessNowUtc,
         };
         attempt.Persistence.Add(storedFile);
         await attempt.FlushBusinessAsync(ct);
@@ -147,15 +148,15 @@ public sealed class IssueLeaseAddendumHandler
             ArtifactKind = LegalDocumentArtifactKind.IssuedAddendum, StorageKey = command.StorageKey,
             FileName = command.FileName, ContentType = "application/pdf", ByteLength = command.FileSize,
             ContentSha256 = command.ContentSha256, LegalIssuanceFingerprint = issuanceFingerprint,
-            CreatedAtUtc = times.WallClockUtc,
+            CreatedAtUtc = businessNowUtc,
             CreatedByUserId = command.ActorUserId,
         };
         attempt.Persistence.Add(artifact);
         await attempt.FlushBusinessAsync(ct);
 
         addendum.IssuedArtifactId = artifact.Id;
-        addendum.IssuedAtUtc = times.WallClockUtc;
-        addendum.UpdatedAtUtc = times.WallClockUtc;
+        addendum.IssuedAtUtc = businessNowUtc;
+        addendum.UpdatedAtUtc = businessNowUtc;
         attempt.BindSemanticAudit(addendum, new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { addendum.IssuedArtifactId, addendum.IssuedAtUtc }),
@@ -165,8 +166,8 @@ public sealed class IssueLeaseAddendumHandler
             PortfolioId = command.PortfolioId, LeaseAddendumId = addendum.Id, Provider = "native",
             PublicId = Guid.NewGuid(), IdempotencyKey = command.DeliveryIdempotencyKey,
             Status = SignatureRequestStatus.AwaitingSignatures, Subject = command.Subject.Trim(),
-            IssuedArtifactId = artifact.Id, PreparedAtUtc = times.WallClockUtc,
-            ProviderAcceptedAtUtc = times.WallClockUtc, CreatedByUserId = command.ActorUserId,
+            IssuedArtifactId = artifact.Id, PreparedAtUtc = businessNowUtc,
+            ProviderAcceptedAtUtc = businessNowUtc, CreatedByUserId = command.ActorUserId,
         };
         var tokens = new Dictionary<int, string>();
         foreach (var input in command.Signers)
@@ -179,25 +180,25 @@ public sealed class IssueLeaseAddendumHandler
                 NameSnapshot = source.NameSnapshot, EmailSnapshot = source.EmailSnapshot,
                 SigningOrder = source.SigningOrder, IsRequired = source.IsRequired,
                 TokenHash = HashToken(token), TokenExpiresAtUtc = times.WallClockUtc.AddDays(14),
-                Status = SignatureSignerStatus.Pending, CreatedAtUtc = times.WallClockUtc,
-                UpdatedAtUtc = times.WallClockUtc,
+                Status = SignatureSignerStatus.Pending, CreatedAtUtc = businessNowUtc,
+                UpdatedAtUtc = businessNowUtc,
             });
             tokens[source.Id] = token;
         }
         packet.AuditEvents.Add(new SignatureAuditEvent
         {
             PortfolioId = command.PortfolioId, Type = SignatureAuditEventType.Sent,
-            OccurredAtUtc = times.WallClockUtc,
+            OccurredAtUtc = businessNowUtc,
             Detail = $"Native Addendum packet admitted for {packet.Signers.Count} required signer(s).",
         });
         attempt.Persistence.Add(packet);
         await attempt.FlushBusinessAsync(ct);
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
-        pending.UpdatedAtUtc = times.WallClockUtc;
+        pending.UpdatedAtUtc = businessNowUtc;
         attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(SignatureRequest),
             packet.Id, AuditLogOperation.Created, UserId: command.ActorUserId,
-            ChangeReason: "Created canonical Addendum signature packet."), times.WallClockUtc);
+            ChangeReason: "Created canonical Addendum signature packet."), businessNowUtc);
         foreach (var signer in packet.Signers)
         {
             var link = $"{command.WebBaseUrl.TrimEnd('/')}/sign/{tokens[signer.AddendumSignerId!.Value]}";
@@ -213,7 +214,7 @@ public sealed class IssueLeaseAddendumHandler
                     body = $"Hi {signer.NameSnapshot},\n\nReview and sign {packet.Subject}:\n{link}\n\nThis secure link is unique to you.",
                 }),
                 IdempotencyKey = $"addendum-esign:{packet.Id}:signer:{signer.Id}:invite",
-                CreatedAtUtc = times.WallClockUtc, NextAttemptAtUtc = times.WallClockUtc,
+                CreatedAtUtc = businessNowUtc, NextAttemptAtUtc = businessNowUtc,
             });
         }
         return new(packet.PublicId, command.LeaseManagementId, addendum.Id, packet.Id, artifact.Id);

@@ -440,6 +440,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
     RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsCommand,
+    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsResult,
+    RentalCommand.Data.Esign.ReconcileNativeEsignAgreementFinancialsHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsBatchCommand,
+    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsBatchResult,
+    RentalCommand.Data.Esign.ReconcileNativeEsignAgreementFinancialsBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.DispatchWorkOrderToVendorCommand,
     RentalCommand.Core.Operations.DispatchWorkOrderToVendorResult,
     RentalCommand.Data.Operations.DispatchWorkOrderToVendorHandler>();

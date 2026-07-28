@@ -18,6 +18,8 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     private const int NativeEsignActorScopeId = 0;
     private const string ExecutedUploadPurpose = "native-esign-executed";
     private const string ExecutedPdfContentType = "application/pdf";
+    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsResult>
+        ReconcileAgreementFinancialsCodec = new("native-esign.agreement-financials.reconcile.v1");
     private static readonly TimeSpan ExecutionLease = TimeSpan.FromMinutes(10);
     private readonly string _claimOwner =
         $"{Environment.MachineName}:{Environment.ProcessId}:native-esign-api:{Guid.NewGuid():N}";
@@ -51,11 +53,18 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     public async Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default)
     {
         var completed = await _db.SignatureRequests.AsNoTracking()
-            .AnyAsync(request => request.Id == signatureRequestId
+            .Where(request => request.Id == signatureRequestId
                 && request.Status == SignatureRequestStatus.Completed
-                && request.ExecutedArtifactId != null, ct);
-        if (completed)
+                && request.ExecutedArtifactId != null)
+            .Select(request => new { request.Id, request.PublicId, request.LeaseAgreementId })
+            .SingleOrDefaultAsync(ct);
+        if (completed is not null)
         {
+            if (completed.LeaseAgreementId.HasValue)
+            {
+                await ReconcileAgreementFinancialsAsync(
+                    completed.Id, completed.PublicId, ct);
+            }
             return true;
         }
 
@@ -64,6 +73,18 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         return claim is not null
             && await FinalizeClaimedAsync(claim.Id, claim.ClaimToken, ct);
     }
+
+    private Task ReconcileAgreementFinancialsAsync(
+        int signatureRequestId,
+        Guid publicId,
+        CancellationToken ct) =>
+        _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "native-esign.agreement-financials.reconcile",
+                publicId.ToString("N")),
+            new ReconcileNativeEsignAgreementFinancialsCommand(signatureRequestId, publicId),
+            ReconcileAgreementFinancialsCodec,
+            ct);
 
     public async Task<bool> FinalizeClaimedAsync(
         int signatureRequestId, Guid claimToken, CancellationToken ct = default)
@@ -79,6 +100,11 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
         if (sigRequest.Status == SignatureRequestStatus.Completed && sigRequest.ExecutedArtifactId.HasValue)
         {
+            if (sigRequest.LeaseAgreementId.HasValue)
+            {
+                await ReconcileAgreementFinancialsAsync(
+                    sigRequest.Id, sigRequest.PublicId, ct);
+            }
             return true;
         }
 
