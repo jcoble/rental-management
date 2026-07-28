@@ -32,7 +32,8 @@ public sealed record AtomicMoneyMutationCommand(
     AtomicMoneyOperation Operation,
     int EntityId,
     string IdempotencyKey,
-    string RequestJson) : IAtomicCommandData;
+    string RequestJson,
+    DateTime BusinessNowUtc = default) : IAtomicCommandData;
 
 public sealed record AtomicMoneyMutationResult(
     bool Found,
@@ -55,13 +56,14 @@ public sealed class AtomicMoneyMutationHandler
             AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var now = times.WallClockUtc;
+        var securityNow = times.WallClockUtc;
+        var now = CommandTimestamp(command.BusinessNowUtc, times.WallClockUtc);
         var businessDateUtc = times.BusinessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         attempt.UseDatabaseWallClockForAudit(now);
-        if (!await LiveAssignments(command, attempt.Persistence, now).AnyAsync(ct))
+        if (!await LiveAssignments(command, attempt.Persistence, securityNow).AnyAsync(ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
         if (RequiresDestructiveDisbursementAuthority(command) &&
-            !await HasDestructiveDisbursementAuthorityAsync(command, attempt.Persistence, now, ct))
+            !await HasDestructiveDisbursementAuthorityAsync(command, attempt.Persistence, securityNow, ct))
         {
             throw Denied("Destructive disbursement authority is required.");
         }
@@ -71,7 +73,8 @@ public sealed class AtomicMoneyMutationHandler
             AtomicMoneyDomain.Expense => await MutateExpenseAsync(command, attempt, now, ct),
             AtomicMoneyDomain.RecurringExpense => await MutateRecurringExpenseAsync(command, attempt, now, ct),
             AtomicMoneyDomain.Loan => await MutateLoanAsync(command, attempt, now, businessDateUtc, ct),
-            AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(command, attempt, now, businessDateUtc, ct),
+            AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(
+                command, attempt, now, securityNow, businessDateUtc, ct),
             AtomicMoneyDomain.CapitalAsset => await MutateCapitalAssetAsync(command, attempt, now, ct),
             AtomicMoneyDomain.PropertyDisposition => await MutatePropertyDispositionAsync(command, attempt, now, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
@@ -740,6 +743,7 @@ public sealed class AtomicMoneyMutationHandler
         AtomicMoneyMutationCommand command,
         IAtomicWriteAttempt attempt,
         DateTime now,
+        DateTime securityNow,
         DateTime businessDateUtc,
         CancellationToken ct)
     {
@@ -759,7 +763,7 @@ public sealed class AtomicMoneyMutationHandler
             await persistence.Query<OwnerDistribution>().SingleOrDefaultAsync(row =>
                 row.Id == command.EntityId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
         if (command.Operation != AtomicMoneyOperation.Create && entity is null) return Missing();
-        if (!await HasWorkspaceAuthorityAsync(command, persistence, now, ct))
+        if (!await HasWorkspaceAuthorityAsync(command, persistence, securityNow, ct))
             throw Denied("Owner distributions require workspace payout authority.");
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
@@ -1305,6 +1309,21 @@ public sealed class AtomicMoneyMutationHandler
             throw new ArgumentException("Portfolio, actor, access revision, capability, operation, and payload are required.");
     }
 
+    private static DateTime CommandTimestamp(DateTime requestedUtc, DateTime fallbackUtc)
+    {
+        if (requestedUtc == default)
+        {
+            return fallbackUtc;
+        }
+
+        if (requestedUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("Money mutation business clock must be UTC.");
+        }
+
+        return requestedUtc;
+    }
+
     private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
     private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     private static string? Normalize(string? value)
@@ -1330,9 +1349,10 @@ public static class AtomicMoneyMutation
 
     public static AtomicMoneyMutationCommand Command<TRequest>(
         WorkspaceReadScope scope, string capability, AtomicMoneyDomain domain,
-        AtomicMoneyOperation operation, int entityId, string idempotencyKey, TRequest request) where TRequest : class =>
+        AtomicMoneyOperation operation, int entityId, string idempotencyKey, TRequest request,
+        DateTime businessNowUtc = default) where TRequest : class =>
         new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision,
-            capability, domain, operation, entityId, idempotencyKey, JsonSerializer.Serialize(request));
+            capability, domain, operation, entityId, idempotencyKey, JsonSerializer.Serialize(request), businessNowUtc);
 
     public static AtomicCommandIdentity Identity(AtomicMoneyMutationCommand command) =>
         new($"money.{command.Domain.ToString().ToLowerInvariant()}.{command.Operation.ToString().ToLowerInvariant()}",

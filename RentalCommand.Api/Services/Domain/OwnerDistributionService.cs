@@ -129,7 +129,8 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, CreateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
-            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
@@ -139,7 +140,8 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, int id, UpdateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
-            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
@@ -149,7 +151,8 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, int id, ApproveOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
-            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Approve, id, idempotencyKey, request);
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Approve, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
@@ -159,7 +162,8 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, int id, RejectOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
-            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Reject, id, idempotencyKey, request);
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Reject, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
@@ -169,7 +173,8 @@ public class OwnerDistributionService : IOwnerDistributionService
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
-            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;

@@ -13,6 +13,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -21,6 +22,7 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
 {
     private static int _nextPortfolioId = 900_000;
+    private static readonly DateTime FrozenBusinessNowUtc = new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
 
     private readonly int _portfolioId = Interlocked.Increment(ref _nextPortfolioId);
 
@@ -156,6 +158,141 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FrozenClockLifecycleTimestampsCoverDraftUpdateApproveRejectReplayAuditsAndOutbox()
+    {
+        SeedFrozenBusinessDate();
+        var clock = new FixedTimeProvider(new DateTimeOffset(FrozenBusinessNowUtc));
+        await using var frozenServices = AtomicDomainTestKernel.CreateForMoneyPostgreSql(
+            _ctx.ConnectionString,
+            timeProvider: clock);
+        var service = new OwnerDistributionService(
+            _ctx.Db,
+            clock,
+            frozenServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+        var owner = SeedOwner("Frozen Lifecycle Owner");
+        var property = SeedProperty(owner.Id, "Frozen Lifecycle Property");
+        var scope = _ctx.Db.SeedAdministratorScope(
+            _portfolioId, nameof(FrozenClockLifecycleTimestampsCoverDraftUpdateApproveRejectReplayAuditsAndOutbox));
+
+        var draft = await service.CreateAsync(scope, new CreateOwnerDistributionRequest
+        {
+            OwnerEntityId = owner.Id,
+            PropertyId = property.Id,
+            Date = FrozenBusinessNowUtc,
+            Amount = 3050m,
+            Method = DistributionMethod.Ach,
+            Memo = "Blue Door owner distribution",
+        }, "ys175-draft-frozen");
+
+        draft.Should().NotBeNull();
+        draft!.Status.Should().Be(OwnerDistributionStatus.Draft);
+        draft.CreatedAt.Should().Be(FrozenBusinessNowUtc);
+        draft.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
+
+        var updated = await service.UpdateAsync(scope, draft.Id, new UpdateOwnerDistributionRequest
+        {
+            Amount = 3500m,
+            Memo = "Blue Door owner distribution updated",
+        }, "ys175-update-frozen");
+
+        updated.Should().NotBeNull();
+        updated!.CreatedAt.Should().Be(FrozenBusinessNowUtc);
+        updated.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        updated.Amount.Should().Be(3500m);
+
+        var approved = await service.ApproveAsync(scope, draft.Id, new ApproveOwnerDistributionRequest
+        {
+            BankReference = "DIST-YS175-BANK",
+            ExportReference = "DIST-YS175-EXPORT",
+        }, "ys175-approve-frozen");
+        var replay = await service.ApproveAsync(scope, draft.Id, new ApproveOwnerDistributionRequest
+        {
+            BankReference = "DIST-YS175-BANK",
+            ExportReference = "DIST-YS175-EXPORT",
+        }, "ys175-approve-frozen");
+
+        approved.Should().NotBeNull();
+        approved!.Status.Should().Be(OwnerDistributionStatus.Approved);
+        approved.CreatedAt.Should().Be(FrozenBusinessNowUtc);
+        approved.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        approved.ApprovedAt.Should().Be(FrozenBusinessNowUtc);
+        approved.ApprovedBusinessDate.Should().Be(FrozenBusinessNowUtc.Date);
+        approved.ExportedAt.Should().Be(FrozenBusinessNowUtc);
+        approved.BankReference.Should().Be("DIST-YS175-BANK");
+        approved.ExportReference.Should().Be("DIST-YS175-EXPORT");
+        replay!.Id.Should().Be(approved.Id);
+        replay.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3500m);
+
+        var rejectDraft = await service.CreateAsync(scope, new CreateOwnerDistributionRequest
+        {
+            OwnerEntityId = owner.Id,
+            PropertyId = property.Id,
+            Date = FrozenBusinessNowUtc,
+            Amount = 100.01m,
+            Method = DistributionMethod.Ach,
+            Memo = "Blue Door rejected draft",
+        }, "ys175-draft-reject-frozen");
+        var rejected = await service.RejectAsync(scope, rejectDraft!.Id,
+            new RejectOwnerDistributionRequest { Reason = "verified admin rejected the draft" },
+            "ys175-reject-frozen");
+
+        rejected.Should().NotBeNull();
+        rejected!.Status.Should().Be(OwnerDistributionStatus.Rejected);
+        rejected.CreatedAt.Should().Be(FrozenBusinessNowUtc);
+        rejected.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        rejected.RejectedAt.Should().Be(FrozenBusinessNowUtc);
+        rejected.RejectedByUserId.Should().Be(scope.UserId);
+        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(3500m);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var lifecycleRows = await _ctx.Db.OwnerDistributions.AsNoTracking()
+            .Where(distribution => distribution.Id == approved.Id || distribution.Id == rejected.Id)
+            .OrderBy(distribution => distribution.Id)
+            .Select(distribution => new
+            {
+                distribution.Id,
+                distribution.Status,
+                distribution.CreatedAt,
+                distribution.UpdatedAt,
+                distribution.ApprovedAt,
+                distribution.RejectedAt,
+                distribution.ExportedAt,
+            })
+            .ToListAsync();
+        lifecycleRows.Should().HaveCount(2);
+        lifecycleRows.Should().OnlyContain(row =>
+            row.CreatedAt == FrozenBusinessNowUtc && row.UpdatedAt == FrozenBusinessNowUtc);
+        lifecycleRows.Single(row => row.Id == approved.Id).ApprovedAt.Should().Be(FrozenBusinessNowUtc);
+        lifecycleRows.Single(row => row.Id == approved.Id).ExportedAt.Should().Be(FrozenBusinessNowUtc);
+        lifecycleRows.Single(row => row.Id == rejected.Id).RejectedAt.Should().Be(FrozenBusinessNowUtc);
+
+        var auditRows = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(audit => audit.PortfolioId == _portfolioId &&
+                audit.EntityType == nameof(OwnerDistribution) &&
+                (audit.EntityId == approved.Id || audit.EntityId == rejected.Id))
+            .Select(audit => new { audit.EntityId, audit.Operation, audit.Timestamp })
+            .ToListAsync();
+        auditRows.Should().HaveCount(5);
+        auditRows.Should().OnlyContain(row => row.Timestamp == FrozenBusinessNowUtc);
+
+        var outboxRows = await _ctx.Db.OutboxMessages.AsNoTracking()
+            .Where(outbox => outbox.PortfolioId == _portfolioId &&
+                outbox.MessageType == "data-update" &&
+                (outbox.IdempotencyKey.Contains("ys175-draft-frozen") ||
+                 outbox.IdempotencyKey.Contains("ys175-update-frozen") ||
+                 outbox.IdempotencyKey.Contains("ys175-approve-frozen") ||
+                 outbox.IdempotencyKey.Contains("ys175-draft-reject-frozen") ||
+                 outbox.IdempotencyKey.Contains("ys175-reject-frozen")))
+            .Select(outbox => new { outbox.CreatedAtUtc, outbox.NextAttemptAtUtc })
+            .ToListAsync();
+        outboxRows.Should().HaveCount(5);
+        outboxRows.Should().OnlyContain(row =>
+            row.CreatedAtUtc == FrozenBusinessNowUtc && row.NextAttemptAtUtc == FrozenBusinessNowUtc);
+    }
+
+    [Fact]
     public async Task DraftApproveAndRejectLifecycleControlsCashEffectAndReplay()
     {
         var owner = SeedOwner("Lifecycle Owner");
@@ -225,11 +362,20 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
     [Fact]
     public async Task ApprovalRollsBackWhenAtomicOutboxStagingFails()
     {
+        SeedFrozenBusinessDate();
+        var clock = new FixedTimeProvider(new DateTimeOffset(FrozenBusinessNowUtc));
+        await using var frozenServices = AtomicDomainTestKernel.CreateForMoneyPostgreSql(
+            _ctx.ConnectionString,
+            timeProvider: clock);
+        var service = new OwnerDistributionService(
+            _ctx.Db,
+            clock,
+            frozenServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
         var owner = SeedOwner("Rollback Owner");
         var property = SeedProperty(owner.Id, "Rollback Property");
         var scope = _ctx.Db.SeedAdministratorScope(
             _portfolioId, nameof(ApprovalRollsBackWhenAtomicOutboxStagingFails));
-        var draft = await _service.CreateAsync(scope, new CreateOwnerDistributionRequest
+        var draft = await service.CreateAsync(scope, new CreateOwnerDistributionRequest
         {
             OwnerEntityId = owner.Id,
             PropertyId = property.Id,
@@ -239,10 +385,12 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         }, "draft-rollback-coble");
 
         await using var failingServices = AtomicDomainTestKernel.CreateForMoneyPostgreSql(
-            _ctx.ConnectionString, [new ThrowOnOwnerDistributionOutboxInterceptor()]);
+            _ctx.ConnectionString,
+            [new ThrowOnOwnerDistributionOutboxInterceptor()],
+            clock);
         var failingService = new OwnerDistributionService(
             _ctx.Db,
-            TimeProvider.System,
+            clock,
             failingServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
 
         var approve = async () => await failingService.ApproveAsync(scope, draft!.Id,
@@ -257,7 +405,13 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         persisted.Status.Should().Be(OwnerDistributionStatus.Draft);
         persisted.BankReference.Should().BeNull();
         persisted.ApprovedAt.Should().BeNull();
-        (await _service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
+        persisted.CreatedAt.Should().Be(FrozenBusinessNowUtc);
+        persisted.UpdatedAt.Should().Be(FrozenBusinessNowUtc);
+        (await service.SumForOwnerYearAsync(_portfolioId, owner.Id, 2027)).Should().Be(0m);
+        var failedApprovalOutboxCount = await _ctx.Db.OutboxMessages.AsNoTracking().CountAsync(outbox =>
+            outbox.PortfolioId == _portfolioId &&
+            outbox.IdempotencyKey.Contains("approve-rollback-coble"));
+        failedApprovalOutboxCount.Should().Be(0);
     }
 
     private static string[] Policies(string methodName) =>
@@ -288,6 +442,24 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             UpdatedAt = now,
         });
         _ctx.Db.SaveChanges();
+    }
+
+    private void SeedFrozenBusinessDate()
+    {
+        var clock = _ctx.Db.SimulationClocks.SingleOrDefault(clock => clock.Id == 1);
+        if (clock is null)
+        {
+            _ctx.Db.SimulationClocks.Add(new SimulationClock { Id = 1 });
+            clock = _ctx.Db.SimulationClocks.Local.Single(clock => clock.Id == 1);
+        }
+
+        clock.Mode = ClockMode.Frozen;
+        clock.SimAnchorUtc = FrozenBusinessNowUtc;
+        clock.RealAnchorUtc = FrozenBusinessNowUtc;
+        clock.TimeZoneId = "UTC";
+        clock.UpdatedAtRealUtc = FrozenBusinessNowUtc;
+        _ctx.Db.SaveChanges();
+        _ctx.Db.ChangeTracker.Clear();
     }
 
     private OwnerEntity SeedOwner(string name)
@@ -411,5 +583,10 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
                 throw new InvalidOperationException("Injected owner-distribution outbox failure.");
             }
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
