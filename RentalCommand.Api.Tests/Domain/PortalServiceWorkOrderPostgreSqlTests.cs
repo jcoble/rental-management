@@ -1,9 +1,13 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.TestCommon;
@@ -74,6 +78,67 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && sql.Contains("\"Status\"", StringComparison.Ordinal)
             && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateTenantWorkOrderAsync_UsesInjectedClockForAtomicRows()
+    {
+        var simulatedNow = new DateTimeOffset(2027, 1, 21, 5, 0, 0, TimeSpan.Zero);
+        var clock = new FixedTimeProvider(simulatedNow);
+        var scenario = await SeedScenarioAsync();
+        await using var services = AtomicDomainTestKernel.CreateForWorkOrdersPostgreSql(
+            _context.ConnectionString,
+            clock);
+        var service = new PortalService(
+            _context.Db,
+            Mock.Of<ILeaseQaService>(),
+            clock,
+            services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var created = await service.CreateTenantWorkOrderAsync(
+            new ActiveAccessContext(
+                scenario.AuthSessionId,
+                UserId,
+                scenario.Scope.AccessContextId,
+                PortfolioId,
+                scenario.Scope.AccessRevision,
+                WorkspaceExperience.Tenant,
+                null,
+                WorkspaceExperience.Tenant),
+            new CreateTenantWorkOrderRequest
+            {
+                Title = "Kitchen sink leak",
+                Description = "Water is dripping under the cabinet.",
+                Category = "Plumbing",
+                Priority = WorkOrderPriority.High,
+            },
+            "tenant-work-order-sim-clock-proof");
+
+        created.Should().NotBeNull();
+        created!.RequestedAt.Should().Be(simulatedNow.UtcDateTime);
+        created.UpdatedAt.Should().Be(simulatedNow.UtcDateTime);
+
+        var persisted = await _context.Db.WorkOrders
+            .AsNoTracking()
+            .SingleAsync(workOrder => workOrder.Id == created.Id);
+        persisted.RequestedAt.Should().Be(simulatedNow.UtcDateTime);
+        persisted.UpdatedAt.Should().Be(simulatedNow.UtcDateTime);
+
+        var statusEvent = await _context.Db.WorkOrderStatusEvents
+            .AsNoTracking()
+            .SingleAsync(item => item.WorkOrderId == created.Id);
+        statusEvent.CreatedAtUtc.Should().Be(simulatedNow.UtcDateTime);
+
+        var audit = await _context.Db.AtomicAuditLogs
+            .AsNoTracking()
+            .SingleAsync(item => item.EntityType == nameof(WorkOrder) && item.EntityId == created.Id);
+        audit.Timestamp.Should().Be(simulatedNow.UtcDateTime);
+
+        var outbox = await _context.Db.OutboxMessages
+            .AsNoTracking()
+            .SingleAsync(item => item.IdempotencyKey == "tenant-work-order-create:tenant-work-order-sim-clock-proof");
+        outbox.CreatedAtUtc.Should().Be(simulatedNow.UtcDateTime);
+        outbox.NextAttemptAtUtc.Should().Be(simulatedNow.UtcDateTime);
     }
 
     private async Task<Scenario> SeedScenarioAsync()
@@ -161,6 +226,17 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             GrantedByUserId = UserId,
             Reason = "tenant maintenance PostgreSQL proof",
         });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = UserId,
+            ActiveAccessContextId = accessContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = Now,
+            LastSeenAtUtc = Now,
+            ExpiresAtUtc = new DateTime(2027, 1, 22, 5, 0, 0, DateTimeKind.Utc),
+        };
+        _context.Db.AuthSessions.Add(session);
 
         var workOrders = new[]
         {
@@ -178,6 +254,7 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
                 UserId,
                 accessContext.Id,
                 accessContext.AccessRevision),
+            session.Id,
             tenant.Id,
             workOrders[0].Id,
             workOrders[1].Id,
@@ -225,9 +302,15 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
 
     private sealed record Scenario(
         PortalTenantReadScope Scope,
+        Guid AuthSessionId,
         int TenantId,
         int BeforeBoundaryId,
         int StartBoundaryId,
         int EndBoundaryId,
         int ExclusiveEndId);
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
 }

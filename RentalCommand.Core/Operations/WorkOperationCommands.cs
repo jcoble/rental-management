@@ -77,6 +77,7 @@ public sealed record CreateTenantWorkOrderCommand(
     string Description,
     string Category,
     WorkOrderPriority Priority,
+    DateTime RequestedAtUtc,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum OperationMutationOutcome { Applied, NotFound }

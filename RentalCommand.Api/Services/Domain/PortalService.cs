@@ -1048,7 +1048,7 @@ public class PortalService : IPortalService
         var command = new CreateTenantWorkOrderCommand(
             access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
             access.AccessRevision, request.Title, request.Description, request.Category,
-            request.Priority, idempotencyKey);
+            request.Priority, _timeProvider.UtcNow(), idempotencyKey);
         var digest = Convert.ToHexString(SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
         var outcome = await (_atomic ?? throw new InvalidOperationException(
