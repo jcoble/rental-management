@@ -1005,6 +1005,11 @@ builder.Services.AddSignalR().AddJsonProtocol(options =>
     options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
+builder.Services.AddSingleton<RealtimeInvalidationQueue>();
+builder.Services.AddSingleton<IRealtimeInvalidationQueue>(sp =>
+    sp.GetRequiredService<RealtimeInvalidationQueue>());
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<RealtimeInvalidationQueue>());
 
 // Realtime backplane bridge (TSK-624): LISTENs on the Postgres channel the Engine NOTIFYs, and
 // re-broadcasts each cross-process entity change onto the SignalR hub via DataUpdateService. Without

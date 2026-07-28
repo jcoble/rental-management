@@ -61,9 +61,9 @@ public class ConversationNotificationTests : IAsyncLifetime
         await _ctx.DisposeAsync();
     }
 
-    private ConversationService CreateSut() => new(
+    private ConversationService CreateSut(RecordingRealtimeInvalidationQueue? realtimeQueue = null) => new(
         _ctx.Db,
-        new NoopDataUpdateService(),
+        realtimeQueue ?? new RecordingRealtimeInvalidationQueue(),
         new NoopFairHousingReviewService(),
         NullLogger<ConversationService>.Instance,
         TimeProvider.System,
@@ -96,7 +96,8 @@ public class ConversationNotificationTests : IAsyncLifetime
         });
         _ctx.Db.TeamRoutingRules.Add(routingRule);
         _ctx.Db.SaveChanges();
-        var sut = CreateSut();
+        var realtimeQueue = new RecordingRealtimeInvalidationQueue();
+        var sut = CreateSut(realtimeQueue);
 
         var result = await sut.TenantStartAsync(
             1, tenant.Id, "Sink leak", "Water under the cabinet", "tenant-start-sink-leak");
@@ -112,6 +113,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.NavigationAccessContextId.Should().BePositive();
         notification.NavigationAccessRevision.Should().BePositive();
         _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
+        realtimeQueue.Batches.Should().ContainSingle();
+        realtimeQueue.Batches[0].Should().Contain(update =>
+            update.EntityType == "Conversation" && update.EntityId == result!.Id);
+        realtimeQueue.Batches[0].Should().Contain(update =>
+            update.EntityType == "Notification" && update.EntityId == notification.Id);
     }
 
     [Fact]
@@ -896,13 +902,12 @@ public class ConversationNotificationTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
     }
 
-    private sealed class NoopDataUpdateService : IDataUpdateService
+    private sealed class RecordingRealtimeInvalidationQueue : IRealtimeInvalidationQueue
     {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
+        public List<IReadOnlyList<EntityUpdateBroadcast>> Batches { get; } = [];
 
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
+        public void EnqueueEntityUpdates(IReadOnlyList<EntityUpdateBroadcast> updates) =>
+            Batches.Add(updates.ToArray());
     }
 
     // These tests exercise the TENANT send path (TenantStartAsync), which is not Fair-Housing gated,

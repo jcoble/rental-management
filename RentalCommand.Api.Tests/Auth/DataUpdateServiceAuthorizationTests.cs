@@ -255,7 +255,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
                 1,
                 "Notification",
                 notification.Id,
-                NotificationResponse.FromEntity(notification)))
+                new SavedContextNotificationRealtimeHint()))
             .ToArray());
 
         sentPayloadIds.Should().BeEquivalentTo(notifications.Select(notification => notification.Id));

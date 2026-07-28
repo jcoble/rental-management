@@ -2,6 +2,13 @@ namespace RentalCommand.Core.Interfaces;
 
 public sealed record EntityUpdateBroadcast(int PortfolioId, string EntityType, int EntityId, object Data);
 
+public sealed record SavedContextNotificationRealtimeHint();
+
+public interface IRealtimeInvalidationQueue
+{
+    void EnqueueEntityUpdates(IReadOnlyList<EntityUpdateBroadcast> updates);
+}
+
 /// <summary>
 /// Broadcasts realtime entity changes to connected clients (backed by SignalR in the Api).
 /// Phase 0 defines the contract only; the SignalR-backed implementation lands in the hubs wave.
