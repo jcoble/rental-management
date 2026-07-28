@@ -2,6 +2,196 @@
 
 Prepared 2026-07-27 for continuation of the 2027 full-company simulation.
 
+## Authoritative continuation checkpoint — 2026-07-28, January 29 stop
+
+This section supersedes every older checkpoint below. The preserved database is reconciled
+through the completed January 29 runs listed here, and the simulation clock is intentionally
+frozen at **2027-01-29 00:00 America/New_York** (`2027-01-29T05:00:00Z`). Do not advance it
+until `YS-212` and `RUN-20270129-04` are resolved.
+
+### Exact repository and runtime state
+
+| Item | State at handoff |
+| --- | --- |
+| Notion task | `TSK-754` — **Doing**, High, verified 2026-07-28 |
+| Worktree | `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution` |
+| Branch | `tsk-754-year-simulation-execution` |
+| Latest implementation commit | `d921bf1391f010d1c1d72266a4288eb5cb9918bf`; the handoff-only commit is immediately above it |
+| Tracked worktree state | Clean |
+| Database | `rentalcommand-tsk754-db`, healthy on local port `5754` |
+| API | `tsk754-api`, rebuilt from `d921bf13`, healthy on `https://localhost:5666` |
+| Web | `tsk754-web`, healthy on `https://localhost:5667` |
+| Engine | Stopped; keep it off until the exact reminder-worker run |
+| Browser automation | No browser session running |
+| Physical phone | Samsung `SM_S906U`, wireless ADB online |
+| Android package | `com.rentalcommand.rental_command.dev`, foreground |
+| ADB reverse | `host-24 tcp:5666 tcp:5666` |
+| Heavy tests/builds | None running |
+
+The installed physical-phone APK is still the clean local-API artifact built from source SHA
+`46a9ae36`:
+
+```text
+/Users/blackcolours/.codex/remote-artifacts/tsk754-mobile-jan27-46a9ae36-20260728t1259z/app-dev-profile-arm64-local-api-clean.apk
+SHA-256 9d426f...b6604c5
+```
+
+The changes after that SHA in this checkpoint are API, web, and planner-script work; no new
+mobile binary was required for the completed January 29 web acceptance.
+
+### January 29 execution status
+
+| Run | State |
+| --- | --- |
+| `RUN-20270129-01` | **Completed.** Tenant Messages is live-proved after `YS-210`; final send returned in 375 ms and rendered exactly once. |
+| `RUN-20270129-02` | Safely blocked by the `YS-211` generated-field planner correction; `FLD-0030` is `Select.Content`, not a saveable control. |
+| `RUN-20270129-03` | **Completed.** Real Property Type persisted, reloaded, and was restored; rental structure remained correctly locked. |
+| `RUN-20270129-04` | Blocked by `YS-212`; the rent-due-in-five-days reminder correctly excludes Yara while her lease has a possession reconciliation exception. |
+| `RUN-20270129-05` | Safely blocked by the existing `YS-207` setup planner correction; the live portfolio is already 100% configured. |
+
+The ignored execution ledger has 10 valid columns on every row after these updates. The bug
+ledger still has 14 older malformed legacy rows, but all newly written `YS-210` through
+`YS-212` rows have the canonical 9 columns. Continue editing both ignored ledgers only with
+`apply_patch`.
+
+### `YS-210` completed realtime repair
+
+The original tenant reply committed once but held the HTTP response for 36.7 seconds. The
+measured repair sequence is:
+
+| Commit | Result |
+| --- | --- |
+| `cecab709` | Bounded SignalR delivery. |
+| `9151f505` | Aligned notification fanout. |
+| `3ae8f77e` | Used the durable saved access context for targeted notification authorization. |
+| `96a31cd6` | Batched conversation and notification invalidations; live response still took 22.1098 seconds. |
+| `fbffebec` | Resolved all saved-context notification recipients in one DB-side authorized query; focused suite passed 6/6, but live response still took 15.517 seconds. |
+| `d921bf13` | Moved only post-commit realtime invalidation onto a bounded nonblocking hosted queue and removed the post-commit notification reload. |
+
+`d921bf13` passed 22 focused tests covering the conversation path, the saved-context
+authorization query, bounded-queue overflow, and continuation after a queued batch failure.
+The final real Yara UI send:
+
+- returned HTTP 200 in **375 ms**;
+- logged API action completion in **314.1066 ms**;
+- cleared the composer and rendered the exact text once without reload;
+- created exactly one `ConversationMessage 18`, sender `Tenant`, at the frozen
+  `2027-01-29T05:00:00Z`;
+- left no browser or test process running.
+
+`YS-210` and `RUN-20270129-01` are recorded as fixed/completed in the ignored QA ledgers.
+
+### Other completed January 28–29 work
+
+- `f7cb24c2` fixed Lease Template Designer width/height validation; the invalid height stayed
+  unsaved in live proof and the canonical field was restored.
+- `5512384e` removed ignored Status and Notes controls from scan-first lease review.
+- `0324d354` fixed the field-inventory parser so only exact native `input`, `select`, and
+  `textarea` tags are inventoried. The regression ignores Svelte `Select.Root`, `Trigger`,
+  `Content`, and `Item`. Active year artifacts were intentionally not regenerated mid-run.
+- `RUN-20270129-03` used the real Property Manager UI on Arbor House Property 1. Property Type
+  changed Single-family to Condo, survived reload, and was restored to Single-family.
+  `AtomicAuditLogs 3579` and `3580` record the frozen-time transitions.
+
+### Current blocker: `YS-212` historical possession reconciliation
+
+Do not treat this as a notice-worker bug. The DB-side candidate filter is correctly excluding
+a contradictory lease.
+
+Yara Brooks has:
+
+```text
+LeaseManagementId: 8
+RelationshipNumber: LM-SCAN-00000009
+AgreementId / AgreementNumber: 8 / SCN-0008
+PlannedPossessionAtUtc: 2026-03-01T00:00:00Z
+PossessionGivenAtUtc: NULL
+Agreement term: 2026-03-01 through 2027-08-31
+Agreement fully executed: yes
+Derived lifecycle: Upcoming
+Exception: GoverningAgreementWithoutPossession
+HasReconciliationException: true
+```
+
+A DB-side portfolio aggregation found **13** legacy `Upcoming` relationships with this same
+exception across LeaseManagement IDs 1 through 14. The current production scan confirmation
+path already validates and persists a reviewed `PossessionGivenAtUtc` for a newly imported,
+fully signed, already-active lease. Do not duplicate or loosen that safeguard.
+
+The required smallest repair is a supported staff reconciliation action exposed only when the
+DB-derived exception is exactly `GoverningAgreementWithoutPossession`:
+
+1. An authorized rentals-management user enters the real historical possession date.
+2. The server requires a fully executed governing agreement.
+3. The date must fall within that agreement term and cannot be after effective business time.
+4. Future/upcoming relationships and every other reconciliation state fail closed.
+5. Possession, semantic audit, and data-update outbox persist atomically and idempotently in
+   one explicit transaction.
+6. Authorization and eligibility remain DB-side; no materialized-row filtering, grouping,
+   aggregation, joins, N+1, or per-row follow-up queries.
+7. Add PostgreSQL failure-injection proof and a focused web contract test.
+
+No implementation for this action is in progress at handoff. The focused coding agents were
+stopped cleanly before this document was written, and the tracked tree is clean. Do not use the
+existing generic **Give possession** action for Yara: it would stamp January 29 and destroy the
+true March 1, 2026 occupancy history. Do not patch the database directly.
+
+### Exact next sequence
+
+1. Verify the state without mutating it:
+
+   ```bash
+   git status --short
+   git rev-parse HEAD
+   curl -sk https://localhost:5666/api/v1/dev/clock
+   tmux list-sessions
+   adb devices -l
+   adb reverse --list
+   ```
+
+   Expected history has the handoff-only commit immediately above implementation commit
+   `d921bf13`; clock is Frozen `2027-01-29T05:00:00Z`; API and web are running; Engine is
+   absent.
+
+2. Dispatch one focused coder for `YS-212` using the exact reconciliation contract above. Do
+   not create a reviewer swarm or another worktree.
+3. Run only focused PostgreSQL/failure-injection and web contract tests, with
+   `MSBUILDDISABLENODEREUSE=1`, then shut down build servers.
+4. Rebuild and restart only `tsk754-api`. Confirm the frozen clock again.
+5. In the real Property Manager web UI, open LeaseManagement 8 through normal navigation and
+   reconcile possession to **2026-03-01**. Live-prove:
+   - a future date is rejected without mutation;
+   - the valid historical date commits once;
+   - duplicate replay is idempotent;
+   - DB-derived lifecycle becomes `Occupied`;
+   - the reconciliation exception clears;
+   - exactly one semantic audit and one data-update outbox fact exist.
+6. Reconcile the other 12 affected legacy leases only through the same supported action or a
+   separately proven supported batch command. Do not run direct SQL updates.
+7. Only after LeaseManagement 8 is repaired, advance the frozen clock to the policy's genuine
+   Jan 29 send time, **09:00 America/New_York** (`2027-01-29T14:00:00Z`).
+8. Start the Engine only for the rent-reminder worker. Policy 10 is `rent-reminder`, five lead
+   days, send hour 9, email + portal enabled, push disabled, and currently Draft. Follow the
+   product's actual draft/approval lifecycle; do not invent a delivered notice if approval is
+   required.
+9. Prove `NTF-002` once on web and the connected physical phone, including safe copy, scoped
+   deep link, read synchronization, configured-channel outcome, retry, duplicate suppression,
+   and adjacent-role denial. No screenshots are required for this continuation.
+10. Stop the Engine immediately, finish `RUN-20270129-04`, reconcile January 29, and only then
+    advance to the January 31 close.
+
+`RUN-20270122-03` still has physical-phone proof pending for the earlier rent-charge
+notification. It can be paired with the `NTF-002` phone pass after `YS-212` rather than opening
+another mobile setup lane.
+
+### Cleanup state
+
+- Browser cleanup: no Playwright browser is running.
+- Build cleanup: no Rental Command build/test process is running.
+- Worktree cleanup: no new worktree was created. Preserve the active TSK-754 worktree and the
+  user-owned TSK-749 worktree.
+- Engine cleanup: stopped.
+
 ## Authoritative continuation checkpoint — 2026-07-28
 
 This section supersedes the older January 14 checkpoint below. The preserved database was
