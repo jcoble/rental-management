@@ -141,6 +141,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             OwnerRelationshipAccessMutationResult,
             GrantOwnerUserAccessHandler>();
         services.AddAtomicCommandHandler<
+            AtomicCoreCrudMutationCommand,
+            AtomicCoreCrudMutationResult,
+            AtomicCoreCrudMutationHandler>();
+        services.AddAtomicCommandHandler<
             UnsafeWorkspaceAssignmentMutationCommand,
             WorkspaceAccessMutationResult,
             UnsafeWorkspaceAssignmentMutationHandler>();
@@ -478,6 +482,49 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         (await verify.Loans.CountAsync(row => row.PropertyId == _unscopedPropertyId)).Should().Be(0);
         (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task AtomicCoreCrudMutation_VendorCreate_AllowsSelectedPropertyWorkManageScope()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
+            AtomicCoreCrudMutationOperation.Create, 0, "selected-work-vendor-create",
+            new CreateVendorRequest
+            {
+                Name = "Summit Roofing",
+                ServiceType = "Roofing",
+                Email = "summit@example.test",
+                Phone = "555-0100",
+                Is1099Eligible = true,
+                Preferred = true,
+            },
+            createdAtUtc: _now);
+        var identity = AtomicCoreCrudMutation.Identity(command);
+
+        var outcome = await AtomicUnitOfWork.ExecuteAsync(
+            identity, command, AtomicCoreCrudMutation.Codec);
+
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        outcome.Value.Found.Should().BeTrue();
+        outcome.Value.Applied.Should().BeTrue();
+        outcome.Value.EntityId.Should().BePositive();
+        await using var verify = NewContext();
+        var persisted = await verify.Vendors.AsNoTracking()
+            .Where(row => row.Id == outcome.Value.EntityId && row.PortfolioId == _portfolioId)
+            .Select(row => new { row.Name, row.ServiceType, row.Email })
+            .SingleAsync();
+        persisted.Should().BeEquivalentTo(new
+        {
+            Name = "Summit Roofing",
+            ServiceType = "Roofing",
+            Email = "summit@example.test",
+        });
+        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
     }
 
     [SkippableFact]
