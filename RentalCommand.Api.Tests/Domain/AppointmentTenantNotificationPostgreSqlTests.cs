@@ -36,6 +36,10 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
     {
         _context = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _context.Db.SeedAdministratorScope(PortfolioId, nameof(AppointmentTenantNotificationPostgreSqlTests));
+        var portfolio = await _context.Db.Portfolios.SingleAsync(row => row.Id == PortfolioId);
+        portfolio.TimeZone = "America/New_York";
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
         _services = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
             _context.ConnectionString,
             new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
@@ -68,6 +72,8 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         notification.UserId.Should().Be(scenario.TenantUserId);
         notification.Type.Should().Be("TenantAppointmentScheduled");
         notification.Title.Should().Be("Appointment scheduled");
+        notification.Message.Should().Contain("Jan 26, 2027 at 9:00 AM America/New_York (UTC-05:00)");
+        notification.Message.Should().NotContain("2:00 PM UTC");
         notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
         notification.NavigationDestination.Should().Be(NavigationDestination.Home);
         notification.NavigationAccessContextId.Should().Be(scenario.AccessContextId);
@@ -86,6 +92,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
             command.Contains("YS-187 appointment lifecycle tenant notification recipients", StringComparison.Ordinal)
             && command.Contains("\"TenantUserAccesses\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("\"LeaseManagementParties\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("\"Portfolios\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -126,6 +133,14 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
             "TenantAppointmentScheduled",
             "TenantAppointmentUpdated",
             "TenantAppointmentCancelled");
+        var updatedMessage = await _context.Db.Notifications.AsNoTracking()
+            .Where(row => row.RelatedEntityType == nameof(Appointment)
+                && row.RelatedEntityId == created.Id
+                && row.Type == "TenantAppointmentUpdated")
+            .Select(row => row.Message)
+            .SingleAsync();
+        updatedMessage.Should().Contain("Jan 26, 2027 at 10:00 AM America/New_York (UTC-05:00)");
+        updatedMessage.Should().NotContain("3:00 PM UTC");
     }
 
     [Fact]
@@ -302,8 +317,8 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         Title = "Frozen-clock move-in walkthrough",
         Type = AppointmentType.MoveIn,
         Status = AppointmentStatus.Scheduled,
-        ScheduledStart = new DateTime(2027, 1, 25, 15, 0, 0, DateTimeKind.Utc),
-        ScheduledEnd = new DateTime(2027, 1, 25, 16, 0, 0, DateTimeKind.Utc),
+        ScheduledStart = new DateTime(2027, 1, 26, 14, 0, 0, DateTimeKind.Utc),
+        ScheduledEnd = new DateTime(2027, 1, 26, 15, 0, 0, DateTimeKind.Utc),
         AssignedTo = "Leasing Agent",
     };
 

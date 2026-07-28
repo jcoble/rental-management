@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
@@ -228,6 +229,8 @@ internal static class AppointmentTenantNotifications
                 join context in attempt.Persistence.Query<WorkspaceAccessContext>().AsNoTracking()
                     on new { access.AccessContextId, access.PortfolioId }
                     equals new { AccessContextId = context.Id, context.PortfolioId }
+                join portfolio in attempt.Persistence.Query<Portfolio>().AsNoTracking()
+                    on access.PortfolioId equals portfolio.Id
                 join party in attempt.Persistence.Query<LeaseManagementParty>().AsNoTracking()
                     on new { LeaseManagementPartyId = access.LeaseManagementPartyId, access.PortfolioId }
                     equals new { LeaseManagementPartyId = party.Id, party.PortfolioId }
@@ -299,7 +302,8 @@ internal static class AppointmentTenantNotifications
                 select new AppointmentTenantNotificationRecipient(
                     context.UserId,
                     access.AccessContextId,
-                    context.AccessRevision))
+                    context.AccessRevision,
+                    portfolio.TimeZone))
             .TagWith("YS-187 appointment lifecycle tenant notification recipients")
             .ToListAsync(ct);
 
@@ -314,7 +318,7 @@ internal static class AppointmentTenantNotifications
             UserId = recipient.UserId,
             Type = notificationType,
             Title = Title(lifecycle),
-            Message = Message(lifecycle, appointment),
+            Message = Message(lifecycle, appointment, recipient.TimeZoneId),
             Severity = lifecycle == AppointmentTenantNotificationLifecycle.Cancelled ? "Warning" : "Info",
             NavigationExperience = NavigationExperience.Tenant,
             NavigationDestination = NavigationDestination.Home,
@@ -363,9 +367,12 @@ internal static class AppointmentTenantNotifications
         _ => throw new ArgumentOutOfRangeException(nameof(lifecycle), lifecycle, "Unknown appointment notification lifecycle."),
     };
 
-    private static string Message(AppointmentTenantNotificationLifecycle lifecycle, Appointment appointment)
+    private static string Message(
+        AppointmentTenantNotificationLifecycle lifecycle,
+        Appointment appointment,
+        string timeZoneId)
     {
-        var scheduled = appointment.ScheduledStart.ToString("MMM d, yyyy 'at' h:mm tt 'UTC'");
+        var scheduled = FormatScheduledStart(appointment.ScheduledStart, timeZoneId);
         return lifecycle switch
         {
             AppointmentTenantNotificationLifecycle.Scheduled =>
@@ -378,10 +385,42 @@ internal static class AppointmentTenantNotifications
         };
     }
 
+    private static string FormatScheduledStart(DateTime scheduledStartUtc, string timeZoneId)
+    {
+        var zone = ResolveTimeZone(timeZoneId);
+        var utc = scheduledStartUtc.Kind == DateTimeKind.Utc
+            ? scheduledStartUtc
+            : DateTime.SpecifyKind(scheduledStartUtc, DateTimeKind.Utc);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc, zone);
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "{0:MMM d, yyyy 'at' h:mm tt} {1} ({2})",
+            local,
+            zone.Id,
+            FormatOffset(zone.GetUtcOffset(new DateTimeOffset(utc))));
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string timeZoneId)
+    {
+        if (string.IsNullOrWhiteSpace(timeZoneId))
+            return TimeZoneInfo.Utc;
+
+        return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+    }
+
+    private static string FormatOffset(TimeSpan offset) =>
+        string.Format(
+            CultureInfo.InvariantCulture,
+            "UTC{0}{1:00}:{2:00}",
+            offset < TimeSpan.Zero ? '-' : '+',
+            Math.Abs(offset.Hours),
+            Math.Abs(offset.Minutes));
+
     private sealed record AppointmentTenantNotificationRecipient(
         int UserId,
         int AccessContextId,
-        long AccessRevision);
+        long AccessRevision,
+        string TimeZoneId);
 }
 
 internal static class AppointmentOperationValidation
