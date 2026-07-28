@@ -97,8 +97,10 @@ public sealed class ActivateOwnerPortalAccessHandler
             throw new DomainValidationException("A valid web application URL is required for account activation.");
         }
 
-        var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
+        await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
             command, attempt, null, ct);
+        var changedAtUtc = Utc(command.EffectiveFromUtc);
+        attempt.UseDatabaseWallClockForAudit(changedAtUtc);
         await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.EmailLockId, ct);
 
         var owner = await attempt.Persistence.Query<OwnerEntity>()
@@ -318,7 +320,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                     command.OwnerEntityId,
                     ContextId = context.Id,
                     RequiresAccountActivation = true,
-                }));
+                }), changedAtUtc);
         }
         if (existingAccess is null)
         {
@@ -330,7 +332,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                 command.ActorUserId,
                 access.Id,
                 AuditLogOperation.Created,
-                "Owner portal relationship granted"));
+                "Owner portal relationship granted"), changedAtUtc);
         }
         if (invitation is not null && invitationMembership is not null)
         {
@@ -344,7 +346,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                     AccessContextId = context.Id,
                     WorkspaceMembershipId = invitationMembership.Id,
                     invitation.ExpiresAtUtc,
-                }));
+                }), changedAtUtc);
         }
 
         return Result(
@@ -378,6 +380,9 @@ public sealed class ActivateOwnerPortalAccessHandler
             throw new ArgumentException("Owner portal activation, actor context, and reason are required.");
         }
     }
+
+    private static DateTime Utc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
     private static ActivateOwnerPortalAccessMutationResult Result(
         ActivateOwnerPortalAccessMutationOutcome outcome,

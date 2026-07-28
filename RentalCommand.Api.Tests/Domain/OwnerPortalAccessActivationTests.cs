@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -30,6 +31,8 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int ActorUserId = 1;
+    private static readonly DateTime FrozenBusinessNowUtc =
+        new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
     private static readonly AtomicJsonResultCodec<OwnerRelationshipAccessMutationResult> OwnerAccessCodec =
         new("owner-relationship-access.mutation.v1");
     private readonly MigratedPostgreSqlFixture _fixture;
@@ -46,7 +49,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
-        _services = BuildServices(_ctx.ConnectionString);
+        _services = BuildServices(_ctx.ConnectionString, timeProvider: new FixedTimeProvider(FrozenBusinessNowUtc));
         _scope = SeedActor(RoleProfileKeys.WorkspaceAdministrator);
         _sut = Service();
     }
@@ -144,6 +147,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
             .SingleAsync(user => user.NormalizedEmail == "MISSING-ACCOUNT@EXAMPLE.TEST");
         invitedUser.PasswordHash.Should().BeNull();
         invitedUser.EmailConfirmed.Should().BeFalse();
+        invitedUser.CreatedAt.Should().Be(FrozenBusinessNowUtc);
 
         var context = await _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
             .Include(row => row.Membership)
@@ -151,23 +155,56 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         context.UserId.Should().Be(invitedUser.Id);
         context.LastAuthorizedExperience.Should().Be(WorkspaceExperience.Owner);
         context.AccessRevision.Should().Be(2);
+        context.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        context.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
         context.Membership.Should().NotBeNull();
         context.Membership!.DefaultExperience.Should().Be(WorkspaceExperience.Owner);
+        context.Membership.EffectiveFromUtc.Should().Be(FrozenBusinessNowUtc);
+        context.Membership.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        context.Membership.UpdatedAtUtc.Should().Be(FrozenBusinessNowUtc);
 
         var access = await _ctx.Db.OwnerUserAccesses.AsNoTracking()
             .SingleAsync(row => row.OwnerEntityId == owner.Id);
         access.AccessContextId.Should().Be(context.Id);
         access.ApplicationUserId.Should().Be(invitedUser.Id);
+        access.EffectiveFromUtc.Should().Be(FrozenBusinessNowUtc);
+        access.GrantedAtUtc.Should().Be(FrozenBusinessNowUtc);
 
         var invitation = await _ctx.Db.WorkspaceInvitations.AsNoTracking()
             .SingleAsync(row => row.InvitedUserId == invitedUser.Id);
         invitation.WorkspaceMembershipId.Should().Be(context.Membership.Id);
         invitation.AcceptedAtUtc.Should().BeNull();
+        invitation.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        invitation.ExpiresAtUtc.Should().Be(FrozenBusinessNowUtc.AddDays(7));
 
         var outbox = await _ctx.Db.OutboxMessages.AsNoTracking()
             .SingleAsync(row => row.IdempotencyKey.StartsWith($"owner-portal-invitation:{PortfolioId}:{owner.Id}:"));
+        outbox.CreatedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        outbox.NextAttemptAtUtc.Should().Be(FrozenBusinessNowUtc);
         var token = ExtractActivationToken(outbox.Payload);
         HashInvitationToken(token).Should().Be(invitation.TokenHash);
+
+        var audits = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.PortfolioId == PortfolioId
+                && (row.EntityType == nameof(ApplicationUser)
+                    || row.EntityType == nameof(OwnerUserAccess)
+                    || row.EntityType == nameof(WorkspaceInvitation)))
+            .OrderBy(row => row.Id)
+            .ToListAsync();
+        audits.Should().HaveCount(4);
+        audits.Should().OnlyContain(row => row.Timestamp == FrozenBusinessNowUtc);
+        audits.Should().Contain(row =>
+            row.EntityType == nameof(OwnerUserAccess)
+            && row.ChangeReason == null
+            && (row.NewValues ?? string.Empty).Contains("2027-01-25T05:00:00Z", StringComparison.Ordinal));
+        audits.Should().Contain(row =>
+            row.EntityType == nameof(WorkspaceInvitation)
+            && row.ChangeReason == "Owner portal invitation queued"
+            && (row.NewValues ?? string.Empty).Contains("2027-02-01T05:00:00Z", StringComparison.Ordinal));
+
+        var projected = await ProjectOwnerForGridAsync(owner.Id);
+        projected.HasPendingOwnerPortalInvitation.Should().BeTrue();
+        projected.HasActiveOwnerPortalAccess.Should().BeFalse();
 
         _ctx.Db.ChangeTracker.Clear();
         invitation = await _ctx.Db.WorkspaceInvitations.AsNoTracking()
@@ -192,6 +229,9 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         activatedUser.EmailConfirmed.Should().BeTrue();
         (await _ctx.Db.WorkspaceInvitations.AsNoTracking()
             .SingleAsync(row => row.Id == invitation.Id)).AcceptedAtUtc.Should().NotBeNull();
+        projected = await ProjectOwnerForGridAsync(owner.Id);
+        projected.HasPendingOwnerPortalInvitation.Should().BeFalse();
+        projected.HasActiveOwnerPortalAccess.Should().BeTrue();
     }
 
     [Fact]
@@ -233,10 +273,17 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
             _scope,
             owner.Id,
             new ActivateOwnerPortalAccessRequest(),
+            "activate-owner-pending-duplicate-1");
+        var third = await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
             "activate-owner-pending-duplicate-2");
 
         first.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.InvitationPending);
         second.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.InvitationPending);
+        second.Replayed.Should().BeTrue();
+        third.Outcome.Should().Be(ActivateOwnerPortalAccessOutcome.InvitationPending);
         (await _ctx.Db.Users.AsNoTracking()
             .CountAsync(user => user.NormalizedEmail == "PENDING-DUPLICATE@EXAMPLE.TEST")).Should().Be(1);
         (await _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
@@ -257,7 +304,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
 
         var failure = new ThrowOnOwnerPortalInvitationOutboxInterceptor();
         _ctx = await _fixture.CreateContextAsync();
-        _services = BuildServices(_ctx.ConnectionString, failure);
+        _services = BuildServices(_ctx.ConnectionString, failure, new FixedTimeProvider(FrozenBusinessNowUtc));
         _scope = SeedActor(RoleProfileKeys.WorkspaceAdministrator);
         _sut = Service();
         var owner = SeedOwner("rollback-owner@example.test");
@@ -299,7 +346,7 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         await _ctx.DisposeAsync();
 
         _ctx = await _fixture.CreateContextAsync();
-        _services = BuildServices(_ctx.ConnectionString);
+        _services = BuildServices(_ctx.ConnectionString, timeProvider: new FixedTimeProvider(FrozenBusinessNowUtc));
         _scope = SeedActor(RoleProfileKeys.LeasingAgent);
         _sut = Service();
         var owner = SeedOwner("owner-denied@example.test");
@@ -369,15 +416,20 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     private OwnerEntityService Service() => new(
         _ctx.Db,
         Mock.Of<IDataUpdateService>(),
-        TimeProvider.System,
+        new FixedTimeProvider(FrozenBusinessNowUtc),
         _services.GetRequiredService<IAtomicUnitOfWork>());
 
     private static ServiceProvider BuildServices(
         string connectionString,
-        DbCommandInterceptor? interceptor = null)
+        DbCommandInterceptor? interceptor = null,
+        TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        if (timeProvider is not null)
+        {
+            services.AddSingleton(timeProvider);
+        }
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
@@ -552,6 +604,21 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     private static string HashInvitationToken(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
+    private async Task<OwnerEntityResponse> ProjectOwnerForGridAsync(int ownerId)
+    {
+        var method = typeof(OwnerEntityService).GetMethod(
+            "ProjectOwnerResponses",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+
+        var query = (IQueryable<OwnerEntityResponse>)method!.Invoke(_sut,
+        [
+            _ctx.Db.OwnerEntities.AsNoTracking().Where(owner => owner.Id == ownerId),
+            _ctx.Db.Properties.AsNoTracking().Where(property => property.PortfolioId == PortfolioId),
+        ])!;
+        return await query.SingleAsync();
+    }
+
     private sealed class ThrowOnOwnerPortalInvitationOutboxInterceptor : DbCommandInterceptor
     {
         public override InterceptionResult<DbDataReader> ReaderExecuting(
@@ -610,5 +677,10 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         public int AccessContextId { get; set; }
         public int InvitedUserId { get; set; }
         public DateTime AcceptedAtUtc { get; set; }
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
     }
 }

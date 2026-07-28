@@ -328,7 +328,8 @@ public class OwnerEntityService : IOwnerEntityService
             HasActiveOwnerPortalAccess = _db.OwnerUserAccesses.Any(access =>
                 access.PortfolioId == o.PortfolioId
                 && access.OwnerEntityId == o.Id
-                && access.RevokedAtUtc == null),
+                && access.RevokedAtUtc == null
+                && access.ApplicationUser!.PasswordHash != null),
             HasPendingOwnerPortalInvitation = _db.OwnerUserAccesses.Any(access =>
                 access.PortfolioId == o.PortfolioId
                 && access.OwnerEntityId == o.Id
