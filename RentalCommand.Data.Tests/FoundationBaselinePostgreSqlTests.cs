@@ -807,6 +807,15 @@ public sealed class FoundationBaselinePostgreSqlTests
             "the immutable optimization migration replaces only current scope authority and adds " +
             "the relational capability-scope authority");
 
+        var businessClockMigration = new UseBusinessClockForCapabilityScopes();
+        var businessClockBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(UseBusinessClockForCapabilityScopes).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(businessClockMigration, [businessClockBuilder]);
+        businessClockBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle()
+            .Which.Sql.Should().BeSameAs(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
+
         var down = typeof(OptimizeRlsRequestScope).GetMethod(
             "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         var act = () => down.Invoke(l15Migration, [new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL")]);
@@ -863,7 +872,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     [Fact]
     public void EffectiveCapabilityScopeAuthority_IsApiOnlyCurrentAndFailClosed()
     {
-        var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725;
+        var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727;
         var normalizedDelta = Regex.Replace(delta, @"\s+", " ");
 
         normalizedDelta.Should().Contain(
@@ -878,16 +887,30 @@ public sealed class FoundationBaselinePostgreSqlTests
                 "a supplied invalid or stale session must never fall through to registration bootstrap");
         normalizedDelta.Should().Contain(
             "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes(");
-        normalizedDelta.Should().Contain("WITH request_scope AS MATERIALIZED");
+        normalizedDelta.Should().Contain("request_scope AS MATERIALIZED");
         normalizedDelta.Should().Contain("public.rc_api_scope_allows(target_portfolio_id)");
         normalizedDelta.Should().Contain(
             "capability.\"Key\" = ANY(capability_keys)");
         normalizedDelta.Should().Contain(
             "capability.\"AuthorizationTargetKind\"::text = authorization_target_kind");
+        normalizedDelta.Should().Contain("WITH business_clock AS MATERIALIZED");
         normalizedDelta.Should().Contain(
-            "assignment.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+            "WHEN 'Frozen' THEN clock.\"SimAnchorUtc\"");
         normalizedDelta.Should().Contain(
-            "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+            "clock.\"SimAnchorUtc\" + (CURRENT_TIMESTAMP - clock.\"RealAnchorUtc\")");
+        Regex.Matches(normalizedDelta, "WITH business_clock AS MATERIALIZED").Should().HaveCount(2);
+        normalizedDelta.Should().Contain(
+            "THEN EXISTS ( WITH business_clock AS MATERIALIZED");
+        normalizedDelta.Should().Contain(
+            "FROM business_clock CROSS JOIN public.\"AuthSessions\" session");
+        normalizedDelta.Should().Contain(
+            "CROSS JOIN business_clock JOIN public.\"WorkspaceAccessContexts\"");
+        normalizedDelta.Should().Contain(
+            "session.\"ExpiresAtUtc\" > CURRENT_TIMESTAMP");
+        normalizedDelta.Should().Contain(
+            "assignment.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
+        normalizedDelta.Should().Contain(
+            "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
         normalizedDelta.Should().Contain("SELECT DISTINCT assignment.\"Id\" AS \"AssignmentId\"");
         normalizedDelta.Should().Contain(
             "REVOKE ALL ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) FROM PUBLIC;");
@@ -899,13 +922,13 @@ public sealed class FoundationBaselinePostgreSqlTests
             "GRANT EXECUTE ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) TO rentalcommand_engine;");
 
         var normalizedBaseline = Regex.Replace(
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725,
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260727,
             @"\s+",
             " ");
         normalizedBaseline.Should().Contain(
             Regex.Replace(
-                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725[
-                    FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725.IndexOf(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727[
+                    FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727.IndexOf(
                         "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes",
                         StringComparison.Ordinal)..],
                 @"\s+",

@@ -2433,7 +2433,105 @@ internal static class FoundationBaselinePostgreSql
             "\n\n",
             EffectiveCapabilityScopeFunctionSqlV20260725);
 
-    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260725;
+    private static readonly string RlsApiScopeAllowsFunctionSqlV20260727 =
+        RlsApiScopeAllowsFunctionSqlV20260725
+            .Replace(
+                "THEN EXISTS (",
+                """
+                THEN EXISTS (
+                  WITH business_clock AS MATERIALIZED (
+                    SELECT COALESCE(
+                      (
+                        SELECT CASE clock."Mode"
+                          WHEN 'Frozen' THEN clock."SimAnchorUtc"
+                          WHEN 'Offset' THEN
+                            clock."SimAnchorUtc" + (CURRENT_TIMESTAMP - clock."RealAnchorUtc")
+                          ELSE CURRENT_TIMESTAMP
+                        END
+                        FROM public."SimulationClocks" clock
+                        WHERE clock."Id" = 1
+                      ),
+                      CURRENT_TIMESTAMP) AS effective_at_utc
+                  )
+                """,
+                StringComparison.Ordinal)
+            .Replace(
+                "FROM public.\"AuthSessions\" session",
+                """
+                FROM business_clock
+                  CROSS JOIN public."AuthSessions" session
+                """,
+                StringComparison.Ordinal)
+            .Replace(
+                "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+                "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+                StringComparison.Ordinal)
+            .Replace(
+                "membership.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+                "membership.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+                StringComparison.Ordinal);
+
+    private static readonly string EffectiveCapabilityScopeFunctionSqlV20260727 =
+        EffectiveCapabilityScopeFunctionSqlV20260725
+            .Replace(
+                "WITH request_scope AS MATERIALIZED (",
+                """
+                WITH business_clock AS MATERIALIZED (
+                  SELECT COALESCE(
+                    (
+                      SELECT CASE clock."Mode"
+                        WHEN 'Frozen' THEN clock."SimAnchorUtc"
+                        WHEN 'Offset' THEN
+                          clock."SimAnchorUtc" + (CURRENT_TIMESTAMP - clock."RealAnchorUtc")
+                        ELSE CURRENT_TIMESTAMP
+                      END
+                      FROM public."SimulationClocks" clock
+                      WHERE clock."Id" = 1
+                    ),
+                    CURRENT_TIMESTAMP) AS effective_at_utc
+                ),
+                request_scope AS MATERIALIZED (
+                """,
+                StringComparison.Ordinal)
+            .Replace(
+                "FROM request_scope",
+                """
+                FROM request_scope
+                  CROSS JOIN business_clock
+                """,
+                StringComparison.Ordinal)
+            .Replace(
+                "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+                "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+                StringComparison.Ordinal)
+            .Replace(
+                "membership.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+                "membership.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+                StringComparison.Ordinal)
+            .Replace(
+                "assignment.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+                "assignment.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+                StringComparison.Ordinal)
+            .Replace(
+                "assignment.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+                "assignment.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+                StringComparison.Ordinal);
+
+    internal static readonly string EffectiveCapabilityScopeAuthoritySqlV20260727 =
+        string.Concat(
+            RlsApiScopeAllowsFunctionSqlV20260727,
+            "\n\n",
+            EffectiveCapabilityScopeFunctionSqlV20260727);
+
+    internal static readonly string RlsAuthorityFunctionSqlV20260727 =
+        string.Concat(
+            ReplaceInitialScopeAuthorityFunction(
+                RlsAuthorityFunctionSqlV20260724,
+                RlsApiScopeAllowsFunctionSqlV20260727),
+            "\n\n",
+            EffectiveCapabilityScopeFunctionSqlV20260727);
+
+    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260727;
 
     private static string ReplaceInitialScopeAuthorityFunction(
         string historicalAuthoritySql,

@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -23,6 +24,11 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 {
     private const int ActorUserId = 73;
     private const string ContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static readonly DateTime SecurityAtUtc =
+        new(2026, 7, 27, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime BusinessAtUtc =
+        new(2027, 1, 14, 5, 0, 0, DateTimeKind.Utc);
+    private readonly FixedAuthSecurityClock _securityClock = new(SecurityAtUtc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
@@ -72,7 +78,9 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<TimeProvider>(
+            new FixedTimeProvider(new DateTimeOffset(BusinessAtUtc)));
+        services.AddSingleton<IAuthSecurityClock>(_securityClock);
         services.AddSingleton<CommandProbe>();
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddSingleton<CapturingFileStorage>();
@@ -137,6 +145,33 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             .ToListAsync();
         audits.Should().Contain(audit => audit.EntityType == nameof(StoredFile) && audit.EntityId == first.Id);
         audits.Should().Contain(audit => audit.EntityType == nameof(Unit) && audit.EntityId == _unitId);
+    }
+
+    [SkippableFact]
+    public async Task Create_separates_business_authority_time_from_real_session_expiry()
+    {
+        SkipIfNoDocker();
+        Storage.Add("blob-clock-separation");
+
+        var created = await CreateAsync("upload-clock-separation", "blob-clock-separation");
+
+        created.Should().NotBeNull();
+        created!.UploadedAt.Should().Be(BusinessAtUtc);
+        await using var db = NewContext();
+        var membership = await db.WorkspaceMemberships.SingleAsync(
+            candidate => candidate.AccessContextId == _accessContextId);
+        var session = await db.AuthSessions.SingleAsync(candidate => candidate.Id == _sessionId);
+        membership.EffectiveFromUtc.Should().BeAfter(SecurityAtUtc);
+        session.ExpiresAtUtc.Should().BeBefore(BusinessAtUtc);
+
+        Storage.Add("blob-expired-security-session");
+        _securityClock.UtcNowValue = session.ExpiresAtUtc;
+        var expiredSession = await CreateAsync(
+            "upload-expired-security-session",
+            "blob-expired-security-session");
+        expiredSession.Should().BeNull();
+        (await db.StoredFiles.CountAsync(file =>
+            file.PortfolioId == _portfolioId && file.EntityId == _unitId)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -395,7 +430,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     private async Task<(Guid SessionId, int AccessContextId, long AccessRevision)>
         SeedManagementAccessAsync(RentalCommandDbContext db)
     {
-        var now = DateTime.UtcNow;
+        var now = SecurityAtUtc;
         var user = new ApplicationUser
         {
             Id = ActorUserId,
@@ -423,7 +458,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = now.AddMinutes(-1),
+            EffectiveFromUtc = BusinessAtUtc.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -435,7 +470,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = now.AddMinutes(-1),
+            EffectiveFromUtc = BusinessAtUtc.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -463,6 +498,17 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         public int? UserId => ActorUserId;
         public string? ActorLabel => null;
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNowValue { get; set; } = utcNow;
+        public DateTime UtcNow() => UtcNowValue;
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
     private sealed class CapturingFileStorage : IFileStorage

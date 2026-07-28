@@ -10,6 +10,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
+using RentalCommand.Api.Services.Auth;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -27,6 +28,7 @@ public sealed class DocumentService : IDocumentService
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly ILogger<DocumentService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public DocumentService(
         RentalCommandDbContext db,
@@ -34,7 +36,8 @@ public sealed class DocumentService : IDocumentService
         IFileStorage storage,
         IPendingFileUploadStore pendingUploads,
         ILogger<DocumentService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAuthSecurityClock securityClock)
     {
         _db = db;
         _atomic = atomic;
@@ -42,6 +45,7 @@ public sealed class DocumentService : IDocumentService
         _pendingUploads = pendingUploads;
         _logger = logger;
         _timeProvider = timeProvider;
+        _securityClock = securityClock;
     }
 
     public Task<PendingFileUploadAdmission> PrepareUploadAsync(
@@ -147,6 +151,7 @@ public sealed class DocumentService : IDocumentService
                     contentType,
                     sizeBytes,
                     _timeProvider.UtcNow(),
+                    _securityClock.UtcNow(),
                     staffScope is { } access
                         ? new StoredDocumentManagementAccess(
                             access.SessionId,
@@ -200,6 +205,7 @@ public sealed class DocumentService : IDocumentService
                 isStaff,
                 normalizedOperationId,
                 _timeProvider.UtcNow(),
+                _securityClock.UtcNow(),
                 staffScope is { } access
                     ? new StoredDocumentManagementAccess(
                         access.SessionId,

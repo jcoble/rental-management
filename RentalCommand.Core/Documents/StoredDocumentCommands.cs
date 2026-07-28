@@ -59,6 +59,7 @@ public sealed record CreateStoredDocumentCommand(
     string ContentType,
     long SizeBytes,
     DateTime UploadedAtUtc,
+    DateTime SecurityAtUtc,
     StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record CreateStoredDocumentResult(
@@ -84,6 +85,7 @@ public sealed record DeleteStoredDocumentCommand(
     bool IsStaff,
     string ClientOperationId,
     DateTime DeletedAtUtc,
+    DateTime SecurityAtUtc,
     StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record DeleteStoredDocumentResult(
