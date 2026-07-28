@@ -17,6 +17,16 @@ public class OwnerDistributionResponse
     public DateTime Date { get; set; }
     public decimal Amount { get; set; }
     public DistributionMethod Method { get; set; }
+    public OwnerDistributionStatus Status { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public DateTime? ApprovedBusinessDate { get; set; }
+    public int? ApprovedByUserId { get; set; }
+    public DateTime? RejectedAt { get; set; }
+    public int? RejectedByUserId { get; set; }
+    public string? RejectionReason { get; set; }
+    public string? BankReference { get; set; }
+    public string? ExportReference { get; set; }
+    public DateTime? ExportedAt { get; set; }
     public string? Memo { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -42,6 +52,9 @@ public class OwnerDistributionListQuery : ListQuery
 
     [FromQuery(Name = "year")]
     public int? Year { get; set; }
+
+    [FromQuery(Name = "status")]
+    public OwnerDistributionStatus? Status { get; set; }
 }
 
 public class CreateOwnerDistributionRequest
@@ -63,6 +76,25 @@ public class CreateOwnerDistributionRequest
 
     [MaxLength(500)]
     public string? Memo { get; set; }
+}
+
+public class ApproveOwnerDistributionRequest
+{
+    [Required]
+    [MaxLength(100)]
+    public string BankReference { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(100)]
+    public string ExportReference { get; set; } = string.Empty;
+
+    public DateTime? ExportedAt { get; set; }
+}
+
+public class RejectOwnerDistributionRequest
+{
+    [MaxLength(500)]
+    public string? Reason { get; set; }
 }
 
 public class UpdateOwnerDistributionRequest

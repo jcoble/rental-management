@@ -336,8 +336,13 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.Property(e => e.Memo).HasMaxLength(500);
+            entity.Property(e => e.RejectionReason).HasMaxLength(500);
+            entity.Property(e => e.BankReference).HasMaxLength(100);
+            entity.Property(e => e.ExportReference).HasMaxLength(100);
             entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId, e.Date });
+            entity.HasIndex(e => new { e.PortfolioId, e.Status, e.Date });
             entity.HasIndex(e => e.PropertyId);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
@@ -351,6 +356,14 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasOne(e => e.Property)
                 .WithMany()
                 .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.ApprovedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.ApprovedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RejectedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.RejectedByUserId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

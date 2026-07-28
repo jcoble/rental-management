@@ -180,6 +180,9 @@ public sealed class OwnerDistributionServiceTests : IDisposable
             Date = date,
             Amount = amount,
             Method = DistributionMethod.Check,
+            Status = OwnerDistributionStatus.Approved,
+            ApprovedAt = now,
+            ApprovedBusinessDate = date.Date,
             CreatedAt = now,
             UpdatedAt = now,
         };

@@ -91,6 +91,7 @@ public class OwnerStatementService : IOwnerStatementService
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
                         distribution.OwnerEntityId == owner.Id &&
+                        distribution.Status == OwnerDistributionStatus.Approved &&
                         distribution.Date >= start &&
                         distribution.Date < end &&
                         ((distribution.PropertyId != null &&
@@ -264,6 +265,7 @@ public class OwnerStatementService : IOwnerStatementService
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
                         distribution.OwnerEntityId == group.Key.OwnerId &&
+                        distribution.Status == OwnerDistributionStatus.Approved &&
                         distribution.Date >= start &&
                         distribution.Date < end &&
                         ((distribution.PropertyId != null &&

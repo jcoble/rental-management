@@ -102,6 +102,7 @@ public class OwnerDistributionService : IOwnerDistributionService
             .Where(d =>
                 d.PortfolioId == portfolioId &&
                 d.OwnerEntityId == ownerEntityId &&
+                d.Status == OwnerDistributionStatus.Approved &&
                 d.Date >= start &&
                 d.Date < end)
             .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
@@ -144,6 +145,26 @@ public class OwnerDistributionService : IOwnerDistributionService
         return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
+    public async Task<OwnerDistributionResponse?> ApproveAsync(
+        WorkspaceReadScope scope, int id, ApproveOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Approve, id, idempotencyKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
+    }
+
+    public async Task<OwnerDistributionResponse?> RejectAsync(
+        WorkspaceReadScope scope, int id, RejectOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
+            AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Reject, id, idempotencyKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
+    }
+
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
@@ -177,6 +198,9 @@ public class OwnerDistributionService : IOwnerDistributionService
             var (start, end) = YearRange(query.Year.Value);
             q = q.Where(d => d.Date >= start && d.Date < end);
         }
+
+        if (query.Status.HasValue)
+            q = q.Where(d => d.Status == query.Status.Value);
 
         var (from, to) = ListDateRange.UtcDay(query.From, query.To);
         if (from is { } fromUtc)
@@ -231,6 +255,16 @@ public class OwnerDistributionService : IOwnerDistributionService
             Date = d.Date,
             Amount = d.Amount,
             Method = d.Method,
+            Status = d.Status,
+            ApprovedAt = d.ApprovedAt,
+            ApprovedBusinessDate = d.ApprovedBusinessDate,
+            ApprovedByUserId = d.ApprovedByUserId,
+            RejectedAt = d.RejectedAt,
+            RejectedByUserId = d.RejectedByUserId,
+            RejectionReason = d.RejectionReason,
+            BankReference = d.BankReference,
+            ExportReference = d.ExportReference,
+            ExportedAt = d.ExportedAt,
             Memo = d.Memo,
             CreatedAt = d.CreatedAt,
             UpdatedAt = d.UpdatedAt,
