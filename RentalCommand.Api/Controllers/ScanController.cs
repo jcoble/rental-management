@@ -710,6 +710,7 @@ public class ScanController : ManagementControllerBase
                 CreatedAt = d.CreatedAt,
                 ReviewedAt = d.ReviewedAt,
                 ConfirmedAt = d.ConfirmedAt,
+                SourceStoredFileId = d.SourceStoredFileId,
                 SourceContentSha256 = d.SourceContentSha256,
                 SourceLabel = d.SourceLabel,
                 CaptureExperience = d.CaptureExperience,
@@ -790,6 +791,7 @@ public class ScanController : ManagementControllerBase
                     draft.CaptureTenantAccountId, draft.CaptureTenantLedgerEntryId,
                     draft.CaptureWorkOrderId, draft.CaptureApplicationId,
                     draft.CaptureRentalListingId, draft.SourceLabel),
+                SourceStoredFileId: draft.SourceStoredFileId,
                 SourceContentSha256: draft.SourceContentSha256));
         }
 
@@ -847,6 +849,7 @@ public class ScanController : ManagementControllerBase
         public DateTime CreatedAt { get; init; }
         public DateTime? ReviewedAt { get; init; }
         public DateTime? ConfirmedAt { get; init; }
+        public int? SourceStoredFileId { get; init; }
         public string? SourceContentSha256 { get; init; }
         public string? SourceLabel { get; init; }
         public WorkspaceExperience? CaptureExperience { get; init; }

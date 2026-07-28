@@ -26,6 +26,13 @@
 	const queryClient = useQueryClient();
 	const tenantAccountId = $derived(parseInt(page.params.id ?? '0', 10));
 	const today = () => new Date().toISOString().slice(0, 10);
+	function positiveQueryInt(value: string | null): number | null {
+		if (!value) return null;
+		const parsed = Number(value);
+		return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+	}
+	const sourceStoredFileId = $derived(positiveQueryInt(page.url.searchParams.get('sourceStoredFileId')));
+	const sourceDraftId = $derived(positiveQueryInt(page.url.searchParams.get('sourceDraftId')));
 
 	const depositQuery = createQuery(() => ({
 		queryKey: ['deposit', tenantAccountId],
@@ -65,6 +72,7 @@
 	let fundReference = $state('');
 	let fundErrors = $state<Record<string, string>>({});
 	let fundOperation = $state({ fingerprint: '', key: '' });
+	let seededSourceKey = $state('');
 
 	function openFund() {
 		fundAmount = '';
@@ -76,6 +84,15 @@
 		fundOperation = { fingerprint: '', key: '' };
 		showFundForm = true;
 	}
+
+	$effect(() => {
+		if (!deposit || !sourceStoredFileId) return;
+		const key = `${tenantAccountId}:${sourceStoredFileId}:${sourceDraftId ?? ''}`;
+		if (seededSourceKey === key) return;
+		openFund();
+		fundDescription = 'Security deposit received from scanned receipt';
+		seededSourceKey = key;
+	});
 
 	const fundMutation = createMutation(() => ({
 		mutationFn: ({ operationKey, body }: { operationKey: string; body: FundSecurityDepositRequest }) =>
@@ -107,6 +124,7 @@
 			description: fundDescription.trim(),
 			paymentMethodSummary: fundPaymentMethod.trim(),
 		};
+		if (sourceStoredFileId) body.sourceStoredFileId = sourceStoredFileId;
 		if (fundReference.trim()) body.externalReference = fundReference.trim();
 		const fingerprint = JSON.stringify(body);
 		fundOperation = stableOperationKey(fingerprint, fundOperation);
@@ -367,6 +385,11 @@
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header><Dialog.Title>Record deposit funds</Dialog.Title><Dialog.Description>Record money actually received into this existing deposit account.</Dialog.Description></Dialog.Header>
 		<div class="space-y-3">
+			{#if sourceStoredFileId}
+				<div class="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground" data-testid="deposit-fund-source">
+					Scanned source attached{sourceDraftId ? ` from scan #${sourceDraftId}` : ''}.
+				</div>
+			{/if}
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={fundAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if fundErrors.amount}<p class="mt-1 text-xs text-destructive">{fundErrors.amount}</p>{/if}</div>
 			<div>
 				<label for="deposit-fund-date" class="mb-1 block text-xs text-muted-foreground">Received date</label>

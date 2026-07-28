@@ -1015,6 +1015,7 @@
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
 	// the new lease instead, so they don't use this card.)
 	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null; unitId: number | null } | null>(null);
+	let depositFundingRedirectPending = $state(false);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
 	const lowConfidenceFields = $derived(
@@ -1081,6 +1082,37 @@
 			leaseManagementId: data?.captureContext?.leaseManagementId ?? scanContext.leaseManagementId ?? null
 		});
 	})());
+	const depositFundingHref = $derived.by(() => {
+		if (!isPayment || !data?.sourceStoredFileId) return null;
+		const accountId = selectedTenantAccountId
+			? Number(selectedTenantAccountId)
+			: data.captureContext?.tenantAccountId ?? scanContext.tenantAccountId ?? null;
+		if (!accountId || !Number.isFinite(accountId) || accountId <= 0) return null;
+		const params = new URLSearchParams({
+			sourceStoredFileId: String(data.sourceStoredFileId),
+			sourceDraftId: String(data.id)
+		});
+		return `/deposits/${accountId}?${params.toString()}`;
+	});
+
+	async function recordScanAsDepositFunds(): Promise<void> {
+		if (!depositFundingHref || !data) return;
+		depositFundingRedirectPending = true;
+		try {
+			if (data.status !== 'Rejected' && data.status !== 'Failed') {
+				await scan.reject(
+					data.id,
+					'Reclassified as a security deposit receipt; record it through the deposit workflow.'
+				);
+				queryClient.invalidateQueries({ queryKey: ['scans'] });
+				queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			}
+			await goto(depositFundingHref);
+		} catch (err) {
+			depositFundingRedirectPending = false;
+			toast.error(err instanceof Error ? err.message : 'Could not open deposit funding.');
+		}
+	}
 
 	function formatUsd(val: number | null): string {
 		if (val == null) return '';
@@ -2716,6 +2748,16 @@
 								{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
 							</Button>
 						</div>
+						{#if depositFundingHref && !confirmedRecord && data.status !== 'Confirmed'}
+							<Button
+								data-testid="scan-record-security-deposit"
+								variant="secondary"
+								onclick={recordScanAsDepositFunds}
+								disabled={depositFundingRedirectPending || isProcessing}
+							>
+								{depositFundingRedirectPending ? 'Opening deposit…' : 'Record as deposit funds'}
+							</Button>
+						{/if}
 						{#if amountInvalid && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--m3c-error)]" data-testid="scan-amount-error">
 								Enter an amount greater than $0 (under "total") before confirming.

@@ -97,6 +97,7 @@ export interface ScanDraftResponse {
 		rentalListingId?: number | null;
 		sourceLabel?: string | null;
 	} | null;
+	sourceStoredFileId?: number | null;
 	sourceContentSha256?: string | null;
 }
 

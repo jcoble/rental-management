@@ -43,6 +43,7 @@ public sealed record ScanDraftResponse(
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
     LeaseImportProposal? LeaseProposal = null,
     ScanCaptureContextDto? CaptureContext = null,
+    int? SourceStoredFileId = null,
     string? SourceContentSha256 = null)
 {
     /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
@@ -71,6 +72,7 @@ public sealed record ScanDraftResponse(
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
             createdEntityType, createdEntityId, createdUnitId,
             CaptureContext: ToCaptureContext(d),
+            SourceStoredFileId: d.SourceStoredFileId,
             SourceContentSha256: d.SourceContentSha256);
     }
 
