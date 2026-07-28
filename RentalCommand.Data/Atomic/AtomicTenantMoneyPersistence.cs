@@ -16,9 +16,12 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
 
     public async Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledRentChargesAsync(
         int batchSize,
+        DateTime postedAtUtc,
         CancellationToken ct = default)
     {
         if (batchSize is <= 0 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
+        if (postedAtUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Scheduled charge posting time must be UTC.", nameof(postedAtUtc));
 
         using var lease = _scope.BeginInternalRawDml(
             "TenantLedgerEntries", AtomicRawDmlOperation.Insert);
@@ -144,7 +147,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                     "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
                 SELECT eligible."PortfolioId", eligible."TenantAccountId", 'RentCharge', 'Debit',
                        eligible.charge_amount, eligible."Currency", eligible.due_on,
-                       eligible.due_on, clock_timestamp(),
+                       eligible.due_on, {postedAtUtc},
                        'Rent due ' || to_char(eligible.due_on, 'Mon FMDD, YYYY'),
                        eligible.business_key, eligible."LeaseAgreementId", eligible."CreatedByUserId"
                 FROM eligible
@@ -167,10 +170,13 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
     public async Task<IReadOnlyList<AtomicScheduledTenantCharge>> PostScheduledLateFeesAsync(
         int batchSize,
         string stateCapsJson,
+        DateTime postedAtUtc,
         CancellationToken ct = default)
     {
         if (batchSize is <= 0 or > 500) throw new ArgumentOutOfRangeException(nameof(batchSize));
         ArgumentException.ThrowIfNullOrWhiteSpace(stateCapsJson);
+        if (postedAtUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Scheduled charge posting time must be UTC.", nameof(postedAtUtc));
 
         using var lease = _scope.BeginInternalRawDml(
             "TenantLedgerEntries", AtomicRawDmlOperation.Insert);
@@ -249,7 +255,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                     "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
                 SELECT candidate."PortfolioId", candidate."TenantAccountId", 'LateFeeCharge',
                        'Debit', round(candidate.fee_amount, 2), candidate."Currency",
-                       candidate.business_date, candidate.business_date, clock_timestamp(),
+                       candidate.business_date, candidate.business_date, {postedAtUtc},
                        'Late fee for ' || replace(candidate.rent_business_key, 'rent:', ''),
                        candidate.business_key, candidate."LeaseAgreementId",
                        candidate."CreatedByUserId"

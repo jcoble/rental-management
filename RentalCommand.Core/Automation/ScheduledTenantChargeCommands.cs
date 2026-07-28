@@ -8,6 +8,7 @@ namespace RentalCommand.Core.Automation;
 /// </summary>
 public sealed record ApplyScheduledTenantChargeBatchCommand(
     Guid RunToken,
+    DateTime BusinessNowUtc,
     int BatchSize,
     bool IncludeRentCharges,
     bool IncludeLateFeeCharges,

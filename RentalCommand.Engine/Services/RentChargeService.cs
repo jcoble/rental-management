@@ -15,11 +15,16 @@ public sealed class RentChargeService : IRentChargeService
     private const int BatchSize = 200;
 
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RentChargeService> _logger;
 
-    public RentChargeService(IAtomicUnitOfWork atomic, ILogger<RentChargeService> logger)
+    public RentChargeService(
+        IAtomicUnitOfWork atomic,
+        TimeProvider timeProvider,
+        ILogger<RentChargeService> logger)
     {
         _atomic = atomic;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -34,6 +39,7 @@ public sealed class RentChargeService : IRentChargeService
                     runToken.ToString("N")),
                 new ApplyScheduledTenantChargeBatchCommand(
                     runToken,
+                    _timeProvider.GetUtcNow().UtcDateTime,
                     BatchSize,
                     IncludeRentCharges: true,
                     IncludeLateFeeCharges: false,

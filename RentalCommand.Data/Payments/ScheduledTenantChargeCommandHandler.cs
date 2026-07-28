@@ -25,23 +25,30 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
     {
         if (command.RunToken == Guid.Empty)
             throw new ArgumentException("A scheduled tenant-charge run token is required.");
+        if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Scheduled tenant-charge business time must be UTC.");
         if (command.BatchSize is <= 0 or > 500)
             throw new ArgumentOutOfRangeException(nameof(command.BatchSize));
         if (!command.IncludeRentCharges && !command.IncludeLateFeeCharges)
             throw new ArgumentException("At least one scheduled tenant-charge type is required.");
         ArgumentException.ThrowIfNullOrWhiteSpace(command.StateLateFeeCapsJson);
+        attempt.UseDatabaseWallClockForAudit(command.BusinessNowUtc);
 
         var rent = command.IncludeRentCharges
-            ? await attempt.TenantMoney.PostScheduledRentChargesAsync(command.BatchSize, ct)
+            ? await attempt.TenantMoney.PostScheduledRentChargesAsync(
+                command.BatchSize,
+                command.BusinessNowUtc,
+                ct)
             : [];
         var lateFees = command.IncludeLateFeeCharges
             ? await attempt.TenantMoney.PostScheduledLateFeesAsync(
                 command.BatchSize,
                 command.StateLateFeeCapsJson,
+                command.BusinessNowUtc,
                 ct)
             : [];
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = command.BusinessNowUtc;
         foreach (var charge in rent.Concat(lateFees))
         {
             attempt.StageSemanticEvent(new AtomicSemanticAudit(
