@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -29,6 +30,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         new("tenant-account.receipt.record.v1");
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ScanCodec =
         new("scan-confirm.result.v1");
+    private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
+        new("tenant-account.security-deposit.mutation.v1");
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
@@ -45,6 +48,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantReceiptSimulationClockTests));
+        await FreezeSimulationClockAsync();
         _services = BuildServices(_ctx.ConnectionString, SimulatedEntryAtUtc);
         _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
     }
@@ -230,6 +234,65 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             .Should().Be(0);
     }
 
+    [Fact]
+    public async Task DepositFunding_UsesSimulationClockForBusinessRowsButWallClockForManualAttempt()
+    {
+        var graph = SeedTenantAccountWithOpenDepositCharge("deposit-sim-clock", 1_675m);
+        var command = FundDepositCommand(graph, 1_675m, "deposit-sim-clock");
+
+        var beforeWallClock = DateTime.UtcNow.AddSeconds(-5);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("tenant-account.deposit.fund", command.DeliveryIdempotencyKey),
+            command,
+            DepositCodec);
+        var afterWallClock = DateTime.UtcNow.AddSeconds(5);
+
+        outcome.Value.Applied.Should().BeTrue();
+        _ctx.Db.ChangeTracker.Clear();
+        var outboxKey = OutboxIdempotency.Create("tenant-money", command.DeliveryIdempotencyKey);
+        var row = await (
+            from deposit in _ctx.Db.SecurityDepositEntries.AsNoTracking()
+            join receipt in _ctx.Db.TenantLedgerEntries.AsNoTracking()
+                on deposit.TenantLedgerEntryId equals receipt.Id
+            join attempt in _ctx.Db.TenantPaymentAttempts.AsNoTracking()
+                on receipt.ProviderPaymentAttemptId equals (long?)attempt.Id
+            join allocation in _ctx.Db.TenantLedgerAllocations.AsNoTracking()
+                on receipt.Id equals allocation.CreditEntryId
+            join audit in _ctx.Db.AtomicAuditLogs.AsNoTracking()
+                on receipt.TenantAccountId equals audit.EntityId
+            join outbox in _ctx.Db.OutboxMessages.AsNoTracking()
+                on receipt.PortfolioId equals outbox.PortfolioId
+            where deposit.Id == outcome.Value.SecurityDepositEntryId
+                && audit.CommandType == "tenant-account.deposit.fund"
+                && audit.EntityType == nameof(TenantAccount)
+                && outbox.IdempotencyKey == outboxKey
+            select new
+            {
+                ReceiptPostedAtUtc = receipt.PostedAtUtc,
+                AllocationAllocatedAtUtc = allocation.AllocatedAtUtc,
+                DepositPostedAtUtc = deposit.PostedAtUtc,
+                AuditTimestamp = audit.Timestamp,
+                OutboxCreatedAtUtc = outbox.CreatedAtUtc,
+                OutboxNextAttemptAtUtc = outbox.NextAttemptAtUtc,
+                attempt.PreparedAtUtc,
+                attempt.SubmittedAtUtc,
+                attempt.SettledAtUtc,
+                attempt.UpdatedAtUtc,
+            }).SingleAsync();
+
+        row.ReceiptPostedAtUtc.Should().Be(SimulatedEntryAtUtc);
+        row.AllocationAllocatedAtUtc.Should().Be(SimulatedEntryAtUtc);
+        row.DepositPostedAtUtc.Should().Be(SimulatedEntryAtUtc);
+        row.AuditTimestamp.Should().Be(SimulatedEntryAtUtc);
+        row.OutboxCreatedAtUtc.Should().Be(SimulatedEntryAtUtc);
+        row.OutboxNextAttemptAtUtc.Should().Be(SimulatedEntryAtUtc);
+        row.PreparedAtUtc.Should().BeOnOrAfter(beforeWallClock);
+        row.PreparedAtUtc.Should().BeOnOrBefore(afterWallClock);
+        row.SubmittedAtUtc.Should().Be(row.PreparedAtUtc);
+        row.SettledAtUtc.Should().Be(row.PreparedAtUtc);
+        row.UpdatedAtUtc.Should().Be(row.PreparedAtUtc);
+    }
+
     private static ServiceProvider BuildServices(string connectionString, DateTime utcNow)
     {
         var services = new ServiceCollection();
@@ -246,10 +309,40 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
             ConfirmScanDraftHandler<ProductionScanConfirmationTargetWriter>>();
+        services.AddAtomicCommandHandler<
+            FundSecurityDepositCommand,
+            SecurityDepositMutationResult,
+            FundSecurityDepositHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));
         return services.BuildServiceProvider();
+    }
+
+    private async Task FreezeSimulationClockAsync()
+    {
+        var clock = await _ctx.Db.SimulationClocks.SingleOrDefaultAsync(clock => clock.Id == 1);
+        if (clock is null)
+        {
+            _ctx.Db.SimulationClocks.Add(new SimulationClock
+            {
+                Id = 1,
+                Mode = ClockMode.Frozen,
+                SimAnchorUtc = SimulatedEntryAtUtc,
+                RealAnchorUtc = DateTime.UtcNow,
+                TimeZoneId = "America/New_York",
+            });
+        }
+        else
+        {
+            clock.Mode = ClockMode.Frozen;
+            clock.SimAnchorUtc = SimulatedEntryAtUtc;
+            clock.RealAnchorUtc = DateTime.UtcNow;
+            clock.TimeZoneId = "America/New_York";
+        }
+
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
     }
 
     private TenantAccountGraph SeedTenantAccountWithOpenCharge(string suffix, decimal amount)
@@ -336,6 +429,130 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         return new TenantAccountGraph(account.Id);
     }
 
+    private TenantDepositGraph SeedTenantAccountWithOpenDepositCharge(string suffix, decimal amount)
+    {
+        var seededAt = new DateTime(2026, 12, 15, 12, 0, 0, DateTimeKind.Utc);
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Deposit Test Property {suffix}",
+            AddressLine1 = "200 Deposit Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = suffix,
+            MarketRent = amount,
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Deposit",
+            LastName = suffix,
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"DLM-{suffix}",
+            PossessionGivenAtUtc = seededAt,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+            CreatedByUserId = _scope.UserId,
+            RowVersion = Guid.NewGuid(),
+        };
+        relationship.Parties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(2027, 01, 01),
+            ChangeReason = "Test setup",
+            CreatedAtUtc = seededAt,
+            CreatedByUserId = _scope.UserId,
+        });
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = $"DTA-{suffix}",
+            Currency = "USD",
+            OpenedAtUtc = seededAt,
+            CreatedAtUtc = seededAt,
+            CreatedByUserId = _scope.UserId,
+        };
+        var source = LegalDocumentSourceVersionTestData.BuiltIn(
+            PortfolioId,
+            _scope.UserId,
+            seededAt,
+            $"deposit-sim-clock-{suffix}");
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            VersionNumber = 1,
+            AgreementNumber = $"DAGR-{suffix}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = new DateOnly(2027, 01, 01),
+            TermEndOn = new DateOnly(2027, 12, 31),
+            GoverningFromOn = new DateOnly(2027, 01, 01),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = amount,
+            LateFeeAmount = 25m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = source,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+            CreatedByUserId = _scope.UserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccount = account,
+            OriginatingAgreement = agreement,
+            Currency = "USD",
+            CreatedAtUtc = seededAt,
+            CreatedByUserId = _scope.UserId,
+        };
+        var charge = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccount = account,
+            EntryType = TenantLedgerEntryType.DepositCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 05),
+            DueOn = new DateOnly(2027, 01, 05),
+            PostedAtUtc = seededAt,
+            Description = "Security deposit due",
+            BusinessKey = $"deposit-charge-{suffix}",
+            CreatedByUserId = _scope.UserId,
+        };
+        _ctx.Db.AddRange(property, unit, tenant, relationship, account, source, agreement,
+            depositAccount, charge);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.ChangeTracker.Clear();
+        return new TenantDepositGraph(account.Id, depositAccount.Id);
+    }
+
     private ScanDraft SeedPaymentScanDraft(int tenantAccountId)
     {
         var extractedFields = "{\"document_type\":{\"value\":\"Payment\"}}";
@@ -384,6 +601,27 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             $"receipt-{suffix}",
             $"tenant-receipt:{PortfolioId}:{accountId}:{suffix}",
             recordedAtUtc);
+
+    private FundSecurityDepositCommand FundDepositCommand(
+        TenantDepositGraph graph,
+        decimal amount,
+        string suffix) => new(
+            PortfolioId,
+            graph.AccountId,
+            graph.DepositAccountId,
+            amount,
+            new DateOnly(2027, 01, 05),
+            "Security deposit received",
+            "Money order",
+            $"DEP-{suffix}",
+            null,
+            _scope.UserId,
+            _scope.SessionId,
+            _scope.AccessContextId,
+            _scope.AccessRevision,
+            CapabilityKeys.MoneyDepositsManage,
+            $"deposit-fund-{suffix}",
+            $"tenant-deposit:{PortfolioId}:{graph.AccountId}:{suffix}");
 
     private ConfirmScanDraftCommand ScanCommand(
         ScanDraft draft,
@@ -479,4 +717,6 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     }
 
     private sealed record TenantAccountGraph(int AccountId);
+
+    private sealed record TenantDepositGraph(int AccountId, int DepositAccountId);
 }
