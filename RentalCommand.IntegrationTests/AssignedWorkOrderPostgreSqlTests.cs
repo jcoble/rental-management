@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -18,6 +20,11 @@ namespace RentalCommand.IntegrationTests;
 [Collection(RoleAuthorityPostgreSqlCollection.Name)]
 public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
 {
+    private static readonly DateTime BusinessNowUtc = new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
+    private static readonly AtomicJsonResultCodec<AssignWorkOrderResponsibilityResult> AssignCodec =
+        new("work-order-responsibility.assign.v1");
+    private static readonly AtomicJsonResultCodec<CloseWorkOrderResponsibilityResult> CloseCodec =
+        new("work-order-responsibility.close.v1");
     private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> UpdateCodec =
         new("assigned-work-order.update.v1");
     private static readonly AtomicJsonResultCodec<RecordTechnicianWorkEntryResult> EntryCodec =
@@ -41,6 +48,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
         services.AddAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult,
             UpdateAssignedWorkOrderHandler>();
+        services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
+            AssignWorkOrderResponsibilityHandler>();
         services.AddAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult,
             RecordTechnicianWorkEntryHandler>();
         services.AddAtomicCommandHandler<SendTechnicianAssignmentMessageCommand,
@@ -204,6 +213,184 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             .Should().Be(0);
     }
 
+    [Fact]
+    public async Task AssignResponsibility_UsesBusinessClockForLifecycleAuditAndOutbox_AndReplaysOriginalResult()
+    {
+        var scenario = await SeedResponsibilityAssignmentScenarioAsync("business-clock");
+        await using var services = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        var command = AssignCommand(scenario, "business-clock");
+        var identity = AssignIdentity(scenario, command);
+
+        var executed = await services.GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, AssignCodec);
+
+        executed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        executed.Value.EffectiveFromUtc.Should().Be(BusinessNowUtc);
+        executed.Value.AccessRevisions.Should().ContainSingle()
+            .Which.Should().Be(new WorkspaceAccessRevisionExpectation(
+                scenario.TechnicianAccessContextId,
+                scenario.TechnicianAccessRevision + 1));
+
+        _context.Db.ChangeTracker.Clear();
+        var row = await (
+            from responsibility in _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            join membership in _context.Db.WorkspaceMemberships.AsNoTracking()
+                on responsibility.WorkspaceMembershipId equals membership.Id
+            join context in _context.Db.WorkspaceAccessContexts.AsNoTracking()
+                on membership.AccessContextId equals context.Id
+            join audit in _context.Db.AtomicAuditLogs.AsNoTracking()
+                on responsibility.WorkOrderId equals audit.EntityId
+            join outbox in _context.Db.OutboxMessages.AsNoTracking()
+                on responsibility.PortfolioId equals outbox.PortfolioId
+            where responsibility.Id == executed.Value.ResponsibilityId
+                && audit.EntityType == nameof(WorkOrderResponsibility)
+                && audit.CommandType == identity.CommandType
+                && audit.CommandIdempotencyKey == identity.IdempotencyKey
+                && outbox.IdempotencyKey == $"work-order-responsibility:{command.DeliveryIdempotencyKey}"
+            select new
+            {
+                responsibility.EffectiveFromUtc,
+                responsibility.AssignedAtUtc,
+                ContextUpdatedAtUtc = context.UpdatedAtUtc,
+                context.AccessRevision,
+                AuditTimestamp = audit.Timestamp,
+                outbox.CreatedAtUtc,
+                outbox.NextAttemptAtUtc,
+            }).SingleAsync();
+
+        row.EffectiveFromUtc.Should().Be(BusinessNowUtc);
+        row.AssignedAtUtc.Should().Be(BusinessNowUtc);
+        row.AuditTimestamp.Should().Be(BusinessNowUtc);
+        row.CreatedAtUtc.Should().Be(BusinessNowUtc);
+        row.NextAttemptAtUtc.Should().Be(BusinessNowUtc);
+        row.AccessRevision.Should().Be(scenario.TechnicianAccessRevision + 1);
+        row.ContextUpdatedAtUtc.Should().NotBe(BusinessNowUtc,
+            "access-context revision metadata remains on the database/security clock");
+
+        await using var replayServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc.AddDays(1)));
+        var replayed = await replayServices.GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, AssignCodec);
+
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().BeEquivalentTo(executed.Value);
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            .CountAsync(item => item.WorkOrderId == scenario.WorkOrderId))
+            .Should().Be(1);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(item => item.CommandType == identity.CommandType &&
+                item.CommandIdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(item => item.IdempotencyKey == $"work-order-responsibility:{command.DeliveryIdempotencyKey}"))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AssignResponsibility_RollsBackLifecycleRevisionAuditReceiptAndOutbox_WhenOutboxInsertFails()
+    {
+        var scenario = await SeedResponsibilityAssignmentScenarioAsync("rollback");
+        var failure = new ThrowOnOutboxInsertInterceptor();
+        await using var services = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc), failure);
+        var command = AssignCommand(scenario, "rollback");
+        var identity = AssignIdentity(scenario, command);
+
+        var act = async () => await services.GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, AssignCodec);
+
+        await act.Should().ThrowAsync<DbUpdateException>()
+            .Where(exception => exception.InnerException is InjectedOutboxFailure);
+
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            .CountAsync(item => item.WorkOrderId == scenario.WorkOrderId))
+            .Should().Be(0);
+        (await _context.Db.WorkspaceAccessContexts.AsNoTracking()
+            .Where(item => item.Id == scenario.TechnicianAccessContextId)
+            .Select(item => item.AccessRevision)
+            .SingleAsync())
+            .Should().Be(scenario.TechnicianAccessRevision);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(item => item.CommandType == identity.CommandType &&
+                item.CommandIdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking()
+            .CountAsync(item => item.CommandType == identity.CommandType &&
+                item.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(item => item.IdempotencyKey == $"work-order-responsibility:{command.DeliveryIdempotencyKey}"))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CloseResponsibility_UsesBusinessClockForLifecycleAuditAndOutbox()
+    {
+        var scenario = await SeedResponsibilityAssignmentScenarioAsync("close-clock");
+        await using var assignServices = BuildResponsibilityServices(new FixedTimeProvider(BusinessNowUtc));
+        var assignCommand = AssignCommand(scenario, "close-clock-assign");
+        var assigned = await assignServices.GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(AssignIdentity(scenario, assignCommand), assignCommand, AssignCodec);
+        var closeNow = BusinessNowUtc.AddHours(4);
+        await using var closeServices = BuildResponsibilityServices(new FixedTimeProvider(closeNow));
+        var closeCommand = new CloseWorkOrderResponsibilityCommand(
+            scenario.PortfolioId,
+            scenario.ManagerUserId,
+            scenario.ManagerSessionId,
+            scenario.ManagerAccessContextId,
+            scenario.ManagerAccessRevision,
+            scenario.WorkOrderId,
+            assigned.Value.ResponsibilityId,
+            [new WorkspaceAccessRevisionExpectation(
+                scenario.TechnicianAccessContextId,
+                scenario.TechnicianAccessRevision + 1)],
+            "Unassign technician.",
+            "close-clock-close");
+        var closeIdentity = new AtomicCommandIdentity(
+            "work-order-responsibility.close",
+            $"{scenario.PortfolioId}:{scenario.WorkOrderId}:{closeCommand.DeliveryIdempotencyKey}");
+
+        var closed = await closeServices.GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(closeIdentity, closeCommand, CloseCodec);
+
+        closed.Value.EffectiveToUtc.Should().Be(closeNow);
+        _context.Db.ChangeTracker.Clear();
+        var row = await (
+            from responsibility in _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            join membership in _context.Db.WorkspaceMemberships.AsNoTracking()
+                on responsibility.WorkspaceMembershipId equals membership.Id
+            join context in _context.Db.WorkspaceAccessContexts.AsNoTracking()
+                on membership.AccessContextId equals context.Id
+            join audit in _context.Db.AtomicAuditLogs.AsNoTracking()
+                on responsibility.WorkOrderId equals audit.EntityId
+            join outbox in _context.Db.OutboxMessages.AsNoTracking()
+                on responsibility.PortfolioId equals outbox.PortfolioId
+            where responsibility.Id == assigned.Value.ResponsibilityId
+                && audit.EntityType == nameof(WorkOrderResponsibility)
+                && audit.CommandType == closeIdentity.CommandType
+                && audit.CommandIdempotencyKey == closeIdentity.IdempotencyKey
+                && outbox.IdempotencyKey == $"work-order-responsibility-close:{closeCommand.DeliveryIdempotencyKey}"
+            select new
+            {
+                responsibility.EffectiveToUtc,
+                responsibility.EndedAtUtc,
+                ContextUpdatedAtUtc = context.UpdatedAtUtc,
+                context.AccessRevision,
+                AuditTimestamp = audit.Timestamp,
+                outbox.CreatedAtUtc,
+                outbox.NextAttemptAtUtc,
+            }).SingleAsync();
+
+        row.EffectiveToUtc.Should().Be(closeNow);
+        row.EndedAtUtc.Should().Be(closeNow);
+        row.AuditTimestamp.Should().Be(closeNow);
+        row.CreatedAtUtc.Should().Be(closeNow);
+        row.NextAttemptAtUtc.Should().Be(closeNow);
+        row.AccessRevision.Should().Be(scenario.TechnicianAccessRevision + 2);
+        row.ContextUpdatedAtUtc.Should().NotBe(closeNow,
+            "access-context revision metadata remains on the database/security clock");
+    }
+
     private async Task AssertDeniedAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
         TCommand command,
@@ -216,6 +403,190 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     }
 
     private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+
+    private ServiceProvider BuildResponsibilityServices(
+        TimeProvider timeProvider,
+        IInterceptor? interceptor = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(timeProvider);
+        services.AddScoped<ICurrentActor, TestActor>();
+        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
+            AssignWorkOrderResponsibilityHandler>();
+        services.AddAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult,
+            CloseWorkOrderResponsibilityHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
+            builder.UseNpgsql(_context.ConnectionString)
+                .UseAtomicPersistenceKernel(provider);
+            if (interceptor is not null) builder.AddInterceptors(interceptor);
+        });
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+    }
+
+    private static AssignWorkOrderResponsibilityCommand AssignCommand(
+        ResponsibilityAssignmentScenario scenario,
+        string idempotencyKey) =>
+        new(
+            scenario.PortfolioId,
+            scenario.ManagerUserId,
+            scenario.ManagerSessionId,
+            scenario.ManagerAccessContextId,
+            scenario.ManagerAccessRevision,
+            scenario.WorkOrderId,
+            scenario.TechnicianMembershipId,
+            scenario.TechnicianRoleAssignmentId,
+            WorkOrderResponsibilityKind.Primary,
+            null,
+            [new WorkspaceAccessRevisionExpectation(
+                scenario.TechnicianAccessContextId,
+                scenario.TechnicianAccessRevision)],
+            "Assign primary technician.",
+            idempotencyKey);
+
+    private static AtomicCommandIdentity AssignIdentity(
+        ResponsibilityAssignmentScenario scenario,
+        AssignWorkOrderResponsibilityCommand command) =>
+        new(
+            "work-order-responsibility.assign",
+            $"{scenario.PortfolioId}:{scenario.WorkOrderId}:{command.DeliveryIdempotencyKey}");
+
+    private async Task<ResponsibilityAssignmentScenario> SeedResponsibilityAssignmentScenarioAsync(string suffix)
+    {
+        var now = DateTime.UtcNow;
+        var db = _context.Db;
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = $"Responsibility Property {suffix}",
+            AddressLine1 = "10 Responsibility Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = "Responsibility",
+            LastName = $"Tenant {suffix}",
+            Email = $"responsibility-{suffix}-{Guid.NewGuid():N}@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var manager = User($"responsibility-manager-{suffix}");
+        var technician = User($"responsibility-technician-{suffix}");
+        db.AddRange(property, tenant, manager, technician);
+        await db.SaveChangesAsync();
+
+        var managerContext = AccessContext(manager.Id, now);
+        var managerMembership = Membership(managerContext, now, WorkspaceExperience.Management);
+        var managerAssignment = Assignment(
+            managerMembership,
+            RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties,
+            now);
+        var managerSession = Session(manager.Id, managerContext, now);
+
+        var technicianContext = AccessContext(technician.Id, now);
+        var technicianMembership = Membership(technicianContext, now, WorkspaceExperience.Maintenance);
+        var technicianAssignment = Assignment(
+            technicianMembership,
+            RoleProfileKeys.MaintenanceTechnician,
+            MembershipRoleAssignmentScopeKind.AssignedWorkOrders,
+            now);
+        db.AddRange(managerAssignment, managerSession, technicianAssignment);
+        await db.SaveChangesAsync();
+
+        var workOrder = WorkOrder(property.Id, tenant.Id, $"Responsibility repair {suffix}", now);
+        db.WorkOrders.Add(workOrder);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        return new ResponsibilityAssignmentScenario(
+            1,
+            manager.Id,
+            managerSession.Id,
+            managerContext.Id,
+            managerContext.AccessRevision,
+            technicianContext.Id,
+            technicianContext.AccessRevision,
+            technicianMembership.Id,
+            technicianAssignment.Id,
+            workOrder.Id);
+    }
+
+    private static ApplicationUser User(string prefix)
+    {
+        var email = $"{prefix}-{Guid.NewGuid():N}@example.test";
+        return new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = prefix,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = DateTime.UtcNow,
+        };
+    }
+
+    private static WorkspaceAccessContext AccessContext(int userId, DateTime now) => new()
+    {
+        UserId = userId,
+        PortfolioId = 1,
+        Status = WorkspaceAccessContextStatus.Active,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static WorkspaceMembership Membership(
+        WorkspaceAccessContext context,
+        DateTime now,
+        WorkspaceExperience experience) => new()
+    {
+        AccessContext = context,
+        PortfolioId = 1,
+        Status = WorkspaceMembershipStatus.Active,
+        DefaultExperience = experience,
+        EffectiveFromUtc = now.AddHours(-1),
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static MembershipRoleAssignment Assignment(
+        WorkspaceMembership membership,
+        string roleKey,
+        MembershipRoleAssignmentScopeKind scopeKind,
+        DateTime now) => new()
+    {
+        WorkspaceMembership = membership,
+        PortfolioId = 1,
+        RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleKey).Id,
+        Status = MembershipRoleAssignmentStatus.Active,
+        ScopeKind = scopeKind,
+        EffectiveFromUtc = now.AddHours(-1),
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static AuthSession Session(int userId, WorkspaceAccessContext context, DateTime now) => new()
+    {
+        Id = Guid.NewGuid(),
+        UserId = userId,
+        ActiveAccessContext = context,
+        Status = AuthSessionStatus.Active,
+        CreatedAtUtc = now,
+        LastSeenAtUtc = now,
+        ExpiresAtUtc = now.AddDays(30),
+    };
 
     private async Task<Scenario> SeedScenarioAsync()
     {
@@ -378,6 +749,42 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         int UnassignedWorkOrderId,
         DateTime UnassignedUpdatedAt,
         int ConversationId);
+
+    private sealed record ResponsibilityAssignmentScenario(
+        int PortfolioId,
+        int ManagerUserId,
+        Guid ManagerSessionId,
+        int ManagerAccessContextId,
+        long ManagerAccessRevision,
+        int TechnicianAccessContextId,
+        long TechnicianAccessRevision,
+        int TechnicianMembershipId,
+        int TechnicianRoleAssignmentId,
+        int WorkOrderId);
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
+
+    private sealed class ThrowOnOutboxInsertInterceptor : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("INSERT INTO \"OutboxMessages\"", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InjectedOutboxFailure();
+            }
+
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    private sealed class InjectedOutboxFailure : Exception;
 }
 
 [CollectionDefinition(Name, DisableParallelization = true)]

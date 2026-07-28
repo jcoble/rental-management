@@ -22,8 +22,9 @@ public sealed class AssignWorkOrderResponsibilityHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.WorkspaceAccessContext, command.ActorAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var workOrder = await AuthorizeActorAndLoadWorkOrderAsync(command, attempt.Persistence, now, ct);
+        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = attempt.BusinessNowUtc;
+        var workOrder = await AuthorizeActorAndLoadWorkOrderAsync(command, attempt.Persistence, securityNowUtc, ct);
 
         var target = await attempt.Persistence.Query<MembershipRoleAssignment>()
             .AsNoTracking()
@@ -34,8 +35,8 @@ public sealed class AssignWorkOrderResponsibilityHandler
                 assignment.Status == MembershipRoleAssignmentStatus.Active &&
                 assignment.SuspendedAtUtc == null &&
                 assignment.RevokedAtUtc == null &&
-                assignment.EffectiveFromUtc <= now &&
-                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
+                assignment.EffectiveFromUtc <= securityNowUtc &&
+                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc) &&
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
                 assignment.RoleProfile!.Key == RoleProfileKeys.MaintenanceTechnician &&
                 assignment.RoleProfile.Capabilities.Any(capability =>
@@ -45,9 +46,9 @@ public sealed class AssignWorkOrderResponsibilityHandler
                 assignment.WorkspaceMembership!.Status == WorkspaceMembershipStatus.Active &&
                 assignment.WorkspaceMembership.SuspendedAtUtc == null &&
                 assignment.WorkspaceMembership.RevokedAtUtc == null &&
-                assignment.WorkspaceMembership.EffectiveFromUtc <= now &&
+                assignment.WorkspaceMembership.EffectiveFromUtc <= securityNowUtc &&
                 (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-                 assignment.WorkspaceMembership.EffectiveToUtc > now) &&
+                 assignment.WorkspaceMembership.EffectiveToUtc > securityNowUtc) &&
                 assignment.WorkspaceMembership.AccessContext!.Status == WorkspaceAccessContextStatus.Active &&
                 assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
                 assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null)
@@ -114,14 +115,14 @@ public sealed class AssignWorkOrderResponsibilityHandler
             var expectation = expectations.Single(item => item.AccessContextId == context.Id);
             if (context.AccessRevision != expectation.ExpectedRevision)
                 throw new StaleAccessRevisionException(expectation.ExpectedRevision, context.AccessRevision);
-            context.UpdatedAtUtc = now;
+            context.UpdatedAtUtc = securityNowUtc;
             context.AdvanceRevision(expectation.ExpectedRevision);
         }
 
         foreach (var closing in toClose)
         {
-            closing.EffectiveToUtc = now;
-            closing.EndedAtUtc = now;
+            closing.EffectiveToUtc = businessNowUtc;
+            closing.EndedAtUtc = businessNowUtc;
             closing.EndedByUserId = command.ActorUserId;
             closing.EndedByAccessContextId = command.ActorAccessContextId;
             closing.EndedReason = command.Reason.Trim();
@@ -136,14 +137,14 @@ public sealed class AssignWorkOrderResponsibilityHandler
             WorkspaceMembershipId = command.WorkspaceMembershipId,
             MembershipRoleAssignmentId = command.MembershipRoleAssignmentId,
             Kind = command.Kind,
-            EffectiveFromUtc = now,
+            EffectiveFromUtc = businessNowUtc,
             AssignedByUserId = command.ActorUserId,
             AssignedByAccessContextId = command.ActorAccessContextId,
             AssignedReason = command.Reason.Trim(),
-            AssignedAtUtc = now,
+            AssignedAtUtc = businessNowUtc,
         };
         attempt.Persistence.Add(responsibility);
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNowUtc);
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(WorkOrderResponsibility),
@@ -159,7 +160,7 @@ public sealed class AssignWorkOrderResponsibilityHandler
                 command.Kind,
                 ClosedResponsibilityIds = toClose.Select(item => item.Id),
             }),
-            ChangeReason: command.Reason.Trim()), now);
+            ChangeReason: command.Reason.Trim()), businessNowUtc);
         attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
@@ -171,8 +172,8 @@ public sealed class AssignWorkOrderResponsibilityHandler
                 data = new { responsibility.Id, command.WorkspaceMembershipId, command.Kind },
             }),
             IdempotencyKey = $"work-order-responsibility:{command.DeliveryIdempotencyKey}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            NextAttemptAtUtc = businessNowUtc,
         });
 
         return new AssignWorkOrderResponsibilityResult(
@@ -181,7 +182,7 @@ public sealed class AssignWorkOrderResponsibilityHandler
             command.WorkspaceMembershipId,
             command.MembershipRoleAssignmentId,
             command.Kind,
-            now,
+            businessNowUtc,
             contexts
                 .Select(context => new WorkspaceAccessRevisionExpectation(context.Id, context.AccessRevision))
                 .ToArray());

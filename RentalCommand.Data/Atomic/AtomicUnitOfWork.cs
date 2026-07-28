@@ -415,6 +415,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
 
         public Guid AttemptId { get; }
         public Guid AuditScopeId => _auditScope.ScopeId;
+        public DateTime BusinessNowUtc => _timeProvider.GetUtcNow().UtcDateTime;
         public IAtomicPersistenceSession Persistence => this;
         public IAtomicSetBasedPersistence SetBased => _setBased;
         public IAtomicBankingPersistence Banking => _banking;
