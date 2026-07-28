@@ -94,6 +94,18 @@ public class LoanPaymentResponse
     };
 }
 
+public class PostLoanPaymentRequest
+{
+    /// <summary>Bound from the route by the server; client values are overwritten.</summary>
+    public int LoanId { get; set; }
+
+    /// <summary>
+    /// Business-effective payment date. When omitted, the portfolio's current simulation/business
+    /// date is used.
+    /// </summary>
+    public DateTime? PaidDate { get; set; }
+}
+
 public class CreateLoanRequest
 {
     [Required]

@@ -260,6 +260,15 @@
 		enabled: expandedLoanId != null
 	}));
 	const scheduleRows = $derived(scheduleQuery.data ?? []);
+	const postPaymentMut = createMutation(() => ({
+		mutationFn: (paymentId: number) => loans.postPayment(expandedLoanId as number, paymentId),
+		onSuccess: () => {
+			showSuccess('Loan payment recorded.');
+			queryClient.invalidateQueries({ queryKey: ['loan-payments', expandedLoanId] });
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
 
 	function toggleSchedule(id: number) {
 		expandedLoanId = expandedLoanId === id ? null : id;
@@ -348,6 +357,7 @@
 								<th class="py-1 pr-3 text-right">Escrow</th>
 								<th class="py-1 pr-3 text-right">Total</th>
 								<th class="py-1 pr-3 text-right">Balance</th>
+								<th class="py-1 text-right">Status</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -360,10 +370,28 @@
 									<td class="py-1 pr-3 text-right">{fmtCurrency(row.escrowAmount)}</td>
 									<td class="py-1 pr-3 text-right font-medium">{fmtCurrency(row.totalAmount)}</td>
 									<td class="py-1 pr-3 text-right">{fmtCurrency(row.balanceAfter)}</td>
+									<td class="py-1 text-right">
+										{#if row.status === 'Paid'}
+											<span class="font-medium text-success">Paid {row.paidDate ? fmtDate(row.paidDate) : ''}</span>
+										{:else if canManage}
+											<Button
+												variant="outline"
+												size="sm"
+												class="h-7"
+												disabled={postPaymentMut.isPending}
+												onclick={() => postPaymentMut.mutate(row.id)}
+												data-testid={`loan-payment-post-${row.id}`}
+											>
+												{postPaymentMut.isPending && postPaymentMut.variables === row.id ? 'Recording…' : 'Record paid'}
+											</Button>
+										{:else}
+											<span class="text-muted-foreground">Scheduled</span>
+										{/if}
+									</td>
 								</tr>
 								{#if row.paymentDoesNotCoverInterest}
 									<tr>
-										<td colspan="7" class="pb-1 text-xs text-amber-600">
+										<td colspan="8" class="pb-1 text-xs text-amber-600">
 											<AlertTriangle class="mr-1 inline h-3 w-3" />Payment didn't cover interest this period.
 										</td>
 									</tr>

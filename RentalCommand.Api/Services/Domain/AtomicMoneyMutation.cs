@@ -18,7 +18,7 @@ public enum AtomicMoneyDomain
     PropertyDisposition,
 }
 
-public enum AtomicMoneyOperation { Create, Update, Delete, CapitalizeExpense }
+public enum AtomicMoneyOperation { Create, Update, Delete, CapitalizeExpense, PostPayment }
 
 public sealed record AtomicMoneyMutationCommand(
     int PortfolioId,
@@ -168,6 +168,20 @@ public sealed class AtomicMoneyMutationHandler
                 .SingleOrDefaultAsync(ct);
             return target is not null && await HasPropertyAuthorityAsync(command, persistence, now,
                 target.PropertyId, null, null, ct);
+        }
+
+        if (command.Operation == AtomicMoneyOperation.PostPayment)
+        {
+            var request = Read<PostLoanPaymentRequest>(command);
+            var paymentTarget = await persistence.Query<LoanPayment>()
+                .Where(row =>
+                    row.Id == command.EntityId &&
+                    row.LoanId == request.LoanId &&
+                    row.PortfolioId == command.PortfolioId)
+                .Select(row => new { row.Loan!.PropertyId })
+                .SingleOrDefaultAsync(ct);
+            return paymentTarget is not null && await HasPropertyAuthorityAsync(command, persistence, now,
+                paymentTarget.PropertyId, null, null, ct);
         }
 
         if (command.Operation == AtomicMoneyOperation.Create)
@@ -398,6 +412,58 @@ public sealed class AtomicMoneyMutationHandler
         CancellationToken ct)
     {
         var persistence = attempt.Persistence;
+        if (command.Operation == AtomicMoneyOperation.PostPayment)
+        {
+            var request = Read<PostLoanPaymentRequest>(command);
+            var payment = await persistence.Query<LoanPayment>()
+                .Include(row => row.Loan)
+                .SingleOrDefaultAsync(row =>
+                    row.Id == command.EntityId &&
+                    row.LoanId == request.LoanId &&
+                    row.PortfolioId == command.PortfolioId &&
+                    row.Loan != null &&
+                    row.Loan.DeletedAt == null, ct);
+            if (payment?.Loan is null) return Missing();
+            if (!await HasPropertyAuthorityAsync(
+                    command, persistence, now, payment.Loan.PropertyId, null, null, ct))
+                return Missing();
+
+            if (payment.Status != LoanPaymentStatus.Paid)
+            {
+                var hasEarlierUnpaid = await persistence.Query<LoanPayment>()
+                    .AnyAsync(row =>
+                        row.LoanId == payment.LoanId &&
+                        row.PortfolioId == command.PortfolioId &&
+                        (row.DueDate < payment.DueDate ||
+                         (row.DueDate == payment.DueDate && row.Id < payment.Id)) &&
+                        row.Status != LoanPaymentStatus.Paid, ct);
+                if (hasEarlierUnpaid)
+                    throw new InvalidOperationException("Earlier scheduled loan payments must be posted first.");
+
+                var paidDate = Utc(request.PaidDate ?? businessDateUtc);
+                payment.Status = LoanPaymentStatus.Paid;
+                payment.PaidDate = paidDate;
+                payment.Loan.CurrentBalance = payment.BalanceAfter;
+                payment.Loan.UpdatedAt = now;
+                if (payment.BalanceAfter == 0m)
+                    payment.Loan.Status = LoanStatus.PaidOff;
+
+                attempt.BindSemanticAudit(payment.Loan, Audit(command, nameof(Loan),
+                    AuditLogOperation.Updated, $"Loan payment {payment.Id} reduced the live balance",
+                    payment.Loan.Id));
+                await attempt.FlushBusinessAsync(ct);
+                attempt.StageSemanticEvent(Audit(command, nameof(LoanPayment),
+                    AuditLogOperation.Updated, $"Loan payment {payment.Id} posted", payment.Id));
+            }
+
+            var paymentResponseJson = await SnapshotLoanPaymentAsync(
+                payment.Id, command.PortfolioId, persistence, ct);
+            StageDataUpdate(attempt, command, nameof(LoanPayment), payment.Id, now,
+                responseJson: paymentResponseJson);
+            StageDataUpdate(attempt, command, nameof(Loan), payment.Loan.Id, now);
+            return Applied(payment.Id, paymentResponseJson);
+        }
+
         var entity = command.Operation == AtomicMoneyOperation.Create ? null :
             await persistence.Query<Loan>().SingleOrDefaultAsync(row =>
                 row.Id == command.EntityId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
@@ -767,6 +833,34 @@ public sealed class AtomicMoneyMutationHandler
         return JsonSerializer.Serialize(response);
     }
 
+    private static async Task<string> SnapshotLoanPaymentAsync(
+        int entityId,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var response = await persistence.Query<LoanPayment>()
+            .AsNoTracking()
+            .Where(payment => payment.Id == entityId && payment.PortfolioId == portfolioId)
+            .Select(payment => new LoanPaymentResponse
+            {
+                Id = payment.Id,
+                LoanId = payment.LoanId,
+                PeriodKey = payment.PeriodKey,
+                DueDate = payment.DueDate,
+                PaidDate = payment.PaidDate,
+                InterestAmount = payment.InterestAmount,
+                PrincipalAmount = payment.PrincipalAmount,
+                EscrowAmount = payment.EscrowAmount,
+                TotalAmount = payment.TotalAmount,
+                BalanceAfter = payment.BalanceAfter,
+                Status = payment.Status,
+                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+            })
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
     private static async Task<string> SnapshotRecurringExpenseAsync(
         int entityId,
         int portfolioId,
@@ -833,7 +927,7 @@ public sealed class AtomicMoneyMutationHandler
                 data,
             }),
             IdempotencyKey = $"money:{command.PortfolioId}:{command.AccessContextId}:" +
-                $"{command.Domain}:{command.Operation}:{entityId}:{command.IdempotencyKey}:data-update",
+                $"{command.Domain}:{command.Operation}:{entityType}:{entityId}:{command.IdempotencyKey}:data-update",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });

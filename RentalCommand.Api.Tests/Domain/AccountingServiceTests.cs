@@ -461,7 +461,8 @@ public class AccountingServiceTests : IAsyncLifetime
                 EscrowAmount = 0m,
                 TotalAmount = 700m,
                 BalanceAfter = 99_900m,
-                Status = LoanPaymentStatus.Scheduled,
+                Status = LoanPaymentStatus.Paid,
+                PaidDate = new DateTime(year, 01, 01, 0, 0, 0, DateTimeKind.Utc),
                 CreatedAt = now,
             },
             new LoanPayment
@@ -475,7 +476,8 @@ public class AccountingServiceTests : IAsyncLifetime
                 EscrowAmount = 0m,
                 TotalAmount = 700m,
                 BalanceAfter = 99_790m,
-                Status = LoanPaymentStatus.Scheduled,
+                Status = LoanPaymentStatus.Paid,
+                PaidDate = new DateTime(year, 02, 01, 0, 0, 0, DateTimeKind.Utc),
                 CreatedAt = now,
             });
         _db.SaveChanges();

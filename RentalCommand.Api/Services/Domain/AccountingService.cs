@@ -205,6 +205,25 @@ public class AccountingService : IAccountingService
 
         var spentMtd = expensesSpent?.Mtd ?? 0m;
         var spent30 = expensesSpent?.Last30 ?? 0m;
+        var debtServiceSpent = await _db.LoanPayments
+            .AsNoTracking()
+            .Where(payment =>
+                payment.PortfolioId == portfolioId &&
+                payment.Status == LoanPaymentStatus.Paid &&
+                payment.PaidDate != null &&
+                payment.Loan != null &&
+                authorizedProperties.Any(property => property.Id == payment.Loan.PropertyId))
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Mtd = group.Sum(payment => payment.PaidDate >= monthStart.ToDateTime(
+                    TimeOnly.MinValue, DateTimeKind.Utc) ? payment.TotalAmount : 0m),
+                Last30 = group.Sum(payment => payment.PaidDate >= last30Start.ToDateTime(
+                    TimeOnly.MinValue, DateTimeKind.Utc) ? payment.TotalAmount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
+        spentMtd += debtServiceSpent?.Mtd ?? 0m;
+        spent30 += debtServiceSpent?.Last30 ?? 0m;
 
         // Past due: anyone behind right now (not period-bound). The amount and the distinct-lease count
         // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
@@ -980,10 +999,12 @@ public class AccountingService : IAccountingService
             .AsNoTracking()
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
+                lp.Status == LoanPaymentStatus.Paid &&
+                lp.PaidDate != null &&
                 lp.Loan != null &&
                 authorizedProperties.Any(property => property.Id == lp.Loan.PropertyId) &&
-                lp.DueDate >= yearStart &&
-                lp.DueDate < yearEndExclusive)
+                lp.PaidDate >= yearStart &&
+                lp.PaidDate < yearEndExclusive)
             .Select(lp => new
             {
                 Category = ScheduleECategory.MortgageInterest,

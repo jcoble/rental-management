@@ -142,6 +142,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Property finances'));
+    await tester.tap(find.text('Property finances'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Mortgage / Loans'), findsOneWidget);
     expect(find.text('First Federal'), findsOneWidget);
     expect(find.textContaining(r'$196,500'), findsOneWidget);
@@ -160,6 +164,7 @@ void main() {
     expect(find.text('Principal'), findsOneWidget);
     expect(find.text(r'$825'), findsOneWidget);
     expect(find.text(r'$195,675'), findsOneWidget);
+    expect(find.text('Record paid'), findsOneWidget);
     expect(loansRepo.lastPaymentLoanId, 42);
 
     await tester.tap(find.byTooltip('Scan mortgage statement'));

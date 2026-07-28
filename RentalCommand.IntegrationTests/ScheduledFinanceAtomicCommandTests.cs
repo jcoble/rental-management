@@ -255,7 +255,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         payment.BalanceAfter.Should().BeLessThan(importedBalance);
         payment.BalanceAfter.Should().BeGreaterThan(123_999.58m);
         var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
-        loan.CurrentBalance.Should().Be(payment.BalanceAfter);
+        loan.CurrentBalance.Should().Be(importedBalance,
+            "a scheduled projection must not reduce the live balance");
     }
 
     [SkippableFact]
@@ -288,7 +289,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         payment.BalanceAfter.Should().BeLessThan(importedBalance);
         payment.BalanceAfter.Should().BeGreaterThan(123_999.58m);
         var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
-        loan.CurrentBalance.Should().Be(payment.BalanceAfter);
+        loan.CurrentBalance.Should().Be(importedBalance,
+            "a scheduled projection must not reduce the live balance");
     }
 
     [SkippableFact]
@@ -343,7 +345,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
         loan.CreatedAt.Should().Be(databaseWallClockCreatedAt);
         loan.DebtServiceAutomationStartDate.Should().Be(importDate);
-        loan.CurrentBalance.Should().Be(generated.BalanceAfter);
+        loan.CurrentBalance.Should().Be(importedBalance,
+            "a scheduled projection must not reduce the live balance");
     }
 
     [SkippableFact]

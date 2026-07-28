@@ -1938,7 +1938,11 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
           ),
           if (_expanded) ...[
             const Divider(height: 1),
-            _LoanPaymentSchedule(loanId: loan.id),
+            _LoanPaymentSchedule(
+              loanId: loan.id,
+              propertyId: loan.propertyId,
+              canManage: widget.onEdit != null,
+            ),
           ],
         ],
       ),
@@ -1946,19 +1950,64 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
   }
 }
 
-class _LoanPaymentSchedule extends ConsumerWidget {
-  const _LoanPaymentSchedule({required this.loanId});
+class _LoanPaymentSchedule extends ConsumerStatefulWidget {
+  const _LoanPaymentSchedule({
+    required this.loanId,
+    required this.propertyId,
+    required this.canManage,
+  });
 
   final int loanId;
+  final int propertyId;
+  final bool canManage;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final paymentsAsync = ref.watch(loanPaymentsProvider(loanId));
+  ConsumerState<_LoanPaymentSchedule> createState() =>
+      _LoanPaymentScheduleState();
+}
+
+class _LoanPaymentScheduleState extends ConsumerState<_LoanPaymentSchedule> {
+  int? _postingPaymentId;
+
+  Future<void> _postPayment(int paymentId) async {
+    if (_postingPaymentId != null) return;
+    setState(() => _postingPaymentId = paymentId);
+    try {
+      await ref
+          .read(propertyLoansRepositoryProvider)
+          .postLoanPayment(loanId: widget.loanId, paymentId: paymentId);
+      ref.invalidate(loanPaymentsProvider(widget.loanId));
+      await ref
+          .read(propertyLoansProvider(widget.propertyId).notifier)
+          .refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Loan payment recorded.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is ApiException ? error.message : error.toString(),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _postingPaymentId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final paymentsAsync = ref.watch(loanPaymentsProvider(widget.loanId));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
     return Padding(
-      key: Key('loan-amortization-schedule-$loanId'),
+      key: Key('loan-amortization-schedule-${widget.loanId}'),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1989,7 +2038,15 @@ class _LoanPaymentSchedule extends ConsumerWidget {
               return Column(
                 children: [
                   for (final payment in payments)
-                    _LoanPaymentRow(payment: payment),
+                    _LoanPaymentRow(
+                      payment: payment,
+                      isPosting: _postingPaymentId == payment.id,
+                      onRecordPaid:
+                          widget.canManage &&
+                              payment.status.toLowerCase() != 'paid'
+                          ? () => _postPayment(payment.id)
+                          : null,
+                    ),
                 ],
               );
             },
@@ -2001,9 +2058,15 @@ class _LoanPaymentSchedule extends ConsumerWidget {
 }
 
 class _LoanPaymentRow extends StatelessWidget {
-  const _LoanPaymentRow({required this.payment});
+  const _LoanPaymentRow({
+    required this.payment,
+    required this.isPosting,
+    this.onRecordPaid,
+  });
 
   final LoanPayment payment;
+  final bool isPosting;
+  final VoidCallback? onRecordPaid;
 
   @override
   Widget build(BuildContext context) {
@@ -2083,6 +2146,17 @@ class _LoanPaymentRow extends StatelessWidget {
               ),
             ],
           ),
+          if (onRecordPaid != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonal(
+                key: Key('loan-payment-post-${payment.id}'),
+                onPressed: isPosting ? null : onRecordPaid,
+                child: Text(isPosting ? 'Recording…' : 'Record paid'),
+              ),
+            ),
+          ],
           if (payment.paymentDoesNotCoverInterest) ...[
             const SizedBox(height: 6),
             Row(

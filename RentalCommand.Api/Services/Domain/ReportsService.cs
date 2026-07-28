@@ -937,9 +937,11 @@ public class ReportsService : IReportsService
                 DebtService = _db.LoanPayments
                     .Where(lp =>
                         lp.PortfolioId == portfolioId &&
+                        lp.Status == LoanPaymentStatus.Paid &&
+                        lp.PaidDate != null &&
                         lp.Loan != null &&
                         lp.Loan.PropertyId == p.Id &&
-                        lp.DueDate >= from && lp.DueDate <= to)
+                        lp.PaidDate >= from && lp.PaidDate <= to)
                     .Sum(lp => (decimal?)lp.TotalAmount) ?? 0m,
             })
             .Where(r => r.Income != 0m || r.OperatingExpenses != 0m || r.DebtService != 0m);
