@@ -202,6 +202,75 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task BatchTenantMessageNotificationInvalidation_ResolvesSavedAccessContextsInOneQuery()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Tenant Message Batch Target");
+        var decoyProperty = AddProperty("Tenant Message Batch Decoy");
+        _context.Db.SaveChanges();
+        var targets = new[]
+        {
+            AddTeamSession("tenant-message-batch-target-1", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-2", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-3", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-4", targetProperty, now),
+        };
+        var decoy = AddTeamSession("tenant-message-batch-decoy", decoyProperty, now);
+        _context.Db.SaveChanges();
+        var notifications = targets.Select((target, index) => new Notification
+        {
+            PortfolioId = 1,
+            UserId = target.User.Id,
+            Type = "TenantMessage",
+            Title = "New tenant message",
+            Message = $"The tenant replied {index}.",
+            CreatedAt = now,
+            NavigationExperience = NavigationExperience.Management,
+            NavigationDestination = NavigationDestination.Message,
+            NavigationAccessContextId = target.Context.Id,
+            NavigationAccessRevision = target.Context.AccessRevision,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(1),
+            NavigationFallbackDestination = NavigationDestination.Notifications,
+        }).ToArray();
+        _context.Db.Notifications.AddRange(notifications);
+        _context.Db.SaveChanges();
+        var sentPayloadIds = new List<int>();
+        _client.Setup(value => value.SendCoreAsync(
+                "EntityUpdated",
+                It.IsAny<object?[]>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, arguments, _) =>
+            {
+                if (arguments.SingleOrDefault() is EntityUpdatePayload payload)
+                {
+                    sentPayloadIds.Add(payload.EntityId);
+                }
+            })
+            .Returns(Task.CompletedTask);
+        _commands.Clear();
+
+        await _service.BroadcastEntityUpdatesAsync(notifications
+            .Select(notification => new EntityUpdateBroadcast(
+                1,
+                "Notification",
+                notification.Id,
+                NotificationResponse.FromEntity(notification)))
+            .ToArray());
+
+        sentPayloadIds.Should().BeEquivalentTo(notifications.Select(notification => notification.Id));
+        _deliveredGroups.Should().NotContain(DataUpdateHub.SessionRevisionGroup(decoy.SessionId, 1),
+            "a batch of personally addressed tenant-message notifications must not fan out to unrelated contexts");
+        _commands.Should().HaveCount(1,
+            "saved-context notification batches must not repeat the RLS recipient query once per notification");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: saved navigation access contexts batch");
+        _commands.Single().Should().NotContain(
+            "UNION",
+            "a saved-context notification batch must not plan the portfolio broadcast branch under API-role RLS");
+    }
+
+    [Fact]
     public async Task PropertyInvalidation_ReturnsPromptlyWhenHubSendNeverCompletes()
     {
         var now = DateTime.UtcNow;
