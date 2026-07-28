@@ -64,6 +64,14 @@ const tenantAuthority: SelectedAccessContextSummary = {
 	activeExperience: 'Tenant'
 };
 
+const managementAuthority: SelectedAccessContextSummary = {
+	accessContextId: 32,
+	portfolioId: 9,
+	workspaceName: 'Manager workspace',
+	accessRevision: 3,
+	activeExperience: 'Management'
+};
+
 function tenantMessageIntent(
 	overrides: Partial<NotificationNavigationIntent> = {}
 ): NotificationNavigationIntent {
@@ -82,6 +90,19 @@ function tenantMessageIntent(
 	};
 }
 
+function tenantLedgerIntent(
+	overrides: Partial<NotificationNavigationIntent> = {}
+): NotificationNavigationIntent {
+	return {
+		...tenantMessageIntent({
+			destination: 'TenantLedgerEntry',
+			resource: { kind: 'TenantLedgerEntry', id: 872 },
+			parentResource: { kind: 'TenantAccount', id: 8 }
+		}),
+		...overrides
+	};
+}
+
 describe('notification intent URL mapping', () => {
 	it('maps a current typed tenant message intent without accepting a raw URL', () => {
 		assert.equal(
@@ -95,6 +116,44 @@ describe('notification intent URL mapping', () => {
 				Date.UTC(2026, 0, 1)
 			),
 			'/portal'
+		);
+	});
+
+	it('routes tenant ledger entry intents to scoped portal payments with account and entry focus', () => {
+		assert.equal(
+			notificationIntentUrl(tenantLedgerIntent(), tenantAuthority, Date.UTC(2026, 0, 27)),
+			'/portal/payments?account=8&entry=872'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				tenantLedgerIntent({ parentResource: { kind: 'Unit', id: 8 } }),
+				tenantAuthority,
+				Date.UTC(2026, 0, 27)
+			),
+			'/portal'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				tenantLedgerIntent({ resource: { kind: 'Payment', id: 872 } }),
+				tenantAuthority,
+				Date.UTC(2026, 0, 27)
+			),
+			'/portal'
+		);
+	});
+
+	it('keeps management ledger entry intents on the staff detail route', () => {
+		assert.equal(
+			notificationIntentUrl(
+				tenantLedgerIntent({
+					experience: 'Management',
+					accessContextId: 32,
+					accessRevision: 3
+				}),
+				managementAuthority,
+				Date.UTC(2026, 0, 27)
+			),
+			'/tenant-accounts/8/entries/872'
 		);
 	});
 
