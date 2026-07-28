@@ -7,7 +7,11 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { formatDate } from '$lib/utils/date';
-	import { currentOwnerStatementYear, ownerStatementYearOptions } from '$lib/accounting/owner-statement-years';
+	import {
+		currentOwnerStatementYear,
+		ownerStatementYearOptions,
+		watchOwnerStatementYear
+	} from '$lib/accounting/owner-statement-years';
 	import { onMount } from 'svelte';
 
 	const pageSize = 20;
@@ -18,11 +22,12 @@
 	let distributionSkip = $state(0);
 	let lastYear = $state(currentOwnerStatementYear().toString());
 
-	onMount(() => {
-		const businessYear = currentOwnerStatementYear();
+	function applyBusinessYear(businessYear: number) {
 		years = ownerStatementYearOptions(businessYear);
 		selectedYear = String(businessYear);
-	});
+	}
+
+	onMount(() => watchOwnerStatementYear(applyBusinessYear));
 
 	$effect(() => {
 		if (selectedYear !== lastYear) {
