@@ -140,6 +140,7 @@ public sealed class LeasingApplicationDetailResponse
     public string? Notes { get; init; }
     public bool ConsentGiven { get; init; }
     public DateTime SubmittedAtUtc { get; init; }
+    public int? ApprovedTenantId { get; init; }
 }
 
 public sealed class LeasingAppointmentDetailResponse

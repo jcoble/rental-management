@@ -464,6 +464,7 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
                 Notes = application.Notes,
                 ConsentGiven = application.ConsentGiven,
                 SubmittedAtUtc = application.SubmittedAtUtc,
+                ApprovedTenantId = application.ApprovedTenantId,
             })
             .SingleOrDefaultAsync(ct);
 

@@ -70,10 +70,15 @@ describe('approved application lease continuation', () => {
 	it('keeps leasing application navigation inside the leasing experience', () => {
 		assert.match(leasingListPageSource, /return `\/leasing\/applications\/\$\{item\.recordId\}`/);
 		assert.match(leasingApplicationDetailRouteSource, /<ApplicationDetail/);
+		assert.match(leasingApplicationDetailRouteSource, /leasingWorkspace\.application\(id\)/);
 		assert.match(leasingApplicationDetailRouteSource, /prepareMoveInBasePath/);
+		assert.match(leasingApplicationDetailRouteSource, /showScreening=\{false\}/);
+		assert.match(leasingApplicationDetailRouteSource, /applicationQueryScope="leasing"/);
 		assert.match(leasingApplicationDetailRouteSource, /readPrepareMoveInPrefill\(page\.url\.searchParams\)/);
 		assert.match(leasingApplicationDetailRouteSource, /<PrepareMoveInDialog/);
 		assert.match(leasingApplicationDetailRouteSource, /goto\(`\/leasing\/move-ins\/\$\{result\.leaseManagementId\}`\)/);
+		assert.doesNotMatch(leasingApplicationDetailRouteSource, /applications\.get/);
+		assert.doesNotMatch(leasingApplicationDetailRouteSource, /applications\.screening/);
 		assert.doesNotMatch(leasingApplicationDetailRouteSource, /leaseManagements\.prepareMoveIn/);
 		assert.doesNotMatch(leasingApplicationDetailRouteSource, /applications\?prepareMoveIn/);
 	});
