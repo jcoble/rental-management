@@ -300,11 +300,40 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260719,
             FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719,
             FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724,
-            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725);
+            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725,
+            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
         FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725);
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260727);
         FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
+    }
+
+    [SkippableFact]
+    public async Task EffectiveCapabilityScopes_UseFrozenBusinessClockForFutureEffectiveAuthority()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL capability-scope proof.");
+        await ExecuteOwnerSqlAsync(ResetSecurityStateSql);
+        await ExecuteOwnerSqlAsync("""
+            UPDATE "SimulationClocks"
+            SET "Mode" = 'Frozen',
+                "SimAnchorUtc" = '2027-01-14T05:00:00Z',
+                "RealAnchorUtc" = CURRENT_TIMESTAMP,
+                "TimeZoneId" = 'America/New_York',
+                "UpdatedAtRealUtc" = CURRENT_TIMESTAMP
+            WHERE "Id" = 1;
+            UPDATE "WorkspaceMemberships"
+            SET "EffectiveFromUtc" = '2027-01-13T05:00:00Z'
+            WHERE "Id" = 9001;
+            UPDATE "MembershipRoleAssignments"
+            SET "EffectiveFromUtc" = '2027-01-13T05:00:00Z'
+            WHERE "Id" = 9001;
+            """);
+
+        var frozenScope = await ExecuteApiScalarTextAsync(
+            EffectiveScopeSummarySql("ARRAY['rentals.read']", "Property"),
+            ScopeSql);
+
+        frozenScope.Should().Be("9001|9001|AllProperties|null");
     }
 
     [SkippableFact]
@@ -763,7 +792,19 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             .Which.Should().BeSameAs(
                 FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725);
 
-        var sql = l15Sql.Append(laterSql[0]).Concat(optimizedSql).ToArray();
+        var businessClockMigration = new UseBusinessClockForCapabilityScopes();
+        var businessClockBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(UseBusinessClockForCapabilityScopes).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(businessClockMigration, [businessClockBuilder]);
+        var businessClockSql = businessClockBuilder.Operations.OfType<SqlOperation>()
+            .Select(operation => operation.Sql)
+            .ToArray();
+        businessClockSql.Should().ContainSingle()
+            .Which.Should().BeSameAs(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
+
+        var sql = l15Sql.Append(laterSql[0]).Concat(optimizedSql).Concat(businessClockSql).ToArray();
         foreach (var statement in sql) await ExecuteOwnerSqlAsync(statement);
         return sql;
     }
