@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
     private readonly SqliteTestContext _context;
     private readonly Mock<IClientProxy> _client = new();
     private readonly Mock<IHubClients> _clients = new();
+    private readonly Mock<IHubContext<DataUpdateHub>> _hub = new();
     private readonly DataUpdateService _service;
     private IReadOnlyList<string> _deliveredGroups = [];
 
@@ -27,8 +29,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
         _context = new SqliteTestContext(
             [new Domain.RecordingCommandInterceptor(_commands)]);
         EnsureRelationshipProjectionView();
-        var hub = new Mock<IHubContext<DataUpdateHub>>();
-        hub.SetupGet(value => value.Clients).Returns(_clients.Object);
+        _hub.SetupGet(value => value.Clients).Returns(_clients.Object);
         _clients.Setup(value => value.Groups(It.IsAny<IReadOnlyList<string>>()))
             .Callback<IReadOnlyList<string>>(groups => _deliveredGroups = groups)
             .Returns(_client.Object);
@@ -38,7 +39,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
         _service = new DataUpdateService(
             _context.Db,
-            hub.Object,
+            _hub.Object,
             TimeProvider.System,
             Mock.Of<ILogger<DataUpdateService>>());
     }
@@ -137,6 +138,46 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             "realtime fanout must honor the same in-app preference as the REST notification read");
         _commands.Should().HaveCount(1,
             "notification authorization, effective access, and session selection must be one SQL query");
+    }
+
+    [Fact]
+    public async Task PropertyInvalidation_ReturnsPromptlyWhenHubSendNeverCompletes()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Bounded fanout");
+        _context.Db.SaveChanges();
+        var target = AddTeamSession("bounded-fanout", targetProperty, now);
+        _context.Db.SaveChanges();
+        _commands.Clear();
+        var blockedSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _client.Setup(value => value.SendCoreAsync(
+                It.IsAny<string>(), It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Returns(blockedSend.Task);
+        var service = new DataUpdateService(
+            _context.Db,
+            _hub.Object,
+            TimeProvider.System,
+            Mock.Of<ILogger<DataUpdateService>>(),
+            TimeSpan.FromMilliseconds(25));
+
+        var elapsed = Stopwatch.StartNew();
+        await service.BroadcastEntityUpdateAsync(
+            1,
+            "Property",
+            targetProperty.Id,
+            new { targetProperty.Id });
+        elapsed.Stop();
+
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "a stuck post-commit SignalR delivery must not hold the durable mutation response");
+        blockedSend.Task.IsCompleted.Should().BeFalse();
+        _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(target.SessionId, 1));
+        _commands.Should().HaveCount(1,
+            "recipient authorization and session selection still run as one translated SQL query");
+        _client.Verify(value => value.SendCoreAsync(
+            "EntityUpdated",
+            It.IsAny<object?[]>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private Property AddProperty(string name)
