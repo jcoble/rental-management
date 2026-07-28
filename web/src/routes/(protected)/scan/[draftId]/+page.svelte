@@ -1018,6 +1018,14 @@
 	let depositFundingRedirectPending = $state(false);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
+	const canRecoverPaymentDepositHandoff = $derived(
+		isPayment &&
+			!!data?.sourceStoredFileId &&
+			(data.status === 'Rejected' || data.status === 'Failed') &&
+			!confirmedRecord
+	);
+	const showPaymentTenantAccountSelector = $derived(isPayment && (!isTerminal || canRecoverPaymentDepositHandoff));
+	const disablePaymentTenantAccountSelector = $derived(reviewControlsDisabled && !canRecoverPaymentDepositHandoff);
 	const lowConfidenceFields = $derived(
 		(data?.fields ?? []).filter(
 			(field) => field.name !== LINE_ITEMS_FIELD && confidenceLevel(field.confidence) === 'low'
@@ -1670,23 +1678,23 @@
 						</p>
 					{:else if isPayment}
 						<!-- Canonical tenant-account selector — required for Payment drafts -->
-						{#if !isTerminal}
+						{#if showPaymentTenantAccountSelector}
 							<div class="mb-5 space-y-2 rounded-md border border-border bg-muted/30 p-3">
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-tenant-account-select">
-									Which rental account is this payment for? <span class="text-[var(--m3c-error)]">*</span>
+									{canRecoverPaymentDepositHandoff ? 'Which rental account should receive these deposit funds?' : 'Which rental account is this payment for?'} <span class="text-[var(--m3c-error)]">*</span>
 								</label>
 								<Input
 									aria-label="Search rental accounts"
 									placeholder="Search tenant, property, unit, or relationship number"
 									value={tenantAccountSearch}
-									disabled={reviewControlsDisabled}
+									disabled={disablePaymentTenantAccountSelector}
 									oninput={(event) => {
 										tenantAccountSearch = (event.currentTarget as HTMLInputElement).value;
 										tenantAccountSkip = 0;
 									}}
 								/>
-								<Select.Root type="single" value={selectedTenantAccountId} onValueChange={selectTenantAccount} disabled={reviewControlsDisabled}>
-									<Select.Trigger id="scan-tenant-account-select" data-testid="scan-tenant-account-select" class="w-full" disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedTenantAccountId} onValueChange={selectTenantAccount} disabled={disablePaymentTenantAccountSelector}>
+									<Select.Trigger id="scan-tenant-account-select" data-testid="scan-tenant-account-select" class="w-full" disabled={disablePaymentTenantAccountSelector}>
 										{selectedTenantAccountLabel}
 									</Select.Trigger>
 									<Select.Content>
@@ -2765,6 +2773,9 @@
 						{/if}
 						{#if isPayment && !selectedTenantAccountId && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]">Select a rental account above to enable payment creation.</p>
+						{/if}
+						{#if canRecoverPaymentDepositHandoff && !selectedTenantAccountId && !isProcessing}
+							<p class="text-center text-xs text-[var(--warning)]">Select a rental account above to record these deposit funds.</p>
 						{/if}
 						{#if isWorkOrder && selectedPropertyId === NO_PROPERTY && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]">Select a property above to enable work order creation.</p>

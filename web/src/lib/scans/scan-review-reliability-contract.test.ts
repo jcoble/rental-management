@@ -67,4 +67,22 @@ describe("scan review reliability contract", () => {
     assert.match(source, /Reclassified as a security deposit receipt/);
     assert.match(source, /await scan\.reject\(/);
   });
+
+  it("lets rejected deposit receipt scans choose an authorized account before handoff", () => {
+    assert.match(
+      source,
+      /const canRecoverPaymentDepositHandoff = \$derived\([\s\S]*data\.status === 'Rejected'[\s\S]*data\.status === 'Failed'[\s\S]*!confirmedRecord[\s\S]*\);/
+    );
+    assert.match(
+      source,
+      /const showPaymentTenantAccountSelector = \$derived\(isPayment && \(!isTerminal \|\| canRecoverPaymentDepositHandoff\)\);/
+    );
+    assert.match(
+      source,
+      /const disablePaymentTenantAccountSelector = \$derived\(reviewControlsDisabled && !canRecoverPaymentDepositHandoff\);/
+    );
+    assert.match(source, /\{#if showPaymentTenantAccountSelector\}/);
+    assert.match(source, /disabled=\{disablePaymentTenantAccountSelector\}/);
+    assert.match(source, /Select a rental account above to record these deposit funds\./);
+  });
 });
