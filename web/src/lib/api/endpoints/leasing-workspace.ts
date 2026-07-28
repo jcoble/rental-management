@@ -25,6 +25,7 @@ export interface LeasingPipelineItem {
 export interface LeasingRental {
 	propertyId: number;
 	unitId: number;
+	leaseManagementId?: number | null;
 	propertyName: string;
 	unitNumber: string;
 	address: string;

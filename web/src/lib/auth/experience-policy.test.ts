@@ -40,6 +40,12 @@ describe('experience route policy', () => {
 		assert.equal(canAccessRoute('/properties', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/properties/12', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/leasing/rentals/12', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leases', 'Leasing', capabilities), false);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', capabilities), false);
+		capabilities.add(CAPABILITY.leasingAgreementsPrepare);
+		assert.equal(canAccessRoute('/leases', 'Leasing', capabilities), false);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', new Set([CAPABILITY.leasingTermsRead])), false);
 		assert.equal(canAccessRoute('/profile', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), false);
 		capabilities.add(CAPABILITY.leasingOnboardingManage);

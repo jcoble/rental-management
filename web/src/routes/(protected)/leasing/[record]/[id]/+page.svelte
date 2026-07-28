@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, CalendarDays, Home, Inbox, Send, UserRound } from '@lucide/svelte';
+	import { ArrowLeft, CalendarDays, FileSignature, Home, Inbox, Send, UserRound } from '@lucide/svelte';
 	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 
 	type LeasingRecord = 'rentals' | 'applications' | 'appointments' | 'conversations' | 'move-ins';
@@ -37,6 +39,15 @@
 	}));
 
 	const detail = $derived(detailQuery.data as Record<string, any> | undefined);
+	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
+	const activeCapabilities = $derived(new Set(
+		page.data.access?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience
+		)?.capabilityKeys ?? []
+	));
+	const canPrepareAgreements = $derived(
+		activeExperience === 'Leasing' && activeCapabilities.has(CAPABILITY.leasingAgreementsPrepare)
+	);
 
 	const replyMutation = createMutation(() => ({
 		mutationFn: () => leasingWorkspace.reply(id, replyBody.trim()),
@@ -101,6 +112,11 @@
 						<p class="mt-2 text-sm text-muted-foreground">{detail.address}</p>
 						{#if detail.canViewApplications}<p class="mt-4 text-sm">{detail.openApplicationCount} open applications</p>{/if}
 						{#if detail.canViewShowings}<p class="mt-4 text-sm">Next showing: {date(detail.nextShowingAtUtc)}</p>{/if}
+						{#if canPrepareAgreements && detail.leaseManagementId}
+							<Button href={`/leases/${detail.leaseManagementId}`} variant="outline" size="sm" class="mt-4 gap-2" data-testid="leasing-rental-open-agreement-workspace">
+								<FileSignature class="h-4 w-4" /> Open agreement workspace
+							</Button>
+						{/if}
 					</div>
 					<div class="rounded-xl border bg-card p-5"><h2 class="font-semibold">Current listing</h2><p class="mt-2 text-lg font-medium">{detail.listingHeadline || 'No listing started'}</p><p class="text-sm text-muted-foreground">{detail.listingStatus || 'Not listed'} · {money(detail.askingRent)}</p><p class="mt-3 text-sm">Available {date(detail.availableOn)}</p><p class="text-sm">Deposit {money(detail.securityDeposit)}</p></div>
 				</div>
@@ -113,7 +129,25 @@
 			{:else if record === 'conversations'}
 				<div class="rounded-xl border bg-card p-5"><p class="text-sm text-muted-foreground">{detail.tenantName}{detail.propertyName ? ` · ${detail.propertyName}` : ''}</p><div class="mt-5 space-y-3">{#each detail.messages as message (message.id)}<div class={`max-w-[85%] rounded-xl p-3 text-sm ${message.senderRole === 'Landlord' ? 'ml-auto bg-primary text-primary-foreground' : 'bg-muted'}`}><p class="whitespace-pre-wrap">{message.body}</p><p class="mt-1 text-xs opacity-70">{date(message.createdAt)}</p></div>{/each}</div><form class="mt-5 flex gap-3" onsubmit={(event) => { event.preventDefault(); if (replyBody.trim()) replyMutation.mutate(); }}><textarea bind:value={replyBody} class="min-h-24 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm" maxlength="4000" placeholder="Reply in the tenant portal" aria-label="Reply"></textarea><Button type="submit" disabled={!replyBody.trim() || replyMutation.isPending}><Send class="h-4 w-4" /> Send</Button></form></div>
 			{:else}
-				<div class="grid gap-4 md:grid-cols-2"><div class="rounded-xl border bg-card p-5"><h2 class="font-semibold">Household</h2><p class="mt-3 text-sm">{detail.tenantName}</p><p class="text-sm">{detail.propertyName} · Unit {detail.unitNumber}</p><p class="mt-2 text-xs text-muted-foreground">{detail.relationshipNumber}</p></div><div class="rounded-xl border bg-card p-5"><h2 class="font-semibold">Move-in readiness</h2><p class="mt-3 text-sm">Planned possession: {date(detail.plannedPossessionAtUtc)}</p><p class="text-sm">Agreement: {detail.agreementFullyExecuted ? 'Fully executed' : 'Still needs execution'}</p><p class="text-sm">Possession: {detail.possessionGiven ? 'Given' : 'Not yet given'}</p></div></div>
+				<div class="grid gap-4 md:grid-cols-2">
+					<div class="rounded-xl border bg-card p-5">
+						<h2 class="font-semibold">Household</h2>
+						<p class="mt-3 text-sm">{detail.tenantName}</p>
+						<p class="text-sm">{detail.propertyName} · Unit {detail.unitNumber}</p>
+						<p class="mt-2 text-xs text-muted-foreground">{detail.relationshipNumber}</p>
+						{#if canPrepareAgreements}
+							<Button href={`/leases/${detail.id}`} variant="outline" size="sm" class="mt-4 gap-2" data-testid="leasing-move-in-open-agreement-workspace">
+								<FileSignature class="h-4 w-4" /> Open agreement workspace
+							</Button>
+						{/if}
+					</div>
+					<div class="rounded-xl border bg-card p-5">
+						<h2 class="font-semibold">Move-in readiness</h2>
+						<p class="mt-3 text-sm">Planned possession: {date(detail.plannedPossessionAtUtc)}</p>
+						<p class="text-sm">Agreement: {detail.agreementFullyExecuted ? 'Fully executed' : 'Still needs execution'}</p>
+						<p class="text-sm">Possession: {detail.possessionGiven ? 'Given' : 'Not yet given'}</p>
+					</div>
+				</div>
 			{/if}
 		{/if}
 	</div>

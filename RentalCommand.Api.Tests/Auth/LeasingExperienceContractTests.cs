@@ -31,6 +31,8 @@ public sealed class LeasingExperienceContractTests
     {
         var source = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+        var leaseManagementQuerySource = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeaseManagementQueryService.cs");
 
         source.Should().Contain(nameof(CapabilityKeys.LeasingApplicationsManage));
         source.Should().Contain(nameof(CapabilityKeys.LeasingListingsManage));
@@ -52,6 +54,8 @@ public sealed class LeasingExperienceContractTests
             "agreement.Id == (lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId)");
         source.Should().Contain("agreement.FullyExecutedAtUtc != null");
         source.Should().Contain("agreement.VoidedAtUtc == null");
+        leaseManagementQuerySource.Should().Contain("BuildLeaseWorkspaceReadManagementQuery");
+        leaseManagementQuerySource.Should().Contain("[CapabilityKeys.RentalsRead, CapabilityKeys.LeasingAgreementsPrepare]");
         source.Should().NotContain("AgreementFullyExecuted = management.Agreements.Any");
         source.Should().NotContain("AsEnumerable");
         source.Should().NotContain("GroupBy(");
@@ -108,6 +112,11 @@ public sealed class LeasingExperienceContractTests
         detailPage.Should().Contain("<ListingTab unitId={detail.unitId} />");
         detailPage.Should().Contain("{#if detail.canViewApplications}");
         detailPage.Should().Contain("{#if detail.canViewShowings}");
+        detailPage.Should().Contain("activeCapabilities.has(CAPABILITY.leasingAgreementsPrepare)");
+        detailPage.Should().Contain("data-testid=\"leasing-rental-open-agreement-workspace\"");
+        detailPage.Should().Contain("href={`/leases/${detail.leaseManagementId}`}");
+        detailPage.Should().Contain("data-testid=\"leasing-move-in-open-agreement-workspace\"");
+        detailPage.Should().Contain("href={`/leases/${detail.id}`}");
         detailPage.Should().NotContain("units.");
         detailPage.Should().NotContain("properties.");
         applicationDetailPage.Should().Contain("leasingWorkspace.application(id)");
@@ -123,11 +132,17 @@ public sealed class LeasingExperienceContractTests
         listPage.Should().Contain("{#if item.canViewApplications || item.canViewShowings}");
         workspaceTypes.Should().Contain("canViewApplications: boolean;");
         workspaceTypes.Should().Contain("canViewShowings: boolean;");
+        workspaceTypes.Should().Contain("leaseManagementId?: number | null;");
         workspaceTypes.Should().Contain("approvedTenantId?: number | null;");
         workspaceService.Should().Contain("AuthorizedApplications(scope, _time.GetUtcNow().UtcDateTime)");
         workspaceService.Should().Contain("ApprovedTenantId = application.ApprovedTenantId");
+        workspaceService.Should().Contain("LeaseManagementId = unit.LeaseManagements");
+        workspaceService.Should().Contain("management.CanceledAtUtc == null");
+        workspaceService.Should().Contain("management.PossessionReturnedAtUtc == null");
         routePolicy.Should().Contain("prefix: '/units', experiences: ['Management']");
         routePolicy.Should().Contain("prefix: '/properties', experiences: ['Management']");
+        routePolicy.Should().Contain("prefix: '/leases',");
+        routePolicy.Should().Contain("CAPABILITY.leasingAgreementsPrepare");
 
         var listingTab = ReadSource(
             "web", "src", "lib", "components", "unit", "tabs", "ListingTab.svelte");
@@ -171,10 +186,14 @@ public sealed class LeasingExperienceContractTests
     [Fact]
     public void LeasingRentalDtosDistinguishHiddenFactsFromEmptyFacts()
     {
+        typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.LeaseManagementId))!
+            .PropertyType.Should().Be(typeof(int?));
         typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewApplications))!
             .PropertyType.Should().Be(typeof(bool));
         typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewShowings))!
             .PropertyType.Should().Be(typeof(bool));
+        typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.LeaseManagementId))!
+            .PropertyType.Should().Be(typeof(int?));
         typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewApplications))!
             .PropertyType.Should().Be(typeof(bool));
         typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewShowings))!
