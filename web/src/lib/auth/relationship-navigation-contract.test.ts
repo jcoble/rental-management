@@ -21,11 +21,12 @@ test('tenant peer navigation stays small without hiding account functionality', 
 	const end = shell.indexOf('const portalUtilityItems: NavItem[] = [', start);
 	const nav = shell.slice(start, end);
 
-	assert.equal(nav.match(/\{ href:/g)?.length, 5);
+	assert.equal(nav.match(/\{ href:/g)?.length, 6);
 	for (const href of [
 		'/portal',
 		'/portal/account',
 		'/portal/maintenance',
+		'/portal/appointments',
 		'/portal/messages',
 		'/portal/profile'
 	]) {
