@@ -167,6 +167,164 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
     }
 
     [Fact]
+    public async Task UpdateAsync_SameInstantOverlappingOwnershipKeepsRequestedOwnerAndDeletesZeroLengthRow()
+    {
+        var seeded = await SeedPropertyWithSameInstantOverlappingOwnersAsync();
+        var service = CreateService();
+        var request = new UpdatePropertyRequest
+        {
+            Name = "Property 49 edited",
+            YearBuilt = 2008,
+            Ownerships =
+            [
+                new PropertyOwnershipRequest
+                {
+                    OwnerEntityId = seeded.CobleOwnerId,
+                    OwnershipSharePercent = 100m,
+                },
+            ],
+        };
+
+        var first = await service.UpdateAsync(
+            _scope,
+            seeded.PropertyId,
+            request,
+            "property-owner-same-instant-replay");
+        var replay = await service.UpdateAsync(
+            _scope,
+            seeded.PropertyId,
+            request,
+            "property-owner-same-instant-replay");
+
+        replay.Should().BeEquivalentTo(first);
+        _context.Db.ChangeTracker.Clear();
+        var readback = await (
+            from property in _context.Db.Properties.AsNoTracking()
+            where property.Id == seeded.PropertyId
+            select new
+            {
+                property.Name,
+                property.YearBuilt,
+                ActiveCount = _context.Db.PropertyOwnerships.Count(ownership =>
+                    ownership.PortfolioId == PortfolioId
+                    && ownership.PropertyId == seeded.PropertyId
+                    && ownership.EffectiveFromUtc <= BusinessNowUtc
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > BusinessNowUtc)),
+                ActiveOwnerId = _context.Db.PropertyOwnerships
+                    .Where(ownership =>
+                        ownership.PortfolioId == PortfolioId
+                        && ownership.PropertyId == seeded.PropertyId
+                        && ownership.EffectiveFromUtc <= BusinessNowUtc
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > BusinessNowUtc))
+                    .Select(ownership => ownership.OwnerEntityId)
+                    .Single(),
+                ActiveShare = _context.Db.PropertyOwnerships
+                    .Where(ownership =>
+                        ownership.PortfolioId == PortfolioId
+                        && ownership.PropertyId == seeded.PropertyId
+                        && ownership.EffectiveFromUtc <= BusinessNowUtc
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > BusinessNowUtc))
+                    .Sum(ownership => ownership.OwnershipSharePercent),
+                CobleOwnership = _context.Db.PropertyOwnerships
+                    .Where(ownership => ownership.Id == seeded.CobleOwnershipId)
+                    .Select(ownership => new
+                    {
+                        ownership.EffectiveFromUtc,
+                        ownership.EffectiveToUtc,
+                        ownership.OwnershipSharePercent,
+                    })
+                    .Single(),
+                SameInstantCount = _context.Db.PropertyOwnerships.Count(ownership =>
+                    ownership.Id == seeded.SameInstantOwnershipId),
+                OwnershipAuditCount = _context.Db.AtomicAuditLogs.Count(audit =>
+                    audit.PortfolioId == PortfolioId
+                    && audit.EntityType == nameof(PropertyOwnership)),
+                ReceiptCount = _context.Db.AtomicCommandReceipts.Count(receipt =>
+                    receipt.CommandType == "rental.property.update"
+                    && receipt.IdempotencyKey.Contains("property-owner-same-instant-replay")),
+            }).SingleAsync();
+
+        readback.Name.Should().Be("Property 49 edited");
+        readback.YearBuilt.Should().Be(2008);
+        readback.ActiveCount.Should().Be(1);
+        readback.ActiveOwnerId.Should().Be(seeded.CobleOwnerId);
+        readback.ActiveShare.Should().Be(100m);
+        readback.CobleOwnership.EffectiveFromUtc.Should().Be(seeded.CobleEffectiveFromUtc);
+        readback.CobleOwnership.EffectiveToUtc.Should().BeNull();
+        readback.CobleOwnership.OwnershipSharePercent.Should().Be(100m);
+        readback.SameInstantCount.Should().Be(0);
+        readback.OwnershipAuditCount.Should().Be(2);
+        readback.ReceiptCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenSameInstantOwnershipDeleteFails_RollsBackPropertyAndOwnershipChanges()
+    {
+        var seeded = await SeedPropertyWithSameInstantOverlappingOwnersAsync();
+        await _services.DisposeAsync();
+        _services = BuildServices(
+            _context.ConnectionString,
+            new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
+            [new ThrowOnPropertyOwnershipDeleteInterceptor()]);
+        var service = CreateService();
+
+        var act = async () => await service.UpdateAsync(
+            _scope,
+            seeded.PropertyId,
+            new UpdatePropertyRequest
+            {
+                Name = "Should roll back",
+                YearBuilt = 2008,
+                Ownerships =
+                [
+                    new PropertyOwnershipRequest
+                    {
+                        OwnerEntityId = seeded.CobleOwnerId,
+                        OwnershipSharePercent = 100m,
+                    },
+                ],
+            },
+            "property-owner-same-instant-rollback");
+
+        var exception = await act.Should().ThrowAsync<DbUpdateException>();
+        exception.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("Injected PropertyOwnership delete failure.");
+        _context.Db.ChangeTracker.Clear();
+
+        var readback = await (
+            from property in _context.Db.Properties.AsNoTracking()
+            where property.Id == seeded.PropertyId
+            select new
+            {
+                property.Name,
+                property.YearBuilt,
+                SameInstantCount = _context.Db.PropertyOwnerships.Count(ownership =>
+                    ownership.Id == seeded.SameInstantOwnershipId
+                    && ownership.EffectiveToUtc == null),
+                Coble = _context.Db.PropertyOwnerships
+                    .Where(ownership => ownership.Id == seeded.CobleOwnershipId)
+                    .Select(ownership => new
+                    {
+                        ownership.EffectiveFromUtc,
+                        ownership.EffectiveToUtc,
+                        ownership.OwnershipSharePercent,
+                    })
+                    .Single(),
+                ReceiptCount = _context.Db.AtomicCommandReceipts.Count(receipt =>
+                    receipt.CommandType == "rental.property.update"
+                    && receipt.IdempotencyKey.Contains("property-owner-same-instant-rollback")),
+            }).SingleAsync();
+
+        readback.Name.Should().Be("Property 49");
+        readback.YearBuilt.Should().BeNull();
+        readback.SameInstantCount.Should().Be(1);
+        readback.Coble.EffectiveFromUtc.Should().Be(seeded.CobleEffectiveFromUtc);
+        readback.Coble.EffectiveToUtc.Should().BeNull();
+        readback.Coble.OwnershipSharePercent.Should().Be(100m);
+        readback.ReceiptCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task UpdateAsync_WhenOwnershipInsertFails_RollsBackPropertyAndOwnershipChanges()
     {
         var seeded = await SeedPropertyWithOwnersAsync();
@@ -278,6 +436,72 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         return new SeededOwnership(property.Id, originalOwner.Id, replacementOwner.Id, ownership.Id);
     }
 
+    private async Task<SeededSameInstantOwnership> SeedPropertyWithSameInstantOverlappingOwnersAsync()
+    {
+        var sameInstantOwner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = "Blue Door",
+            Email = "blue-door-same-instant@example.test",
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var cobleOwner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = "Coble",
+            Email = "coble-same-instant@example.test",
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Property 49",
+            AddressLine1 = "49 Frozen Lane",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var sameInstantOwnership = new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            OwnerEntity = sameInstantOwner,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = BusinessNowUtc,
+            StatementRecipientName = sameInstantOwner.Name,
+            StatementRecipientEmail = sameInstantOwner.Email,
+            PayeeName = sameInstantOwner.Name,
+        };
+        var cobleEffectiveFromUtc = new DateTime(2026, 7, 28, 7, 36, 15, 581, DateTimeKind.Utc)
+            .AddTicks(4290);
+        var cobleOwnership = new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            OwnerEntity = cobleOwner,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = cobleEffectiveFromUtc,
+            StatementRecipientName = cobleOwner.Name,
+            StatementRecipientEmail = cobleOwner.Email,
+            PayeeName = cobleOwner.Name,
+        };
+
+        _context.Db.AddRange(sameInstantOwner, cobleOwner, property, sameInstantOwnership, cobleOwnership);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+        return new SeededSameInstantOwnership(
+            property.Id,
+            sameInstantOwner.Id,
+            cobleOwner.Id,
+            sameInstantOwnership.Id,
+            cobleOwnership.Id,
+            cobleEffectiveFromUtc);
+    }
+
     private static ServiceProvider BuildServices(
         string connectionString,
         TimeProvider timeProvider,
@@ -310,6 +534,14 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
         int ReplacementOwnerId,
         int OriginalOwnershipId);
 
+    private sealed record SeededSameInstantOwnership(
+        int PropertyId,
+        int SameInstantOwnerId,
+        int CobleOwnerId,
+        int SameInstantOwnershipId,
+        int CobleOwnershipId,
+        DateTime CobleEffectiveFromUtc);
+
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
@@ -341,6 +573,36 @@ public sealed class PropertyOwnerReplacementAtomicPostgreSqlTests : IAsyncLifeti
             if (command.CommandText.Contains("INSERT INTO \"PropertyOwnerships\"", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Injected PropertyOwnership insert failure.");
+            }
+        }
+    }
+
+    private sealed class ThrowOnPropertyOwnershipDeleteInterceptor : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            ThrowIfOwnershipDelete(command);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfOwnershipDelete(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private static void ThrowIfOwnershipDelete(DbCommand command)
+        {
+            if (command.CommandText.Contains("DELETE FROM \"PropertyOwnerships\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Injected PropertyOwnership delete failure.");
             }
         }
     }
