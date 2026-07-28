@@ -308,8 +308,10 @@ public sealed class CreateTenantWorkOrderHandler
     public async Task<OperationMutationResult> HandleAsync(
         CreateTenantWorkOrderCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
-        var now = command.RequestedAtUtc;
-        var relationship = await TenantWorkOrderAuthorization.CurrentRelationship(command, attempt.Persistence, now)
+        var businessNow = command.RequestedAtUtc;
+        var securityNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var relationship = await TenantWorkOrderAuthorization.CurrentRelationship(
+                command, attempt.Persistence, businessNow, securityNow)
             .FirstOrDefaultAsync(ct);
         if (relationship is null) return new(OperationMutationOutcome.NotFound, 0);
         var entity = new WorkOrder
@@ -319,16 +321,16 @@ public sealed class CreateTenantWorkOrderHandler
             LeaseManagementId = relationship.LeaseManagementId,
             Title = command.Title.Trim(), Description = command.Description.Trim(),
             Category = string.IsNullOrWhiteSpace(command.Category) ? "Resident Request" : command.Category.Trim(),
-            Priority = command.Priority, Status = WorkOrderStatus.New, RequestedAt = now,
-            CreatedBy = "Tenant", UpdatedAt = now,
+            Priority = command.Priority, Status = WorkOrderStatus.New, RequestedAt = businessNow,
+            CreatedBy = "Tenant", UpdatedAt = businessNow,
         };
         entity.StatusEvents.Add(new WorkOrderStatusEvent
         {
             PortfolioId = command.PortfolioId, FromStatus = null, ToStatus = WorkOrderStatus.New,
-            ChangedByUserId = command.TenantUserId, ChangedByLabel = "Tenant", CreatedAtUtc = now,
+            ChangedByUserId = command.TenantUserId, ChangedByLabel = "Tenant", CreatedAtUtc = businessNow,
         });
         attempt.Persistence.Add(entity);
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNow);
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId, nameof(WorkOrder), 0, AuditLogOperation.Created,
             command.TenantUserId, ActorLabel: "Tenant",
@@ -337,15 +339,17 @@ public sealed class CreateTenantWorkOrderHandler
         await attempt.FlushBusinessAsync(ct);
         var snapshot = await WorkOrderSnapshot.LoadAsync(attempt.Persistence, command.PortfolioId, entity.Id, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
-            $"tenant-work-order-create:{command.DeliveryIdempotencyKey}", now));
+            $"tenant-work-order-create:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
     public async Task AuthorizeReplayAsync(
         CreateTenantWorkOrderCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
     {
-        var now = command.RequestedAtUtc;
-        if (!await TenantWorkOrderAuthorization.CurrentRelationship(command, persistence, now).AnyAsync(ct))
+        var businessNow = command.RequestedAtUtc;
+        var securityNow = await persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await TenantWorkOrderAuthorization.CurrentRelationship(
+                command, persistence, businessNow, securityNow).AnyAsync(ct))
             throw new UnauthorizedAccessException("The tenant relationship is no longer active.");
     }
 }
@@ -578,9 +582,12 @@ internal static class TenantWorkOrderAuthorization
     internal sealed record Relationship(int TenantId, int LeaseManagementId, int PropertyId, int UnitId);
 
     internal static IQueryable<Relationship> CurrentRelationship(
-        CreateTenantWorkOrderCommand command, IAtomicPersistenceSession persistence, DateTime now)
+        CreateTenantWorkOrderCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime businessNow,
+        DateTime securityNow)
     {
-        var today = DateOnly.FromDateTime(now);
+        var today = DateOnly.FromDateTime(businessNow);
         return persistence.Query<TenantUserAccess>().AsNoTracking()
             .Where(access =>
                 access.PortfolioId == command.PortfolioId &&
@@ -595,7 +602,7 @@ internal static class TenantWorkOrderAuthorization
                     session.Id == command.TenantAuthSessionId && session.UserId == command.TenantUserId &&
                     session.ActiveAccessContextId == command.TenantAccessContextId &&
                     session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null &&
-                    session.ExpiresAtUtc > now) &&
+                    session.ExpiresAtUtc > securityNow) &&
                 access.LeaseManagementParty != null && access.LeaseManagementParty.LeaseManagement != null &&
                 access.LeaseManagementParty.EffectiveFrom <= today &&
                 (access.LeaseManagementParty.EffectiveThrough == null ||

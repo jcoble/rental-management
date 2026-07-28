@@ -85,7 +85,12 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
     {
         var simulatedNow = new DateTimeOffset(2027, 1, 21, 5, 0, 0, TimeSpan.Zero);
         var clock = new FixedTimeProvider(simulatedNow);
-        var scenario = await SeedScenarioAsync();
+        var securityNow = await _context.Db.Database
+            .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
+            .SingleAsync();
+        var sessionExpiresAt = securityNow.AddDays(1);
+        sessionExpiresAt.Should().BeBefore(simulatedNow.UtcDateTime);
+        var scenario = await SeedScenarioAsync(sessionExpiresAt);
         await using var services = AtomicDomainTestKernel.CreateForWorkOrdersPostgreSql(
             _context.ConnectionString,
             clock);
@@ -141,7 +146,7 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
         outbox.NextAttemptAtUtc.Should().Be(simulatedNow.UtcDateTime);
     }
 
-    private async Task<Scenario> SeedScenarioAsync()
+    private async Task<Scenario> SeedScenarioAsync(DateTime? sessionExpiresAtUtc = null)
     {
         var accessContext = new WorkspaceAccessContext
         {
@@ -234,7 +239,7 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = Now,
             LastSeenAtUtc = Now,
-            ExpiresAtUtc = new DateTime(2027, 1, 22, 5, 0, 0, DateTimeKind.Utc),
+            ExpiresAtUtc = sessionExpiresAtUtc ?? new DateTime(2027, 1, 22, 5, 0, 0, DateTimeKind.Utc),
         };
         _context.Db.AuthSessions.Add(session);
 
