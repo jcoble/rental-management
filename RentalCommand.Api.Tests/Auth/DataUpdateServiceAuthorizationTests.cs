@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.Data;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Core.Authorization;
@@ -125,7 +126,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             1,
             "Notification",
             notification.Id,
-            new { notification.Id, Secret = "must-not-reach-signalr" });
+            NotificationResponse.FromEntity(notification));
 
         _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(team.SessionId, 1));
         _deliveredGroups.Should().Contain(
@@ -174,13 +175,15 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
         };
         _context.Db.Notifications.Add(notification);
         _context.Db.SaveChanges();
+        var response = NotificationResponse.FromEntity(notification);
+        response.NavigationIntent.Should().NotBeNull();
         _commands.Clear();
 
         await _service.BroadcastEntityUpdateAsync(
             1,
             "Notification",
             notification.Id,
-            new { notification.Id, Secret = "must-not-reach-signalr" });
+            response);
 
         _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(target.SessionId, 1));
         _deliveredGroups.Should().NotContain(DataUpdateHub.SessionRevisionGroup(decoy.SessionId, 1),
@@ -188,10 +191,13 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
         _commands.Should().HaveCount(1,
             "saved-context notification authorization and session selection must stay one SQL query");
         _commands.Single().Should().Contain(
-            "Realtime notification recipients: current REST-readable notification audience");
+            "Realtime notification recipients: saved navigation access context");
         _commands.Single().Should().NotContain(
             "ScopedNotificationRecipients: active workspace membership",
             "the tenant-message realtime query must not invoke the broad reusable staff-recipient helper");
+        _commands.Single().Should().NotContain(
+            "UNION",
+            "a saved-context notification must not plan the portfolio broadcast branch under API-role RLS");
     }
 
     [Fact]
