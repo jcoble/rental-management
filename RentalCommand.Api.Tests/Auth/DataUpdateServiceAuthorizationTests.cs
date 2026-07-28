@@ -10,6 +10,7 @@ using RentalCommand.Api.Services;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -138,6 +139,59 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             "realtime fanout must honor the same in-app preference as the REST notification read");
         _commands.Should().HaveCount(1,
             "notification authorization, effective access, and session selection must be one SQL query");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: current REST-readable notification audience");
+        _commands.Single().Should().NotContain(
+            "ScopedNotificationRecipients: active workspace membership",
+            "the realtime notification fanout must not nest the reusable staff-recipient query");
+    }
+
+    [Fact]
+    public async Task TenantMessageNotificationInvalidation_UsesSavedAccessContextInOneQuery()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Tenant Message Target");
+        var decoyProperty = AddProperty("Tenant Message Decoy");
+        _context.Db.SaveChanges();
+        var target = AddTeamSession("tenant-message-target", targetProperty, now);
+        var decoy = AddTeamSession("tenant-message-decoy", decoyProperty, now);
+        _context.Db.SaveChanges();
+        var notification = new Notification
+        {
+            PortfolioId = 1,
+            UserId = target.User.Id,
+            Type = "TenantMessage",
+            Title = "New tenant message",
+            Message = "The tenant replied.",
+            CreatedAt = now,
+            NavigationExperience = NavigationExperience.Management,
+            NavigationDestination = NavigationDestination.Message,
+            NavigationAccessContextId = target.Context.Id,
+            NavigationAccessRevision = target.Context.AccessRevision,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(1),
+            NavigationFallbackDestination = NavigationDestination.Notifications,
+        };
+        _context.Db.Notifications.Add(notification);
+        _context.Db.SaveChanges();
+        _commands.Clear();
+
+        await _service.BroadcastEntityUpdateAsync(
+            1,
+            "Notification",
+            notification.Id,
+            new { notification.Id, Secret = "must-not-reach-signalr" });
+
+        _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(target.SessionId, 1));
+        _deliveredGroups.Should().NotContain(DataUpdateHub.SessionRevisionGroup(decoy.SessionId, 1),
+            "a personally addressed tenant-message notification must fan out only through its saved access context");
+        _commands.Should().HaveCount(1,
+            "saved-context notification authorization and session selection must stay one SQL query");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: current REST-readable notification audience");
+        _commands.Single().Should().NotContain(
+            "ScopedNotificationRecipients: active workspace membership",
+            "the tenant-message realtime query must not invoke the broad reusable staff-recipient helper");
     }
 
     [Fact]
@@ -258,7 +312,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             RevokedAtUtc = revoked ? now : null,
         };
         _context.Db.AddRange(assignment, session);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private SessionCoordinates AddEffectiveTenantSession(string key, DateTime now)
@@ -334,7 +388,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             Reason = "Realtime authorization test",
         };
         _context.Db.AddRange(session, access);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private SessionCoordinates AddBareContextSession(string key, DateTime now)
@@ -359,7 +413,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             ExpiresAtUtc = now.AddHours(1),
         };
         _context.Db.Add(session);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private void EnsureRelationshipProjectionView()
@@ -409,5 +463,5 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
     public void Dispose() => _context.Dispose();
 
-    private sealed record SessionCoordinates(Guid SessionId, ApplicationUser User);
+    private sealed record SessionCoordinates(Guid SessionId, ApplicationUser User, WorkspaceAccessContext Context);
 }

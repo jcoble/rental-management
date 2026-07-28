@@ -6,7 +6,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
-using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services;
 
@@ -237,23 +236,75 @@ public sealed class DataUpdateService : IDataUpdateService
         int notificationId)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking()
-            .WhereEffectiveAccess(
-                _db.WorkspaceMemberships.AsNoTracking(),
-                _db.MembershipRoleAssignments.AsNoTracking(),
-                _db.OwnerUserAccesses.AsNoTracking(),
-                _db.EffectiveTenantAccess.AsNoTracking(),
-                userId: 0,
-                utcNow: utcNow);
-        var staffUserIds = ScopedNotificationRecipientQuery
-            .ForWorkspaceMembership(_db, portfolioId, utcNow);
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
+        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
+        var effectiveAssignments = _db.MembershipRoleAssignments.AsNoTracking().WhereEffective(utcNow);
+        var effectiveOwnerAccess = _db.OwnerUserAccesses.AsNoTracking().Where(access =>
+            access.RevokedAtUtc == null
+            && access.EffectiveFromUtc <= utcNow
+            && (access.EffectiveToUtc == null || access.EffectiveToUtc > utcNow));
+        var effectiveTenantAccess = _db.EffectiveTenantAccess.AsNoTracking();
 
         // Mirror NotificationService.AuthorizedNotifications: a portfolio-wide notification is
         // readable in every currently-authorized Team/owner/tenant context, while a user-addressed
         // row reaches only that user. Personal in-app preferences and the staff-only TenantMessage
         // exception stay in the same translated recipient query. The wire still carries only an
         // invalidation hint; each client refetches through the authorized REST read.
-        return (
+        var contextTargeted =
+            from notification in _db.Notifications.AsNoTracking()
+            join context in effectiveContexts
+                on new
+                {
+                    AccessContextId = notification.NavigationAccessContextId,
+                    UserId = notification.UserId,
+                    AccessRevision = notification.NavigationAccessRevision,
+                }
+                equals new
+                {
+                    AccessContextId = (int?)context.Id,
+                    UserId = (int?)context.UserId,
+                    AccessRevision = (long?)context.AccessRevision,
+                }
+            join session in _db.AuthSessions.AsNoTracking()
+                on new { ActiveAccessContextId = context.Id, context.UserId }
+                equals new { session.ActiveAccessContextId, session.UserId }
+            where notification.Id == notificationId
+                && notification.PortfolioId == portfolioId
+                && notification.NavigationAccessContextId != null
+                && notification.NavigationAccessRevision != null
+                && context.PortfolioId == portfolioId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > utcNow
+                && (effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId
+                        && effectiveAssignments.Any(assignment =>
+                            assignment.WorkspaceMembershipId == membership.Id
+                            && assignment.PortfolioId == membership.PortfolioId))
+                    || effectiveOwnerAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.ApplicationUserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId)
+                    || effectiveTenantAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.UserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId))
+                && !_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                    preference.PortfolioId == portfolioId
+                    && preference.UserId == context.UserId
+                    && !preference.EnableInApp)
+                && (notification.Type != "TenantMessage"
+                    || effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId))
+            select new RealtimeSessionRecipient
+            {
+                SessionId = session.Id,
+                AccessRevision = context.AccessRevision,
+            };
+
+        var portfolioScoped =
             from session in _db.AuthSessions.AsNoTracking()
             join context in effectiveContexts
                 on new { Id = session.ActiveAccessContextId, session.UserId }
@@ -262,25 +313,42 @@ public sealed class DataUpdateService : IDataUpdateService
                 && session.Status == AuthSessionStatus.Active
                 && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > utcNow
+                && (effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId
+                        && effectiveAssignments.Any(assignment =>
+                            assignment.WorkspaceMembershipId == membership.Id
+                            && assignment.PortfolioId == membership.PortfolioId))
+                    || effectiveOwnerAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.ApplicationUserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId)
+                    || effectiveTenantAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.UserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId))
                 && _db.Notifications.AsNoTracking().Any(notification =>
                     notification.Id == notificationId
                     && notification.PortfolioId == portfolioId
+                    && notification.NavigationAccessContextId == null
+                    && notification.NavigationAccessRevision == null
                     && (notification.UserId == null || notification.UserId == context.UserId)
-                    && (!_db.UserAlertPreferences.AsNoTracking().Any(preference =>
-                            preference.PortfolioId == portfolioId
-                            && preference.UserId == context.UserId)
-                        || _db.UserAlertPreferences.AsNoTracking().Any(preference =>
-                            preference.PortfolioId == portfolioId
-                            && preference.UserId == context.UserId
-                            && preference.EnableInApp))
+                    && !_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                        preference.PortfolioId == portfolioId
+                        && preference.UserId == context.UserId
+                        && !preference.EnableInApp)
                     && (notification.Type != "TenantMessage"
-                        || staffUserIds.Any(candidateUserId =>
-                            candidateUserId == context.UserId)))
+                        || effectiveMemberships.Any(membership =>
+                            membership.AccessContextId == context.Id
+                            && membership.PortfolioId == context.PortfolioId)))
             select new RealtimeSessionRecipient
             {
                 SessionId = session.Id,
                 AccessRevision = context.AccessRevision,
-            })
+            };
+
+        return contextTargeted
+            .Union(portfolioScoped)
             .TagWith("Realtime notification recipients: current REST-readable notification audience");
     }
 
