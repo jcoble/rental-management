@@ -93,6 +93,8 @@ public sealed class AtomicCoreCrudMutationHandler
                     CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage, ct),
             AtomicCoreCrudMutationDomain.Tenant =>
                 await AuthorizeTenantAsync(command, persistence, now, ct),
+            AtomicCoreCrudMutationDomain.Vendor when command.Operation == AtomicCoreCrudMutationOperation.Create =>
+                await AuthorizeAnyPropertyAsync(command, persistence, now, CapabilityKeys.WorkManage, ct),
             AtomicCoreCrudMutationDomain.Vendor =>
                 await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct),
             _ => false,
@@ -735,8 +737,10 @@ public sealed class AtomicCoreCrudMutationHandler
         AtomicCoreCrudMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
     {
         var persistence = attempt.Persistence;
-        if (!await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct))
-            throw Denied();
+        var authorized = command.Operation == AtomicCoreCrudMutationOperation.Create
+            ? await AuthorizeAnyPropertyAsync(command, persistence, now, CapabilityKeys.WorkManage, ct)
+            : await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct);
+        if (!authorized) throw Denied();
         var mutationNow = command.Operation == AtomicCoreCrudMutationOperation.Create
             ? command.CreatedAtUtc ?? now
             : command.ChangedAtUtc ?? now;
@@ -810,6 +814,15 @@ public sealed class AtomicCoreCrudMutationHandler
         string capability,
         CancellationToken ct) =>
         AuthorizeAllPropertiesEitherAsync(command, persistence, now, capability, capability, ct);
+
+    private static Task<bool> AuthorizeAnyPropertyAsync(
+        AtomicCoreCrudMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        string capability,
+        CancellationToken ct) =>
+        AuthorizedProperties(command, persistence, now, capability, capability)
+            .AnyAsync(ct);
 
     private static Task<bool> AuthorizeAllPropertiesEitherAsync(
         AtomicCoreCrudMutationCommand command,

@@ -60,7 +60,15 @@ public class VendorController : ManagementControllerBase
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
-        var created = await _service.CreateAsync(scope, request, operationKey, ct);
+        VendorResponse? created;
+        try
+        {
+            created = await _service.CreateAsync(scope, request, operationKey, ct);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
         if (created == null) return NotFound(new { error = "Vendor not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
