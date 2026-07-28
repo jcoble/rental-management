@@ -2,10 +2,43 @@
 
 Prepared 2026-07-27 for continuation of the 2027 full-company simulation.
 
+## Authoritative continuation checkpoint — 2026-07-28
+
+This section supersedes the older January 14 checkpoint below. The preserved database was
+reconciled through January 21 and the simulation clock is now intentionally frozen at
+**2027-01-22 00:00 America/New_York** (`2027-01-22T05:00:00Z`). Do not roll it back or advance it
+until all three January 22 runs are reconciled.
+
+- Local API and web are running in `tsk754-api` and `tsk754-web`; Engine is stopped.
+- The Rental Command web URL is **`https://localhost:5667`**. Port 5173 belongs to another local
+  application and must not be used for this simulation.
+- `RUN-20270122-01` is complete. `YS-165` was fixed in `adfe0ab2` and live-proved with generic
+  signed-lease copy while the authorized stored JPEG downloaded successfully.
+- `RUN-20270122-02` remains blocked by planner data. `7525fa80` and `70bdc625` added the
+  role-specific Leasing Agent application route and canonical PrepareMoveInDialog without the
+  unauthorized management/screening calls. The rebuilt endpoint correctly fails closed for the
+  only application because the test user is assigned Properties 21 and 23 while the application
+  belongs to Property 30.
+- `YS-168` records an independent planner contradiction: the only application was atomically
+  prepared on January 7, while the same one-submit Prepare-move-in dialog fields are split across
+  January 21, 22, 25, and 26. Do not fabricate a replacement application.
+- `RUN-20270122-03` remains blocked. `YS-163` is committed in `ed5c5567`, but no safe unposted
+  charge exists on January 22. A DB-side prospective query found the next genuine event on
+  January 26 for one January 31 charge, then 37 February 1 charges on January 27.
+- `YS-167` is fixed in `275be564` with focused PostgreSQL proof. Live proof is queued for the
+  first genuine January 26 charge because no safe unposted charge exists on January 22.
+- `YS-169` is fixed and live-proved in `d00da2af`: the preference update, atomic audit, and
+  data-update outbox all used the frozen January 22 business timestamp.
+- `YS-157`, `YS-158`, `YS-159`, and `YS-164` are fixed and live-proved. The latest committed
+  sequence is `d00da2af`, `275be564`, `70bdc625`, `7525fa80`, `adfe0ab2`, `4ac5d65a`,
+  `ed5c5567`, and `9ee3738d`.
+- No TSK-754 browser automation session is intentionally retained between proof runs. Each
+  named session must still be closed and its process tree verified immediately after use.
+
 ## Outcome and current checkpoint
 
 Continue TSK-754 from the preserved January database. Do not restart the year, replace the
-database, or treat January 21 as financially complete.
+database, or treat the historical January 14 checkpoint below as current.
 
 The latest chronologically executed scenario is `RUN-20270121-04`, but the authoritative
 simulation clock is intentionally frozen at **2027-01-14 00:00 America/New_York**. The clock
@@ -164,7 +197,7 @@ API:
 ```bash
 tmux new-session -d -s tsk754-api \
   -c '/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/RentalCommand.Api' \
-  "env ASPNETCORE_ENVIRONMENT=Development DOTNET_ENVIRONMENT=Development Simulation__Enabled=true Auth__ExposeDevTokens=true ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_api;Password=rentalcommand_api_dev' Jwt__SecretKey='dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789' Jwt__Issuer=RentalCommand Jwt__Audience=RentalCommandWeb Seed__Enabled=false dotnet run --no-build --urls 'https://localhost:5666;http://localhost:5665'"
+  "env ASPNETCORE_ENVIRONMENT=Development DOTNET_ENVIRONMENT=Development Simulation__Enabled=true Auth__ExposeDevTokens=true ASPNETCORE_Kestrel__Certificates__Default__Path='/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/web/.cert/api-cert.pem' ASPNETCORE_Kestrel__Certificates__Default__KeyPath='/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/web/.cert/api-key.pem' ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_api;Password=rentalcommand_api_dev' Jwt__SecretKey='dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789' Jwt__Issuer=RentalCommand Jwt__Audience=RentalCommandWeb Seed__Enabled=false dotnet run --no-build --urls 'https://localhost:5666;http://localhost:5665'"
 ```
 
 Web:
@@ -172,8 +205,11 @@ Web:
 ```bash
 tmux new-session -d -s tsk754-web \
   -c '/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/web' \
-  'pnpm dev'
+  "env NODE_EXTRA_CA_CERTS='/Users/blackcolours/Library/Application Support/mkcert/rootCA.pem' pnpm dev"
 ```
+
+Vite currently binds Rental Command to `https://localhost:5667`. Confirm the printed URL after
+startup instead of assuming its preferred port was available.
 
 Engine, only when a scheduled worker is required:
 
@@ -189,10 +225,16 @@ needs a worker. This prevents unplanned background mutation while the clock move
 Immediately after API startup:
 
 1. Confirm `/api/v1/dev/clock` exists.
-2. Confirm it reports Frozen at `2027-01-14T05:00:00Z`.
+2. Confirm it reports the current authoritative frozen checkpoint. As of 2026-07-28 that is
+   `2027-01-22T05:00:00Z`.
 3. Log in fresh. Never reuse bearer tokens from `/tmp/tsk754-*`.
 4. Confirm the phone's ADB reverse.
 5. Start the web or Flutter debug client.
+
+The clock provider starts in an in-memory Real default and refreshes from PostgreSQL
+asynchronously. A first HTTP 200 can therefore briefly say Real even when the preserved database
+row is Frozen. Poll until both `mode=Frozen` and the exact expected instant are returned; do not
+mutate product data after a merely reachable but not-yet-refreshed clock response.
 
 Synthetic QA credentials previously used include:
 
