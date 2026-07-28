@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
@@ -62,16 +63,17 @@ public sealed class DataUpdateService : IDataUpdateService
 
     public Task BroadcastEntityUpdateAsync(
         int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default) =>
-        BroadcastAsync(portfolioId, entityType, entityId, "EntityUpdated", ct);
+        BroadcastAsync(portfolioId, entityType, entityId, data, "EntityUpdated", ct);
 
     public Task BroadcastEntityDeleteAsync(
         int portfolioId, string entityType, int entityId, CancellationToken ct = default) =>
-        BroadcastAsync(portfolioId, entityType, entityId, "EntityDeleted", ct);
+        BroadcastAsync(portfolioId, entityType, entityId, null, "EntityDeleted", ct);
 
     private async Task BroadcastAsync(
         int portfolioId,
         string entityType,
         int entityId,
+        object? data,
         string eventName,
         CancellationToken ct)
     {
@@ -79,7 +81,7 @@ public sealed class DataUpdateService : IDataUpdateService
         {
             var recipients = entityType switch
             {
-                "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId),
+                "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId, data),
                 "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
                 _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
             };
@@ -233,7 +235,8 @@ public sealed class DataUpdateService : IDataUpdateService
 
     private IQueryable<RealtimeSessionRecipient> BuildNotificationRecipientQuery(
         int portfolioId,
-        int notificationId)
+        int notificationId,
+        object? data)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
@@ -250,6 +253,7 @@ public sealed class DataUpdateService : IDataUpdateService
         // row reaches only that user. Personal in-app preferences and the staff-only TenantMessage
         // exception stay in the same translated recipient query. The wire still carries only an
         // invalidation hint; each client refetches through the authorized REST read.
+        var navigationHint = (data as NotificationResponse)?.NavigationIntent;
         var contextTargeted =
             from notification in _db.Notifications.AsNoTracking()
             join context in effectiveContexts
@@ -272,6 +276,9 @@ public sealed class DataUpdateService : IDataUpdateService
                 && notification.PortfolioId == portfolioId
                 && notification.NavigationAccessContextId != null
                 && notification.NavigationAccessRevision != null
+                && (navigationHint == null
+                    || (notification.NavigationAccessContextId == navigationHint.AccessContextId
+                        && notification.NavigationAccessRevision == navigationHint.AccessRevision))
                 && context.PortfolioId == portfolioId
                 && session.Status == AuthSessionStatus.Active
                 && session.RevokedAtUtc == null
@@ -303,6 +310,12 @@ public sealed class DataUpdateService : IDataUpdateService
                 SessionId = session.Id,
                 AccessRevision = context.AccessRevision,
             };
+
+        if (navigationHint is not null)
+        {
+            return contextTargeted
+                .TagWith("Realtime notification recipients: saved navigation access context");
+        }
 
         var portfolioScoped =
             from session in _db.AuthSessions.AsNoTracking()
