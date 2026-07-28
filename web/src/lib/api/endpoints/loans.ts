@@ -65,12 +65,30 @@ export interface LoanPayment {
   paymentDoesNotCoverInterest: boolean;
 }
 
+export interface LoanPaymentListParams {
+  status?: LoanPaymentStatus;
+  skip?: number;
+  take?: number;
+  sort?: string;
+}
+
+function buildLoanPaymentsPath(id: number, params?: LoanPaymentListParams): string {
+  const search = new URLSearchParams();
+  if (params?.status) search.set("status", params.status);
+  if (params?.skip != null) search.set("skip", String(params.skip));
+  if (params?.take != null) search.set("take", String(params.take));
+  if (params?.sort) search.set("sort", params.sort);
+  const query = search.toString();
+  return `/loans/${id}/payments${query ? `?${query}` : ""}`;
+}
+
 export const loans = {
   list: (params?: LoanListParams) => api.get<Loan[]>(buildLoanListPath(params)),
   listPage: (params?: LoanListParams) =>
     api.get<LoanListResponse>(buildLoanListPagePath(params)),
   get: (id: number) => api.get<Loan>(`/loans/${id}`),
-  payments: (id: number) => api.get<LoanPayment[]>(`/loans/${id}/payments`),
+  payments: (id: number, params?: LoanPaymentListParams) =>
+    api.get<LoanPayment[]>(buildLoanPaymentsPath(id, params)),
   postPayment: (loanId: number, paymentId: number) =>
     idempotentMutation(`loans:${loanId}:payments:${paymentId}:post`, (key) =>
       api.post<LoanPayment>(

@@ -21,6 +21,15 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 {
     private static readonly DateTime CommandTime =
         new(2026, 7, 11, 14, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime StatementDate =
+        new(2027, 1, 20, 0, 0, 0, DateTimeKind.Utc);
+    private const decimal StatementOpeningBalance = 125_825m;
+    private const decimal StatementPrincipal = 431m;
+    private const decimal StatementInterest = 623m;
+    private const decimal StatementPrincipalInterest = 1_054m;
+    private const decimal StatementEscrow = 318m;
+    private const decimal StatementTotal = 1_372m;
+    private const decimal StatementBalanceAfter = 125_394m;
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> Codec =
         new("scan-confirm.result.v1");
 
@@ -404,6 +413,396 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await using var verify = Scope();
         (await verify.Db.Expenses.CountAsync(row => row.Description == uniqueVendor))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchesExistingScheduledPaymentWithExactStatementValuesAndDoesNotCreateLoan()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment");
+        int loanCountBefore;
+        await using (var before = Scope())
+        {
+            loanCountBefore = await before.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+
+        var result = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityId.Should().Be(loanId);
+        result.Value.LoanPaymentId.Should().Be(paymentId);
+        await using var verify = Scope();
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(loanCountBefore);
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(StatementDate);
+        payment.PaidDate.Should().Be(StatementDate);
+        payment.PrincipalAmount.Should().Be(StatementPrincipal);
+        payment.InterestAmount.Should().Be(StatementInterest);
+        payment.EscrowAmount.Should().Be(StatementEscrow);
+        payment.TotalAmount.Should().Be(StatementTotal);
+        payment.BalanceAfter.Should().Be(StatementBalanceAfter);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementBalanceAfter);
+        loan.Status.Should().Be(LoanStatus.Active);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(Loan));
+        source.EntityId.Should().Be(loanId);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(Loan)
+            && row.EntityId == loanId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(LoanPayment)
+            && row.EntityId == paymentId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchReplayDoesNotDoubleMutateOrCreateLoan()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-replay");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+
+        var first = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var replay = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId && row.Id == loanId))
+            .Should().Be(1);
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(1);
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(StatementDate);
+        payment.PaidDate.Should().Be(StatementDate);
+        payment.PrincipalAmount.Should().Be(StatementPrincipal);
+        payment.InterestAmount.Should().Be(StatementInterest);
+        payment.EscrowAmount.Should().Be(StatementEscrow);
+        payment.TotalAmount.Should().Be(StatementTotal);
+        payment.BalanceAfter.Should().Be(StatementBalanceAfter);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPayment)
+            && row.EntityId == paymentId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchAcceptsAlreadyPaidPaymentWhenStatementValuesMatchWithoutRewrite()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var paidDate = StatementDate.AddDays(-2);
+        await using (var arrange = Scope())
+        {
+            var arrangedPayment = await arrange.Db.LoanPayments
+                .Include(row => row.Loan)
+                .SingleAsync(row => row.Id == paymentId);
+            arrangedPayment.DueDate = paidDate;
+            arrangedPayment.PaidDate = paidDate;
+            arrangedPayment.Status = LoanPaymentStatus.Paid;
+            arrangedPayment.PrincipalAmount = 400m;
+            arrangedPayment.InterestAmount = 600m;
+            arrangedPayment.EscrowAmount = 300m;
+            arrangedPayment.TotalAmount = 1_300m;
+            arrangedPayment.BalanceAfter = 125_425m;
+            arrangedPayment.Loan!.CurrentBalance = 125_425m;
+            await arrange.Db.SaveChangesAsync();
+        }
+
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-already-paid");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    loanId,
+                    paymentId,
+                    principal: 400m,
+                    interest: 600m,
+                    principalInterest: 1_000m,
+                    escrow: 300m,
+                    total: 1_300m,
+                    effectiveDate: StatementDate)),
+        };
+
+        var result = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityId.Should().Be(loanId);
+        result.Value.LoanPaymentId.Should().Be(paymentId);
+        await using var verify = Scope();
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(paidDate);
+        payment.PaidDate.Should().Be(paidDate);
+        payment.PrincipalAmount.Should().Be(400m);
+        payment.InterestAmount.Should().Be(600m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_300m);
+        payment.BalanceAfter.Should().Be(125_425m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(125_425m);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPayment)
+            && row.EntityId == paymentId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsAlreadyPaidPaymentWhenStatementValuesDisagreeAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var paidDate = StatementDate.AddDays(-5);
+        await using (var arrange = Scope())
+        {
+            var arrangedPayment = await arrange.Db.LoanPayments
+                .Include(row => row.Loan)
+                .SingleAsync(row => row.Id == paymentId);
+            arrangedPayment.DueDate = paidDate;
+            arrangedPayment.PaidDate = paidDate;
+            arrangedPayment.Status = LoanPaymentStatus.Paid;
+            arrangedPayment.PrincipalAmount = 400m;
+            arrangedPayment.InterestAmount = 600m;
+            arrangedPayment.EscrowAmount = 300m;
+            arrangedPayment.TotalAmount = 1_300m;
+            arrangedPayment.BalanceAfter = 125_425m;
+            arrangedPayment.Loan!.CurrentBalance = 125_425m;
+            await arrange.Db.SaveChangesAsync();
+        }
+
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-already-paid-mismatch");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    loanId,
+                    paymentId,
+                    principal: 401m,
+                    interest: 599m,
+                    principalInterest: 1_000m,
+                    escrow: 300m,
+                    total: 1_300m,
+                    effectiveDate: StatementDate)),
+        };
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*already-paid loan payment*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(paidDate);
+        payment.PaidDate.Should().Be(paidDate);
+        payment.PrincipalAmount.Should().Be(400m);
+        payment.InterestAmount.Should().Be(600m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_300m);
+        payment.BalanceAfter.Should().Be(125_425m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(125_425m);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsWhenEarlierPaymentIsUnpaidAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, _, laterPaymentId) = await SeedExistingLoanWithPaymentsAsync(includeEarlierUnpaid: true);
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-earlier-unpaid");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, laterPaymentId)),
+        };
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*Earlier scheduled loan payments must be posted first*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == laterPaymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsMismatchedStatementComponentsAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-invalid-components");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId, total: StatementTotal + 1m)),
+        };
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*Statement total must equal principal plus interest plus escrow*");
+        await AssertLoanPaymentMatchRolledBackAsync(draftId, identity, loanId, paymentId);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsOpeningBalanceMismatchAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-stale-balance");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId, openingBalance: StatementOpeningBalance - 1m)),
+        };
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*opening unpaid principal must match the loan's current live balance*");
+        await AssertLoanPaymentMatchRolledBackAsync(draftId, identity, loanId, paymentId);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_AuditFailureRollsBackDraftPaymentLoanAuditAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-audit-failure");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_scan_loan_payment_audit()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."EntityType" = 'LoanPayment' THEN
+                        RAISE EXCEPTION 'fail scan loan payment audit';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                DROP TRIGGER IF EXISTS fail_scan_loan_payment_audit ON "AtomicAuditLogs";
+                CREATE TRIGGER fail_scan_loan_payment_audit
+                BEFORE INSERT ON "AtomicAuditLogs"
+                FOR EACH ROW EXECUTE FUNCTION fail_scan_loan_payment_audit();
+                """);
+        }
+
+        try
+        {
+            var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+            await action.Should().ThrowAsync<Exception>()
+                .Where(ex => ex.ToString().Contains(
+                    "fail scan loan payment audit", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await using var cleanup = Scope();
+            await cleanup.Db.Database.ExecuteSqlRawAsync("""
+                    DROP TRIGGER IF EXISTS fail_scan_loan_payment_audit ON "AtomicAuditLogs";
+                    DROP FUNCTION IF EXISTS fail_scan_loan_payment_audit();
+                    """);
+        }
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementOpeningBalance);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityId.Should().BeNull();
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPayment) && row.EntityId == paymentId))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
     }
 
     [SkippableFact]
@@ -846,6 +1245,44 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         true,
         "Imported statement");
 
+    private static ScanLoanTargetData MatchExistingLoanTarget(int propertyId, int loanId, int paymentId) =>
+        LoanTarget(propertyId) with
+        {
+            ExistingLoanId = loanId,
+            ExistingLoanPaymentId = paymentId,
+            CurrentBalance = StatementOpeningBalance,
+            MonthlyPrincipalInterest = StatementPrincipalInterest,
+            StatementPrincipalAmount = StatementPrincipal,
+            StatementInterestAmount = StatementInterest,
+            StatementEscrowAmount = StatementEscrow,
+            StatementTotalAmount = StatementTotal,
+            StatementEffectiveDate = StatementDate,
+        };
+
+    private static ScanLoanTargetData MatchExistingLoanTarget(
+        int propertyId,
+        int loanId,
+        int paymentId,
+        decimal openingBalance = StatementOpeningBalance,
+        decimal principal = StatementPrincipal,
+        decimal interest = StatementInterest,
+        decimal principalInterest = StatementPrincipalInterest,
+        decimal escrow = StatementEscrow,
+        decimal total = StatementTotal,
+        DateTime? effectiveDate = null) =>
+        LoanTarget(propertyId) with
+        {
+            ExistingLoanId = loanId,
+            ExistingLoanPaymentId = paymentId,
+            CurrentBalance = openingBalance,
+            MonthlyPrincipalInterest = principalInterest,
+            StatementPrincipalAmount = principal,
+            StatementInterestAmount = interest,
+            StatementEscrowAmount = escrow,
+            StatementTotalAmount = total,
+            StatementEffectiveDate = effectiveDate ?? StatementDate,
+        };
+
     private static ScanReceiptData Receipt(string vendorName) => new(
         vendorName, null, null, null, null, "R-1", CommandTime,
         120m, 5m, null, null, null, null, 125m, "Check", null,
@@ -891,6 +1328,100 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Where(row => row.Id == draftId)
             .Select(row => row.SourceStoredFileId!.Value)
             .SingleAsync();
+    }
+
+    private async Task<(int LoanId, int PaymentId)> SeedExistingLoanWithPaymentsAsync()
+    {
+        var (loanId, _, secondPaymentId) = await SeedExistingLoanWithPaymentsAsync(includeEarlierUnpaid: false);
+        return (loanId, secondPaymentId);
+    }
+
+    private async Task<(int LoanId, int FirstPaymentId, int SecondPaymentId)> SeedExistingLoanWithPaymentsAsync(
+        bool includeEarlierUnpaid)
+    {
+        await using var scope = Scope();
+        var loan = new Loan
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            Lender = "Existing Match Bank",
+            OriginalAmount = 200_000m,
+            CurrentBalance = StatementOpeningBalance,
+            AnnualInterestRatePct = 6.125m,
+            TermMonths = 360,
+            StartDate = CommandTime.AddYears(-1),
+            DebtServiceAutomationStartDate = CommandTime.AddMonths(-2),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 1_250m,
+            MonthlyEscrow = 300m,
+            EscrowCoversTaxes = true,
+            EscrowCoversInsurance = true,
+            Status = LoanStatus.Active,
+            CreatedAt = CommandTime.AddMonths(-2),
+            UpdatedAt = CommandTime.AddMonths(-2),
+        };
+        scope.Db.Loans.Add(loan);
+        await scope.Db.SaveChangesAsync();
+
+        var first = new LoanPayment
+        {
+            PortfolioId = _portfolioId,
+            LoanId = loan.Id,
+            PeriodKey = "2026-06",
+            DueDate = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = includeEarlierUnpaid ? null : CommandTime.AddMonths(-1),
+            InterestAmount = 1_000m,
+            PrincipalAmount = 250m,
+            EscrowAmount = 300m,
+            TotalAmount = 1_550m,
+            BalanceAfter = 199_750m,
+            Status = includeEarlierUnpaid ? LoanPaymentStatus.Scheduled : LoanPaymentStatus.Paid,
+            CreatedAt = CommandTime.AddMonths(-2),
+        };
+        var second = new LoanPayment
+        {
+            PortfolioId = _portfolioId,
+            LoanId = loan.Id,
+            PeriodKey = "2026-07",
+            DueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc),
+            InterestAmount = 995m,
+            PrincipalAmount = 255m,
+            EscrowAmount = 300m,
+            TotalAmount = 1_550m,
+            BalanceAfter = 199_495m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = CommandTime.AddMonths(-2),
+        };
+        scope.Db.LoanPayments.AddRange(first, second);
+        await scope.Db.SaveChangesAsync();
+        return (loan.Id, first.Id, second.Id);
+    }
+
+    private async Task AssertLoanPaymentMatchRolledBackAsync(
+        int draftId,
+        AtomicCommandIdentity identity,
+        int loanId,
+        int paymentId)
+    {
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        payment.DueDate.Should().Be(new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc));
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementOpeningBalance);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
     }
 
     private async Task<LeaseDraftSource> SeedLeaseDraftAsync(string sourceLabel)

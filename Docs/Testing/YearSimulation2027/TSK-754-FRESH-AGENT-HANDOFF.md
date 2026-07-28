@@ -130,9 +130,9 @@ The database is already running. Start only the services needed for the next tes
 that flag and made `/api/v1/dev/clock` return 404. Verify the clock endpoint before doing any
 product work. Use `Auth__ExposeDevTokens=true` only in this isolated QA environment.
 
-Load the isolated container's owner password without printing it. The API and Engine connection
-then assumes their NOLOGIN runtime role through the repository's normal connection interceptor;
-never configure a password for `rentalcommand_api` or `rentalcommand_engine`.
+Load the isolated container's owner password without printing it. Use that credential only for
+the one-shot migration process. The long-running API and Engine must use their direct restricted
+development logins; current startup code rejects `MigratorConnection` in a long-running process.
 
 ```bash
 export TSK754_DB_OWNER_PASSWORD="$(
@@ -142,12 +142,29 @@ export TSK754_DB_OWNER_PASSWORD="$(
 )"
 ```
 
+Apply migrations once after rebuilding:
+
+```bash
+env \
+  ASPNETCORE_ENVIRONMENT=Development \
+  DOTNET_ENVIRONMENT=Development \
+  Simulation__Enabled=true \
+  ConnectionStrings__MigratorConnection="Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=postgres;Password=${TSK754_DB_OWNER_PASSWORD}" \
+  ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_api;Password=rentalcommand_api_dev' \
+  ConnectionStrings__EngineConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_engine;Password=rentalcommand_engine_dev' \
+  Jwt__SecretKey='dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789' \
+  Jwt__Issuer=RentalCommand \
+  Jwt__Audience=RentalCommandWeb \
+  Seed__Enabled=false \
+  dotnet run --no-build --project RentalCommand.Api -- --migrate-only
+```
+
 API:
 
 ```bash
 tmux new-session -d -s tsk754-api \
   -c '/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/RentalCommand.Api' \
-  "env ASPNETCORE_ENVIRONMENT=Development DOTNET_ENVIRONMENT=Development Simulation__Enabled=true Auth__ExposeDevTokens=true ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=postgres;Password=${TSK754_DB_OWNER_PASSWORD}' ConnectionStrings__MigratorConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=postgres;Password=${TSK754_DB_OWNER_PASSWORD}' Jwt__SecretKey='dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789' Jwt__Issuer=RentalCommand Jwt__Audience=RentalCommandWeb Seed__Enabled=false dotnet run --no-build --urls 'https://localhost:5666;http://localhost:5665'"
+  "env ASPNETCORE_ENVIRONMENT=Development DOTNET_ENVIRONMENT=Development Simulation__Enabled=true Auth__ExposeDevTokens=true ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_api;Password=rentalcommand_api_dev' Jwt__SecretKey='dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789' Jwt__Issuer=RentalCommand Jwt__Audience=RentalCommandWeb Seed__Enabled=false dotnet run --no-build --urls 'https://localhost:5666;http://localhost:5665'"
 ```
 
 Web:
@@ -163,7 +180,7 @@ Engine, only when a scheduled worker is required:
 ```bash
 tmux new-session -d -s tsk754-engine \
   -c '/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution/RentalCommand.Engine' \
-  "env DOTNET_ENVIRONMENT=Development Simulation__Enabled=true ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=postgres;Password=${TSK754_DB_OWNER_PASSWORD}' dotnet run --no-build"
+  "env DOTNET_ENVIRONMENT=Development Simulation__Enabled=true ConnectionStrings__DefaultConnection='Host=localhost;Port=5754;Database=rentalcommand_tsk754;Username=rentalcommand_engine;Password=rentalcommand_engine_dev' dotnet run --no-build"
 ```
 
 Keep the Engine stopped during manual backfill and inspection unless a scenario explicitly

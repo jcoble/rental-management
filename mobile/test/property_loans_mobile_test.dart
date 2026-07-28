@@ -78,6 +78,24 @@ void main() {
   });
 
   test(
+    'property loans repository can request payments page without status filter',
+    () async {
+      final adapter = _RecordingAdapter(
+        responseBody: jsonEncode([_paymentJson()]),
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = PropertyLoansRepository(dio);
+
+      await repo.getLoanPayments(42, sort: 'dueDate', skip: 0, take: 50);
+
+      expect(adapter.method, 'GET');
+      expect(adapter.path, '/loans/42/payments');
+      expect(adapter.query, {'sort': 'dueDate', 'skip': 0, 'take': 50});
+    },
+  );
+
+  test(
     'property loans provider requests additional pages server-side',
     () async {
       final repo = _FakePropertyLoansRepository(
@@ -393,7 +411,13 @@ class _FakePropertyLoansRepository extends PropertyLoansRepository {
   }
 
   @override
-  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+  Future<List<LoanPayment>> getLoanPayments(
+    int loanId, {
+    String? status,
+    String? sort,
+    int? skip,
+    int? take,
+  }) async {
     lastPaymentLoanId = loanId;
     return [LoanPayment.fromJson(_paymentJson())];
   }

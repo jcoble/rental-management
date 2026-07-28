@@ -13,6 +13,7 @@ import '../maintenance/work_order_unit_aware_loader.dart';
 import '../maintenance/work_orders_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
+import '../properties/property_loans_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/units_repository.dart';
@@ -113,6 +114,36 @@ final _leaseTemplateOptionsProvider = FutureProvider.autoDispose
           );
     });
 
+typedef _LoanOptionQuery = ({int propertyId, int skip});
+
+final _loanOptionsProvider = FutureProvider.autoDispose
+    .family<List<PropertyLoan>, _LoanOptionQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(propertyLoansRepositoryProvider)
+          .listLoans(
+            propertyId: query.propertyId,
+            skip: query.skip,
+            take: 50,
+            sort: '-createdAt',
+          );
+    });
+
+typedef _LoanPaymentOptionQuery = ({int loanId, int skip});
+
+final _loanPaymentOptionsProvider = FutureProvider.autoDispose
+    .family<List<LoanPayment>, _LoanPaymentOptionQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(propertyLoansRepositoryProvider)
+          .getLoanPayments(
+            query.loanId,
+            sort: 'dueDate',
+            skip: query.skip,
+            take: 50,
+          );
+    });
+
 // ---------------------------------------------------------------------------
 // Field groups (mirrors web review page)
 // ---------------------------------------------------------------------------
@@ -208,6 +239,41 @@ const _loanFieldOrder = <String>[
   'notes',
 ];
 
+const _loanStatementPrincipalFieldNames = [
+  'statement_principal_amount',
+  'statementPrincipalAmount',
+  'principal_amount',
+  'principalAmount',
+];
+const _loanStatementInterestFieldNames = [
+  'statement_interest_amount',
+  'statementInterestAmount',
+  'interest_amount',
+  'interestAmount',
+];
+const _loanStatementEscrowFieldNames = [
+  'statement_escrow_amount',
+  'statementEscrowAmount',
+  'escrow_amount',
+  'escrowAmount',
+];
+const _loanStatementOpeningBalanceFieldNames = [
+  'opening_principal_balance',
+  'openingPrincipalBalance',
+  'unpaid_principal_balance',
+  'unpaidPrincipalBalance',
+  'current_balance',
+  'currentBalance',
+];
+const _loanStatementEffectiveDateFieldNames = [
+  'statementEffectiveDate',
+  'statement_effective_date',
+  'statement_date',
+  'statementDate',
+  'due_date',
+  'dueDate',
+];
+
 const _knownScalarFields = {
   'vendor_name',
   'vendor_address',
@@ -237,6 +303,17 @@ const _knownScalarFields = {
   'day_of_month_due',
   'monthly_principal_interest',
   'monthly_escrow',
+  'statement_principal_amount',
+  'principal_amount',
+  'statement_interest_amount',
+  'interest_amount',
+  'statement_escrow_amount',
+  'escrow_amount',
+  'opening_principal_balance',
+  'unpaid_principal_balance',
+  'statement_effective_date',
+  'statementEffectiveDate',
+  'statement_date',
   'escrow_covers_taxes',
   'escrow_covers_insurance',
   'property_id',
@@ -267,6 +344,14 @@ const _moneyFields = {
   'annual_interest_rate_pct',
   'monthly_principal_interest',
   'monthly_escrow',
+  'statement_principal_amount',
+  'principal_amount',
+  'statement_interest_amount',
+  'interest_amount',
+  'statement_escrow_amount',
+  'escrow_amount',
+  'opening_principal_balance',
+  'unpaid_principal_balance',
 };
 
 const _dateFields = {
@@ -279,6 +364,10 @@ const _dateFields = {
   // Applicant fields
   'date_of_birth',
   'desired_move_in_date',
+  // Loan statement fields
+  'statement_date',
+  'statement_effective_date',
+  'statementEffectiveDate',
 };
 
 enum LeaseScanReviewDisposition {
@@ -289,6 +378,8 @@ enum LeaseScanReviewDisposition {
 
   final String wireValue;
 }
+
+enum _LoanReviewMode { matchExistingPayment, addNewLoan }
 
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
 const _intFields = {
@@ -348,6 +439,17 @@ const _labelOverrides = <String, String>{
   'day_of_month_due': 'Day due',
   'monthly_principal_interest': 'Monthly P&I',
   'monthly_escrow': 'Monthly escrow',
+  'statement_principal_amount': 'Statement principal',
+  'principal_amount': 'Statement principal',
+  'statement_interest_amount': 'Statement interest',
+  'interest_amount': 'Statement interest',
+  'statement_escrow_amount': 'Statement escrow',
+  'escrow_amount': 'Statement escrow',
+  'opening_principal_balance': 'Opening principal balance',
+  'unpaid_principal_balance': 'Opening principal balance',
+  'statement_date': 'Statement date',
+  'statement_effective_date': 'Statement effective date',
+  'statementEffectiveDate': 'Statement effective date',
   'escrow_covers_taxes': 'Escrow covers taxes',
   'escrow_covers_insurance': 'Escrow covers insurance',
 };
@@ -440,6 +542,9 @@ Map<String, dynamic> buildOverridesMap({
   required int? selectedUnitId,
   required int? selectedTenantId,
   required int? loanPropertyId,
+  int? existingLoanId,
+  int? existingLoanPaymentId,
+  bool includeLoanStatementPaymentOverrides = false,
   RentalStructure? newPropertyRentalStructure,
   LeaseScanReviewDisposition? leaseReviewDisposition,
   int? documentTemplateId,
@@ -455,6 +560,11 @@ Map<String, dynamic> buildOverridesMap({
     if (entry.key == 'line_items' ||
         entry.key == 'rentalStructure' ||
         entry.key == 'rental_structure') {
+      continue;
+    }
+    if (isLoan &&
+        !includeLoanStatementPaymentOverrides &&
+        _isLoanStatementPaymentOnlyField(entry.key)) {
       continue;
     }
     final key = _keyMap[entry.key] ?? entry.key;
@@ -532,10 +642,118 @@ Map<String, dynamic> buildOverridesMap({
     overrides['tenantAccountId'] = selectedTenantAccountId;
   } else if (isLoan) {
     if (loanPropertyId != null) overrides['propertyId'] = loanPropertyId;
+    if (existingLoanId != null) overrides['existingLoanId'] = existingLoanId;
+    if (existingLoanPaymentId != null) {
+      overrides['existingLoanPaymentId'] = existingLoanPaymentId;
+    }
+    if (includeLoanStatementPaymentOverrides) {
+      _addLoanStatementPaymentOverrideAliases(overrides, editedFields);
+    }
   } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
   }
   return overrides;
+}
+
+bool _isLoanStatementPaymentOnlyField(String name) {
+  return name == 'statement_principal_amount' ||
+      name == 'statementPrincipalAmount' ||
+      name == 'principal_amount' ||
+      name == 'principalAmount' ||
+      name == 'statement_interest_amount' ||
+      name == 'statementInterestAmount' ||
+      name == 'interest_amount' ||
+      name == 'interestAmount' ||
+      name == 'statement_escrow_amount' ||
+      name == 'statementEscrowAmount' ||
+      name == 'escrow_amount' ||
+      name == 'escrowAmount' ||
+      name == 'opening_principal_balance' ||
+      name == 'openingPrincipalBalance' ||
+      name == 'unpaid_principal_balance' ||
+      name == 'unpaidPrincipalBalance' ||
+      name == 'statementTotalAmount' ||
+      name == 'statement_total_amount' ||
+      name == 'statementEffectiveDate' ||
+      name == 'statement_effective_date' ||
+      name == 'statement_date' ||
+      name == 'statementDate' ||
+      name == 'due_date' ||
+      name == 'dueDate';
+}
+
+void _addLoanStatementPaymentOverrideAliases(
+  Map<String, dynamic> overrides,
+  Map<String, String> editedFields,
+) {
+  void addFirst({
+    required List<String> names,
+    required String? snakeKey,
+    required String camelKey,
+  }) {
+    for (final name in names) {
+      final value = editedFields[name]?.trim();
+      if (value != null && value.isNotEmpty) {
+        if (snakeKey != null) overrides[snakeKey] = value;
+        overrides[camelKey] = value;
+        return;
+      }
+    }
+  }
+
+  addFirst(
+    names: _loanStatementPrincipalFieldNames,
+    snakeKey: null,
+    camelKey: 'statementPrincipalAmount',
+  );
+  addFirst(
+    names: _loanStatementInterestFieldNames,
+    snakeKey: null,
+    camelKey: 'statementInterestAmount',
+  );
+  addFirst(
+    names: _loanStatementEscrowFieldNames,
+    snakeKey: null,
+    camelKey: 'statementEscrowAmount',
+  );
+  addFirst(
+    names: _loanStatementOpeningBalanceFieldNames,
+    snakeKey: 'current_balance',
+    camelKey: 'currentBalance',
+  );
+  final principal = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementPrincipalFieldNames,
+  );
+  final interest = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementInterestFieldNames,
+  );
+  final escrow = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementEscrowFieldNames,
+  );
+  if (principal != null && interest != null && escrow != null) {
+    overrides['statementTotalAmount'] = (principal + interest + escrow)
+        .toStringAsFixed(2);
+  }
+  addFirst(
+    names: _loanStatementEffectiveDateFieldNames,
+    snakeKey: null,
+    camelKey: 'statementEffectiveDate',
+  );
+}
+
+double? _loanStatementOverrideDecimal(
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    final value = editedFields[name]?.trim();
+    if (value == null || value.isEmpty) continue;
+    return double.tryParse(value.replaceAll(RegExp(r'[$,]'), ''));
+  }
+  return null;
 }
 
 String? paymentContextConflictMessage({
@@ -777,6 +995,68 @@ double? _effectivePositiveFieldDecimal(
   return value != null && value > 0 ? value : null;
 }
 
+String _effectiveLoanStatementText(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    final edited = editedFields[name]?.trim();
+    if (edited != null && edited.isNotEmpty) return edited;
+  }
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = field?.value.trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  return '';
+}
+
+double? _effectiveLoanStatementDecimal(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  final text = _effectiveLoanStatementText(draft, editedFields, names);
+  final value = double.tryParse(text.replaceAll(RegExp(r'[$,]'), ''));
+  return value != null && value >= 0 ? value : null;
+}
+
+bool _loanMatchStatementNumbersReady(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  return _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementPrincipalFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementInterestFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementEscrowFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementOpeningBalanceFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementText(
+        draft,
+        editedFields,
+        _loanStatementEffectiveDateFieldNames,
+      ).isNotEmpty;
+}
+
 int? _effectivePositiveFieldInt(
   ScanDraft draft,
   Map<String, String> editedFields,
@@ -867,6 +1147,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // Loan scans launched from a property arrive with this preselected. Reopened
   // drafts choose here so a pending mortgage scan never dead-ends after restart.
   int? _selectedLoanPropertyId;
+  _LoanReviewMode _loanReviewMode = _LoanReviewMode.matchExistingPayment;
+  int? _selectedExistingLoanId;
+  int? _selectedExistingLoanPaymentId;
+  bool _loanStatementEffectiveDateSeededFromPayment = false;
 
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
@@ -1006,6 +1290,63 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _selectedTenantAccountId ??
       _positiveOrNull(draft.captureContext?.tenantAccountId);
 
+  void _setLoanReviewMode(_LoanReviewMode mode) {
+    setState(() {
+      _loanReviewMode = mode;
+      _selectedExistingLoanId = null;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setLoanPropertyId(int? id) {
+    setState(() {
+      _selectedLoanPropertyId = id;
+      _selectedExistingLoanId = null;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setExistingLoanId(int? id) {
+    setState(() {
+      _selectedExistingLoanId = id;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setExistingLoanPayment(ScanDraft draft, LoanPayment? payment) {
+    setState(() {
+      _selectedExistingLoanPaymentId = payment?.id;
+      if (payment == null) {
+        if (_loanStatementEffectiveDateSeededFromPayment) {
+          _editedFields.remove('statementEffectiveDate');
+          _loanStatementEffectiveDateSeededFromPayment = false;
+        }
+        return;
+      }
+      if (_effectiveLoanStatementText(
+            draft,
+            _editedFields,
+            _loanStatementEffectiveDateFieldNames,
+          ).isEmpty ||
+          _loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields['statementEffectiveDate'] = _formatDate(payment.dueDate);
+        _loanStatementEffectiveDateSeededFromPayment = true;
+      }
+    });
+  }
+
   /// Reads an extracted scalar field's raw value, or '' when absent. Used to
   /// seed the create-new-property address fields.
   String _extractedValue(ScanDraft draft, String name) {
@@ -1033,6 +1374,15 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         selectedUnitId: _selectedUnitId,
         selectedTenantId: _selectedTenantId,
         loanPropertyId: _selectedLoanPropertyId,
+        existingLoanId: _loanReviewMode == _LoanReviewMode.matchExistingPayment
+            ? _selectedExistingLoanId
+            : null,
+        existingLoanPaymentId:
+            _loanReviewMode == _LoanReviewMode.matchExistingPayment
+            ? _selectedExistingLoanPaymentId
+            : null,
+        includeLoanStatementPaymentOverrides:
+            _loanReviewMode == _LoanReviewMode.matchExistingPayment,
         newPropertyRentalStructure: _newPropertyRentalStructure,
         leaseReviewDisposition: _leaseReviewDisposition,
         documentTemplateId: _selectedDocumentTemplateId,
@@ -1076,7 +1426,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 : draft.isApplication
                 ? 'Application created!'
                 : draft.isLoan
-                ? 'Loan created!'
+                ? _loanReviewMode == _LoanReviewMode.matchExistingPayment
+                      ? 'Payment recorded!'
+                      : 'Loan created!'
                 : 'Expense created!',
           ),
           backgroundColor: Colors.green,
@@ -1330,8 +1682,12 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         return _ReviewBody(
           draft: draft,
           editedFields: _editedFields,
-          onFieldChanged: (name, value) =>
-              setState(() => _editedFields[name] = value),
+          onFieldChanged: (name, value) => setState(() {
+            _editedFields[name] = value;
+            if (_loanStatementEffectiveDateFieldNames.contains(name)) {
+              _loanStatementEffectiveDateSeededFromPayment = false;
+            }
+          }),
           isPaid: _isPaid,
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
           selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
@@ -1383,8 +1739,14 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           onRentTrackingStartOnChanged: (value) =>
               setState(() => _rentTrackingStartOn = value),
           loanPropertyId: _selectedLoanPropertyId,
-          onLoanPropertySelected: (id) =>
-              setState(() => _selectedLoanPropertyId = id),
+          onLoanPropertySelected: _setLoanPropertyId,
+          loanReviewMode: _loanReviewMode,
+          onLoanReviewModeChanged: _setLoanReviewMode,
+          existingLoanId: _selectedExistingLoanId,
+          onExistingLoanSelected: _setExistingLoanId,
+          existingLoanPaymentId: _selectedExistingLoanPaymentId,
+          onExistingLoanPaymentSelected: (payment) =>
+              _setExistingLoanPayment(draft, payment),
           confirming: _confirming,
           rejecting: _rejecting,
           retrying: _retrying,
@@ -1433,6 +1795,12 @@ class _ReviewBody extends ConsumerWidget {
     required this.onRentTrackingStartOnChanged,
     required this.loanPropertyId,
     required this.onLoanPropertySelected,
+    required this.loanReviewMode,
+    required this.onLoanReviewModeChanged,
+    required this.existingLoanId,
+    required this.onExistingLoanSelected,
+    required this.existingLoanPaymentId,
+    required this.onExistingLoanPaymentSelected,
     required this.confirming,
     required this.rejecting,
     required this.retrying,
@@ -1472,6 +1840,12 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<DateTime?> onRentTrackingStartOnChanged;
   final int? loanPropertyId;
   final ValueChanged<int?> onLoanPropertySelected;
+  final _LoanReviewMode loanReviewMode;
+  final ValueChanged<_LoanReviewMode> onLoanReviewModeChanged;
+  final int? existingLoanId;
+  final ValueChanged<int?> onExistingLoanSelected;
+  final int? existingLoanPaymentId;
+  final ValueChanged<LoanPayment?> onExistingLoanPaymentSelected;
   final bool confirming;
   final bool rejecting;
   final bool retrying;
@@ -1526,7 +1900,19 @@ class _ReviewBody extends ConsumerWidget {
         !draft.isApplication ||
         ((editedFields['first_name']?.trim().isNotEmpty ?? false) &&
             (editedFields['last_name']?.trim().isNotEmpty ?? false));
-    final loanReady = !draft.isLoan || loanPropertyId != null;
+    final addLoanReady =
+        loanPropertyId != null &&
+        (editedFields['lender']?.trim().isNotEmpty ?? false);
+    final matchLoanReady =
+        loanPropertyId != null &&
+        existingLoanId != null &&
+        existingLoanPaymentId != null &&
+        _loanMatchStatementNumbersReady(draft, editedFields);
+    final loanReady =
+        !draft.isLoan ||
+        (loanReviewMode == _LoanReviewMode.addNewLoan
+            ? addLoanReady
+            : matchLoanReady);
     final paymentConflictMessage = paymentContextConflictMessage(
       draft: draft,
       selectedTenantAccountId: selectedTenantAccountId,
@@ -1563,6 +1949,20 @@ class _ReviewBody extends ConsumerWidget {
         : selectedPropertyId != null && selectedUnitId == null
         ? 'Enter the new Unit number from the lease.'
         : 'Choose an existing Unit, or create a new Unit in an existing Property.';
+    final loanReadinessMessage = loanReviewMode == _LoanReviewMode.addNewLoan
+        ? loanPropertyId == null
+              ? 'Select a property to enable loan creation.'
+              : 'Enter the lender before creating this loan.'
+        : loanPropertyId == null
+        ? 'Select a property to find its loans.'
+        : existingLoanId == null
+        ? 'Choose the existing loan from this property.'
+        : existingLoanPaymentId == null
+        ? 'Choose the loan payment this statement should attach to.'
+        : 'Review the statement principal, interest, escrow, opening balance, and effective date.';
+    final loanActionLabel = loanReviewMode == _LoanReviewMode.addNewLoan
+        ? 'Create Loan'
+        : 'Match & record payment';
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already confirmed/rejected.
     final rejectEnabled =
@@ -1722,11 +2122,26 @@ class _ReviewBody extends ConsumerWidget {
                       onFieldChanged: onFieldChanged,
                     ),
                 ] else if (draft.isLoan) ...[
+                  _LoanReviewModeSection(
+                    mode: loanReviewMode,
+                    onModeChanged: onLoanReviewModeChanged,
+                  ),
                   _LoanPropertyPicker(
                     selectedPropertyId: loanPropertyId,
                     onPropertySelected: onLoanPropertySelected,
                   ),
-                  if (draft.scalarFields.isNotEmpty ||
+                  if (loanReviewMode == _LoanReviewMode.matchExistingPayment)
+                    _ExistingLoanPaymentPicker(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                      propertyId: loanPropertyId,
+                      loanId: existingLoanId,
+                      onLoanSelected: onExistingLoanSelected,
+                      paymentId: existingLoanPaymentId,
+                      onPaymentSelected: onExistingLoanPaymentSelected,
+                    )
+                  else if (draft.scalarFields.isNotEmpty ||
                       draft.status != 'Pending')
                     _LoanFieldsSection(
                       draft: draft,
@@ -1833,7 +2248,7 @@ class _ReviewBody extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'Select a property to enable loan creation.',
+                  loanReadinessMessage,
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -1903,7 +2318,7 @@ class _ReviewBody extends ConsumerWidget {
                               : draft.isApplication
                               ? 'Create Application'
                               : draft.isLoan
-                              ? 'Create Loan'
+                              ? loanActionLabel
                               : 'Confirm & Create Expense',
                         ),
                 ),
@@ -3584,6 +3999,68 @@ class _ApplicantSection extends StatelessWidget {
 // _LoanFieldsSection — editable loan fields in web form order
 // ---------------------------------------------------------------------------
 
+String _formatMoney(double value) {
+  final fixed = value.abs().toStringAsFixed(2);
+  final parts = fixed.split('.');
+  final dollars = parts.first;
+  final buffer = StringBuffer();
+  for (var i = 0; i < dollars.length; i++) {
+    if (i > 0 && (dollars.length - i) % 3 == 0) buffer.write(',');
+    buffer.write(dollars[i]);
+  }
+  final sign = value < 0 ? '-' : '';
+  return '$sign\$$buffer.${parts.last}';
+}
+
+String _formatDate(DateTime value) {
+  if (value.year <= 0) return 'Unknown date';
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
+
+String _loanPaymentStatusLabel(String status) => switch (status) {
+  'Paid' => 'Paid',
+  'Scheduled' => 'Scheduled',
+  _ => status,
+};
+
+class _LoanReviewModeSection extends StatelessWidget {
+  const _LoanReviewModeSection({
+    required this.mode,
+    required this.onModeChanged,
+  });
+
+  final _LoanReviewMode mode;
+  final ValueChanged<_LoanReviewMode> onModeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: SegmentedButton<_LoanReviewMode>(
+        segments: const [
+          ButtonSegment(
+            value: _LoanReviewMode.matchExistingPayment,
+            label: Text('Match existing payment'),
+            icon: Icon(Icons.playlist_add_check),
+          ),
+          ButtonSegment(
+            value: _LoanReviewMode.addNewLoan,
+            label: Text('Add new loan'),
+            icon: Icon(Icons.add_home_work_outlined),
+          ),
+        ],
+        selected: {mode},
+        onSelectionChanged: (selection) =>
+            onModeChanged(selection.firstOrNull ?? mode),
+        style: SegmentedButton.styleFrom(visualDensity: theme.visualDensity),
+      ),
+    );
+  }
+}
+
 class _LoanPropertyPicker extends ConsumerWidget {
   const _LoanPropertyPicker({
     required this.selectedPropertyId,
@@ -3656,6 +4133,504 @@ class _LoanPropertyPicker extends ConsumerWidget {
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ExistingLoanPaymentPicker extends ConsumerWidget {
+  const _ExistingLoanPaymentPicker({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+    required this.propertyId,
+    required this.loanId,
+    required this.onLoanSelected,
+    required this.paymentId,
+    required this.onPaymentSelected,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+  final int? propertyId;
+  final int? loanId;
+  final ValueChanged<int?> onLoanSelected;
+  final int? paymentId;
+  final ValueChanged<LoanPayment?> onPaymentSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final propertyId = this.propertyId;
+    final selectedLoanId = loanId;
+    final loansAsync = propertyId == null
+        ? null
+        : ref.watch(_loanOptionsProvider((propertyId: propertyId, skip: 0)));
+    final paymentsAsync = selectedLoanId == null
+        ? null
+        : ref.watch(
+            _loanPaymentOptionsProvider((loanId: selectedLoanId, skip: 0)),
+          );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'MATCH PAYMENT',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _PickerLabel(text: 'Existing loan', required: true),
+          if (loansAsync == null)
+            Text(
+              'Select a property first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            loansAsync.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => Text(
+                'Could not load property loans.',
+                style: TextStyle(color: colorScheme.error),
+              ),
+              data: (loans) {
+                if (loans.isEmpty) {
+                  return Text(
+                    'No loans were returned for this property.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  );
+                }
+                final ids = loans.map((loan) => loan.id).toSet();
+                final selectedLoan = loans
+                    .where((loan) => loan.id == selectedLoanId)
+                    .firstOrNull;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: ids.contains(selectedLoanId)
+                          ? selectedLoanId
+                          : null,
+                      hint: const Text('Select a loan'),
+                      isExpanded: true,
+                      decoration: _pickerDecoration,
+                      items: loans
+                          .map(
+                            (loan) => DropdownMenuItem(
+                              value: loan.id,
+                              child: Text(
+                                '${loan.lender} - ${_formatMoney(loan.currentBalance)} balance',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: onLoanSelected,
+                    ),
+                    if (selectedLoan != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _LoanSummary(loan: selectedLoan),
+                      ),
+                  ],
+                );
+              },
+            ),
+          const SizedBox(height: 16),
+          _PickerLabel(text: 'Loan payment', required: true),
+          if (loanId == null)
+            Text(
+              'Select a loan first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            paymentsAsync!.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => Text(
+                'Could not load loan payments.',
+                style: TextStyle(color: colorScheme.error),
+              ),
+              data: (payments) {
+                if (payments.isEmpty) {
+                  return Text(
+                    'No payments were returned for this loan.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  );
+                }
+                final ids = payments.map((payment) => payment.id).toSet();
+                final selectedPayment = payments
+                    .where((payment) => payment.id == paymentId)
+                    .firstOrNull;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: ids.contains(paymentId) ? paymentId : null,
+                      hint: const Text('Select a payment'),
+                      isExpanded: true,
+                      decoration: _pickerDecoration,
+                      items: payments
+                          .map(
+                            (payment) => DropdownMenuItem(
+                              value: payment.id,
+                              child: Text(
+                                '${_formatDate(payment.dueDate)} - ${_formatMoney(payment.totalAmount)} total - ${_loanPaymentStatusLabel(payment.status)}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (id) => onPaymentSelected(
+                        payments
+                            .where((payment) => payment.id == id)
+                            .firstOrNull,
+                      ),
+                    ),
+                    if (selectedPayment != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _LoanPaymentSummary(payment: selectedPayment),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _LoanStatementPaymentFields(
+                        draft: draft,
+                        editedFields: editedFields,
+                        onFieldChanged: onFieldChanged,
+                        selectedPayment: selectedPayment,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanStatementPaymentFields extends StatelessWidget {
+  const _LoanStatementPaymentFields({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+    required this.selectedPayment,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+  final LoanPayment? selectedPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final principal = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementPrincipalFieldNames,
+    );
+    final interest = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementInterestFieldNames,
+    );
+    final escrow = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementEscrowFieldNames,
+    );
+    final openingBalance = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementOpeningBalanceFieldNames,
+    );
+    final piTotal = principal != null && interest != null
+        ? principal + interest
+        : null;
+    final cashTotal = principal != null && interest != null && escrow != null
+        ? principal + interest + escrow
+        : null;
+    final balanceAfter = openingBalance != null && principal != null
+        ? openingBalance - principal
+        : null;
+    final fields = [
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementPrincipalFieldNames,
+        'statement_principal_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementInterestFieldNames,
+        'statement_interest_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementEscrowFieldNames,
+        'statement_escrow_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementOpeningBalanceFieldNames,
+        'opening_principal_balance',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementEffectiveDateFieldNames,
+        'statementEffectiveDate',
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'STATEMENT AMOUNTS',
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Review the exact amounts from the statement before attaching it to this loan payment.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        for (final field in fields)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _FieldInput(
+              field: field,
+              value: editedFields[field.name] ?? field.value,
+              onChanged: (value) => onFieldChanged(field.name, value),
+            ),
+          ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                _AmountReviewRow(label: 'P&I total', value: piTotal),
+                _AmountReviewRow(label: 'Full cash total', value: cashTotal),
+                _AmountReviewRow(
+                  label: 'Derived balance after',
+                  value: balanceAfter,
+                ),
+                if (selectedPayment != null) ...[
+                  const Divider(height: 20),
+                  _AmountReviewRow(
+                    label: 'Selected payment total',
+                    value: selectedPayment!.totalAmount,
+                  ),
+                  _AmountReviewRow(
+                    label: 'Selected balance after',
+                    value: selectedPayment!.balanceAfter,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AmountReviewRow extends StatelessWidget {
+  const _AmountReviewRow({required this.label, required this.value});
+
+  final String label;
+  final double? value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final amount = value;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Text(
+            amount == null ? 'Review needed' : _formatMoney(amount),
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: amount == null ? colorScheme.error : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+ScanField _loanStatementField(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+  String fallbackName,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      final existing = draft.fields
+          .where((field) => field.name == name)
+          .firstOrNull;
+      return ScanField(
+        name: name,
+        value: editedFields[name] ?? existing?.value ?? '',
+        confidence: existing?.confidence ?? 1,
+      );
+    }
+  }
+  for (final name in names) {
+    final existing = draft.fields
+        .where((field) => field.name == name)
+        .firstOrNull;
+    if (existing != null) return existing;
+  }
+  return ScanField(name: fallbackName, value: '', confidence: 1);
+}
+
+class _LoanSummary extends StatelessWidget {
+  const _LoanSummary({required this.loan});
+
+  final PropertyLoan loan;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              loan.lender,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${_formatMoney(loan.currentBalance)} balance',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LoanPaymentSummary extends StatelessWidget {
+  const _LoanPaymentSummary({required this.payment});
+
+  final LoanPayment payment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final rows = [
+      ('Principal', payment.principalAmount),
+      ('Interest', payment.interestAmount),
+      ('Escrow', payment.escrowAmount),
+      ('Total', payment.totalAmount),
+      ('Balance after', payment.balanceAfter),
+    ];
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Due ${_formatDate(payment.dueDate)} - ${_loanPaymentStatusLabel(payment.status)}',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final row in rows)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        row.$1,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _formatMoney(row.$2),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

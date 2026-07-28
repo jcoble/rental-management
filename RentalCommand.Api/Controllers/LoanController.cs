@@ -51,9 +51,12 @@ public class LoanController : ManagementControllerBase
     [HttpGet("{id:int}/payments")]
     [ProducesResponseType(typeof(IReadOnlyList<LoanPaymentResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<IReadOnlyList<LoanPaymentResponse>>> Payments(int id, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<LoanPaymentResponse>>> Payments(
+        int id,
+        [FromQuery] LoanPaymentQuery query,
+        CancellationToken ct)
     {
-        var payments = await _service.GetPaymentsAsync(GetWorkspaceReadScope(), id, ct);
+        var payments = await _service.GetPaymentsAsync(GetWorkspaceReadScope(), id, query, ct);
         return payments == null ? NotFound(new { error = "Loan not found" }) : Ok(payments);
     }
 

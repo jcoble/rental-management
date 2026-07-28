@@ -230,9 +230,24 @@ class PropertyLoansRepository {
     }
   }
 
-  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+  Future<List<LoanPayment>> getLoanPayments(
+    int loanId, {
+    String? status,
+    String? sort,
+    int? skip,
+    int? take,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/loans/$loanId/payments');
+      final response = await _dio.get<List<dynamic>>(
+        '/loans/$loanId/payments',
+        queryParameters: {
+          if (status != null && status.trim().isNotEmpty)
+            'status': status.trim(),
+          if (sort != null && sort.trim().isNotEmpty) 'sort': sort.trim(),
+          'skip': ?skip,
+          'take': ?take,
+        },
+      );
       final data = response.data ?? [];
       return data
           .whereType<Map<String, dynamic>>()

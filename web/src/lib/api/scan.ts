@@ -115,6 +115,7 @@ export interface ScanConfirmResponse {
 	agreementId?: number | null;
 	applicationId?: number | null;
 	loanId?: number | null;
+	loanPaymentId?: number | null;
 	unitId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;

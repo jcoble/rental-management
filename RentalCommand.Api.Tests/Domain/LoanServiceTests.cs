@@ -95,6 +95,37 @@ public class LoanServiceTests : IDisposable
         schedule[1].PeriodKey.Should().Be("2024-02");
     }
 
+    [Fact]
+    public async Task GetPaymentsAsync_AppliesStatusDueDateSortAndPagingServerSide()
+    {
+        var property = SeedProperty();
+        var loan = SeedLoan(property.Id);
+
+        _ctx.Db.LoanPayments.AddRange(
+            MakePayment(loan, "2024-01", 199_800.90m,
+                dueDate: new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                status: LoanPaymentStatus.Paid),
+            MakePayment(loan, "2024-02", 199_600.80m,
+                dueDate: new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-03", 199_400.70m,
+                dueDate: new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-04", 199_200.60m,
+                dueDate: new DateTime(2024, 4, 1, 0, 0, 0, DateTimeKind.Utc)));
+        _ctx.Db.SaveChanges();
+
+        var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id, new LoanPaymentQuery
+        {
+            Status = LoanPaymentStatus.Scheduled,
+            Sort = "dueDate",
+            Skip = 1,
+            Take = 1,
+        });
+
+        schedule.Should().NotBeNull();
+        schedule!.Should().ContainSingle();
+        schedule[0].PeriodKey.Should().Be("2024-03");
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -145,18 +176,23 @@ public class LoanServiceTests : IDisposable
         return loan;
     }
 
-    private static LoanPayment MakePayment(Loan loan, string periodKey, decimal balanceAfter) => new()
+    private static LoanPayment MakePayment(
+        Loan loan,
+        string periodKey,
+        decimal balanceAfter,
+        DateTime? dueDate = null,
+        LoanPaymentStatus status = LoanPaymentStatus.Scheduled) => new()
     {
         PortfolioId = loan.PortfolioId,
         LoanId = loan.Id,
         PeriodKey = periodKey,
-        DueDate = DateTime.UtcNow,
+        DueDate = dueDate ?? DateTime.UtcNow,
         InterestAmount = 1000m,
         PrincipalAmount = 199.10m,
         EscrowAmount = 0m,
         TotalAmount = 1199.10m,
         BalanceAfter = balanceAfter,
-        Status = LoanPaymentStatus.Scheduled,
+        Status = status,
         CreatedAt = DateTime.UtcNow,
     };
 }

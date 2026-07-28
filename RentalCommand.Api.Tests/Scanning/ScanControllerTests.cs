@@ -2,7 +2,6 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
@@ -20,36 +19,34 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
-public class ScanControllerTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ScanControllerTests : IAsyncLifetime
 {
     private static readonly Guid SessionId =
         Guid.Parse("11111111-1111-1111-1111-111111111111");
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
     private readonly List<string> _executedSql = [];
-    private readonly CanonicalScanTestAuthorization _authorization;
+    private CanonicalScanTestAuthorization _authorization = null!;
 
-    public ScanControllerTests()
+    public ScanControllerTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new ScanControllerTestDbContext(options);
-        _db.Database.EnsureCreated();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, portfolioId: 42, userId: 7, sessionId: SessionId);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -465,6 +462,36 @@ public class ScanControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Confirm_LoanMatchResponseIncludesLoanAndPaymentIds()
+    {
+        SeedAuthorizedDraft(17, "Loan");
+        var scan = ReadyScan(LoanCommand(17));
+        var atomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed, 17, "Loan", 91,
+                    LoanPaymentId: 901),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, atomic: atomic);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "loan-match" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "loanId").Should().Be(91);
+        Property(body, "loanPaymentId").Should().Be(901);
+        Property(body, "entityId").Should().Be(91);
+        Property(body, "entityType").Should().Be("Loan");
+        scan.VerifyAll();
+    }
+
+
+    [Fact]
     public async Task Confirm_MapsNotFoundRejectedAndValidationResponses()
     {
         var notFoundScan = new Mock<IScanService>(MockBehavior.Strict);
@@ -596,6 +623,31 @@ public class ScanControllerTests : IDisposable
                 null,
                 null)));
 
+    private static ConfirmScanDraftCommand LoanCommand(int draftId) => new(
+        42,
+        draftId,
+        7,
+        DateTime.UtcNow,
+        ScanConfirmationDraftFingerprint.Create("Loan", null, null),
+        new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.Loan,
+            Loan: new ScanLoanTargetData(
+                10,
+                "Existing Match Bank",
+                200_000m,
+                199_500m,
+                6.125m,
+                360,
+                DateTime.UtcNow.AddYears(-1),
+                1,
+                1_250m,
+                300m,
+                true,
+                true,
+                "Scanned statement",
+                ExistingLoanId: 91,
+                ExistingLoanPaymentId: 901)));
+
     private static object? Property(object value, string name) =>
         value.GetType().GetProperty(name)!.GetValue(value);
 
@@ -645,9 +697,4 @@ public class ScanControllerTests : IDisposable
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
-}
-
-internal sealed class ScanControllerTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-{
-    public ScanControllerTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }

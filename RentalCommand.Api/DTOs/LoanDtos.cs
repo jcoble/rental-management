@@ -94,6 +94,19 @@ public class LoanPaymentResponse
     };
 }
 
+public class LoanPaymentQuery
+{
+    public LoanPaymentStatus? Status { get; set; }
+    public int? Skip { get; set; }
+    public int? Take { get; set; }
+    public string? Sort { get; set; }
+
+    public int NormalizedSkip => Math.Max(0, Skip ?? 0);
+    public int? NormalizedTake => Take is null ? null : Math.Clamp(Take.Value, 1, 500);
+    public string SortField => (Sort ?? string.Empty).Trim().TrimStart('-').ToLowerInvariant();
+    public bool SortDescending => (Sort ?? string.Empty).TrimStart().StartsWith("-", StringComparison.Ordinal);
+}
+
 public class PostLoanPaymentRequest
 {
     /// <summary>Bound from the route by the server; client values are overwritten.</summary>
