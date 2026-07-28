@@ -20,6 +20,8 @@ namespace RentalCommand.Api.Services.Domain;
 public class VendorService : IVendorService
 {
     private const string EntityType = "Vendor";
+    private static readonly string[] ReadCapabilities =
+        [CapabilityKeys.WorkRead, CapabilityKeys.WorkManage];
     private static readonly AtomicJsonResultCodec<RequestVendorW9Result> RequestW9Codec =
         new("vendor-w9.request.result.v1");
 
@@ -48,7 +50,7 @@ public class VendorService : IVendorService
 
     public async Task<VendorListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var q = AuthorizedVendors(scope, CapabilityKeys.WorkRead).AsNoTracking();
+        var q = AuthorizedVendors(scope, ReadCapabilities).AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -85,7 +87,7 @@ public class VendorService : IVendorService
 
     public async Task<VendorResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        return await ProjectResponses(AuthorizedVendors(scope, CapabilityKeys.WorkRead).AsNoTracking())
+        return await ProjectResponses(AuthorizedVendors(scope, ReadCapabilities).AsNoTracking())
             .FirstOrDefaultAsync(v => v.Id == id, ct);
     }
 
@@ -209,15 +211,49 @@ public class VendorService : IVendorService
             UpdatedAt = entity.UpdatedAt,
         });
 
-    private IQueryable<Vendor> AuthorizedVendors(WorkspaceReadScope scope, string capabilityKey)
+    private IQueryable<Vendor> AuthorizedVendors(WorkspaceReadScope scope, IReadOnlyCollection<string> capabilityKeys)
     {
-        var assignments = _db.AuthorizedWorkspaceAssignments(
-            scope,
-            [capabilityKey],
-            CapabilityAuthorizationTargetKind.Property,
-            _timeProvider.UtcNow());
+        var now = TimeProvider.System.GetUtcNow().UtcDateTime;
+        var assignments = _db.MembershipRoleAssignments.AsNoTracking().Where(assignment =>
+            assignment.PortfolioId == scope.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+                assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && _db.WorkspaceAccessContexts.Any(context =>
+                context.Id == scope.AccessContextId && context.UserId == scope.UserId
+                && context.PortfolioId == scope.PortfolioId
+                && context.AccessRevision == scope.AccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
+            && _db.AuthSessions.Any(session =>
+                session.Id == scope.SessionId && session.UserId == scope.UserId
+                && session.ActiveAccessContextId == scope.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                capabilityKeys.Contains(grant.CapabilityDefinition!.Key)
+                && grant.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
+        var authorizedProperties = _db.Properties.AsNoTracking().Where(property =>
+            property.PortfolioId == scope.PortfolioId && property.DeletedAt == null
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                && assignment.SelectedProperties.Any(selected =>
+                    selected.PortfolioId == scope.PortfolioId
+                    && selected.PropertyId == property.Id)));
         return _db.Vendors.Where(vendor =>
-            vendor.PortfolioId == scope.PortfolioId && assignments.Any());
+            vendor.PortfolioId == scope.PortfolioId &&
+            (assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties) ||
+             authorizedProperties.Any()));
     }
 
     private Task<bool> HasAllPropertiesAsync(
