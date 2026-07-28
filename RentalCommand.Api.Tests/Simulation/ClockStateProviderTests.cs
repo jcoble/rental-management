@@ -43,6 +43,46 @@ public class ClockStateProviderTests
         Assert.Equal("America/Chicago", sut.Current.TimeZoneId);
     }
 
+    [Fact]
+    public async Task EnsureInitializedAsync_LoadsFrozenPersistedClockBeforeFirstUse()
+    {
+        using var ctx = new SqliteTestContext();
+        var anchor = new DateTime(2027, 1, 26, 5, 0, 0, DateTimeKind.Utc);
+        ctx.Db.SimulationClocks.Add(new SimulationClock
+        {
+            Id               = 1,
+            Mode             = ClockMode.Frozen,
+            SimAnchorUtc     = anchor,
+            RealAnchorUtc    = anchor.AddDays(-30),
+            TimeZoneId       = "America/New_York",
+            UpdatedAtRealUtc = anchor,
+        });
+        ctx.Db.SaveChanges();
+
+        var sut = new ClockStateProvider(new SingleDbScopeFactory(ctx.Db));
+
+        Assert.False(sut.HasLoadedPersistedState);
+
+        await sut.EnsureInitializedAsync();
+
+        Assert.True(sut.HasLoadedPersistedState);
+        Assert.Equal(ClockMode.Frozen, sut.Current.Mode);
+        Assert.Equal(anchor, sut.Current.SimAnchorUtc);
+        Assert.Equal("America/New_York", sut.Current.TimeZoneId);
+    }
+
+    [Fact]
+    public async Task EnsureInitializedAsync_ThrowsWhenSeedRowMissing()
+    {
+        using var ctx = new SqliteTestContext();
+        var sut = new ClockStateProvider(new SingleDbScopeFactory(ctx.Db));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.EnsureInitializedAsync());
+        Assert.Contains("SimulationClock row 1 was not found", ex.Message);
+        Assert.False(sut.HasLoadedPersistedState);
+        Assert.Equal(ClockMode.Real, sut.Current.Mode);
+    }
+
     /// <summary>
     /// Minimal <see cref="IServiceScopeFactory"/> that hands <see cref="ClockStateProvider"/> the test's
     /// own <see cref="RentalCommandDbContext"/>. Dispose is a no-op so the shared <see cref="SqliteTestContext"/>
