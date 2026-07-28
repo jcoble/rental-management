@@ -26,6 +26,10 @@ OUT = ROOT / "Docs" / "Testing" / "YearSimulation2027"
 YEAR = 2027
 START = date(YEAR, 1, 1)
 END = date(YEAR, 12, 31)
+WEB_NATIVE_CONTROL = re.compile(
+    r"<(input|select|textarea)(?=\s|/?>)([^>]*)>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 FIRST_NAMES = [
@@ -2020,7 +2024,6 @@ def build_screen_and_field_inventory() -> None:
                 "Open the direct URL or deep link with an adjacent unauthorized persona and with stale scope; both fail closed and land safely without mutation.",
             )
 
-    web_control = re.compile(r"<(input|select|textarea)\b([^>]*)>", re.IGNORECASE | re.DOTALL)
     attr = lambda name, text: next(
         (
             match.group(1) or match.group(2) or match.group(3) or ""
@@ -2041,7 +2044,7 @@ def build_screen_and_field_inventory() -> None:
     for path in sorted((ROOT / "web" / "src").rglob("*.svelte")):
         source_file = str(path.relative_to(ROOT))
         source = path.read_text(encoding="utf-8")
-        for ordinal, match in enumerate(web_control.finditer(source), start=1):
+        for ordinal, match in enumerate(WEB_NATIVE_CONTROL.finditer(source), start=1):
             control_type, attributes = match.groups()
             bind_value = ""
             bind_match = re.search(r"bind:(?:value|checked|group)\s*=\s*\{([^}]+)\}", attributes)
