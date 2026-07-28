@@ -12,6 +12,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Navigation;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -238,6 +239,67 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             "EntityUpdated",
             It.IsAny<object?[]>(),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task BatchPropertyInvalidation_SendsResolvedHubHintsConcurrently()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Concurrent batch fanout");
+        _context.Db.SaveChanges();
+        AddTeamSession("batch-fanout", targetProperty, now);
+        _context.Db.SaveChanges();
+        _commands.Clear();
+        var gate = new object();
+        var inFlight = 0;
+        var maxInFlight = 0;
+        var calls = 0;
+        _client.Setup(value => value.SendCoreAsync(
+                It.IsAny<string>(), It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Returns<string, object?[], CancellationToken>(async (_, _, _) =>
+            {
+                lock (gate)
+                {
+                    calls++;
+                    inFlight++;
+                    maxInFlight = Math.Max(maxInFlight, inFlight);
+                }
+
+                try
+                {
+                    await Task.Delay(300);
+                }
+                finally
+                {
+                    lock (gate)
+                    {
+                        inFlight--;
+                    }
+                }
+            });
+        var service = new DataUpdateService(
+            _context.Db,
+            _hub.Object,
+            TimeProvider.System,
+            Mock.Of<ILogger<DataUpdateService>>(),
+            TimeSpan.FromSeconds(5));
+
+        var elapsed = Stopwatch.StartNew();
+        await service.BroadcastEntityUpdatesAsync(
+        [
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+        ]);
+        elapsed.Stop();
+
+        calls.Should().Be(3);
+        maxInFlight.Should().BeGreaterThan(1,
+            "post-commit realtime batches should not serialize one hub wait per invalidation");
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(800),
+            "three 300 ms hub sends should overlap after the DB-side recipient queries resolve");
+        _commands.Should().HaveCount(3,
+            "each update still resolves its authorized audience with one translated SQL query");
     }
 
     private Property AddProperty(string name)
