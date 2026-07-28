@@ -2009,6 +2009,7 @@ public class ReportsService : IReportsService
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
                         distribution.OwnerEntityId == group.Key.OwnerId &&
+                        distribution.Status == OwnerDistributionStatus.Approved &&
                         distribution.PropertyId != null &&
                         distribution.Date >= start &&
                         distribution.Date < end &&

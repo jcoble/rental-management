@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -18,7 +19,7 @@ public enum AtomicMoneyDomain
     PropertyDisposition,
 }
 
-public enum AtomicMoneyOperation { Create, Update, Delete, CapitalizeExpense, PostPayment }
+public enum AtomicMoneyOperation { Create, Update, Delete, CapitalizeExpense, PostPayment, Approve, Reject }
 
 public sealed record AtomicMoneyMutationCommand(
     int PortfolioId,
@@ -70,7 +71,7 @@ public sealed class AtomicMoneyMutationHandler
             AtomicMoneyDomain.Expense => await MutateExpenseAsync(command, attempt, now, ct),
             AtomicMoneyDomain.RecurringExpense => await MutateRecurringExpenseAsync(command, attempt, now, ct),
             AtomicMoneyDomain.Loan => await MutateLoanAsync(command, attempt, now, businessDateUtc, ct),
-            AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(command, attempt, now, ct),
+            AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(command, attempt, now, businessDateUtc, ct),
             AtomicMoneyDomain.CapitalAsset => await MutateCapitalAssetAsync(command, attempt, now, ct),
             AtomicMoneyDomain.PropertyDisposition => await MutatePropertyDispositionAsync(command, attempt, now, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
@@ -736,7 +737,11 @@ public sealed class AtomicMoneyMutationHandler
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateDistributionAsync(
-        AtomicMoneyMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
+        AtomicMoneyMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        DateTime businessDateUtc,
+        CancellationToken ct)
     {
         var persistence = attempt.Persistence;
         if (command.Operation == AtomicMoneyOperation.Create)
@@ -758,6 +763,8 @@ public sealed class AtomicMoneyMutationHandler
             throw Denied("Owner distributions require workspace payout authority.");
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
+            if (entity!.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner distribution can be deleted.");
             entity!.DeletedAt = now;
             entity.UpdatedAt = now;
             attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerDistribution),
@@ -775,16 +782,54 @@ public sealed class AtomicMoneyMutationHandler
             {
                 PortfolioId = command.PortfolioId, OwnerEntityId = request.OwnerEntityId,
                 PropertyId = request.PropertyId, Date = Utc(request.Date), Amount = request.Amount,
-                Method = request.Method, Memo = request.Memo, CreatedAt = now, UpdatedAt = now,
+                Method = request.Method, Status = OwnerDistributionStatus.Draft,
+                Memo = Normalize(request.Memo), CreatedAt = now, UpdatedAt = now,
             };
             persistence.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerDistribution),
-                AuditLogOperation.Created, "Owner distribution recorded", entityId: 0));
+                AuditLogOperation.Created, "Owner distribution draft created", entityId: 0));
+        }
+        else if (command.Operation == AtomicMoneyOperation.Approve)
+        {
+            var request = Read<ApproveOwnerDistributionRequest>(command);
+            var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner distribution can be approved.");
+            var bankReference = Normalize(request.BankReference);
+            var exportReference = Normalize(request.ExportReference);
+            if (bankReference is null || exportReference is null)
+                throw Conflict("Bank reference and export reference are required before approving a distribution.");
+            current.Status = OwnerDistributionStatus.Approved;
+            current.ApprovedAt = now;
+            current.ApprovedBusinessDate = businessDateUtc;
+            current.ApprovedByUserId = command.ActorUserId;
+            current.BankReference = bankReference;
+            current.ExportReference = exportReference;
+            current.ExportedAt = Utc(request.ExportedAt) ?? now;
+            current.UpdatedAt = now;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerDistribution),
+                AuditLogOperation.Updated, $"Owner distribution {current.Id} approved"));
+        }
+        else if (command.Operation == AtomicMoneyOperation.Reject)
+        {
+            var request = Read<RejectOwnerDistributionRequest>(command);
+            var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner distribution can be rejected.");
+            current.Status = OwnerDistributionStatus.Rejected;
+            current.RejectedAt = now;
+            current.RejectedByUserId = command.ActorUserId;
+            current.RejectionReason = Normalize(request.Reason);
+            current.UpdatedAt = now;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerDistribution),
+                AuditLogOperation.Updated, $"Owner distribution {current.Id} rejected"));
         }
         else
         {
             var request = Read<UpdateOwnerDistributionRequest>(command);
             var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner distribution can be edited.");
             var ownerId = request.OwnerEntityId ?? current.OwnerEntityId;
             await attempt.Locking.AcquireAsync(AtomicLockResource.OwnerEntity, ownerId, ct);
             var propertyId = request.ClearProperty == true ? null : request.PropertyId ?? current.PropertyId;
@@ -794,7 +839,7 @@ public sealed class AtomicMoneyMutationHandler
             if (request.Date.HasValue) current.Date = Utc(request.Date.Value);
             if (request.Amount.HasValue) current.Amount = request.Amount.Value;
             if (request.Method.HasValue) current.Method = request.Method.Value;
-            if (request.Memo is not null) current.Memo = request.Memo;
+            if (request.Memo is not null) current.Memo = Normalize(request.Memo);
             current.UpdatedAt = now;
             attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerDistribution),
                 AuditLogOperation.Updated, $"Owner distribution {current.Id} updated"));
@@ -895,6 +940,16 @@ public sealed class AtomicMoneyMutationHandler
                 Date = distribution.Date,
                 Amount = distribution.Amount,
                 Method = distribution.Method,
+                Status = distribution.Status,
+                ApprovedAt = distribution.ApprovedAt,
+                ApprovedBusinessDate = distribution.ApprovedBusinessDate,
+                ApprovedByUserId = distribution.ApprovedByUserId,
+                RejectedAt = distribution.RejectedAt,
+                RejectedByUserId = distribution.RejectedByUserId,
+                RejectionReason = distribution.RejectionReason,
+                BankReference = distribution.BankReference,
+                ExportReference = distribution.ExportReference,
+                ExportedAt = distribution.ExportedAt,
                 Memo = distribution.Memo,
                 CreatedAt = distribution.CreatedAt,
                 UpdatedAt = distribution.UpdatedAt,
@@ -1260,6 +1315,7 @@ public sealed class AtomicMoneyMutationHandler
     private static AtomicMoneyMutationResult Missing() => new(false, false, 0);
     private static AtomicMoneyMutationResult Applied(int id, string? responseJson = null) =>
         new(true, true, id, responseJson);
+    private static DomainValidationException Conflict(string message) => new(message, 409);
     private static CapabilityAuthorizationTargetKind RequiredTargetKind(AtomicMoneyMutationCommand command) =>
         command.Domain == AtomicMoneyDomain.OwnerDistribution
             ? CapabilityAuthorizationTargetKind.Workspace

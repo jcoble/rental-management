@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -55,6 +56,7 @@ public sealed class OwnerPortalService : IOwnerPortalService
                     .Where(distribution =>
                         distribution.PortfolioId == scope.PortfolioId &&
                         distribution.DeletedAt == null &&
+                        distribution.Status == OwnerDistributionStatus.Approved &&
                         distribution.Date >= start &&
                         distribution.Date < end &&
                         ownerAccess.Any(access =>
@@ -170,6 +172,7 @@ public sealed class OwnerPortalService : IOwnerPortalService
             .Where(distribution =>
                 distribution.PortfolioId == scope.PortfolioId &&
                 distribution.DeletedAt == null &&
+                distribution.Status == OwnerDistributionStatus.Approved &&
                 ownerAccess.Any(access =>
                     access.OwnerEntityId == distribution.OwnerEntityId &&
                     (distribution.PropertyId == null || access.PropertyId == distribution.PropertyId)));

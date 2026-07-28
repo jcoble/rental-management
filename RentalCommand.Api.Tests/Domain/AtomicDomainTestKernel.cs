@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.Services.Domain;
@@ -101,9 +102,11 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForMoneyPostgreSql(string connectionString)
+    internal static ServiceProvider CreateForMoneyPostgreSql(
+        string connectionString,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = CorePostgreSql(connectionString);
+        var services = CorePostgreSql(connectionString, interceptors: interceptors);
         services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
@@ -182,7 +185,10 @@ internal static class AtomicDomainTestKernel
         return services;
     }
 
-    private static ServiceCollection CorePostgreSql(string connectionString, TimeProvider? timeProvider = null)
+    private static ServiceCollection CorePostgreSql(
+        string connectionString,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -193,8 +199,14 @@ internal static class AtomicDomainTestKernel
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
             builder.UseNpgsql(connectionString)
-                .UseAtomicPersistenceKernel(provider));
+                .UseAtomicPersistenceKernel(provider);
+            if (interceptors is not null)
+            {
+                builder.AddInterceptors(interceptors);
+            }
+        });
         return services;
     }
 
