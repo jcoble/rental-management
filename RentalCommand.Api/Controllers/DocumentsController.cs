@@ -40,6 +40,11 @@ namespace RentalCommand.Api.Controllers;
 public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 {
     private const string DocumentTemplateEntityType = "DocumentTemplate";
+    private static readonly string[] DocumentTemplateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
 
     // Content types safe to render inline (no active content that could run scripts).
     private static readonly HashSet<string> InlineSafeContentTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -619,7 +624,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                 assignment.RoleProfile != null &&
                 assignment.RoleProfile.Capabilities.Any(profileCapability =>
                     profileCapability.CapabilityDefinition != null &&
-                    profileCapability.CapabilityDefinition.Key == CapabilityKeys.LeasingAgreementsPrepare &&
+                    DocumentTemplateCapabilityKeys.Contains(profileCapability.CapabilityDefinition.Key) &&
                     profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
                     CapabilityAuthorizationTargetKind.Property));
 
