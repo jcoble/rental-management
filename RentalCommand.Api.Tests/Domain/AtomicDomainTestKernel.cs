@@ -104,9 +104,10 @@ internal static class AtomicDomainTestKernel
 
     internal static ServiceProvider CreateForMoneyPostgreSql(
         string connectionString,
-        IEnumerable<IInterceptor>? interceptors = null)
+        IEnumerable<IInterceptor>? interceptors = null,
+        TimeProvider? timeProvider = null)
     {
-        var services = CorePostgreSql(connectionString, interceptors: interceptors);
+        var services = CorePostgreSql(connectionString, timeProvider, interceptors);
         services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
