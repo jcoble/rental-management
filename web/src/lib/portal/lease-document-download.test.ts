@@ -26,12 +26,15 @@ describe('portal lease document download contract', () => {
 		assert.match(pageSource, /executedDocumentAvailable/);
 		assert.match(pageSource, /agreement\.executedDocumentContentType/);
 		assert.match(pageSource, /portal-lease-download-signed-pdf/);
-		assert.match(pageSource, /Download signed lease PDF/);
-		assert.match(pageSource, /Signed lease PDF is not available yet\. Contact management\./);
+		assert.match(pageSource, /Download signed lease/);
+		assert.match(pageSource, /Signed lease is not available yet\. Contact management\./);
 		assert.match(
 			pageSource,
-			/Could not download the signed lease PDF\. Please try again or contact management\./
+			/Could not download the signed lease\. Please try again or contact management\./
 		);
+		assert.doesNotMatch(pageSource, /Download signed lease PDF/);
+		assert.doesNotMatch(pageSource, /Signed lease PDF is not available yet\. Contact management\./);
+		assert.doesNotMatch(pageSource, /Could not download the signed lease PDF/);
 		assert.doesNotMatch(pageSource, /executedStoredFileId/);
 	});
 });
