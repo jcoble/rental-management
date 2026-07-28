@@ -212,10 +212,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         {
             return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid("Template name is required.");
         }
-        if (!await CanCreateTemplateAsync(scope, propertyId, ct))
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound(
-                "Document template target not found");
-
         var safeFileName = DiskFileStorage.SanitizeFileName(fileName);
         await using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, ct);
@@ -617,25 +613,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             (template.PropertyId.HasValue
                 ? authorizedProperties.Any(property => property.Id == template.PropertyId.Value)
                 : allProperties.Any()));
-    }
-
-    private Task<bool> CanCreateTemplateAsync(
-        WorkspaceReadScope scope, int? propertyId, CancellationToken ct)
-    {
-        if (propertyId.HasValue)
-        {
-            return _db.Properties.AsNoTracking()
-                .WhereAuthorized(
-                    _db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
-                .AnyAsync(property => property.Id == propertyId.Value, ct);
-        }
-
-        return _db.AuthorizedWorkspaceAssignments(
-                scope,
-                [CapabilityKeys.LeasingAgreementsPrepare],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow())
-            .AnyAsync(ct);
     }
 
 }

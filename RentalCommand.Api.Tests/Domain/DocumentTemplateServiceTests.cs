@@ -250,6 +250,56 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         files.Contains(stored.FilePath).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task UploadPdfAsync_FirstEmptyPortfolioUpload_IsIdempotentWithoutDuplicateTemplate()
+    {
+        await using var postgres = await _postgres.CreateContextAsync();
+        var scope = postgres.Db.SeedAdministratorScope(
+            PortfolioId, nameof(UploadPdfAsync_FirstEmptyPortfolioUpload_IsIdempotentWithoutDuplicateTemplate));
+        await using var services = CreateAtomicServices(builder =>
+            builder.UseNpgsql(postgres.ConnectionString));
+        var files = new InMemoryFileStorage();
+        var sut = new DocumentTemplateService(
+            postgres.Db, _catalog, files,
+            services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
+
+        await using var firstContent = new MemoryStream("%PDF-1.7 first empty portfolio lease"u8.ToArray());
+        var first = await sut.UploadPdfAsync(
+            scope,
+            firstContent,
+            "empty-portfolio-lease.pdf",
+            "application/pdf",
+            firstContent.Length,
+            "First empty portfolio lease",
+            "Regression for the first reusable lease template.",
+            defaultForPortfolio: false,
+            propertyId: null,
+            idempotencyKey: "upload-first-empty-portfolio-lease");
+
+        await using var retryContent = new MemoryStream("%PDF-1.7 first empty portfolio lease"u8.ToArray());
+        var retry = await sut.UploadPdfAsync(
+            scope,
+            retryContent,
+            "empty-portfolio-lease.pdf",
+            "application/pdf",
+            retryContent.Length,
+            "First empty portfolio lease",
+            "Regression for the first reusable lease template.",
+            defaultForPortfolio: false,
+            propertyId: null,
+            idempotencyKey: "upload-first-empty-portfolio-lease");
+
+        first.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        retry.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        retry.Value!.Id.Should().Be(first.Value!.Id);
+        (await postgres.Db.Properties.CountAsync()).Should().Be(0);
+        (await postgres.Db.DocumentTemplates.CountAsync()).Should().Be(1);
+        (await postgres.Db.StoredFiles.CountAsync(file => file.EntityType == nameof(DocumentTemplate))).Should().Be(1);
+        (await postgres.Db.PendingFileUploads.CountAsync()).Should().Be(1);
+        files.Count.Should().Be(1);
+    }
+
     private static ServiceProvider CreateAtomicServices(
         Action<DbContextOptionsBuilder> configureDatabase)
     {
@@ -374,5 +424,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         }
 
         public bool Contains(string path) => _files.ContainsKey(path);
+
+        public int Count => _files.Count;
     }
 }
