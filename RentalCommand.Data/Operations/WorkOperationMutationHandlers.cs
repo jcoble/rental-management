@@ -158,10 +158,11 @@ public sealed class UpdateWorkOrderHandler
     public async Task<OperationMutationResult> HandleAsync(
         UpdateWorkOrderCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedWorkOrders(
                 command.PortfolioId, command.Actor, CapabilityKeys.WorkManage,
-                attempt.Persistence, now, tracking: true)
+                attempt.Persistence, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.WorkOrderId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.WorkOrderId);
 
@@ -212,15 +213,15 @@ public sealed class UpdateWorkOrderHandler
         if (command.ScheduledForUtc.HasValue) entity.ScheduledFor = command.ScheduledForUtc;
         if (command.ScheduledWindowEndUtc.HasValue) entity.ScheduledWindowEnd = command.ScheduledWindowEndUtc;
         if (command.CompletedAtUtc.HasValue) entity.CompletedAt = command.CompletedAtUtc;
-        if (entity.Status == WorkOrderStatus.Completed && priorStatus != entity.Status) entity.CompletedAt ??= now;
+        if (entity.Status == WorkOrderStatus.Completed && priorStatus != entity.Status) entity.CompletedAt ??= businessNow;
         if (command.EstimatedCost.HasValue) entity.EstimatedCost = command.EstimatedCost;
         if (command.ActualCost.HasValue) entity.ActualCost = command.ActualCost;
         WorkOperationValidation.EnsureSchedule(entity.ScheduledFor, entity.ScheduledWindowEnd);
         WorkOperationValidation.EnsureCompletedAtInRange(
             command.RequestedAtUtc.HasValue, entity.RequestedAt,
             command.ScheduledForUtc.HasValue, entity.ScheduledFor,
-            command.CompletedAtUtc.HasValue, entity.CompletedAt, now);
-        entity.UpdatedAt = now;
+            command.CompletedAtUtc.HasValue, entity.CompletedAt, businessNow);
+        entity.UpdatedAt = businessNow;
 
         if (statusChanged)
             attempt.Persistence.Add(new WorkOrderStatusEvent
@@ -228,16 +229,16 @@ public sealed class UpdateWorkOrderHandler
                 PortfolioId = command.PortfolioId, WorkOrderId = entity.Id,
                 FromStatus = priorStatus, ToStatus = entity.Status,
                 Note = string.IsNullOrWhiteSpace(command.StatusNote) ? null : command.StatusNote.Trim(),
-                ChangedByUserId = command.Actor.UserId, ChangedByLabel = "Staff", CreatedAtUtc = now,
+                ChangedByUserId = command.Actor.UserId, ChangedByLabel = "Staff", CreatedAtUtc = businessNow,
             });
         else if (WorkOperationValidation.EditTimelineNote(scheduleChanged, detailsChanged) is { } editNote)
             attempt.Persistence.Add(new WorkOrderStatusEvent
             {
                 PortfolioId = command.PortfolioId, WorkOrderId = entity.Id,
                 FromStatus = entity.Status, ToStatus = entity.Status, Note = editNote,
-                ChangedByUserId = command.Actor.UserId, ChangedByLabel = "Staff", CreatedAtUtc = now,
+                ChangedByUserId = command.Actor.UserId, ChangedByLabel = "Staff", CreatedAtUtc = businessNow,
             });
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNow);
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId, nameof(WorkOrder), entity.Id, AuditLogOperation.Updated,
             command.Actor.UserId, NewValues: JsonSerializer.Serialize(new
@@ -250,7 +251,7 @@ public sealed class UpdateWorkOrderHandler
         var snapshot = await WorkOrderSnapshot.LoadAsync(
             attempt.Persistence, command.PortfolioId, entity.Id, ct);
         attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(command.PortfolioId, nameof(WorkOrder), entity.Id,
-            $"work-order-update:{command.DeliveryIdempotencyKey}", now));
+            $"work-order-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 

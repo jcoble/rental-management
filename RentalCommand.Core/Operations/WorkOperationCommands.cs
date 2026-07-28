@@ -59,6 +59,7 @@ public sealed record UpdateWorkOrderCommand(
     DateTime? CompletedAtUtc,
     decimal? EstimatedCost,
     decimal? ActualCost,
+    DateTime BusinessNowUtc,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record DeleteWorkOrderCommand(

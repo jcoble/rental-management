@@ -409,7 +409,8 @@ public class WorkOrderService : IWorkOrderService
             request.StatusNote,
             request.RequestedAt?.ToUtc(), request.ScheduledFor.ToUtcDateTime(),
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
-            request.EstimatedCost, request.ActualCost, idempotencyKey);
+            request.EstimatedCost, request.ActualCost,
+            _timeProvider.GetUtcNow().UtcDateTime, idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("work-order.update", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
