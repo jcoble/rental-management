@@ -184,14 +184,14 @@ public sealed class OwnerPortalService : IOwnerPortalService
                 (distribution.Property != null && EF.Functions.ILike(distribution.Property.Name, $"%{search}%")) ||
                 (distribution.Memo != null && EF.Functions.ILike(distribution.Memo, $"%{search}%")));
         }
-        if (query.From is not null)
+        var (fromUtc, toUtcExclusive) = ListDateRange.UtcDay(query.From, query.To);
+        if (fromUtc is not null)
         {
-            distributions = distributions.Where(distribution => distribution.Date >= query.From.Value);
+            distributions = distributions.Where(distribution => distribution.Date >= fromUtc.Value);
         }
-        if (query.To is not null)
+        if (toUtcExclusive is not null)
         {
-            var through = query.To.Value.Date.AddDays(1);
-            distributions = distributions.Where(distribution => distribution.Date < through);
+            distributions = distributions.Where(distribution => distribution.Date < toUtcExclusive.Value);
         }
         distributions = query.SortDescending
             ? distributions.OrderByDescending(distribution => distribution.Date).ThenByDescending(distribution => distribution.Id)
