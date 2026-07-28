@@ -20,10 +20,11 @@ public sealed class CloseWorkOrderResponsibilityHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.WorkspaceAccessContext, command.ActorAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = attempt.BusinessNowUtc;
         await WorkOrderResponsibilityCommandAuthorization.AuthorizeManagerAsync(command.PortfolioId,
             command.ActorUserId, command.ActorAuthSessionId, command.ActorAccessContextId,
-            command.ActorAccessRevision, command.WorkOrderId, attempt.Persistence, now, ct);
+            command.ActorAccessRevision, command.WorkOrderId, attempt.Persistence, securityNowUtc, ct);
 
         var responsibility = await attempt.Persistence.Query<WorkOrderResponsibility>()
             .SingleOrDefaultAsync(item => item.Id == command.ResponsibilityId &&
@@ -48,32 +49,32 @@ public sealed class CloseWorkOrderResponsibilityHandler
         var expected = command.AccessRevisionExpectations[0].ExpectedRevision;
         if (context.AccessRevision != expected)
             throw new StaleAccessRevisionException(expected, context.AccessRevision);
-        context.UpdatedAtUtc = now;
+        context.UpdatedAtUtc = securityNowUtc;
         context.AdvanceRevision(expected);
 
-        responsibility.EffectiveToUtc = now;
-        responsibility.EndedAtUtc = now;
+        responsibility.EffectiveToUtc = businessNowUtc;
+        responsibility.EndedAtUtc = businessNowUtc;
         responsibility.EndedByUserId = command.ActorUserId;
         responsibility.EndedByAccessContextId = command.ActorAccessContextId;
         responsibility.EndedReason = command.Reason.Trim();
-        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.UseDatabaseWallClockForAudit(businessNowUtc);
         attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(WorkOrderResponsibility), command.WorkOrderId, AuditLogOperation.Updated,
             command.ActorUserId, NewValues: JsonSerializer.Serialize(new
             {
                 command.ResponsibilityId,
-                EffectiveToUtc = now,
-            }), ChangeReason: command.Reason.Trim()), now);
+                EffectiveToUtc = businessNowUtc,
+            }), ChangeReason: command.Reason.Trim()), businessNowUtc);
         attempt.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = nameof(WorkOrder), entityId = command.WorkOrderId }),
             IdempotencyKey = $"work-order-responsibility-close:{command.DeliveryIdempotencyKey}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            NextAttemptAtUtc = businessNowUtc,
         });
-        return new(command.ResponsibilityId, command.WorkOrderId, now,
+        return new(command.ResponsibilityId, command.WorkOrderId, businessNowUtc,
             [new WorkspaceAccessRevisionExpectation(context.Id, context.AccessRevision)]);
     }
 

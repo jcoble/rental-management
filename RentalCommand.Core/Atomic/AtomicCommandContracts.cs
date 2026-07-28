@@ -158,6 +158,7 @@ public interface IAtomicWriteAttempt
 {
     Guid AttemptId { get; }
     Guid AuditScopeId { get; }
+    DateTime BusinessNowUtc { get; }
     IAtomicPersistenceSession Persistence { get; }
     IAtomicSetBasedPersistence SetBased { get; }
     IAtomicBankingPersistence Banking { get; }
