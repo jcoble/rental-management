@@ -39,11 +39,14 @@ describe('canonical lease lifecycle action hub', () => {
 
 	it('edits and issues the exact canonical draft revision', () => {
 		assert.match(draftDialogSource, /leaseManagements\.getAgreementDraft/);
+		assert.match(draftDialogSource, /draftRequestsEnabled && leaseManagementId > 0 && leaseAgreementId > 0/);
+		assert.match(draftDialogSource, /enabled: canLoadDraft/);
 		assert.match(draftDialogSource, /draftRevision: draft\.draftRevision/);
 		assert.match(draftDialogSource, /termsSchemaVersion: draft\.termsSchemaVersion/);
 		assert.match(draftDialogSource, /termsPayload: draft\.termsPayload/);
 		assert.match(draftDialogSource, /leaseManagements\.prepareAgreementIssuance/);
 		assert.match(draftDialogSource, /\{ \.\.\.prepared, subject: subject\.trim\(\) \}/);
+		assert.match(draftDialogSource, /draftRequestsEnabled = false;\s*issueConfirmationOpen = false;\s*await onissued\(result\);\s*await queryClient\.invalidateQueries/s);
 		assert.match(draftDialogSource, /Save the current draft changes before issuing/);
 		assert.match(draftDialogSource, /isRequired: true/);
 		assert.match(draftDialogSource, /draft\.signers\.some\(\(signer\) => !signer\.isRequired\)/);
