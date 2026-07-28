@@ -459,6 +459,29 @@ internal static class StaffOperationAuthorization
         return tracking ? query : query.AsNoTracking();
     }
 
+    internal static IQueryable<Appointment> AuthorizedAppointmentsByType(
+        int portfolioId, StaffOperationActor actor,
+        IAtomicPersistenceSession persistence, DateTime now, bool tracking)
+    {
+        var workProperties = AuthorizedProperties(portfolioId, actor, CapabilityKeys.WorkManage, persistence, now);
+        var workAllProperties = ActiveAssignments(portfolioId, actor, CapabilityKeys.WorkManage, persistence, now)
+            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+        var leasingProperties = AuthorizedProperties(
+            portfolioId, actor, CapabilityKeys.LeasingShowingsManage, persistence, now);
+        var leasingAllProperties = ActiveAssignments(
+                portfolioId, actor, CapabilityKeys.LeasingShowingsManage, persistence, now)
+            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+
+        var query = persistence.Query<Appointment>().Where(item =>
+            item.PortfolioId == portfolioId &&
+            (item.Type == AppointmentType.MaintenanceVisit
+                ? ((item.PropertyId == null && workAllProperties.Any()) ||
+                   (item.PropertyId != null && workProperties.Any(property => property.Id == item.PropertyId)))
+                : ((item.PropertyId == null && leasingAllProperties.Any()) ||
+                   (item.PropertyId != null && leasingProperties.Any(property => property.Id == item.PropertyId)))));
+        return tracking ? query : query.AsNoTracking();
+    }
+
     internal static async Task<bool> CanManagePropertyForDeletedWorkOrderAsync(
         int portfolioId, StaffOperationActor actor, int workOrderId, string capability,
         IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)

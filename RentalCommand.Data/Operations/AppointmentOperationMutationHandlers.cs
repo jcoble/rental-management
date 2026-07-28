@@ -18,9 +18,10 @@ public sealed class CreateAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var capability = AppointmentOperationValidation.ManageCapability(command.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(
                 command.PortfolioId, command.Actor, command.PropertyId,
-                CapabilityKeys.LeasingShowingsManage, attempt.Persistence, now, ct))
+                capability, attempt.Persistence, now, ct))
             return new(OperationMutationOutcome.NotFound, 0);
         if (!AppointmentOperationValidation.ValidRange(command.ScheduledStartUtc, command.ScheduledEndUtc))
             throw new DomainValidationException("The end time must be after the start time.");
@@ -53,8 +54,9 @@ public sealed class CreateAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var capability = AppointmentOperationValidation.ManageCapability(command.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
-                command.PropertyId, CapabilityKeys.LeasingShowingsManage, persistence, now, ct))
+                command.PropertyId, capability, persistence, now, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
 
@@ -77,14 +79,14 @@ public sealed class UpdateAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var entity = await StaffOperationAuthorization.AuthorizedAppointments(
-                command.PortfolioId, command.Actor, CapabilityKeys.LeasingShowingsManage,
-                attempt.Persistence, now, tracking: true)
+        var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
+                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         var destinationProperty = command.PropertyId ?? entity.PropertyId;
+        var destinationCapability = AppointmentOperationValidation.ManageCapability(command.Type ?? entity.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
-                destinationProperty, CapabilityKeys.LeasingShowingsManage, attempt.Persistence, now, ct))
+                destinationProperty, destinationCapability, attempt.Persistence, now, ct))
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
         var effectiveUnit = command.UnitId ?? entity.UnitId;
         var effectiveManagement = command.LeaseManagementId ?? entity.LeaseManagementId;
@@ -130,10 +132,16 @@ public sealed class UpdateAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await StaffOperationAuthorization.AuthorizedAppointments(
-                command.PortfolioId, command.Actor, CapabilityKeys.LeasingShowingsManage,
-                persistence, now, tracking: false)
-            .AnyAsync(item => item.Id == command.AppointmentId, ct))
+        var current = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
+                command.PortfolioId, command.Actor, persistence, now, tracking: false)
+            .Where(item => item.Id == command.AppointmentId)
+            .Select(item => new { item.PropertyId, item.Type })
+            .SingleOrDefaultAsync(ct);
+        if (current is null)
+            throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
+        var destinationCapability = AppointmentOperationValidation.ManageCapability(command.Type ?? current.Type);
+        if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
+                command.PropertyId ?? current.PropertyId, destinationCapability, persistence, now, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
 }
@@ -147,9 +155,8 @@ public sealed class DeleteAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var entity = await StaffOperationAuthorization.AuthorizedAppointments(
-                command.PortfolioId, command.Actor, CapabilityKeys.LeasingShowingsManage,
-                attempt.Persistence, now, tracking: true)
+        var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
+                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.AppointmentId, ct);
         if (entity is null || entity.PropertyId != command.ExpectedPropertyId)
             return new(OperationMutationOutcome.NotFound, command.AppointmentId);
@@ -168,9 +175,10 @@ public sealed class DeleteAppointmentHandler
     {
         AppointmentOperationValidation.Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(
-                command.PortfolioId, command.Actor, command.ExpectedPropertyId,
-                CapabilityKeys.LeasingShowingsManage, persistence, now, ct))
+        if (!await StaffOperationAuthorization.AuthorizedAppointmentsByType(
+                command.PortfolioId, command.Actor, persistence, now, tracking: false)
+            .AnyAsync(item => item.Id == command.AppointmentId &&
+                item.PropertyId == command.ExpectedPropertyId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this appointment.");
     }
 }
@@ -211,6 +219,12 @@ internal static class AppointmentOperationValidation
 
     internal static bool ValidRange(DateTime start, DateTime? end) => !end.HasValue || end > start;
 
+    internal static string ManageCapability(AppointmentType type) => type switch
+    {
+        AppointmentType.MaintenanceVisit => CapabilityKeys.WorkManage,
+        _ => CapabilityKeys.LeasingShowingsManage,
+    };
+
     internal static async Task<bool> ReferencesMatchAsync(IAtomicPersistenceSession persistence,
         int portfolioId, int? propertyId, int? unitId, int? managementId, int? applicationId,
         int? tenantId, CancellationToken ct)
@@ -236,7 +250,12 @@ internal static class AppointmentOperationValidation
                     application.Id == applicationId.Value && application.PortfolioId == portfolioId &&
                     (!application.PropertyId.HasValue || application.PropertyId == property.Id))) &&
                 (!tenantId.HasValue || persistence.Query<Tenant>().AsNoTracking().Any(tenant =>
-                    tenant.Id == tenantId.Value && tenant.PortfolioId == portfolioId)))
+                    tenant.Id == tenantId.Value && tenant.PortfolioId == portfolioId) &&
+                    (!managementId.HasValue || persistence.Query<LeaseManagementParty>().AsNoTracking().Any(party =>
+                        party.TenantId == tenantId.Value && party.PortfolioId == portfolioId &&
+                        party.LeaseManagementId == managementId.Value &&
+                        party.LeaseManagement != null && party.LeaseManagement.PropertyId == property.Id &&
+                        (!unitId.HasValue || party.LeaseManagement.UnitId == unitId.Value)))))
             .SingleOrDefaultAsync(ct);
     }
 }

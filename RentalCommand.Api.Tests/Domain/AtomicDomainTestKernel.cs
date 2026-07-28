@@ -40,6 +40,27 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForAppointments(
+        string connectionString,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var services = Core(connectionString, timeProvider, interceptors);
+        services.AddAtomicCommandHandler<
+            CreateAppointmentCommand,
+            OperationMutationResult,
+            CreateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateAppointmentCommand,
+            OperationMutationResult,
+            UpdateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            DeleteAppointmentCommand,
+            OperationMutationResult,
+            DeleteAppointmentHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForWorkOrdersPostgreSql(
         string connectionString,
         TimeProvider? timeProvider = null)
@@ -169,7 +190,10 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    private static ServiceCollection Core(string connectionString, TimeProvider? timeProvider = null)
+    private static ServiceCollection Core(
+        string connectionString,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -180,9 +204,15 @@ internal static class AtomicDomainTestKernel
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
             builder.UseSqlite(connectionString)
                 .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
-                .UseAtomicPersistenceKernel(provider));
+                .UseAtomicPersistenceKernel(provider);
+            if (interceptors is not null)
+            {
+                builder.AddInterceptors(interceptors);
+            }
+        });
         return services;
     }
 
