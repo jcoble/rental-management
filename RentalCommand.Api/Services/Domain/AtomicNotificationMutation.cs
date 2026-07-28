@@ -39,7 +39,8 @@ public sealed record AtomicNotificationMutationCommand(
     int EntityId,
     string ResourceKey,
     string RequestJson,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    string DeliveryIdempotencyKey,
+    DateTime BusinessNowUtc = default) : IAtomicCommandData;
 
 public sealed record AtomicNotificationMutationResult(
     bool Found,
@@ -68,42 +69,43 @@ public sealed class AtomicNotificationMutationHandler
         if (command.Domain is AtomicNotificationMutationDomain.LandlordConversationRead
             or AtomicNotificationMutationDomain.TenantConversationRead)
             await attempt.Locking.AcquireAsync(AtomicLockResource.Conversation, command.EntityId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
-        await AuthorizeAsync(command, attempt.Persistence, now, ct);
+        var databaseNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var mutationNow = BusinessNow(command, databaseNow);
+        attempt.UseDatabaseWallClockForAudit(mutationNow);
+        await AuthorizeAsync(command, attempt.Persistence, databaseNow, ct);
 
         return command.Domain switch
         {
             AtomicNotificationMutationDomain.MyAlerts =>
-                await UpdateMyAlertsAsync(command, attempt, now, ct),
+                await UpdateMyAlertsAsync(command, attempt, mutationNow, ct),
             AtomicNotificationMutationDomain.TeamRouting =>
-                await ReplaceTeamRoutingAsync(command, attempt, now, ct),
+                await ReplaceTeamRoutingAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.TenantNoticePolicy =>
-                await UpsertPolicyAsync(command, attempt, now, ct),
+                await UpsertPolicyAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.SeedTemplates =>
-                await SeedTemplatesAsync(command, attempt, now, ct),
+                await SeedTemplatesAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.TemplateVersion =>
-                await CreateTemplateVersionAsync(command, attempt, now, restore: false, ct),
+                await CreateTemplateVersionAsync(command, attempt, databaseNow, restore: false, ct),
             AtomicNotificationMutationDomain.RestoreTemplate =>
-                await CreateTemplateVersionAsync(command, attempt, now, restore: true, ct),
+                await CreateTemplateVersionAsync(command, attempt, databaseNow, restore: true, ct),
             AtomicNotificationMutationDomain.MorningBriefingSettings =>
-                await UpdateMorningBriefingSettingsAsync(command, attempt, now, ct),
+                await UpdateMorningBriefingSettingsAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.LateFeeSettings =>
-                await UpdateLateFeeAutomationSettingsAsync(command, attempt, now, ct),
+                await UpdateLateFeeAutomationSettingsAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.DeviceRegister =>
-                await RegisterDeviceAsync(command, attempt, now, ct),
+                await RegisterDeviceAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.DeviceUnregister =>
-                await UnregisterDeviceAsync(command, attempt, now, ct),
+                await UnregisterDeviceAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.LandlordConversationRead =>
-                await MarkConversationReadAsync(command, attempt, now, tenantViewer: false, ct),
+                await MarkConversationReadAsync(command, attempt, databaseNow, tenantViewer: false, ct),
             AtomicNotificationMutationDomain.TenantConversationRead =>
-                await MarkConversationReadAsync(command, attempt, now, tenantViewer: true, ct),
+                await MarkConversationReadAsync(command, attempt, databaseNow, tenantViewer: true, ct),
             AtomicNotificationMutationDomain.MarkRead =>
-                await MarkReadAsync(command, attempt, now, ct),
+                await MarkReadAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.MarkAllRead =>
-                await MarkAllReadAsync(command, attempt, now, ct),
+                await MarkAllReadAsync(command, attempt, databaseNow, ct),
             AtomicNotificationMutationDomain.Broadcast =>
-                await BroadcastAsync(command, attempt, now, ct),
+                await BroadcastAsync(command, attempt, databaseNow, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
         };
     }
@@ -1038,6 +1040,21 @@ public sealed class AtomicNotificationMutationHandler
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Notification mutation request payload is invalid.");
 
+    private static DateTime BusinessNow(AtomicNotificationMutationCommand command, DateTime databaseNow)
+    {
+        if (command.BusinessNowUtc == default)
+        {
+            return databaseNow;
+        }
+
+        if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("Notification mutation business time must be UTC.");
+        }
+
+        return command.BusinessNowUtc;
+    }
+
     private static string? NormalizeJurisdiction(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
 
@@ -1086,6 +1103,18 @@ public static class AtomicNotificationMutation
         new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
             scope.AccessRevision, domain, entityId, resourceKey,
             JsonSerializer.Serialize(request), operationKey);
+
+    public static AtomicNotificationMutationCommand Command<TRequest>(
+        WorkspaceReadScope scope,
+        AtomicNotificationMutationDomain domain,
+        int entityId,
+        string resourceKey,
+        string operationKey,
+        TRequest request,
+        DateTime businessNowUtc) =>
+        new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, domain, entityId, resourceKey,
+            JsonSerializer.Serialize(request), operationKey, businessNowUtc);
 
     public static AtomicCommandIdentity Identity(AtomicNotificationMutationCommand command) =>
         new($"rental.notification.{command.Domain.ToString().ToLowerInvariant()}",

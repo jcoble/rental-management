@@ -43,7 +43,8 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         CancellationToken ct)
     {
         var command = AtomicNotificationMutation.Command(scope,
-            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request);
+            AtomicNotificationMutationDomain.MyAlerts, 0, string.Empty, operationKey, request,
+            _clock.GetUtcNow().UtcDateTime);
         var outcome = await _atomic.ExecuteAsync(
             AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
         return ReadSnapshot<MyAlertsResponse>(outcome.Value);

@@ -37,6 +37,7 @@ public static class AtomicCommandFingerprint
         "PresentedAtUtc",
         "RequestedAtUtc",
         "GeneratedAtUtc",
+        "BusinessNowUtc",
         "ChangedAtUtc",
         "DeletedAtUtc",
         "DispatchedAtUtc",
