@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
@@ -5,9 +7,10 @@ import '../push/push_service.dart';
 import '../../features/onboarding/onboarding_repository.dart';
 import 'auth_models.dart';
 import 'auth_repository.dart';
+import 'biometric_auth_service.dart';
 import 'token_store.dart';
 
-/// The three possible auth states for the app.
+/// The possible auth states for the app.
 sealed class AuthState {
   const AuthState();
 }
@@ -50,9 +53,16 @@ final class AuthStateAuthenticated extends AuthState {
 }
 
 /// No valid session.
-final class AuthStateUnauthenticated extends AuthState {
+class AuthStateUnauthenticated extends AuthState {
   const AuthStateUnauthenticated({this.error});
   final String? error;
+}
+
+/// A stored server session exists but remains locally gated by biometrics.
+final class AuthStateBiometricLocked extends AuthStateUnauthenticated {
+  const AuthStateBiometricLocked({this.lastResult});
+
+  final BiometricAuthenticationResult? lastResult;
 }
 
 bool accessAuthorityChanged(AuthState? previous, AuthState next) {
@@ -92,6 +102,7 @@ class AuthController extends Notifier<AuthState> {
 
   AuthRepository get _repository => ref.read(authRepositoryProvider);
   TokenStore get _tokenStore => ref.read(tokenStoreProvider);
+  BiometricAuthService get _biometric => ref.read(biometricAuthServiceProvider);
   OnboardingRepository get _onboarding =>
       ref.read(onboardingRepositoryProvider);
 
@@ -117,10 +128,33 @@ class AuthController extends Notifier<AuthState> {
   Future<void> restoreSession() async {
     final token = await _tokenStore.getAccessToken();
     if (token == null || token.isEmpty) {
+      await _biometric.clearEnabled();
       state = const AuthStateUnauthenticated();
       return;
     }
 
+    if (await _biometric.isEnabled()) {
+      state = const AuthStateBiometricLocked();
+      return;
+    }
+
+    await _revalidateStoredSession();
+  }
+
+  /// Prompts for biometrics and revalidates the existing server session on success.
+  Future<void> unlockBiometricSession() async {
+    if (state is! AuthStateBiometricLocked) return;
+
+    final result = await _biometric.authenticate();
+    if (result != BiometricAuthenticationResult.authenticated) {
+      state = AuthStateBiometricLocked(lastResult: result);
+      return;
+    }
+
+    await _revalidateStoredSession();
+  }
+
+  Future<void> _revalidateStoredSession() async {
     try {
       final user = await _repository.currentUser();
       final access = await _repository.currentAccess();
@@ -135,6 +169,7 @@ class AuthController extends Notifier<AuthState> {
     } on ApiException {
       // Stored token is invalid or expired and refresh also failed.
       await _tokenStore.clearTokens();
+      await _biometric.clearEnabled();
       state = const AuthStateUnauthenticated();
     }
   }
@@ -308,12 +343,14 @@ class AuthController extends Notifier<AuthState> {
       // ignore — logout proceeds regardless
     }
     await _repository.logout();
+    await _biometric.clearEnabled();
     state = const AuthStateUnauthenticated();
   }
 
   /// Called by the interceptor's logout signal — resets state without an
   /// extra server call (tokens are already invalid).
   void notifyLogout() {
+    unawaited(_biometric.clearEnabled());
     state = const AuthStateUnauthenticated();
   }
 
