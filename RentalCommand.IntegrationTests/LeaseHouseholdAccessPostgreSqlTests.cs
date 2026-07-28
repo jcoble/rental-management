@@ -2,6 +2,9 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -90,6 +93,39 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .Should().Be(1);
         (await _context.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == grantIdentity.CommandType && receipt.IdempotencyKey == grantIdentity.IdempotencyKey))
+            .Should().Be(1);
+
+        var tenantRoleId = await _context.Db.RoleProfiles.AsNoTracking()
+            .Where(role => role.Key == RoleProfileKeys.TenantPortal)
+            .Select(role => role.Id)
+            .SingleAsync();
+        var tenantMembershipId = await _context.Db.TenantUserAccesses.AsNoTracking()
+            .Where(access => access.Id == tenantAccessId)
+            .Select(access => access.AccessContext!.Membership!.Id)
+            .SingleAsync();
+        await _context.Db.MembershipRoleAssignments
+            .Where(assignment =>
+                assignment.WorkspaceMembershipId == tenantMembershipId &&
+                assignment.PortfolioId == scenario.PortfolioId &&
+                assignment.RoleProfileId == tenantRoleId)
+            .ExecuteDeleteAsync();
+        _context.Db.ChangeTracker.Clear();
+        var repairGrant = grant with { DeliveryIdempotencyKey = "household-grant-repair-tenant-role" };
+        var repairResult = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:grant-repair-tenant-role"),
+            repairGrant,
+            GrantCodec);
+        repairResult.Value.Outcome.Should().Be(LeasePartyMutationOutcome.AlreadyActive);
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.MembershipRoleAssignments.AsNoTracking()
+            .CountAsync(assignment =>
+                assignment.WorkspaceMembershipId == tenantMembershipId &&
+                assignment.PortfolioId == scenario.PortfolioId &&
+                assignment.RoleProfileId == tenantRoleId &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.RevokedAtUtc == null))
             .Should().Be(1);
 
         var crossRelationshipRevoke = new RevokeTenantUserAccessCommand(
@@ -200,6 +236,32 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         identity.PasswordHash.Should().BeNull();
         identity.EmailConfirmed.Should().BeFalse();
 
+        var tenantContext = await _context.Db.WorkspaceAccessContexts.AsNoTracking()
+            .Where(context => context.UserId == identity.Id && context.PortfolioId == scenario.PortfolioId)
+            .Select(context => new { context.Id, context.LastAuthorizedExperience })
+            .SingleAsync();
+        tenantContext.LastAuthorizedExperience.Should().Be(WorkspaceExperience.Tenant);
+
+        var tenantMembership = await _context.Db.WorkspaceMemberships.AsNoTracking()
+            .Where(membership => membership.AccessContextId == tenantContext.Id)
+            .Select(membership => new { membership.Id, membership.DefaultExperience, membership.Status })
+            .SingleAsync();
+        tenantMembership.DefaultExperience.Should().Be(WorkspaceExperience.Tenant);
+        tenantMembership.Status.Should().Be(WorkspaceMembershipStatus.Active);
+
+        var tenantRoleId = await _context.Db.RoleProfiles.AsNoTracking()
+            .Where(role => role.Key == RoleProfileKeys.TenantPortal)
+            .Select(role => role.Id)
+            .SingleAsync();
+        (await _context.Db.MembershipRoleAssignments.AsNoTracking()
+            .CountAsync(assignment =>
+                assignment.WorkspaceMembershipId == tenantMembership.Id &&
+                assignment.PortfolioId == scenario.PortfolioId &&
+                assignment.RoleProfileId == tenantRoleId &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.RevokedAtUtc == null))
+            .Should().Be(1);
+
         var grantedPartyIds = await _context.Db.TenantUserAccesses.AsNoTracking()
             .Where(access => access.PortfolioId == scenario.PortfolioId
                 && access.ApplicationUserId == identity.Id
@@ -209,12 +271,22 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .ToListAsync();
         grantedPartyIds.Should().Equal(scenario.FirstPartyId, scenario.SecondPartyId);
 
+        var invitations = await _context.Db.WorkspaceInvitations.AsNoTracking()
+            .Where(invitation =>
+                invitation.PortfolioId == scenario.PortfolioId &&
+                invitation.WorkspaceMembershipId == tenantMembership.Id &&
+                invitation.InvitedUserId == identity.Id &&
+                invitation.AcceptedAtUtc == null &&
+                invitation.RevokedAtUtc == null)
+            .ToListAsync();
+        invitations.Should().ContainSingle();
+
         var activationMessages = await _context.Db.OutboxMessages.AsNoTracking()
-            .Where(message => message.IdempotencyKey.EndsWith(":portal-activation-v2"))
+            .Where(message => message.IdempotencyKey.StartsWith("tenant-portal-invitation:"))
             .Select(message => message.Payload)
             .ToListAsync();
         activationMessages.Should().ContainSingle();
-        activationMessages[0].Should().Contain("/forgot-password?email=");
+        activationMessages[0].Should().Contain("/activate-team?token=");
         activationMessages[0].ToLowerInvariant().Should().NotContain("temporary password");
         activationMessages[0].ToLowerInvariant().Should().NotContain("resettoken");
 
@@ -223,6 +295,147 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             && (receipt.IdempotencyKey == firstIdentity.IdempotencyKey
                 || receipt.IdempotencyKey == secondIdentity.IdempotencyKey)))
             .Should().Be(2);
+    }
+
+    [Fact]
+    public async Task TenantInvitation_ActivatesThroughWorkspaceInvitation_AndRevocationCancelsUnusedLinks()
+    {
+        var scenario = await SeedScenarioAsync();
+        var grant = new GrantTenantUserAccessCommand(
+            scenario.PortfolioId,
+            scenario.FirstRelationshipId,
+            scenario.FirstPartyId,
+            "Grant resident activation",
+            "https://rentalcommand.test",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "tenant-activation-proof");
+        var grantResult = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:tenant-activation-proof"),
+            grant,
+            GrantCodec);
+
+        grantResult.Value.Outcome.Should().Be(LeasePartyMutationOutcome.Applied);
+        var accessId = grantResult.Value.TenantUserAccessIds.Should().ContainSingle().Subject;
+        _context.Db.ChangeTracker.Clear();
+
+        var payload = await _context.Db.OutboxMessages.AsNoTracking()
+            .Where(message => message.IdempotencyKey.StartsWith("tenant-portal-invitation:"))
+            .Select(message => message.Payload)
+            .SingleAsync();
+        var token = ExtractActivationToken(payload);
+        var tokenHash = HashInvitationToken(token);
+        var invitation = await _context.Db.WorkspaceInvitations.AsNoTracking()
+            .Where(row => row.TokenHash == tokenHash)
+            .Select(row => new { row.Id, row.InvitedUserId, row.WorkspaceMembershipId })
+            .SingleAsync();
+
+        var activation = await ActivateInvitationAsApiAsync(
+            invitation.Id,
+            invitation.InvitedUserId,
+            tokenHash,
+            "hashed-first-tenant-password");
+        activation.Should().NotBeNull();
+        activation!.AccessContextId.Should().Be(await _context.Db.TenantUserAccesses.AsNoTracking()
+            .Where(access => access.Id == accessId)
+            .Select(access => access.AccessContextId)
+            .SingleAsync());
+
+        var activatedUser = await _context.Db.Users.AsNoTracking()
+            .Where(user => user.Id == invitation.InvitedUserId)
+            .Select(user => new { user.PasswordHash, user.EmailConfirmed })
+            .SingleAsync();
+        activatedUser.PasswordHash.Should().Be("hashed-first-tenant-password");
+        activatedUser.EmailConfirmed.Should().BeTrue();
+
+        var expiredReplay = await ActivateInvitationAsApiAsync(
+            invitation.Id,
+            invitation.InvitedUserId,
+            tokenHash,
+            "second-password-hash");
+        expiredReplay.Should().BeNull();
+
+        var secondScenario = await SeedScenarioAsync(
+            "wrong-email-resident@example.test",
+            "unused-second@example.test");
+        var secondGrant = new GrantTenantUserAccessCommand(
+            secondScenario.PortfolioId,
+            secondScenario.FirstRelationshipId,
+            secondScenario.FirstPartyId,
+            "Grant wrong email resident activation",
+            "https://rentalcommand.test",
+            secondScenario.ActorUserId,
+            secondScenario.SessionId,
+            secondScenario.AccessContextId,
+            secondScenario.AccessRevision,
+            "tenant-revoke-pending-invitation-revoked");
+        var secondGrantResult = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondScenario.FirstPartyId}:tenant-revoke-pending-invitation"),
+            secondGrant,
+            GrantCodec);
+        var secondAccessId = secondGrantResult.Value.TenantUserAccessIds.Should().ContainSingle().Subject;
+
+        var revoke = new RevokeTenantUserAccessCommand(
+            secondScenario.PortfolioId,
+            secondScenario.FirstRelationshipId,
+            secondScenario.FirstPartyId,
+            secondAccessId,
+            "Wrong email; revoke pending activation",
+            secondScenario.ActorUserId,
+            secondScenario.SessionId,
+            secondScenario.AccessContextId,
+            secondScenario.AccessRevision,
+            "tenant-revoke-pending-invitation");
+        var revokeResult = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.revoke",
+                $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondAccessId}:tenant-revoke-pending-invitation"),
+            revoke,
+            RevokeCodec);
+
+        revokeResult.Value.Outcome.Should().Be(LeasePartyMutationOutcome.Applied);
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.WorkspaceInvitations.AsNoTracking()
+            .CountAsync(row =>
+                row.InvitedUser!.NormalizedEmail == "WRONG-EMAIL-RESIDENT@EXAMPLE.TEST" &&
+                row.AcceptedAtUtc == null &&
+                row.RevokedAtUtc != null))
+            .Should().Be(1);
+        (await _context.Db.Database.SqlQuery<int>($"""
+                SELECT count(*)::int AS "Value"
+                FROM "AtomicAuditLogs"
+                WHERE "PortfolioId" = {secondScenario.PortfolioId}
+                  AND "EntityType" = {nameof(WorkspaceInvitation)}
+                  AND "Operation" = {(int)AuditLogOperation.Updated}
+                  AND "ChangeReason" = {"Tenant portal invitation revoked"}
+                  AND "NewValues"::text LIKE {"%TenantUserAccessId%"}
+                """)
+            .SingleAsync())
+            .Should().Be(1);
+
+        var reissueGrant = secondGrant with { DeliveryIdempotencyKey = "tenant-reissue-pending-invitation" };
+        var reissueResult = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "leasing.household-access.grant",
+                $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondScenario.FirstPartyId}:tenant-reissue-pending-invitation"),
+            reissueGrant,
+            GrantCodec);
+        reissueResult.Value.Outcome.Should().Be(LeasePartyMutationOutcome.Applied);
+        _context.Db.ChangeTracker.Clear();
+        var wrongEmailInvitationStates = await _context.Db.WorkspaceInvitations.AsNoTracking()
+            .Where(row => row.InvitedUser!.NormalizedEmail == "WRONG-EMAIL-RESIDENT@EXAMPLE.TEST")
+            .Select(row => new { row.AcceptedAtUtc, row.RevokedAtUtc })
+            .ToListAsync();
+        wrongEmailInvitationStates.Count(row => row.AcceptedAtUtc == null && row.RevokedAtUtc != null)
+            .Should().Be(1);
+        wrongEmailInvitationStates.Count(row => row.AcceptedAtUtc == null && row.RevokedAtUtc == null)
+            .Should().Be(1);
     }
 
     [Fact]
@@ -309,18 +522,64 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .SqlQuery<DateOnly>($"SELECT rc_business_date({portfolioId}) AS \"Value\"")
             .SingleAsync();
 
+    private async Task<WorkspaceInvitationActivationRow?> ActivateInvitationAsApiAsync(
+        long invitationId,
+        int invitedUserId,
+        string tokenHash,
+        string passwordHash)
+    {
+        _context.Db.ChangeTracker.Clear();
+        await _context.Db.Database.OpenConnectionAsync();
+        try
+        {
+            await _context.Db.Database.ExecuteSqlRawAsync("SET SESSION AUTHORIZATION rentalcommand_api;");
+            return await _context.Db.Database.SqlQuery<WorkspaceInvitationActivationRow>($"""
+                    SELECT * FROM rc_activate_workspace_invitation(
+                        {invitationId}, {invitedUserId}, {tokenHash}, {passwordHash},
+                        {"test-security-stamp"}, {"test-concurrency-stamp"})
+                    """)
+                .SingleOrDefaultAsync();
+        }
+        finally
+        {
+            await _context.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
+            await _context.Db.Database.CloseConnectionAsync();
+        }
+    }
+
+    private static string ExtractActivationToken(string payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        var body = document.RootElement.GetProperty("body").GetString()
+            ?? throw new InvalidOperationException("Activation email payload did not contain a text body.");
+        const string marker = "/activate-team?token=";
+        var markerIndex = body.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            throw new InvalidOperationException("Activation email payload did not contain an activate-team token.");
+        }
+
+        var tokenStart = markerIndex + marker.Length;
+        var tokenEnd = body.IndexOfAny(['\r', '\n', ' ', '\t'], tokenStart);
+        return Uri.UnescapeDataString(tokenEnd < 0 ? body[tokenStart..] : body[tokenStart..tokenEnd]);
+    }
+
+    private static string HashInvitationToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
     private async Task<Scenario> SeedScenarioAsync(
         string firstResidentEmail = "first-resident@example.test",
         string secondResidentEmail = "second-resident@example.test")
     {
         var now = DateTime.UtcNow;
+        var unique = Guid.NewGuid().ToString("N")[..12];
         var db = _context.Db;
         var actor = new ApplicationUser
         {
-            UserName = "household-manager@example.test",
-            NormalizedUserName = "HOUSEHOLD-MANAGER@EXAMPLE.TEST",
-            Email = "household-manager@example.test",
-            NormalizedEmail = "HOUSEHOLD-MANAGER@EXAMPLE.TEST",
+            UserName = $"household-manager-{unique}@example.test",
+            NormalizedUserName = $"HOUSEHOLD-MANAGER-{unique.ToUpperInvariant()}@EXAMPLE.TEST",
+            Email = $"household-manager-{unique}@example.test",
+            NormalizedEmail = $"HOUSEHOLD-MANAGER-{unique.ToUpperInvariant()}@EXAMPLE.TEST",
             DisplayName = "Household Manager",
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
@@ -388,8 +647,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         db.AddRange(assignment, session);
         await db.SaveChangesAsync();
 
-        var firstRelationship = Relationship(property.Id, firstUnit.Id, actor.Id, "1", now);
-        var secondRelationship = Relationship(property.Id, secondUnit.Id, actor.Id, "2", now);
+        var firstRelationship = Relationship(property.Id, firstUnit.Id, actor.Id, $"{unique}-1", now);
+        var secondRelationship = Relationship(property.Id, secondUnit.Id, actor.Id, $"{unique}-2", now);
         var firstTenant = Tenant("First", "Resident", firstResidentEmail, now);
         var secondTenant = Tenant("Second", "Resident", secondResidentEmail, now);
         db.AddRange(firstRelationship, secondRelationship, firstTenant, secondTenant);
@@ -452,6 +711,15 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         public int? UserId => 1;
         public string? ActorLabel => "integration:lease-household-access";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class WorkspaceInvitationActivationRow
+    {
+        public int PortfolioId { get; init; }
+        public int WorkspaceMembershipId { get; init; }
+        public int AccessContextId { get; init; }
+        public int InvitedUserId { get; init; }
+        public DateTime AcceptedAtUtc { get; init; }
     }
 
     private sealed record Scenario(

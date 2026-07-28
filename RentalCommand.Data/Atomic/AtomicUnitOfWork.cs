@@ -640,10 +640,14 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
             var row = await _db.Database.SqlQuery<AtomicCommandTimesRow>($$"""
                     SELECT clock_timestamp() AS "WallClockUtc",
+                           rc_effective_now_utc({{portfolioId}}) AS "EffectiveNowUtc",
                            rc_business_date({{portfolioId}}) AS "BusinessDate"
                     """)
                 .SingleAsync(ct);
-            return new AtomicCommandTimes(row.WallClockUtc, row.BusinessDate);
+            return new AtomicCommandTimes(row.WallClockUtc, row.BusinessDate)
+            {
+                EffectiveNowUtc = row.EffectiveNowUtc,
+            };
         }
 
         public Task<bool> IsWorkspaceExperienceAvailableAsync(
@@ -767,6 +771,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private sealed class AtomicCommandTimesRow
         {
             public DateTime WallClockUtc { get; set; }
+            public DateTime EffectiveNowUtc { get; set; }
             public DateOnly BusinessDate { get; set; }
         }
 

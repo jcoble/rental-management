@@ -237,6 +237,9 @@ public sealed class ActiveTenantUserAccessResponse
     public string UserEmail { get; init; } = string.Empty;
     public DateTime GrantedAtUtc { get; init; }
     public string Reason { get; init; } = string.Empty;
+    public bool RequiresAccountActivation { get; init; }
+    public bool HasPendingActivationInvitation { get; init; }
+    public bool IsPortalLoginReady { get; init; }
 }
 
 /// <summary>

@@ -4,6 +4,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -334,7 +335,7 @@ public sealed class CanonicalLeaseReaderSqlTests
 
         foreach (var sql in new[] { partySql, accessSql })
         {
-            sql.Should().Contain("AuthSessions");
+            sql.Should().Contain("rc_api_effective_capability_scopes");
             sql.Should().Contain("rentals.read");
             sql.Should().Contain("vw_lease_management_lifecycle");
             sql.Should().Contain("BusinessDate");
@@ -349,7 +350,15 @@ public sealed class CanonicalLeaseReaderSqlTests
         accessSql.Should().Contain("LeaseManagementParties");
         accessSql.Should().Contain("TenantUserAccesses");
         accessSql.Should().Contain("AspNetUsers");
+        accessSql.Should().Contain("WorkspaceAccessContexts");
+        accessSql.Should().Contain("WorkspaceMemberships");
+        accessSql.Should().Contain("MembershipRoleAssignments");
+        accessSql.Should().Contain("RoleProfiles");
+        accessSql.Should().Contain(RoleProfileKeys.TenantPortal);
+        accessSql.Should().Contain("WorkspaceInvitations");
+        accessSql.Should().Contain("EffectiveNowUtc");
         accessSql.Should().Contain("RevokedAtUtc");
+        accessSql.Should().NotContain("ClientEvaluation");
     }
 
     [Fact]

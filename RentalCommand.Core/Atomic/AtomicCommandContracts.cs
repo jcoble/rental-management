@@ -935,7 +935,10 @@ public sealed record AtomicEffectiveLoginContext(
     long AccessRevision,
     int TotalEffectiveContexts);
 
-public sealed record AtomicCommandTimes(DateTime WallClockUtc, DateOnly BusinessDate);
+public sealed record AtomicCommandTimes(DateTime WallClockUtc, DateOnly BusinessDate)
+{
+    public DateTime EffectiveNowUtc { get; init; } = WallClockUtc;
+}
 
 /// <summary>Database-owned mutation for the caller's current workspace display preference.</summary>
 public interface IAtomicWorkspaceExperiencePersistence

@@ -57,7 +57,15 @@ public sealed class LeaseHouseholdAccessContractTests
 
         source.Should().Contain("AtomicLockResource.TenantIdentityEmail");
         source.Should().Contain("EmailConfirmed = false");
-        source.Should().Contain("/forgot-password?email=");
+        source.Should().Contain("/activate-team?token=");
+        source.Should().Contain("WorkspaceInvitation");
+        source.Should().Contain("RoleProfileKeys.TenantPortal");
+        source.Should().Contain("var changedAtUtc = times.EffectiveNowUtc");
+        source.Should().Contain("var tenantSecurityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct)");
+        source.Should().Contain("attempt.UseDatabaseWallClockForAudit(changedAtUtc)");
+        source.Should().Contain("EffectiveFromUtc = tenantSecurityNowUtc");
+        source.Should().Contain("CreatedAtUtc = changedAtUtc");
+        source.Should().Contain("ExpiresAtUtc = changedAtUtc.AddDays(7)");
         source.Should().Contain(
             "relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId" + Environment.NewLine +
             "                    && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate))");
