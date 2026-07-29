@@ -1275,6 +1275,18 @@ class LeaseManagementsRepository {
     }
   }
 
+  Future<Uint8List> agreementSourceDocument({required int storedFileId}) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/documents/$storedFileId/file',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<LeaseSuccessorDraftResult> editAgreementDraft({
     required int leaseManagementId,
     required int leaseAgreementId,

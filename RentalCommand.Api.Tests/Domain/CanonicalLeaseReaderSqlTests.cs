@@ -385,6 +385,35 @@ public sealed class CanonicalLeaseReaderSqlTests
     }
 
     [Fact]
+    public void Agreement_history_and_draft_detail_project_the_same_confirmed_source_scan_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+        var query = new LeaseLegalHistoryQuery();
+
+        var detailSql = service.BuildAgreementDraftDetailQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+        var historySql = service.BuildAgreementHistoryQuery(ReadAccess(), 42, query)
+            .ToQueryString();
+
+        foreach (var sql in new[] { detailSql, historySql })
+        {
+            sql.Should().Contain("ScanDrafts");
+            sql.Should().Contain("TargetEntityType");
+            sql.Should().Contain("ConfirmedEntityId");
+            sql.Should().Contain("SourceStoredFileId");
+            sql.Should().Contain("StoredFiles");
+            sql.Should().Contain("EntityType");
+            sql.Should().Contain("EntityId");
+            sql.Should().Contain("DeletedAt");
+            sql.TrimEnd().Should().NotEndWith(";");
+            sql.Should().NotContain("ClientEvaluation");
+        }
+        detailSql.Should().Contain("FileName");
+        detailSql.Should().Contain("ContentType");
+    }
+
+    [Fact]
     public void Agreement_signature_progress_authorizes_and_projects_packet_signers_and_artifact_readiness_in_one_sql_statement()
     {
         using var db = NewContext();

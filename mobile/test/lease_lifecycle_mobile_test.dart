@@ -175,6 +175,77 @@ void main() {
     );
   });
 
+  test('source-scan agreement drafts expose a real view action', () {
+    final agreement = LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 82,
+      'versionNumber': 1,
+      'agreementNumber': 'AGR-SCAN-82',
+      'changeType': 'Initial',
+      'termType': 'Fixed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'governingFromOn': '2026-01-01',
+      'baseRentAmount': 1500,
+      'agreementStatus': 'Draft',
+      'isGoverning': false,
+      'hasLiveReissue': false,
+      'hasSourceScan': true,
+    });
+    final templateOnlyAgreement = LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 83,
+      'versionNumber': 1,
+      'agreementNumber': 'AGR-TEMPLATE-83',
+      'changeType': 'Initial',
+      'termType': 'Fixed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'governingFromOn': '2026-01-01',
+      'baseRentAmount': 1500,
+      'agreementStatus': 'Draft',
+      'isGoverning': false,
+      'hasLiveReissue': false,
+      'hasSourceScan': false,
+    });
+    final draft = LeaseAgreementDraftDetail.fromJson({
+      'leaseManagementId': 44,
+      'leaseAgreementId': 82,
+      'publicId': 'draft-82',
+      'versionNumber': 1,
+      'draftRevision': 1,
+      'agreementNumber': 'AGR-SCAN-82',
+      'changeType': 'Initial',
+      'termType': 'Fixed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'governingFromOn': '2026-01-01',
+      'baseRentAmount': 1500,
+      'rentDueDay': 1,
+      'securityDepositObligation': 1500,
+      'lateFeeAmount': 50,
+      'gracePeriodDays': 5,
+      'currency': 'USD',
+      'termsSchemaVersion': 1,
+      'termsPayload': <String, dynamic>{},
+      'documentSourceVersionId': 7,
+      'sourceStoredFileId': 91,
+      'sourceFileName': 'scanned-lease.pdf',
+      'sourceContentType': 'application/pdf',
+      'signers': <Map<String, dynamic>>[],
+      'createdAtUtc': '2026-01-01T12:00:00Z',
+      'updatedAtUtc': '2026-01-01T12:00:00Z',
+    });
+    final detail = File(
+      'lib/features/leases/lease_detail_screen.dart',
+    ).readAsStringSync();
+
+    expect(agreement.hasSourceScan, isTrue);
+    expect(templateOnlyAgreement.hasSourceScan, isFalse);
+    expect(draft.sourceStoredFileId, 91);
+    expect(draft.sourceFileName, 'scanned-lease.pdf');
+    expect(detail, contains("'View draft'"));
+    expect(detail, contains('.agreementSourceDocument('));
+  });
+
   test(
     'give possession posts exact relationship and unit with idempotency',
     () async {
