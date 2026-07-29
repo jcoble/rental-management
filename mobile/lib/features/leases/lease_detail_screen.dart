@@ -742,9 +742,17 @@ class _AgreementHistoryCard extends ConsumerWidget {
                     runSpacing: 8,
                     children: [
                       OutlinedButton.icon(
-                        onPressed: () => _editDraft(context, ref, agreement),
-                        icon: const Icon(Icons.edit_outlined),
-                        label: const Text('Edit draft'),
+                        onPressed: () => agreement.hasSourceScan
+                            ? _viewDraft(context, ref, agreement)
+                            : _editDraft(context, ref, agreement),
+                        icon: Icon(
+                          agreement.hasSourceScan
+                              ? Icons.visibility_outlined
+                              : Icons.edit_outlined,
+                        ),
+                        label: Text(
+                          agreement.hasSourceScan ? 'View draft' : 'Edit draft',
+                        ),
                       ),
                       FilledButton.icon(
                         onPressed: () => _issueDraft(context, ref, agreement),
@@ -940,6 +948,38 @@ class _AgreementHistoryCard extends ConsumerWidget {
           content: Text('Draft revision ${result.draftRevision} saved.'),
         ),
       );
+    }
+  }
+
+  Future<void> _viewDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final draft = await _loadDraft(context, ref, agreement);
+    if (draft == null || !context.mounted) return;
+    final storedFileId = draft.sourceStoredFileId;
+    if (storedFileId == null) {
+      _showError(
+        context,
+        const ApiException(
+          statusCode: 0,
+          message: 'The original draft document is unavailable.',
+        ),
+      );
+      return;
+    }
+    try {
+      final bytes = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementSourceDocument(storedFileId: storedFileId);
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: draft.sourceFileName ?? 'lease-draft',
+        mimeType: draft.sourceContentType ?? 'application/octet-stream',
+      );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
     }
   }
 
