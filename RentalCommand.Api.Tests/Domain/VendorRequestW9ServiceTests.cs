@@ -1,6 +1,8 @@
+using System.Data.Common;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
@@ -17,15 +19,24 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class VendorRequestW9ServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class VendorRequestW9ServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
-    private readonly SqliteTestContext _ctx = new();
-    private readonly ServiceProvider _services;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ServiceProvider _services = null!;
+    private WorkspaceReadScope _scope;
 
-    public VendorRequestW9ServiceTests()
+    public VendorRequestW9ServiceTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync()
     {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorRequestW9ServiceTests));
+        await _ctx.ActivateApiScopeAsync(_scope);
+
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(TimeProvider.System);
@@ -36,15 +47,16 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
             RequestVendorW9Result,
             RequestVendorW9Handler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
-            options.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+            options.UseNpgsql(_ctx.ConnectionString)
+                .AddInterceptors(new RequestGucConnectionInterceptor(_scope))
+                .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
-        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorRequestW9ServiceTests));
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     private VendorService CreateSut() => new(
@@ -140,5 +152,38 @@ public sealed class VendorRequestW9ServiceTests : IDisposable
         result.Outcome.Should().Be(RequestW9Outcome.NotFound);
         (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(0);
         (await _ctx.Db.AtomicAuditLogs.CountAsync()).Should().Be(0);
+    }
+
+    private sealed class RequestGucConnectionInterceptor(WorkspaceReadScope scope) : DbConnectionInterceptor
+    {
+        public override async Task ConnectionOpenedAsync(
+            DbConnection connection,
+            ConnectionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SET SESSION AUTHORIZATION rentalcommand_api;
+                SELECT set_config('app.current_portfolio_id', @portfolio_id, false),
+                       set_config('app.auth_session_id', @auth_session_id, false),
+                       set_config('app.current_user_id', @user_id, false),
+                       set_config('app.current_access_context_id', @access_context_id, false),
+                       set_config('app.access_revision', @access_revision, false);
+                """;
+            AddParameter(command, "portfolio_id", scope.PortfolioId.ToString());
+            AddParameter(command, "auth_session_id", scope.SessionId.ToString());
+            AddParameter(command, "user_id", scope.UserId.ToString());
+            AddParameter(command, "access_context_id", scope.AccessContextId.ToString());
+            AddParameter(command, "access_revision", scope.AccessRevision.ToString());
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        private static void AddParameter(DbCommand command, string name, string value)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $"@{name}";
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
     }
 }

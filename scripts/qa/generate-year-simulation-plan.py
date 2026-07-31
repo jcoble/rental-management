@@ -26,10 +26,26 @@ OUT = ROOT / "Docs" / "Testing" / "YearSimulation2027"
 YEAR = 2027
 START = date(YEAR, 1, 1)
 END = date(YEAR, 12, 31)
+HISTORICAL_SCHEDULE_FREEZE_END = date(YEAR, 1, 30)
+HISTORICAL_SCHEDULE_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "year-simulation-schedule-through-2027-01-30.csv"
+)
 WEB_NATIVE_CONTROL = re.compile(
     r"<(input|select|textarea)(?=\s|/?>)([^>]*)>",
-    re.IGNORECASE | re.DOTALL,
+    re.DOTALL,
 )
+WEB_SHARED_CONTROL = re.compile(
+    r"<(Input|DatePicker|AddressAutocomplete|StateSelect|Select\.Trigger|SimpleSelect)(?=\s|/?>)([^>]*)>",
+    re.DOTALL,
+)
+RETIRED_WEB_FIELD_SOURCES = {
+    "web/src/lib/components/assistant/AssistantBubble.svelte",
+    "web/src/lib/components/assistant/AssistantMessage.svelte",
+    "web/src/lib/components/assistant/AssistantPanel.svelte",
+    "web/src/lib/stores/assistantChat.svelte.ts",
+}
 
 
 FIRST_NAMES = [
@@ -148,6 +164,7 @@ class Property:
     opening_loan_balance_cents: int
     monthly_principal_cents: int
     monthly_interest_cents: int
+    monthly_escrow_cents: int
 
 
 @dataclass
@@ -173,6 +190,7 @@ class Lease:
     end_date: date
     monthly_rent_cents: int
     deposit_cents: int
+    rent_due_day: int
     origin: str
     lifecycle_scenario: str
 
@@ -196,6 +214,7 @@ class Asset:
     edge_case: str
     paired_manual_action: str
     confidentiality: str = "Synthetic QA only; no real people, accounts, signatures, or properties"
+    opening_unpaid_principal_cents: int | None = None
 
 
 @dataclass
@@ -295,6 +314,7 @@ def build_portfolio() -> None:
                 opening_loan_balance_cents=loan,
                 monthly_principal_cents=cents(420 + idx * 11) if financed else 0,
                 monthly_interest_cents=cents(610 + idx * 13) if financed else 0,
+                monthly_escrow_cents=cents(318) if financed else 0,
             )
         )
         labels = ["Main"] if structure == "SingleRental" else ["A", "B"]
@@ -350,6 +370,7 @@ def build_leases() -> None:
                 end_date=end,
                 monthly_rent_cents=unit.market_rent_cents,
                 deposit_cents=unit.market_rent_cents,
+                rent_due_day=31 if idx == 31 else 1,
                 origin="Opening lease scan",
                 lifecycle_scenario=scenarios.get(unit.unit_id, "continuing resident through year-end"),
             )
@@ -381,6 +402,7 @@ def build_leases() -> None:
                 end_date=end,
                 monthly_rent_cents=unit.market_rent_cents,
                 deposit_cents=unit.market_rent_cents,
+                rent_due_day=1,
                 origin="Application + lease scan",
                 lifecycle_scenario=scenario,
             )
@@ -416,6 +438,7 @@ def add_asset(
     lease_id: str = "",
     financial_event_id: str = "",
     slug: str = "",
+    opening_unpaid_principal_cents: int | None = None,
 ) -> str:
     asset_id = f"SCN-{len(assets) + 1:04d}"
     suffix = "pdf" if fmt == "PDF" else ("jpg" if "JPEG" in fmt else "png")
@@ -438,6 +461,7 @@ def add_asset(
             expected_fields=expected_fields,
             edge_case=edge_case,
             paired_manual_action=paired_manual_action,
+            opening_unpaid_principal_cents=opening_unpaid_principal_cents,
         )
     )
     return asset_id
@@ -484,6 +508,61 @@ def add_schedule(
         )
     )
     return run_id
+
+
+def load_historical_schedule_freeze() -> list[Schedule]:
+    with HISTORICAL_SCHEDULE_FIXTURE.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise ValueError(f"Historical schedule fixture is empty: {HISTORICAL_SCHEDULE_FIXTURE}")
+    frozen: list[Schedule] = []
+    for row in rows:
+        clock = date.fromisoformat(row["simulated_clock"])
+        if clock > HISTORICAL_SCHEDULE_FREEZE_END:
+            raise ValueError(
+                f"{row['run_id']} is beyond the historical schedule freeze end "
+                f"{HISTORICAL_SCHEDULE_FREEZE_END.isoformat()}"
+            )
+        frozen.append(
+            Schedule(
+                run_id=row["run_id"],
+                simulated_clock=row["simulated_clock"],
+                sequence=int(row["sequence"]),
+                phase=row["phase"],
+                role=row["role"],
+                client=row["client"],
+                entry_mode=row["entry_mode"],
+                workflow=row["workflow"],
+                entity_refs=row["entity_refs"],
+                asset_refs=row["asset_refs"],
+                financial_refs=row["financial_refs"],
+                exact_actions=row["exact_actions"],
+                expected_result=row["expected_result"],
+                evidence_required=row["evidence_required"],
+                negative_or_retry_check=row["negative_or_retry_check"],
+                completion_gate=row["completion_gate"],
+            )
+        )
+    return frozen
+
+
+def apply_historical_schedule_freeze() -> None:
+    frozen = load_historical_schedule_freeze()
+    frozen_ids = {row.run_id for row in frozen}
+    if len(frozen_ids) != len(frozen):
+        raise ValueError("Historical schedule fixture contains duplicate run IDs")
+
+    future = [
+        row
+        for row in schedules
+        if date.fromisoformat(row.simulated_clock) > HISTORICAL_SCHEDULE_FREEZE_END
+    ]
+    future_collisions = sorted(frozen_ids & {row.run_id for row in future})
+    if future_collisions:
+        raise ValueError(
+            f"Historical schedule fixture collides with future generated rows: {future_collisions[:5]}"
+        )
+    schedules[:] = frozen + future
 
 
 def add_financial_event(
@@ -557,6 +636,10 @@ def add_financial_event(
             }
         )
     return event_id
+
+
+def financial_event_by_id(event_id: str) -> FinancialEvent:
+    return next(item for item in financial_events if item.event_id == event_id)
 
 
 def build_opening_setup() -> None:
@@ -742,11 +825,16 @@ def prorated_rent(lease: Lease, month_start: date) -> int:
     return lease.monthly_rent_cents
 
 
+def rent_due_date(lease: Lease, month_start: date) -> date:
+    return safe_day(month_start.year, month_start.month, lease.rent_due_day)
+
+
 def add_charge(lease: Lease, month_start: date, amount: int) -> str:
     prop = property_by_unit(lease.unit_id)
+    due_date = rent_due_date(lease, month_start)
     return add_financial_event(
-        month_start,
-        max(month_start, lease.start_date),
+        due_date,
+        max(due_date, lease.start_date),
         "TenantCharge",
         "Rent",
         amount,
@@ -773,6 +861,14 @@ def add_payment(
     prop = property_by_unit(lease.unit_id)
     modes = ["Scanned check", "Scanned money order", "Manual ACH", "Portal card"]
     mode = modes[method_index % len(modes)]
+    charge = financial_event_by_id(charge_id)
+    charge_entry_date = date.fromisoformat(charge.entry_date)
+    is_advance_receipt = payment_date < charge_entry_date
+    receipt_memo = (
+        f"Advance receipt held for {charge_id}"
+        if is_advance_receipt
+        else f"Receipt allocated to {charge_id}"
+    )
     asset = ""
     if mode.startswith("Scanned"):
         asset = add_asset(
@@ -806,7 +902,7 @@ def add_payment(
         asset,
         reference=f"PMT-{payment_date.strftime('%Y%m%d')}-{lease.lease_id}{suffix}",
         deltas={"ar": -amount, "operating_cash": amount},
-        memo=f"Receipt allocated to {charge_id}",
+        memo=receipt_memo,
     )
     if asset:
         next(item for item in assets if item.asset_id == asset).financial_event_id = payment_id
@@ -816,12 +912,20 @@ def add_payment(
         "Property Manager",
         "Mobile" if method_index % 2 else "Web",
         mode,
-        "Post and allocate tenant receipt",
+        "Post advance tenant receipt" if is_advance_receipt else "Post and allocate tenant receipt",
         f"{prop.property_id}; {lease.unit_id}; {lease.lease_id}",
         asset,
         [charge_id, payment_id],
-        "Open Scan for paper payment or the tenant-account receipt form for electronic payment; verify tenant/lease match, amount, date, method, and reference; confirm once; open ledger detail and allocation.",
-        "Receipt is append-only, allocated once to the correct rent charge, and visible consistently in Unit, Lease, Tenant Account, Accounting, and portal views.",
+        (
+            f"Open Scan for paper payment or the tenant-account receipt form; verify tenant/lease match, amount, date, method, and reference; confirm once as an advance receipt for {charge_entry_date.isoformat()}; open ledger detail and allocation."
+            if is_advance_receipt
+            else "Open Scan for paper payment or the tenant-account receipt form for electronic payment; verify tenant/lease match, amount, date, method, and reference; confirm once; open ledger detail and allocation."
+        ),
+        (
+            "Advance receipt is append-only, credits the tenant account before the matching charge date, and is visible consistently in Unit, Lease, Tenant Account, Accounting, and portal views."
+            if is_advance_receipt
+            else "Receipt is append-only, allocated once to the correct rent charge, and visible consistently in Unit, Lease, Tenant Account, Accounting, and portal views."
+        ),
         "Scan review or form; success result; exact ledger rows; payment detail; accounting delta; portal receipt.",
         "Retry the idempotency key once during the quarter assigned in the coverage matrix; no duplicate cash or allocation.",
     )
@@ -832,11 +936,11 @@ def build_monthly_rent_and_payments() -> None:
     for month in range(1, 13):
         month_start = date(YEAR, month, 1)
         active = active_leases_for_month(month_start)
-        charge_ids = []
+        charge_batches: defaultdict[date, list[tuple[Lease, str]]] = defaultdict(list)
         for lease in active:
             amount = prorated_rent(lease, month_start)
             charge_id = add_charge(lease, month_start, amount)
-            charge_ids.append(charge_id)
+            charge_batches[rent_due_date(lease, month_start)].append((lease, charge_id))
 
             lease_number = int(lease.lease_id[1:])
             if lease.unit_id == "U017" and month == 6:
@@ -944,21 +1048,26 @@ def build_monthly_rent_and_payments() -> None:
             else:
                 add_payment(lease, safe_day(YEAR, month, 3 + (lease_number % 3)), amount, charge_id, lease_number)
 
-        add_schedule(
-            month_start,
-            "Monthly operations",
-            "Workspace Administrator",
-            "Web + Mobile",
-            "System automation + reconciliation",
-            f"{month_start.strftime('%B')} recurring rent generation",
-            f"{len(active)} active tenant accounts",
-            "",
-            charge_ids,
-            "Advance the simulation clock to 08:00 local; run or wait for scheduled finance worker; compare generated charges to active governing agreements, start dates, proration, and unique billing-period keys.",
-            f"Exactly {len(active)} rent charges are posted once; mid-month starts prorate; ended leases do not receive future charges.",
-            "Worker status; charge list; month rent-roll export; sampled Unit/Lease/portal balances; SQL query evidence.",
-            "Run the finance worker a second time and prove no duplicate charge; inject one failure and prove charge/audit/outbox atomic rollback.",
-        )
+        for due_date, batch in sorted(charge_batches.items()):
+            batch_leases = [lease for lease, _ in batch]
+            charge_ids = [charge_id for _, charge_id in batch]
+            due_days = sorted({lease.rent_due_day for lease in batch_leases})
+            due_day_suffix = "" if due_days == [1] else f" due day {'/'.join(str(day) for day in due_days)}"
+            add_schedule(
+                due_date,
+                "Monthly operations",
+                "Workspace Administrator",
+                "Web + Mobile",
+                "System automation + reconciliation",
+                f"{month_start.strftime('%B')} recurring rent generation{due_day_suffix}",
+                f"{len(charge_ids)} active tenant accounts due {due_date.isoformat()}",
+                "",
+                charge_ids,
+                "Advance the simulation clock to 08:00 local; run or wait for scheduled finance worker; compare generated charges to active governing agreements, start dates, proration, rent due day, and unique billing-period keys.",
+                f"Exactly {len(charge_ids)} rent charges due {due_date.isoformat()} are posted once; mid-month starts prorate; ended leases do not receive future charges.",
+                "Worker status; charge list; month rent-roll export; sampled Unit/Lease/portal balances; SQL query evidence.",
+                "Run the finance worker a second time and prove no duplicate charge; inject one failure and prove charge/audit/outbox atomic rollback.",
+            )
 
 
 def expense_account(category: str) -> str:
@@ -1116,22 +1225,25 @@ def build_recurring_and_owner_finance() -> None:
             amount = cents(118 + ((month * 11 + idx * 7) % 90))
             add_expense(day, prop, None, amount, "Utilities", "City Water & Sewer", 1000 + month * 20 + idx)
 
-        # Loan payments: principal reduces liability, interest is Schedule E expense.
+        # Loan payments: principal reduces liability, interest is Schedule E expense, and
+        # escrow remains an asset until the lender disburses it for taxes or insurance.
         loan_refs = []
         for idx, prop in enumerate(financed, start=1):
             day = safe_day(YEAR, month, 20)
             principal = prop.monthly_principal_cents
             interest = max(cents(350), prop.monthly_interest_cents - cents((month - 1) * 8))
-            total = principal + interest
+            escrow = prop.monthly_escrow_cents
+            total = principal + interest + escrow
             event_id = add_financial_event(
                 day,
                 day,
                 "LoanPayment",
-                "Mortgage principal and interest",
+                "Mortgage payment",
                 total,
                 [
                     ("Debit", "2200 Mortgage Loans Payable", principal),
                     ("Debit", "5040 Mortgage Interest", interest),
+                    ("Debit", "1030 Mortgage Escrow Asset", escrow),
                     ("Credit", "1000 Operating Cash", total),
                 ],
                 prop.property_id,
@@ -1142,6 +1254,11 @@ def build_recurring_and_owner_finance() -> None:
                 memo=f"{prop.loan_id} scheduled payment",
             )
             loan_refs.append(event_id)
+            opening_unpaid_principal_cents = (
+                {"LN001": 12539400, "LN002": 13045800}.get(prop.loan_id)
+                if month == 2
+                else None
+            )
             statement = add_asset(
                 day,
                 "Monthly mortgage statement",
@@ -1150,12 +1267,18 @@ def build_recurring_and_owner_finance() -> None:
                 "PDF",
                 "3 pages",
                 "clean lender PDF",
-                "loan; due date; payment; principal; interest; escrow; ending principal balance",
+                (
+                    "loan; due date; payment; principal; interest; escrow; "
+                    "opening unpaid principal; ending unpaid principal"
+                    if opening_unpaid_principal_cents is not None
+                    else "loan; due date; payment; principal; interest; escrow; ending principal balance"
+                ),
                 "principal/interest changes monthly",
                 "Verify or enter a different loan payment manually from the other client.",
                 prop.property_id,
                 financial_event_id=event_id,
                 slug=f"loan-payment-{prop.loan_id}-{YEAR}{month:02d}",
+                opening_unpaid_principal_cents=opening_unpaid_principal_cents,
             )
             financial_events[-1].source_asset_id = statement
         add_schedule(
@@ -2024,47 +2147,80 @@ def build_screen_and_field_inventory() -> None:
                 "Open the direct URL or deep link with an adjacent unauthorized persona and with stale scope; both fail closed and land safely without mutation.",
             )
 
-    attr = lambda name, text: next(
-        (
-            match.group(1) or match.group(2) or match.group(3) or ""
-            for match in [
-                re.search(
-                    rf"(?:{re.escape(name)})\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|\{{([^}}]*)\}})",
-                    text,
-                    re.IGNORECASE,
-                )
-            ]
-            if match
-        ),
-        "",
-    )
+    def attr(name: str, text: str) -> str:
+        match = re.search(
+            rf"(?<![\w:-]){re.escape(name)}(?![\w:-])\s*=\s*"
+            rf"(?:\"([^\"]*)\"|'([^']*)'|\{{\s*`([^`]*)`\s*\}}|\{{([^{{}}]*)\}})",
+            text,
+            re.IGNORECASE,
+        )
+        return next((value for value in match.groups() if value is not None), "") if match else ""
+
+    def label_for_control(source: str, match: re.Match[str], attributes: str) -> str:
+        label_window = source[max(0, match.start() - 500) : match.start()]
+        label = ""
+        open_label = label_window.lower().rfind("<label")
+        closed_label = label_window.lower().rfind("</label>")
+        if open_label > closed_label:
+            label_tail = source[match.end() : min(len(source), match.end() + 500)]
+            following_labels = re.findall(
+                r"<span[^>]*>(.*?)</span>",
+                label_tail.split("</label>", 1)[0],
+                re.IGNORECASE | re.DOTALL,
+            )
+            if following_labels:
+                label = re.sub(
+                    r"<[^>]+>|\{[^}]+\}", " ", following_labels[0]
+                ).strip()
+        if not label:
+            labels = re.findall(
+                r"<(?:label|span|legend)[^>]*>(.*?)</(?:label|span|legend)>",
+                label_window,
+                re.IGNORECASE | re.DOTALL,
+            )
+            label = (
+                re.sub(r"<[^>]+>|\{[^}]+\}", " ", labels[-1]).strip()
+                if labels
+                else ""
+            )
+        return (
+            re.sub(r"\s+", " ", label)
+            or attr("aria-label", attributes)
+            or attr("placeholder", attributes)
+            or attr("value", attributes)
+        )
+
     screen_by_source = {row["source_file"]: row for row in screen_inventory}
     seen_fields: set[tuple[str, str, str]] = set()
 
     for path in sorted((ROOT / "web" / "src").rglob("*.svelte")):
         source_file = str(path.relative_to(ROOT))
+        if source_file in RETIRED_WEB_FIELD_SOURCES:
+            continue
         source = path.read_text(encoding="utf-8")
-        for ordinal, match in enumerate(WEB_NATIVE_CONTROL.finditer(source), start=1):
+        controls = sorted(
+            [
+                *WEB_NATIVE_CONTROL.finditer(source),
+                *WEB_SHARED_CONTROL.finditer(source),
+            ],
+            key=lambda item: item.start(),
+        )
+        for ordinal, match in enumerate(controls, start=1):
             control_type, attributes = match.groups()
             bind_value = ""
             bind_match = re.search(r"bind:(?:value|checked|group)\s*=\s*\{([^}]+)\}", attributes)
             if bind_match:
                 bind_value = bind_match.group(1).strip()
             field_key = (
-                attr("name", attributes)
+                attr("data-testid", attributes)
+                or attr("testid", attributes)
+                or attr("name", attributes)
                 or attr("id", attributes)
                 or bind_value
                 or attr("placeholder", attributes)
                 or f"{control_type}-{ordinal}"
             )
-            label_window = source[max(0, match.start() - 500) : match.start()]
-            labels = re.findall(r"<label[^>]*>(.*?)</label>", label_window, re.IGNORECASE | re.DOTALL)
-            label = re.sub(r"<[^>]+>|\{[^}]+\}", " ", labels[-1]).strip() if labels else ""
-            label = re.sub(r"\s+", " ", label) or attr("aria-label", attributes) or attr("placeholder", attributes)
-            key = ("Web", source_file, field_key)
-            if key in seen_fields:
-                continue
-            seen_fields.add(key)
+            label = label_for_control(source, match, attributes)
             screen = screen_by_source.get(source_file)
             surface = screen["surface"] if screen else source_file
             field_inventory.append(
@@ -2074,7 +2230,7 @@ def build_screen_and_field_inventory() -> None:
                     "screen_or_component": surface,
                     "source_file": source_file,
                     "source_line": source.count("\n", 0, match.start()) + 1,
-                    "control_type": attr("type", attributes) or control_type.lower(),
+                    "control_type": attr("type", attributes) or control_type,
                     "field_key": field_key,
                     "label_or_hint": label,
                     "role": role_for_surface("Web", surface),
@@ -2470,6 +2626,62 @@ def validate(monthly_controls: list[dict]) -> dict:
         raise ValueError(f"Journal is not balanced: {debit} != {credit}")
     if len(properties) != 30 or len(units) != 40 or len(leases) != 45:
         raise ValueError("Portfolio control counts changed unexpectedly")
+    financed_properties = {item.property_id: item for item in properties if item.loan_id}
+    loan_payments = [item for item in financial_events if item.event_type == "LoanPayment"]
+    if len(financed_properties) != 20 or len(loan_payments) != 240:
+        raise ValueError(
+            "Loan payment controls require 20 financed properties and 240 monthly payments"
+        )
+    expected_annual_escrow = sum(
+        item.monthly_escrow_cents * 12 for item in financed_properties.values()
+    )
+    if expected_annual_escrow != 7_632_000:
+        raise ValueError(
+            f"Annual mortgage escrow changed unexpectedly: {expected_annual_escrow}"
+        )
+    journal_by_event: defaultdict[str, list[dict]] = defaultdict(list)
+    for line in journal:
+        journal_by_event[line["event_id"]].append(line)
+    for payment in loan_payments:
+        prop = financed_properties[payment.property_id]
+        payment_lines = journal_by_event[payment.event_id]
+        account_amounts = {
+            line["account"]: (
+                line["debit_cents"],
+                line["credit_cents"],
+            )
+            for line in payment_lines
+        }
+        principal = -payment.loan_liability_delta_cents
+        interest = payment.expense_cents
+        escrow = prop.monthly_escrow_cents
+        expected_total = principal + interest + escrow
+        if payment.category != "Mortgage payment":
+            raise ValueError(f"{payment.event_id} has noncanonical category {payment.category}")
+        if payment.amount_cents != expected_total:
+            raise ValueError(
+                f"{payment.event_id} total {payment.amount_cents} != "
+                f"principal + interest + escrow {expected_total}"
+            )
+        if payment.operating_cash_delta_cents != -expected_total:
+            raise ValueError(
+                f"{payment.event_id} operating cash does not equal the full mortgage payment"
+            )
+        expected_lines = {
+            "2200 Mortgage Loans Payable": (principal, 0),
+            "5040 Mortgage Interest": (interest, 0),
+            "1030 Mortgage Escrow Asset": (escrow, 0),
+            "1000 Operating Cash": (0, expected_total),
+        }
+        if account_amounts != expected_lines:
+            raise ValueError(
+                f"{payment.event_id} journal does not contain the canonical mortgage split"
+            )
+    january = next(row for row in monthly_controls if row["month"] == "2027-01")
+    if january["operating_cash_delta_cents"] != -485_445:
+        raise ValueError(
+            "January operating cash must include all 20 mortgage escrow withdrawals"
+        )
     if len({item.asset_id for item in assets}) != len(assets):
         raise ValueError("Duplicate scan asset ID")
     if len({item.run_id for item in schedules}) != len(schedules):
@@ -2538,6 +2750,7 @@ def validate(monthly_controls: list[dict]) -> dict:
         "scan_or_attachment_run_rows": scan_first,
         "journal_debits_cents": debit,
         "journal_credits_cents": credit,
+        "year_mortgage_escrow_cents": expected_annual_escrow,
         "year_income_cents": sum(row["income_cents"] for row in monthly_controls),
         "year_expense_cents": sum(row["expense_cents"] for row in monthly_controls),
         "year_noi_cents": sum(row["net_operating_income_cents"] for row in monthly_controls),
@@ -2866,6 +3079,7 @@ ul.checks li{{margin:8px 0}} .danger{{color:var(--red);font-weight:700}} footer{
 
 def write_outputs() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
+    apply_historical_schedule_freeze()
     property_rows = [asdict(item) for item in properties]
     unit_rows = [asdict(item) for item in units]
     lease_rows = [

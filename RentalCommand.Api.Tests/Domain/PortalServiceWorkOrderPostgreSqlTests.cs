@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -68,6 +69,15 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
         page.Items.Should().NotContain(item =>
             item.Id == scenario.BeforeBoundaryId || item.Id == scenario.ExclusiveEndId);
 
+        var json = JsonSerializer.Serialize(page, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        });
+        json.Should().NotContain("portfolioId");
+        json.Should().NotContain("propertyId");
+        json.Should().NotContain("tenantId");
+        json.Should().NotContain("leaseManagementId");
+
         _commands.Should().HaveCount(2, "count and bounded page stay server-side");
         _commands.Should().OnlyContain(sql =>
             sql.Contains("\"RequestedAt\" >=", StringComparison.Ordinal)
@@ -78,6 +88,70 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && sql.Contains("\"Status\"", StringComparison.Ordinal)
             && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task WorkOrderDetail_ReturnsTenantSafeContractWithoutManagementFields()
+    {
+        var scenario = await SeedScenarioAsync();
+        var workOrder = await _context.Db.WorkOrders.SingleAsync(item => item.Id == scenario.StartBoundaryId);
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Internal Plumbing",
+            CreatedAt = Now,
+            UpdatedAt = Now,
+        };
+        _context.Db.Vendors.Add(vendor);
+        await _context.Db.SaveChangesAsync();
+        workOrder.VendorId = vendor.Id;
+        workOrder.EstimatedCost = 147.80m;
+        workOrder.ActualCost = 210.25m;
+        workOrder.CreatedBy = "4";
+        workOrder.RequesterPhone = "555-0100";
+        workOrder.RequesterEmail = "marcus@example.test";
+        workOrder.EntryNotes = "Resident can meet at side door.";
+        await _context.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var detail = await new PortalService(
+                _context.Db,
+                Mock.Of<ILeaseQaService>(),
+                TimeProvider.System)
+            .GetWorkOrderDetailAsync(scenario.Scope, scenario.TenantId, scenario.StartBoundaryId);
+
+        detail.Should().NotBeNull();
+        detail!.Id.Should().Be(scenario.StartBoundaryId);
+        detail.ResidentNames.Should().ContainSingle("Marcus Tenant");
+        detail.RequesterPhone.Should().Be("555-0100");
+        detail.RequesterEmail.Should().Be("marcus@example.test");
+        detail.EntryNotes.Should().Be("Resident can meet at side door.");
+        detail.Capabilities.CanCommentPublicly.Should().BeTrue();
+        detail.Capabilities.CanUploadPhoto.Should().BeTrue();
+        detail.Activity.Should().BeEmpty();
+
+        var json = JsonSerializer.Serialize(detail, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        });
+        json.Should().NotContain("portfolioId");
+        json.Should().NotContain("propertyId");
+        json.Should().NotContain("tenantId");
+        json.Should().NotContain("leaseManagementId");
+        json.Should().NotContain("vendorId");
+        json.Should().NotContain("estimatedCost");
+        json.Should().NotContain("actualCost");
+        json.Should().NotContain("createdBy");
+        json.Should().NotContain("147.80");
+
+        _commands.Should().HaveCount(2, "detail and public activity stay server-side");
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"WorkOrderStatusEvents\"", StringComparison.Ordinal));
+        _commands.Should().NotContain(sql =>
+            sql.Contains("\"EstimatedCost\"", StringComparison.Ordinal)
+            || sql.Contains("\"ActualCost\"", StringComparison.Ordinal)
+            || sql.Contains("\"VendorId\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -173,6 +247,8 @@ public sealed class PortalServiceWorkOrderPostgreSqlTests : IAsyncLifetime
             PortfolioId = PortfolioId,
             FirstName = "Marcus",
             LastName = "Tenant",
+            Email = "marcus@example.test",
+            Phone = "555-0100",
             CreatedAt = Now,
             UpdatedAt = Now,
         };

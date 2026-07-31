@@ -11,20 +11,24 @@ namespace RentalCommand.Data.Auth;
 public sealed class IssueLoginContextSelectionChallengeHandler
     : IAtomicCommandHandler<IssueLoginContextSelectionChallengeCommand, LoginContextSelectionChallengeResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public IssueLoginContextSelectionChallengeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LoginContextSelectionChallengeResult> HandleAsync(
         IssueLoginContextSelectionChallengeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ValidateChallenge(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LoginContextSelectionChallenge,
+        await context.AcquireLockAsync(
+            "LoginContextSelectionChallenge",
             command.ChallengeId,
             ct);
 
         // Pre-login RLS cannot see authority tables because no AuthSession exists yet. The DB-owned
         // projection returns the first audit root and total effective-context count in one statement.
-        var projectedRoot = await attempt.Persistence.ReadEffectiveLoginContextRootAsync(
+        var projectedRoot = await AtomicEffectiveLoginContextQueries.ReadRootAsync(_db,
             command.UserId, command.IssuedAtUtc, ct);
         var auditRoot = projectedRoot is null
             ? null
@@ -42,7 +46,7 @@ public sealed class IssueLoginContextSelectionChallengeHandler
                 command.ExpiresAtUtc);
         }
 
-        attempt.Persistence.Add(new LoginContextSelectionChallenge
+        _db.Add(new LoginContextSelectionChallenge
         {
             Id = command.ChallengeId,
             UserId = command.UserId,
@@ -50,7 +54,7 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             CreatedAtUtc = command.IssuedAtUtc,
             ExpiresAtUtc = command.ExpiresAtUtc,
         });
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             auditRoot.PortfolioId,
             nameof(WorkspaceAccessContext),
             auditRoot.AccessContextId,
@@ -72,6 +76,41 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             command.ChallengeId,
             command.UserId,
             command.ExpiresAtUtc);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        IssueLoginContextSelectionChallengeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ValidateChallenge(command);
+
+        var exactChallengeExists = await _db.Set<LoginContextSelectionChallenge>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(challenge =>
+                challenge.Id == command.ChallengeId &&
+                challenge.UserId == command.UserId &&
+                challenge.TokenHash == command.ChallengeTokenHash &&
+                challenge.CreatedAtUtc == command.IssuedAtUtc &&
+                challenge.ExpiresAtUtc == command.ExpiresAtUtc,
+                ct);
+        if (exactChallengeExists)
+        {
+            return;
+        }
+
+        var projectedRoot = await AtomicEffectiveLoginContextQueries.ReadRootAsync(
+            _db,
+            command.UserId,
+            command.IssuedAtUtc,
+            ct);
+        if (projectedRoot is null || projectedRoot.TotalEffectiveContexts < 2)
+        {
+            return;
+        }
+
+        throw new UnauthorizedAccessException("The original login context-selection challenge is unavailable.");
     }
 
     private static void ValidateChallenge(IssueLoginContextSelectionChallengeCommand command)
@@ -97,20 +136,23 @@ public sealed class IssueLoginContextSelectionChallengeHandler
 }
 
 public sealed class StartAuthSessionHandler
-    : IAtomicCommandHandler<StartAuthSessionCommand, StartAuthSessionResult>,
-      IAtomicReplayAuthorizer<StartAuthSessionCommand>
+    : IAtomicCommandHandler<StartAuthSessionCommand, StartAuthSessionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public StartAuthSessionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<StartAuthSessionResult> HandleAsync(
         StartAuthSessionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
         if (command.ContextSelectionChallengeId is { } challengeId)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.LoginContextSelectionChallenge,
+            await context.AcquireLockAsync(
+                "LoginContextSelectionChallenge",
                 challengeId,
                 ct);
         }
@@ -118,8 +160,8 @@ public sealed class StartAuthSessionHandler
         // A login has no AuthSession yet, so ordinary RLS must not be widened to expose authority
         // tables. Read only the selected effective context through the DB-owned SECURITY DEFINER
         // projection; the function also supplies the total count in this same SQL statement.
-        var effectiveAtUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await attempt.Persistence.ReadEffectiveLoginContextAsync(
+        var effectiveAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await AtomicEffectiveLoginContextQueries.ReadAsync(_db,
             command.UserId,
             command.SelectedAccessContextId,
             effectiveAtUtc,
@@ -139,7 +181,7 @@ public sealed class StartAuthSessionHandler
                 return Rejected(command);
             }
 
-            challenge = await attempt.Persistence.Query<LoginContextSelectionChallenge>()
+            challenge = await _db.Set<LoginContextSelectionChallenge>()
                 .SingleOrDefaultAsync(item =>
                     item.Id == command.ContextSelectionChallengeId &&
                     item.UserId == command.UserId &&
@@ -185,13 +227,13 @@ public sealed class StartAuthSessionHandler
         };
         family.Credentials.Add(credential);
         session.RefreshTokenFamilies.Add(family);
-        attempt.Persistence.Add(session);
+        _db.Add(session);
         if (challenge is not null)
         {
             challenge.ConsumedAtUtc = command.IssuedAtUtc;
         }
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             target.PortfolioId,
             nameof(WorkspaceAccessContext),
             target.AccessContextId,
@@ -222,13 +264,11 @@ public sealed class StartAuthSessionHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        StartAuthSessionCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        StartAuthSessionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var effectiveAtUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await persistence.ReadEffectiveLoginContextAsync(
+        var effectiveAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await AtomicEffectiveLoginContextQueries.ReadAsync(_db,
             command.UserId,
             command.SelectedAccessContextId,
             effectiveAtUtc,
@@ -237,7 +277,7 @@ public sealed class StartAuthSessionHandler
         {
             throw new UnauthorizedAccessException("The selected workspace access revision changed.");
         }
-        var exactSessionExists = await persistence.Query<AuthSession>()
+        var exactSessionExists = await _db.Set<AuthSession>()
             // Pre-auth replay has no portfolio GUC yet. The effective-context projection above
             // already proves the live workspace boundary; bypass only the AuthSession model's
             // soft-delete join so this exact global auth row remains visible with blank RLS scope.
@@ -249,7 +289,15 @@ public sealed class StartAuthSessionHandler
                 session.ActiveAccessContextId == target.AccessContextId &&
                 session.Status == AuthSessionStatus.Active &&
                 session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > effectiveAtUtc,
+                session.ExpiresAtUtc > effectiveAtUtc &&
+                session.RefreshTokenFamilies.Any(family =>
+                    family.Id == command.RefreshTokenFamilyId &&
+                    family.AbsoluteExpiresAtUtc == command.AbsoluteFamilyExpiresAtUtc &&
+                    family.Credentials.Any(credential =>
+                        credential.Id == command.CredentialId &&
+                        credential.TokenHash == command.CredentialTokenHash &&
+                        credential.IssuedAtUtc == command.IssuedAtUtc &&
+                        credential.ExpiresAtUtc == command.CredentialExpiresAtUtc)),
                 ct);
         if (!exactSessionExists)
         {

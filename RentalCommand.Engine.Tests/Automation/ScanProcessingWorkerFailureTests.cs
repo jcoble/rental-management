@@ -595,9 +595,6 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     {
         public TestableScanProcessingWorker(IServiceProvider sp)
             : base(sp, NullLogger<ScanProcessingWorker>.Instance) { }
-
-        public Task<int> RunOneCycleAsync(IServiceProvider scoped, CancellationToken ct)
-            => ExecuteCycleAsync(scoped, ct);
     }
 
     private sealed class StubLlmProvider :
@@ -693,7 +690,8 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             int inputUnits,
             int outputUnits,
             decimal estimatedCostUsd,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            string? usageEventIdentity = null)
         {
             Receipts.Add(new UsageReceipt(
                 portfolioId,

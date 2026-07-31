@@ -45,7 +45,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult,
             UpdateAssignedWorkOrderHandler>();
         services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
@@ -88,6 +88,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             null,
             null,
             null,
+            BusinessNowUtc,
             "assigned-update-replay");
         var identity = new AtomicCommandIdentity(
             "assigned-work-order.update",
@@ -124,6 +125,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             null,
             null,
             null,
+            BusinessNowUtc,
             "unassigned-update-denied");
         var denied = async () => await Atomic.ExecuteAsync(
             new AtomicCommandIdentity(
@@ -345,6 +347,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
                 scenario.TechnicianAccessContextId,
                 scenario.TechnicianAccessRevision + 1)],
             "Unassign technician.",
+            closeNow,
             "close-clock-close");
         var closeIdentity = new AtomicCommandIdentity(
             "work-order-responsibility.close",
@@ -394,9 +397,9 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
     private async Task AssertDeniedAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
         TCommand command,
-        IAtomicResultCodec<TResult> codec)
+        AtomicJsonResultCodec<TResult> codec)
         where TCommand : notnull, IAtomicCommandData
-        where TResult : notnull, IAtomicResultData
+        where TResult : notnull
     {
         var act = async () => await Atomic.ExecuteAsync(identity, command, codec);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
@@ -411,7 +414,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(timeProvider);
         services.AddScoped<ICurrentActor, TestActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<AssignWorkOrderResponsibilityCommand, AssignWorkOrderResponsibilityResult,
             AssignWorkOrderResponsibilityHandler>();
         services.AddAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult,
@@ -447,6 +450,7 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
                 scenario.TechnicianAccessContextId,
                 scenario.TechnicianAccessRevision)],
             "Assign primary technician.",
+            BusinessNowUtc,
             idempotencyKey);
 
     private static AtomicCommandIdentity AssignIdentity(

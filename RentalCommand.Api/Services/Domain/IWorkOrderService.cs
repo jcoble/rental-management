@@ -23,6 +23,9 @@ public interface IWorkOrderService
     Task<WorkOrderResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope, int id, UpdateWorkOrderRequest request, string idempotencyKey,
         CancellationToken ct = default);
+    Task<WorkOrderMutationReceipt?> CommentAuthorizedAsync(
+        WorkspaceReadScope scope, int id, WorkOrderCommentRequest request, string idempotencyKey,
+        CancellationToken ct = default);
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 

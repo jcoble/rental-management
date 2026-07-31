@@ -1,4 +1,6 @@
+using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -17,11 +19,13 @@ public class LoanServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly List<string> _commands = [];
+    private readonly SqliteTestContext _ctx;
     private readonly LoanService _sut;
 
     public LoanServiceTests()
     {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
     }
 
@@ -113,6 +117,8 @@ public class LoanServiceTests : IDisposable
                 dueDate: new DateTime(2024, 4, 1, 0, 0, 0, DateTimeKind.Utc)));
         _ctx.Db.SaveChanges();
 
+        _commands.Clear();
+
         var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id, new LoanPaymentQuery
         {
             Status = LoanPaymentStatus.Scheduled,
@@ -124,6 +130,16 @@ public class LoanServiceTests : IDisposable
         schedule.Should().NotBeNull();
         schedule!.Should().ContainSingle();
         schedule[0].PeriodKey.Should().Be("2024-03");
+        _commands.Should().HaveCount(2,
+            "the loan read uses one scope check and one effective schedule reader");
+        var scheduleSql = _commands.Single(sql =>
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.OrdinalIgnoreCase));
+        scheduleSql.Should()
+            .Contain("\"LoanPayments\"")
+            .And.Contain("\"LoanPaymentCorrections\"")
+            .And.Contain("ORDER BY")
+            .And.Contain("LIMIT")
+            .And.Contain("OFFSET");
     }
 
     // -----------------------------------------------------------------------
@@ -195,4 +211,26 @@ public class LoanServiceTests : IDisposable
         Status = status,
         CreatedAt = DateTime.UtcNow,
     };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }

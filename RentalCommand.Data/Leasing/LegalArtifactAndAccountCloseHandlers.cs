@@ -8,33 +8,36 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class VoidLeaseAgreementHandler
-    : IAtomicCommandHandler<VoidLeaseAgreementCommand, VoidLegalArtifactResult>,
-      IAtomicReplayAuthorizer<VoidLeaseAgreementCommand>
+    : IAtomicCommandHandler<VoidLeaseAgreementCommand, VoidLegalArtifactResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public VoidLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<VoidLegalArtifactResult> HandleAsync(
-        VoidLeaseAgreementCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        VoidLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LegalArtifactCommandSupport.Validate(command, command.LeaseAgreementId);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, attempt.Persistence, now)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Agreements)
             .Select(agreement => new
             {
                 Agreement = agreement,
                 ActivePossessionDependsOnAgreement = agreement.LeaseManagement!.PossessionGivenAtUtc != null
                     && agreement.LeaseManagement.PossessionReturnedAtUtc == null
-                    && attempt.Persistence.Query<LeaseAgreementStatusProjection>().Any(status =>
+                    && _db.Set<LeaseAgreementStatusProjection>().Any(status =>
                         status.PortfolioId == command.PortfolioId && status.AgreementId == agreement.Id
                         && status.LeaseManagementId == command.LeaseManagementId && status.IsGoverning),
                 ActiveAddendaDependOnAgreement = agreement.Addenda.Any(addendum =>
                     addendum.FullyExecutedAtUtc != null && addendum.VoidedAtUtc == null
                     && addendum.DraftCanceledAtUtc == null),
-                HasUnreversedPostedMoney = attempt.Persistence.Query<TenantLedgerEntry>().Any(entry =>
+                HasUnreversedPostedMoney = _db.Set<TenantLedgerEntry>().Any(entry =>
                         entry.PortfolioId == command.PortfolioId && entry.LeaseAgreementId == agreement.Id
                         && entry.ReversesEntryId == null
                         && !entry.ReversalEntries.Any())
-                    || attempt.Persistence.Query<SecurityDepositEntry>().Any(entry =>
+                    || _db.Set<SecurityDepositEntry>().Any(entry =>
                         entry.PortfolioId == command.PortfolioId && entry.LeaseAgreementId == agreement.Id
                         && entry.ReversesEntryId == null
                         && !entry.ReversalEntries.Any()),
@@ -61,41 +64,43 @@ public sealed class VoidLeaseAgreementHandler
         target.Agreement.VoidReasonCode = command.VoidReasonCode.Trim();
         target.Agreement.VoidNote = command.VoidNote?.Trim();
         target.Agreement.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(target.Agreement, LegalArtifactCommandSupport.Audit(command,
+        context.BindSemanticAudit(target.Agreement, LegalArtifactCommandSupport.Audit(command,
             nameof(LeaseAgreement), target.Agreement.Id, "Explicitly voided an issued Agreement."));
-        await LegalArtifactCommandSupport.VoidOpenPacketAsync(command.PortfolioId,
-            target.Agreement.Id, null, command.ActorUserId, now, attempt, ct);
-        LegalArtifactCommandSupport.StageOutbox(attempt, command, now, nameof(LeaseAgreement),
+        await LegalArtifactCommandSupport.VoidOpenPacketAsync(_db, command.PortfolioId,
+            target.Agreement.Id, null, command.ActorUserId, now, context, ct);
+        LegalArtifactCommandSupport.StageOutbox(context, command, now, nameof(LeaseAgreement),
             target.Agreement.Id, "agreement-voided");
         return new(VoidLegalArtifactOutcome.Voided, command.LeaseManagementId,
             target.Agreement.Id, null, now, null);
     }
 
-    public Task AuthorizeReplayAsync(VoidLeaseAgreementCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(VoidLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class VoidLeaseAddendumHandler
-    : IAtomicCommandHandler<VoidLeaseAddendumCommand, VoidLegalArtifactResult>,
-      IAtomicReplayAuthorizer<VoidLeaseAddendumCommand>
+    : IAtomicCommandHandler<VoidLeaseAddendumCommand, VoidLegalArtifactResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public VoidLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<VoidLegalArtifactResult> HandleAsync(
-        VoidLeaseAddendumCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        VoidLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LegalArtifactCommandSupport.Validate(command, command.LeaseAddendumId);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, attempt.Persistence, now)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)
             .Select(addendum => new
             {
                 Addendum = addendum,
-                HasPostedMoney = attempt.Persistence.Query<TenantLedgerEntry>().Any(entry =>
+                HasPostedMoney = _db.Set<TenantLedgerEntry>().Any(entry =>
                         entry.PortfolioId == command.PortfolioId && entry.LeaseAddendumId == addendum.Id
                         && entry.ReversesEntryId == null
                         && !entry.ReversalEntries.Any())
-                    || attempt.Persistence.Query<SecurityDepositEntry>().Any(entry =>
+                    || _db.Set<SecurityDepositEntry>().Any(entry =>
                         entry.PortfolioId == command.PortfolioId && entry.LeaseAddendumId == addendum.Id
                         && entry.ReversesEntryId == null
                         && !entry.ReversalEntries.Any()),
@@ -116,63 +121,65 @@ public sealed class VoidLeaseAddendumHandler
         target.Addendum.VoidReasonCode = command.VoidReasonCode.Trim();
         target.Addendum.VoidNote = command.VoidNote?.Trim();
         target.Addendum.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(target.Addendum, LegalArtifactCommandSupport.Audit(command,
+        context.BindSemanticAudit(target.Addendum, LegalArtifactCommandSupport.Audit(command,
             nameof(LeaseAddendum), target.Addendum.Id, "Explicitly voided an issued Addendum."));
-        await LegalArtifactCommandSupport.VoidOpenPacketAsync(command.PortfolioId,
-            null, target.Addendum.Id, command.ActorUserId, now, attempt, ct);
-        LegalArtifactCommandSupport.StageOutbox(attempt, command, now, nameof(LeaseAddendum),
+        await LegalArtifactCommandSupport.VoidOpenPacketAsync(_db, command.PortfolioId,
+            null, target.Addendum.Id, command.ActorUserId, now, context, ct);
+        LegalArtifactCommandSupport.StageOutbox(context, command, now, nameof(LeaseAddendum),
             target.Addendum.Id, "addendum-voided");
         return new(VoidLegalArtifactOutcome.Voided, command.LeaseManagementId,
             null, target.Addendum.Id, now, null);
     }
 
-    public Task AuthorizeReplayAsync(VoidLeaseAddendumCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(VoidLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class CloseTenantAccountHandler
-    : IAtomicCommandHandler<CloseTenantAccountCommand, CloseTenantAccountResult>,
-      IAtomicReplayAuthorizer<CloseTenantAccountCommand>
+    : IAtomicCommandHandler<CloseTenantAccountCommand, CloseTenantAccountResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CloseTenantAccountHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CloseTenantAccountResult> HandleAsync(
-        CloseTenantAccountCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CloseTenantAccountCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, attempt.Persistence, now)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, _db, now)
             .Select(relationship => new
             {
                 Relationship = relationship,
                 Account = relationship.TenantAccount,
-                ReceivableBalance = attempt.Persistence.Query<TenantAccountBalanceProjection>()
+                ReceivableBalance = _db.Set<TenantAccountBalanceProjection>()
                     .Where(balance => balance.PortfolioId == command.PortfolioId
                         && balance.LeaseManagementId == command.LeaseManagementId
                         && balance.TenantAccountId == command.TenantAccountId)
                     .Select(balance => balance.ReceivableBalance).FirstOrDefault(),
-                UnappliedCredit = attempt.Persistence.Query<TenantAccountBalanceProjection>()
+                UnappliedCredit = _db.Set<TenantAccountBalanceProjection>()
                     .Where(balance => balance.PortfolioId == command.PortfolioId
                         && balance.LeaseManagementId == command.LeaseManagementId
                         && balance.TenantAccountId == command.TenantAccountId)
                     .Select(balance => balance.UnappliedCredit).FirstOrDefault(),
-                HeldDeposit = attempt.Persistence.Query<SecurityDepositBalanceProjection>()
+                HeldDeposit = _db.Set<SecurityDepositBalanceProjection>()
                     .Where(balance => balance.PortfolioId == command.PortfolioId
                         && balance.LeaseManagementId == command.LeaseManagementId
                         && balance.TenantAccountId == command.TenantAccountId)
                     .Select(balance => balance.HeldBalance).FirstOrDefault(),
-                HasUnfinishedWorkflow = attempt.Persistence.Query<TenantPaymentAttempt>().Any(payment =>
+                HasUnfinishedWorkflow = _db.Set<TenantPaymentAttempt>().Any(payment =>
                         payment.PortfolioId == command.PortfolioId
                         && payment.TenantAccountId == command.TenantAccountId
                         && payment.State != TenantPaymentAttemptState.Succeeded
                         && payment.State != TenantPaymentAttemptState.Failed
                         && payment.State != TenantPaymentAttemptState.Canceled)
-                    || attempt.Persistence.Query<TenantAutopayEnrollment>().Any(enrollment =>
+                    || _db.Set<TenantAutopayEnrollment>().Any(enrollment =>
                         enrollment.PortfolioId == command.PortfolioId
                         && enrollment.TenantAccountId == command.TenantAccountId
                         && enrollment.CanceledAtUtc == null)
-                    || attempt.Persistence.Query<SignatureRequest>().Any(request =>
+                    || _db.Set<SignatureRequest>().Any(request =>
                         request.PortfolioId == command.PortfolioId
                         && ((request.LeaseAgreementId != null && request.LeaseAgreement!.LeaseManagementId == command.LeaseManagementId)
                             || (request.LeaseAddendumId != null && request.LeaseAddendum!.LeaseManagementId == command.LeaseManagementId))
@@ -209,15 +216,15 @@ public sealed class CloseTenantAccountHandler
         target.Relationship.AccountClosedAtUtc = now;
         target.Relationship.UpdatedAtUtc = now;
         target.Relationship.RowVersion = Guid.NewGuid();
-        attempt.BindSemanticAudit(target.Account, new AtomicSemanticAudit(command.PortfolioId,
+        context.BindSemanticAudit(target.Account, new AtomicSemanticAudit(command.PortfolioId,
             nameof(TenantAccount), target.Account.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
             ChangeReason: "Closed zero-balance Tenant Account after possession return."));
-        attempt.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(command.PortfolioId,
+        context.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseManagement), target.Relationship.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
             ChangeReason: "Closed lease relationship after Tenant Account settlement."));
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
-            PortfolioId = command.PortfolioId, MessageType = "entity-update",
+            PortfolioId = command.PortfolioId, MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = nameof(TenantAccount),
                 entityId = target.Account.Id, leaseManagementId = command.LeaseManagementId,
                 action = "tenant-account-closed" }),
@@ -227,9 +234,8 @@ public sealed class CloseTenantAccountHandler
             target.Account.Id, now, null);
     }
 
-    public Task AuthorizeReplayAsync(CloseTenantAccountCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(CloseTenantAccountCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private static void Validate(CloseTenantAccountCommand command)
     {
@@ -260,10 +266,11 @@ internal static class LegalArtifactCommandSupport
             throw new ArgumentException("Legal artifact and bounded void reason are required.");
     }
 
-    internal static async Task VoidOpenPacketAsync(int portfolioId, int? agreementId, int? addendumId,
-        int actorUserId, DateTime now, IAtomicWriteAttempt attempt, CancellationToken ct)
+    internal static async Task VoidOpenPacketAsync(RentalCommandDbContext db,
+        int portfolioId, int? agreementId, int? addendumId,
+        int actorUserId, DateTime now, IAtomicCommandContext context, CancellationToken ct)
     {
-        var packet = await attempt.Persistence.Query<SignatureRequest>()
+        var packet = await db.Set<SignatureRequest>()
             .SingleOrDefaultAsync(request => request.PortfolioId == portfolioId
                 && request.LeaseAgreementId == agreementId && request.LeaseAddendumId == addendumId
                 && request.Status != SignatureRequestStatus.Completed
@@ -275,13 +282,13 @@ internal static class LegalArtifactCommandSupport
         packet.ExecutionClaimOwner = null;
         packet.ExecutionClaimToken = null;
         packet.ExecutionClaimExpiresAtUtc = null;
-        attempt.Persistence.Add(new SignatureAuditEvent
+        db.Add(new SignatureAuditEvent
         {
             PortfolioId = portfolioId, SignatureRequestId = packet.Id,
             Type = SignatureAuditEventType.Voided, OccurredAtUtc = now,
             Detail = "Signature packet voided with its legal artifact.",
         });
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(portfolioId, nameof(SignatureRequest),
+        context.StageSemanticEvent(new AtomicSemanticAudit(portfolioId, nameof(SignatureRequest),
             packet.Id, AuditLogOperation.Updated, UserId: actorUserId,
             ChangeReason: "Voided open signature packet with legal artifact."), now);
     }
@@ -289,10 +296,10 @@ internal static class LegalArtifactCommandSupport
     internal static AtomicSemanticAudit Audit(ILeaseAgreementDraftCommand command,
         string type, int id, string reason) => new(command.PortfolioId, type, id,
         AuditLogOperation.Updated, UserId: command.ActorUserId, ChangeReason: reason);
-    internal static void StageOutbox(IAtomicWriteAttempt attempt, ILeaseAgreementDraftCommand command,
-        DateTime now, string type, int id, string action) => attempt.StageOutbox(new OutboxMessage
+    internal static void StageOutbox(IAtomicCommandContext context, ILeaseAgreementDraftCommand command,
+        DateTime now, string type, int id, string action) => context.StageOutbox(new OutboxMessage
         {
-            PortfolioId = command.PortfolioId, MessageType = "entity-update",
+            PortfolioId = command.PortfolioId, MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = type, entityId = id,
                 leaseManagementId = command.LeaseManagementId, action }),
             IdempotencyKey = command.DeliveryIdempotencyKey, CreatedAtUtc = now, NextAttemptAtUtc = now,

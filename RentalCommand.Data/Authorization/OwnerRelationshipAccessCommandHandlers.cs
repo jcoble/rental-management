@@ -11,83 +11,16 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Authorization;
 
-public sealed class GrantOwnerUserAccessHandler
-    : IAtomicCommandHandler<GrantOwnerUserAccessCommand, OwnerRelationshipAccessMutationResult>,
-      IAtomicReplayAuthorizer<GrantOwnerUserAccessCommand>
-{
-    public async Task<OwnerRelationshipAccessMutationResult> HandleAsync(
-        GrantOwnerUserAccessCommand command,
-        IAtomicWriteAttempt attempt,
-        CancellationToken ct)
-    {
-        OwnerRelationshipAccessCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.TargetAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await OwnerRelationshipAccessCommandSupport.AuthorizedTarget(command, attempt, now)
-            .Select(context => new
-            {
-                Context = context,
-                OwnerExists = attempt.Persistence.Query<OwnerEntity>().Any(owner =>
-                    owner.Id == command.OwnerEntityId && owner.PortfolioId == command.PortfolioId && owner.DeletedAt == null),
-                Existing = attempt.Persistence.Query<OwnerUserAccess>().FirstOrDefault(access =>
-                    access.AccessContextId == context.Id && access.OwnerEntityId == command.OwnerEntityId &&
-                    access.PortfolioId == command.PortfolioId && access.RevokedAtUtc == null),
-            })
-            .SingleOrDefaultAsync(ct);
-        if (target is null || !target.OwnerExists)
-        {
-            return new(OwnerRelationshipAccessMutationOutcome.NotFound, command.OwnerEntityId,
-                command.TargetAccessContextId, null, command.ExpectedTargetAccessRevision);
-        }
-        if (target.Existing is not null)
-        {
-            return new(OwnerRelationshipAccessMutationOutcome.AlreadyActive, command.OwnerEntityId,
-                command.TargetAccessContextId, target.Existing.Id, target.Context.AccessRevision);
-        }
-        if (command.EffectiveToUtc is not null && command.EffectiveToUtc <= command.EffectiveFromUtc)
-        {
-            return new(OwnerRelationshipAccessMutationOutcome.Invalid, command.OwnerEntityId,
-                command.TargetAccessContextId, null, target.Context.AccessRevision);
-        }
-
-        var access = new OwnerUserAccess
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = command.PortfolioId,
-            AccessContext = target.Context,
-            ApplicationUserId = target.Context.UserId,
-            OwnerEntityId = command.OwnerEntityId,
-            EffectiveFromUtc = now,
-            EffectiveToUtc = command.EffectiveToUtc,
-            GrantedAtUtc = now,
-            GrantedByUserId = command.ActorUserId,
-            Reason = command.Reason.Trim(),
-        };
-        attempt.Persistence.Add(access);
-        target.Context.AdvanceRevision(command.ExpectedTargetAccessRevision);
-        target.Context.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(access, OwnerRelationshipAccessCommandSupport.Audit(
-            command, access.Id, AuditLogOperation.Created, "Owner portal relationship granted"));
-        await attempt.FlushBusinessAsync(ct);
-        return new(OwnerRelationshipAccessMutationOutcome.Applied, command.OwnerEntityId,
-            command.TargetAccessContextId, access.Id, target.Context.AccessRevision);
-    }
-
-    public Task AuthorizeReplayAsync(
-        GrantOwnerUserAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        OwnerRelationshipAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
-}
-
 public sealed class ActivateOwnerPortalAccessHandler
-    : IAtomicCommandHandler<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>,
-      IAtomicReplayAuthorizer<ActivateOwnerPortalAccessCommand>
+    : IAtomicCommandHandler<ActivateOwnerPortalAccessCommand, ActivateOwnerPortalAccessMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ActivateOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ActivateOwnerPortalAccessMutationResult> HandleAsync(
         ActivateOwnerPortalAccessCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
@@ -98,13 +31,14 @@ public sealed class ActivateOwnerPortalAccessHandler
         }
 
         await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, null, ct);
+            command, context, null, _db, ct);
         var changedAtUtc = Utc(command.EffectiveFromUtc);
-        var effectiveFromUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(changedAtUtc);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.EmailLockId, ct);
+        var effectiveFromUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(changedAtUtc);
+        await context.AcquireLockAsync("OwnerEntity", command.OwnerEntityId, ct);
+        await context.AcquireLockAsync("ApplicationUser", command.EmailLockId, ct);
 
-        var owner = await attempt.Persistence.Query<OwnerEntity>()
+        var owner = await _db.Set<OwnerEntity>()
             .AsNoTracking()
             .Where(candidate =>
                 candidate.PortfolioId == command.PortfolioId &&
@@ -145,7 +79,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         }
 
         var normalizedEmail = email.ToUpperInvariant();
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
         var userCreated = false;
         if (user is null)
@@ -162,14 +96,14 @@ public sealed class ActivateOwnerPortalAccessHandler
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),
                 CreatedAt = changedAtUtc,
             };
-            attempt.Persistence.Add(user);
+            _db.Add(user);
             userCreated = true;
         }
 
-        WorkspaceAccessContext? context = null;
+        WorkspaceAccessContext? accessContext = null;
         var existingContextId = userCreated
             ? null
-            : await attempt.Persistence.Query<WorkspaceAccessContext>()
+            : await _db.Set<WorkspaceAccessContext>()
                 .AsNoTracking()
                 .Where(candidate =>
                     candidate.UserId == user.Id &&
@@ -178,27 +112,27 @@ public sealed class ActivateOwnerPortalAccessHandler
                 .SingleOrDefaultAsync(ct);
         if (existingContextId is not null)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.WorkspaceAccessContext, existingContextId.Value, ct);
-            context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            await context.AcquireLockAsync(
+                "WorkspaceAccessContext", existingContextId.Value, ct);
+            accessContext = await _db.Set<WorkspaceAccessContext>()
                 .Include(candidate => candidate.Membership)
                 .SingleAsync(candidate => candidate.Id == existingContextId.Value, ct);
-            if (context.Status != WorkspaceAccessContextStatus.Active ||
-                context.SuspendedAtUtc is not null ||
-                context.RevokedAtUtc is not null)
+            if (accessContext.Status != WorkspaceAccessContextStatus.Active ||
+                accessContext.SuspendedAtUtc is not null ||
+                accessContext.RevokedAtUtc is not null)
             {
                 return Result(
                     ActivateOwnerPortalAccessMutationOutcome.InactiveWorkspaceAccess,
                     owner.Id,
                     email,
                     user.Id,
-                    context.Id,
+                    accessContext.Id,
                     null,
-                    context.AccessRevision);
+                    accessContext.AccessRevision);
             }
         }
 
-        context ??= new WorkspaceAccessContext
+        accessContext ??= new WorkspaceAccessContext
         {
             User = user,
             PortfolioId = command.PortfolioId,
@@ -207,21 +141,21 @@ public sealed class ActivateOwnerPortalAccessHandler
             CreatedAtUtc = changedAtUtc,
             UpdatedAtUtc = changedAtUtc,
         };
-        context.LastAuthorizedExperience ??= WorkspaceExperience.Owner;
+        accessContext.LastAuthorizedExperience ??= WorkspaceExperience.Owner;
 
-        var existingAccess = context.Id <= 0
+        var existingAccess = accessContext.Id <= 0
             ? null
-            : await attempt.Persistence.Query<OwnerUserAccess>()
+            : await _db.Set<OwnerUserAccess>()
                 .SingleOrDefaultAsync(access =>
                     access.PortfolioId == command.PortfolioId &&
-                    access.AccessContextId == context.Id &&
-                    access.ApplicationUserId == context.UserId &&
+                    access.AccessContextId == accessContext.Id &&
+                    access.ApplicationUserId == accessContext.UserId &&
                     access.OwnerEntityId == owner.Id &&
                     access.RevokedAtUtc == null,
                     ct);
 
         var requiresAccountActivation = string.IsNullOrEmpty(user.PasswordHash);
-        WorkspaceMembership? invitationMembership = context.Membership;
+        WorkspaceMembership? invitationMembership = accessContext.Membership;
         var accessEffectiveDatesRepaired = RepairFutureEffectiveOwnerPortalAccess(
             invitationMembership,
             existingAccess,
@@ -229,7 +163,7 @@ public sealed class ActivateOwnerPortalAccessHandler
             changedAtUtc);
         var pendingInvitation = invitationMembership is null
             ? null
-            : await attempt.Persistence.Query<WorkspaceInvitation>()
+            : await _db.Set<WorkspaceInvitation>()
                 .AsNoTracking()
                 .Where(invitation =>
                     invitation.PortfolioId == command.PortfolioId &&
@@ -246,7 +180,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         {
             invitationMembership = new WorkspaceMembership
             {
-                AccessContext = context,
+                AccessContext = accessContext,
                 PortfolioId = command.PortfolioId,
                 Status = WorkspaceMembershipStatus.Active,
                 DefaultExperience = WorkspaceExperience.Owner,
@@ -254,12 +188,12 @@ public sealed class ActivateOwnerPortalAccessHandler
                 CreatedAtUtc = changedAtUtc,
                 UpdatedAtUtc = changedAtUtc,
             };
-            attempt.Persistence.Add(invitationMembership);
+            _db.Add(invitationMembership);
         }
 
         var ownerAssignmentCreated = invitationMembership is not null &&
             await EnsureOwnerPortalRoleAssignmentAsync(
-                attempt,
+                _db,
                 invitationMembership,
                 command.PortfolioId,
                 effectiveFromUtc,
@@ -268,13 +202,13 @@ public sealed class ActivateOwnerPortalAccessHandler
 
         if (existingAccess is not null && (ownerAssignmentCreated || accessEffectiveDatesRepaired))
         {
-            context.AdvanceRevision(context.AccessRevision);
-            context.UpdatedAtUtc = changedAtUtc;
+            accessContext.AdvanceRevision(accessContext.AccessRevision);
+            accessContext.UpdatedAtUtc = changedAtUtc;
         }
 
         if (existingAccess is not null && (!requiresAccountActivation || pendingInvitation is not null))
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
             return Result(
                 requiresAccountActivation
                     ? ActivateOwnerPortalAccessMutationOutcome.InvitationPending
@@ -282,9 +216,9 @@ public sealed class ActivateOwnerPortalAccessHandler
                 owner.Id,
                 email,
                 user.Id,
-                context.Id,
+                accessContext.Id,
                 existingAccess.Id,
-                context.AccessRevision,
+                accessContext.AccessRevision,
                 requiresAccountActivation,
                 pendingInvitation?.ExpiresAtUtc);
         }
@@ -293,7 +227,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         {
             PublicId = Guid.NewGuid(),
             PortfolioId = command.PortfolioId,
-            AccessContext = context,
+            AccessContext = accessContext,
             ApplicationUser = user,
             OwnerEntityId = owner.Id,
             EffectiveFromUtc = effectiveFromUtc,
@@ -304,9 +238,9 @@ public sealed class ActivateOwnerPortalAccessHandler
         };
         if (existingAccess is null)
         {
-            attempt.Persistence.Add(access);
-            context.AdvanceRevision(context.AccessRevision);
-            context.UpdatedAtUtc = changedAtUtc;
+            _db.Add(access);
+            accessContext.AdvanceRevision(accessContext.AccessRevision);
+            accessContext.UpdatedAtUtc = changedAtUtc;
         }
 
         WorkspaceInvitation? invitation = null;
@@ -323,8 +257,8 @@ public sealed class ActivateOwnerPortalAccessHandler
                 CreatedAtUtc = changedAtUtc,
                 ExpiresAtUtc = changedAtUtc.AddDays(7),
             };
-            attempt.Persistence.Add(invitation);
-            attempt.StageOutbox(BuildOwnerActivationEmail(
+            _db.Add(invitation);
+            context.StageOutbox(BuildOwnerActivationEmail(
                 command,
                 invitationMembership,
                 user,
@@ -332,26 +266,26 @@ public sealed class ActivateOwnerPortalAccessHandler
                 changedAtUtc));
         }
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         if (userCreated)
         {
-            attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+            context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
                 command.PortfolioId, nameof(ApplicationUser), user.Id,
                 AuditLogOperation.Created, command.ActorUserId, "Owner portal account invited",
                 new
                 {
                     command.OwnerEntityId,
-                    ContextId = context.Id,
+                    ContextId = accessContext.Id,
                     RequiresAccountActivation = true,
                 }), changedAtUtc);
         }
         if (existingAccess is null)
         {
-            attempt.StageSemanticEvent(OwnerRelationshipAccessCommandSupport.Audit(
+            context.StageSemanticEvent(OwnerRelationshipAccessCommandSupport.Audit(
                 command.PortfolioId,
                 command.OwnerEntityId,
-                context.Id,
-                context.AccessRevision,
+                accessContext.Id,
+                accessContext.AccessRevision,
                 command.ActorUserId,
                 access.Id,
                 AuditLogOperation.Created,
@@ -359,14 +293,14 @@ public sealed class ActivateOwnerPortalAccessHandler
         }
         if (invitation is not null && invitationMembership is not null)
         {
-            attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+            context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
                 command.PortfolioId, nameof(WorkspaceInvitation), (int)invitation.Id,
                 AuditLogOperation.Created, command.ActorUserId, "Owner portal invitation queued",
                 new
                 {
                     command.OwnerEntityId,
                     UserId = user.Id,
-                    AccessContextId = context.Id,
+                    AccessContextId = accessContext.Id,
                     WorkspaceMembershipId = invitationMembership.Id,
                     invitation.ExpiresAtUtc,
                 }), changedAtUtc);
@@ -379,18 +313,16 @@ public sealed class ActivateOwnerPortalAccessHandler
             owner.Id,
             email,
             user.Id,
-            context.Id,
+            accessContext.Id,
             access.Id,
-            context.AccessRevision,
+            accessContext.AccessRevision,
             requiresAccountActivation,
             pendingInvitation?.ExpiresAtUtc ?? invitation?.ExpiresAtUtc);
     }
 
     public Task AuthorizeReplayAsync(
-        ActivateOwnerPortalAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+        ActivateOwnerPortalAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 
     private static void Validate(ActivateOwnerPortalAccessCommand command)
     {
@@ -439,7 +371,7 @@ public sealed class ActivateOwnerPortalAccessHandler
     }
 
     private static async Task<bool> EnsureOwnerPortalRoleAssignmentAsync(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
         WorkspaceMembership membership,
         int portfolioId,
         DateTime effectiveFromUtc,
@@ -452,7 +384,7 @@ public sealed class ActivateOwnerPortalAccessHandler
         }
 
         var ownerRoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.OwnerPortal).Id;
-        if (membership.Id > 0 && await attempt.Persistence.Query<MembershipRoleAssignment>().AnyAsync(assignment =>
+        if (membership.Id > 0 && await db.Set<MembershipRoleAssignment>().AnyAsync(assignment =>
                 assignment.WorkspaceMembershipId == membership.Id &&
                 assignment.PortfolioId == portfolioId &&
                 assignment.RoleProfileId == ownerRoleProfileId &&
@@ -466,7 +398,7 @@ public sealed class ActivateOwnerPortalAccessHandler
             return false;
         }
 
-        attempt.Persistence.Add(new MembershipRoleAssignment
+        db.Add(new MembershipRoleAssignment
         {
             WorkspaceMembership = membership,
             PortfolioId = portfolioId,
@@ -565,143 +497,238 @@ public sealed class ActivateOwnerPortalAccessHandler
     private sealed record PendingInvitation(DateTime ExpiresAtUtc);
 }
 
-public sealed class RevokeOwnerUserAccessHandler
-    : IAtomicCommandHandler<RevokeOwnerUserAccessCommand, OwnerRelationshipAccessMutationResult>,
-      IAtomicReplayAuthorizer<RevokeOwnerUserAccessCommand>
+public sealed class RevokeOwnerPortalAccessHandler
+    : IAtomicCommandHandler<RevokeOwnerPortalAccessCommand, RevokeOwnerPortalAccessMutationResult>
 {
-    public async Task<OwnerRelationshipAccessMutationResult> HandleAsync(
-        RevokeOwnerUserAccessCommand command,
-        IAtomicWriteAttempt attempt,
+    private readonly RentalCommandDbContext _db;
+
+    public RevokeOwnerPortalAccessHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<RevokeOwnerPortalAccessMutationResult> HandleAsync(
+        RevokeOwnerPortalAccessCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        OwnerRelationshipAccessCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.TargetAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await OwnerRelationshipAccessCommandSupport.AuthorizedTarget(command, attempt, now)
-            .Select(context => new
-            {
-                Context = context,
-                Access = attempt.Persistence.Query<OwnerUserAccess>().FirstOrDefault(access =>
-                    access.Id == command.OwnerUserAccessId && access.AccessContextId == context.Id &&
-                    access.OwnerEntityId == command.OwnerEntityId && access.PortfolioId == command.PortfolioId),
-            })
-            .SingleOrDefaultAsync(ct);
-        if (target?.Access is null)
+        Validate(command);
+        await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
+            command, context, null, _db, ct);
+        await context.AcquireLockAsync("OwnerEntity", command.OwnerEntityId, ct);
+
+        var changedAtUtc = Utc(command.ChangedAtUtc);
+        context.UseDatabaseWallClockForAudit(changedAtUtc);
+        var accesses = await BuildRevocationTargetQuery(
+                command.PortfolioId,
+                command.OwnerEntityId)
+            .ToListAsync(ct);
+        if (accesses.Count == 0)
         {
-            return new(OwnerRelationshipAccessMutationOutcome.NotFound, command.OwnerEntityId,
-                command.TargetAccessContextId, command.OwnerUserAccessId, command.ExpectedTargetAccessRevision);
-        }
-        if (target.Access.RevokedAtUtc is not null)
-        {
-            return new(OwnerRelationshipAccessMutationOutcome.AlreadyRevoked, command.OwnerEntityId,
-                command.TargetAccessContextId, target.Access.Id, target.Context.AccessRevision);
+            var prior = await _db.Set<OwnerEntity>()
+                .AsNoTracking()
+                .Where(owner =>
+                    owner.PortfolioId == command.PortfolioId &&
+                    owner.Id == command.OwnerEntityId &&
+                    owner.DeletedAt == null)
+                .Select(owner => new
+                {
+                    owner.Email,
+                    Prior = _db.Set<OwnerUserAccess>()
+                        .Where(access =>
+                            access.PortfolioId == command.PortfolioId &&
+                            access.OwnerEntityId == owner.Id)
+                        .OrderByDescending(access => access.Id)
+                        .Select(access => new
+                        {
+                            access.Id,
+                            access.AccessContextId,
+                            access.AccessContext!.AccessRevision,
+                        })
+                        .FirstOrDefault(),
+                })
+                .SingleOrDefaultAsync(ct);
+            return prior is null
+                ? Result(RevokeOwnerPortalAccessMutationOutcome.NotFound, command.OwnerEntityId)
+                : Result(
+                    RevokeOwnerPortalAccessMutationOutcome.AlreadyRevoked,
+                    command.OwnerEntityId,
+                    prior.Email,
+                    targetAccessContextId: prior.Prior?.AccessContextId,
+                    ownerUserAccessId: prior.Prior?.Id,
+                    accessRevision: prior.Prior?.AccessRevision);
         }
 
-        target.Access.RevokedAtUtc = now;
-        target.Access.RevokedByUserId = command.ActorUserId;
-        target.Access.Reason = command.Reason.Trim();
-        target.Context.AdvanceRevision(command.ExpectedTargetAccessRevision);
-        target.Context.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(target.Access, OwnerRelationshipAccessCommandSupport.Audit(
-            command, target.Access.Id, AuditLogOperation.Updated, "Owner portal relationship revoked"));
-        return new(OwnerRelationshipAccessMutationOutcome.Applied, command.OwnerEntityId,
-            command.TargetAccessContextId, target.Access.Id, target.Context.AccessRevision);
+        var advancedContextIds = new HashSet<int>();
+        foreach (var access in accesses)
+        {
+            var accessContext = access.AccessContext
+                ?? throw new InvalidOperationException("Owner portal access has no access context.");
+            await context.AcquireLockAsync("WorkspaceAccessContext", accessContext.Id, ct);
+            var revokedAtUtc = changedAtUtc < access.GrantedAtUtc
+                ? access.GrantedAtUtc
+                : changedAtUtc;
+
+            access.RevokedAtUtc = revokedAtUtc;
+            access.RevokedByUserId = command.ActorUserId;
+            access.Reason = command.Reason.Trim();
+            if (revokedAtUtc > access.EffectiveFromUtc)
+            {
+                access.EffectiveToUtc = revokedAtUtc;
+            }
+            context.BindSemanticAudit(access, OwnerRelationshipAccessCommandSupport.Audit(
+                command.PortfolioId,
+                command.OwnerEntityId,
+                accessContext.Id,
+                accessContext.AccessRevision + 1,
+                command.ActorUserId,
+                access.Id,
+                AuditLogOperation.Updated,
+                "Owner portal relationship revoked"));
+
+            if (accessContext.Membership is { } membership)
+            {
+                foreach (var invitation in membership.Invitations)
+                {
+                    invitation.RevokedAtUtc = revokedAtUtc;
+                    context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+                        command.PortfolioId,
+                        nameof(WorkspaceInvitation),
+                        (int)invitation.Id,
+                        AuditLogOperation.Updated,
+                        command.ActorUserId,
+                        "Owner portal invitation revoked",
+                        new { command.OwnerEntityId, accessContext.Id }),
+                        changedAtUtc);
+                }
+
+                foreach (var assignment in membership.RoleAssignments)
+                {
+                    assignment.Status = MembershipRoleAssignmentStatus.Revoked;
+                    assignment.SuspendedAtUtc = null;
+                    assignment.RevokedAtUtc = revokedAtUtc;
+                    if (revokedAtUtc > assignment.EffectiveFromUtc)
+                    {
+                        assignment.EffectiveToUtc = revokedAtUtc;
+                    }
+                    assignment.UpdatedAtUtc = revokedAtUtc;
+                    context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+                        command.PortfolioId,
+                        nameof(MembershipRoleAssignment),
+                        assignment.Id,
+                        AuditLogOperation.Updated,
+                        command.ActorUserId,
+                        "Owner portal role assignment revoked",
+                        new { command.OwnerEntityId, accessContext.Id }),
+                        changedAtUtc);
+                }
+            }
+
+            if (advancedContextIds.Add(accessContext.Id))
+            {
+                accessContext.AdvanceRevision(accessContext.AccessRevision);
+                accessContext.UpdatedAtUtc = revokedAtUtc;
+            }
+        }
+
+        context.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(OwnerEntity),
+                entityId = command.OwnerEntityId,
+                operation = "update",
+                data = new { },
+            }),
+            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:owner-portal-revoke-data-update",
+            CreatedAtUtc = changedAtUtc,
+            NextAttemptAtUtc = changedAtUtc,
+        });
+        await context.FlushBusinessAsync(ct);
+
+        var first = accesses[0];
+        return Result(
+            RevokeOwnerPortalAccessMutationOutcome.Revoked,
+            command.OwnerEntityId,
+            first.OwnerEntity?.Email,
+            accesses.Count,
+            first.AccessContextId,
+            first.Id,
+            first.AccessContext!.AccessRevision);
     }
 
     public Task AuthorizeReplayAsync(
-        RevokeOwnerUserAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        OwnerRelationshipAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        RevokeOwnerPortalAccessCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        return WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
+    }
+
+    internal IQueryable<OwnerUserAccess> BuildRevocationTargetQuery(
+        int portfolioId,
+        int ownerEntityId)
+    {
+        var ownerRoleProfileId = AccessCatalog.Roles
+            .Single(role => role.Key == RoleProfileKeys.OwnerPortal)
+            .Id;
+        return _db.Set<OwnerUserAccess>()
+            .Where(access =>
+                access.PortfolioId == portfolioId &&
+                access.OwnerEntityId == ownerEntityId &&
+                access.RevokedAtUtc == null &&
+                access.OwnerEntity!.DeletedAt == null)
+            .Include(access => access.OwnerEntity)
+            .Include(access => access.AccessContext)
+                .ThenInclude(accessContext => accessContext!.Membership)
+                    .ThenInclude(membership => membership!.Invitations.Where(invitation =>
+                        invitation.AcceptedAtUtc == null &&
+                        invitation.RevokedAtUtc == null))
+            .Include(access => access.AccessContext)
+                .ThenInclude(accessContext => accessContext!.Membership)
+                    .ThenInclude(membership => membership!.RoleAssignments.Where(assignment =>
+                        assignment.RoleProfileId == ownerRoleProfileId &&
+                        assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                        assignment.SuspendedAtUtc == null &&
+                        assignment.RevokedAtUtc == null))
+            .AsSingleQuery();
+    }
+
+    private static void Validate(RevokeOwnerPortalAccessCommand command)
+    {
+        if (command.PortfolioId <= 0 || command.OwnerEntityId <= 0 ||
+            command.ActorUserId <= 0 || command.ActorAuthSessionId == Guid.Empty ||
+            command.ActorAccessContextId <= 0 || command.ActorAccessRevision <= 0 ||
+            string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Length > 500 ||
+            string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey))
+        {
+            throw new ArgumentException(
+                "Owner portal revocation, actor context, reason, and delivery identity are required.");
+        }
+    }
+
+    private static DateTime Utc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    private static RevokeOwnerPortalAccessMutationResult Result(
+        RevokeOwnerPortalAccessMutationOutcome outcome,
+        int ownerEntityId,
+        string? ownerEmail = null,
+        int revokedRelationshipCount = 0,
+        int? targetAccessContextId = null,
+        int? ownerUserAccessId = null,
+        long? accessRevision = null) => new(
+        outcome,
+        ownerEntityId,
+        ownerEmail,
+        revokedRelationshipCount,
+        targetAccessContextId,
+        ownerUserAccessId,
+        accessRevision);
 }
 
 internal static class OwnerRelationshipAccessCommandSupport
 {
-    public static IQueryable<WorkspaceAccessContext> AuthorizedTarget(
-        IOwnerRelationshipAccessCommand command,
-        IAtomicWriteAttempt attempt,
-        DateTime now)
-    {
-        var authorizedActors = AuthorizedActors(command, attempt.Persistence, now);
-        return attempt.Persistence.Query<WorkspaceAccessContext>()
-            .Where(context =>
-                context.Id == command.TargetAccessContextId && context.PortfolioId == command.PortfolioId &&
-                context.AccessRevision == command.ExpectedTargetAccessRevision &&
-                context.Status == WorkspaceAccessContextStatus.Active && context.SuspendedAtUtc == null &&
-                context.RevokedAtUtc == null && authorizedActors.Any());
-    }
-
-    private static IQueryable<WorkspaceAccessContext> AuthorizedActors(
-        IOwnerRelationshipAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime now)
-    {
-        var actorAssignments = persistence.Query<MembershipRoleAssignment>().WhereEffective(now);
-        return persistence.Query<WorkspaceAccessContext>().Where(actor =>
-                   actor.Id == command.ActorAccessContextId && actor.UserId == command.ActorUserId &&
-                   actor.PortfolioId == command.PortfolioId && actor.AccessRevision == command.ActorAccessRevision &&
-                   actor.Status == WorkspaceAccessContextStatus.Active && actor.SuspendedAtUtc == null &&
-                   actor.RevokedAtUtc == null && actor.Membership != null &&
-                   persistence.Query<AuthSession>().Any(session =>
-                       session.Id == command.ActorAuthSessionId && session.UserId == command.ActorUserId &&
-                       session.ActiveAccessContextId == actor.Id &&
-                       session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null &&
-                       session.ExpiresAtUtc > now) &&
-                   actorAssignments.Any(assignment =>
-                       assignment.WorkspaceMembershipId == actor.Membership.Id &&
-                       assignment.PortfolioId == command.PortfolioId &&
-                       assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
-                       assignment.RoleProfile!.Capabilities.Any(capability =>
-                           capability.CapabilityDefinition!.Key == CapabilityKeys.TeamManage)));
-    }
-
-    public static async Task AuthorizeReplayAsync(
-        IOwnerRelationshipAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
-    {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var targetContexts = persistence.Query<WorkspaceAccessContext>().Where(context =>
-            context.Id == command.TargetAccessContextId && context.PortfolioId == command.PortfolioId);
-        var authorized = await AuthorizedActors(command, persistence, now)
-            .AnyAsync(actor => targetContexts.Any(), ct);
-        if (!authorized)
-        {
-            throw new UnauthorizedAccessException("The actor no longer has authority to manage owner relationships.");
-        }
-    }
-
-    public static void Validate(IOwnerRelationshipAccessCommand command)
-    {
-        if (command.PortfolioId <= 0 || command.OwnerEntityId <= 0 || command.TargetAccessContextId <= 0 ||
-            command.ExpectedTargetAccessRevision <= 0 || command.ActorUserId <= 0 ||
-            command.ActorAuthSessionId == Guid.Empty || command.ActorAccessContextId <= 0 ||
-            command.ActorAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.Reason) ||
-            command.Reason.Length > 500)
-        {
-            throw new ArgumentException("Owner relationship, target context, actor context, and reason are required.");
-        }
-    }
-
-    public static AtomicSemanticAudit Audit(
-        IOwnerRelationshipAccessCommand command,
-        int accessId,
-        AuditLogOperation operation,
-        string reason) => new(
-            command.PortfolioId,
-            nameof(OwnerUserAccess),
-            accessId,
-            operation,
-            command.ActorUserId,
-            NewValues: JsonSerializer.Serialize(new
-            {
-                command.OwnerEntityId,
-                command.TargetAccessContextId,
-                AccessRevision = command.ExpectedTargetAccessRevision + 1,
-            }),
-            ChangeReason: reason);
-
     public static AtomicSemanticAudit Audit(
         int portfolioId,
         int ownerEntityId,

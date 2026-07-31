@@ -194,11 +194,19 @@ void main() {
     expect(source, contains('expiresAtUtc'));
     expect(source, contains('accessContextId'));
     expect(source, contains('accessRevision'));
-    expect(source, contains('WorkspaceExperience? experience'));
-    expect(source, contains('return fallbackRoute'));
+    expect(source, contains('final WorkspaceExperience experience'));
+    expect(
+      source,
+      contains('return resolveNavigationIntentRoute(this) ?? fallback;'),
+    );
 
     final push = File('lib/core/push/push_service.dart').readAsStringSync();
-    expect(push, contains('pendingPushLinkProvider.notifier).set(intent)'));
+    expect(
+      push,
+      contains(
+        '_ref.read(pendingPushLinkProvider.notifier).set(routedIntent);',
+      ),
+    );
     expect(push, isNot(contains('appRouterProvider')));
   });
 

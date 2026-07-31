@@ -4,9 +4,13 @@ import type {
 	Appointment,
 	LeaseQuestionResponse,
 	WorkOrder,
-	WorkOrderDetail
+	WorkOrderDetail,
 } from '$lib/types';
-import type { Conversation, ConversationMessage, ConversationSummary } from './messages';
+import type {
+	Conversation,
+	ConversationMessage,
+	ConversationSummary,
+} from './messages';
 
 // Re-export the shared conversation types so portal consumers can import them
 // from here without reaching into the landlord-side module.
@@ -102,7 +106,51 @@ export interface PortalTenantLedgerEntry {
 	sourceStoredFileId?: number | null;
 }
 
-export interface PortalTenantCharge extends Omit<PortalTenantLedgerEntry, 'amount' | 'businessKey'> {
+export type PortalTenantAccountHistoryPeriod =
+	| 'currentMonth'
+	| 'previousMonth'
+	| 'last3Months'
+	| 'thisYear'
+	| 'all'
+	| 'custom';
+
+export interface PortalTenantAccountHistoryItem {
+	tenantLedgerEntryId: number;
+	entryType: string;
+	direction: string;
+	displayType: string;
+	description: string;
+	effectiveOn: string;
+	dueOn?: string | null;
+	postedAtUtc: string;
+	signedAmount: number;
+	runningBalance: number;
+	openAmount: number;
+	payable: boolean;
+	reversesEntryId?: number | null;
+	reversedByEntryId?: number | null;
+	isFocused: boolean;
+}
+
+export interface PortalTenantAccountHistory {
+	tenantAccountId: number;
+	leaseManagementId: number;
+	currency: string;
+	businessDate: string;
+	period: PortalTenantAccountHistoryPeriod;
+	periodFrom?: string | null;
+	periodTo: string;
+	currentDue: number;
+	beginningBalance: number;
+	closingBalance: number;
+	items: PortalTenantAccountHistoryItem[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export interface PortalTenantCharge
+	extends Omit<PortalTenantLedgerEntry, 'amount' | 'businessKey'> {
 	originalAmount: number;
 	reversedAmount: number;
 	netAllocations: number;
@@ -160,6 +208,15 @@ export interface PortalTenantLedgerEntryListParams extends PortalListParams {
 	direction?: string;
 }
 
+export interface PortalTenantAccountHistoryParams {
+	period?: PortalTenantAccountHistoryPeriod;
+	from?: string;
+	to?: string;
+	skip?: number;
+	take?: number;
+	entry?: number;
+}
+
 export interface PortalTenantChargeListParams extends PortalListParams {
 	entryType?: string;
 	isPastDue?: boolean;
@@ -210,7 +267,8 @@ export interface PortalLeaseRelationship {
 function queryString(params: object): string {
 	const query = new URLSearchParams();
 	for (const [key, value] of Object.entries(params)) {
-		if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+		if (value !== undefined && value !== null && value !== '')
+			query.set(key, String(value));
 	}
 	const text = query.toString();
 	return text ? `?${text}` : '';
@@ -236,7 +294,10 @@ export async function downloadPortalExecutedAgreement(
 	const blob = await downloadFile(
 		`/portal/leases/${leaseManagementId}/agreements/${leaseAgreementId}/executed-document`
 	);
-	saveBlob(blob.type ? blob : new Blob([blob], { type: contentType }), fileName);
+	saveBlob(
+		blob.type ? blob : new Blob([blob], { type: contentType }),
+		fileName
+	);
 }
 
 export const portal = {
@@ -250,33 +311,85 @@ export const portal = {
 	 */
 	askLease: (question: string, leaseManagementId?: number) =>
 		api.post<LeaseQuestionResponse>(
-			`/portal/lease/ask${leaseManagementId != null ? `?leaseManagementId=${leaseManagementId}` : ''}`,
+			`/portal/lease/ask${
+				leaseManagementId != null
+					? `?leaseManagementId=${leaseManagementId}`
+					: ''
+			}`,
 			{ question }
 		),
 	tenantAccountsPage: (params: PortalTenantAccountListParams = {}) =>
-		api.get<PortalPage<PortalTenantAccount>>(`/portal/tenant-accounts/page${queryString(params)}`),
+		api.get<PortalPage<PortalTenantAccount>>(
+			`/portal/tenant-accounts/page${queryString(params)}`
+		),
 	tenantAccount: (tenantAccountId: number) =>
 		api.get<PortalTenantAccount>(`/portal/tenant-accounts/${tenantAccountId}`),
-	tenantAccountEntriesPage: (tenantAccountId: number, params: PortalTenantLedgerEntryListParams = {}) =>
+	tenantAccountEntriesPage: (
+		tenantAccountId: number,
+		params: PortalTenantLedgerEntryListParams = {}
+	) =>
 		api.get<PortalAccountChildPage<PortalTenantLedgerEntry>>(
-			`/portal/tenant-accounts/${tenantAccountId}/entries/page${queryString(params)}`
+			`/portal/tenant-accounts/${tenantAccountId}/entries/page${queryString(
+				params
+			)}`
 		),
-	tenantAccountChargesPage: (tenantAccountId: number, params: PortalTenantChargeListParams = {}) =>
+	tenantAccountHistory: (
+		tenantAccountId: number,
+		params: PortalTenantAccountHistoryParams = {}
+	) =>
+		api.get<PortalTenantAccountHistory>(
+			`/portal/tenant-accounts/${tenantAccountId}/history${queryString(params)}`
+		),
+	tenantAccountChargesPage: (
+		tenantAccountId: number,
+		params: PortalTenantChargeListParams = {}
+	) =>
 		api.get<PortalAccountChildPage<PortalTenantCharge>>(
-			`/portal/tenant-accounts/${tenantAccountId}/charges/page${queryString(params)}`
+			`/portal/tenant-accounts/${tenantAccountId}/charges/page${queryString(
+				params
+			)}`
 		),
 	tenantAccountDeposit: (tenantAccountId: number) =>
-		api.get<PortalTenantAccountDeposit>(`/portal/tenant-accounts/${tenantAccountId}/deposit`),
+		api.get<PortalTenantAccountDeposit>(
+			`/portal/tenant-accounts/${tenantAccountId}/deposit`
+		),
 	appointments: () => api.get<Appointment[]>('/portal/appointments'),
 	workOrders: (params: PortalTenantWorkOrderListParams = {}) =>
 		api.get<PortalPage<WorkOrder>>(`/portal/work-orders${queryString(params)}`),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
-	workOrder: (id: number) => api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
+	workOrder: (id: number) =>
+		api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
+	updateTenantWorkOrder: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(
+			`portal:work-order:update:${id}:${JSON.stringify(data)}`,
+			(key) =>
+				api.patch<void>(`/portal/work-orders/${id}`, data, {
+					headers: { 'Idempotency-Key': key },
+				})
+		),
+	commentTenantWorkOrder: (id: number, data: { body: string }) =>
+		idempotentMutation(
+			`portal:work-order:comment:${id}:${JSON.stringify(data)}`,
+			(key) =>
+				api.post<void>(`/portal/work-orders/${id}/comments`, data, {
+					headers: { 'Idempotency-Key': key },
+				})
+		),
+	cancelTenantWorkOrder: (id: number, data: { note?: string }) =>
+		idempotentMutation(
+			`portal:work-order:cancel:${id}:${JSON.stringify(data)}`,
+			(key) =>
+				api.post<void>(`/portal/work-orders/${id}/cancel`, data, {
+					headers: { 'Idempotency-Key': key },
+				})
+		),
 	createTenantWorkOrder: (data: Record<string, unknown>) =>
-		idempotentMutation(`portal:work-order:create:${JSON.stringify(data)}`, (key) =>
-			api.post<WorkOrder>('/portal/tenant/work-orders', data, {
-				headers: { 'Idempotency-Key': key }
-			})
+		idempotentMutation(
+			`portal:work-order:create:${JSON.stringify(data)}`,
+			(key) =>
+				api.post<WorkOrder>('/portal/tenant/work-orders', data, {
+					headers: { 'Idempotency-Key': key },
+				})
 		),
 
 	/**
@@ -284,26 +397,42 @@ export const portal = {
 	 * return the URL to redirect to. Throws an {@link ApiError} with status 503
 	 * when online payments aren't configured, or 404 if the payment isn't theirs.
 	 */
-	payCheckout: (tenantAccountId: number, chargeLedgerEntryId: number, body: CheckoutUrls = {}) =>
+	payCheckout: (
+		tenantAccountId: number,
+		chargeLedgerEntryId: number,
+		body: CheckoutUrls = {}
+	) =>
 		api.post<CheckoutSession>(
 			`/portal/tenant-accounts/${tenantAccountId}/charges/${chargeLedgerEntryId}/checkout`,
 			body
 		),
 	/** Current autopay enrollment for a canonical tenant account. */
 	autopayStatus: (tenantAccountId: number) =>
-		api.get<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay`),
+		api.get<AutopayStatus>(
+			`/portal/tenant-accounts/${tenantAccountId}/autopay`
+		),
 	/**
 	 * Begin autopay enrollment via a setup-mode Checkout; redirect to the returned
 	 * `checkoutUrl`. Throws 503 when online payments aren't configured.
 	 */
-	autopayEnroll: (tenantAccountId: number, body: { operationKey: string } & CheckoutUrls) =>
-		api.post<CheckoutSession>(`/portal/tenant-accounts/${tenantAccountId}/autopay/enroll`, body),
+	autopayEnroll: (
+		tenantAccountId: number,
+		body: { operationKey: string } & CheckoutUrls
+	) =>
+		api.post<CheckoutSession>(
+			`/portal/tenant-accounts/${tenantAccountId}/autopay/enroll`,
+			body
+		),
 	/** Cancel autopay for a canonical tenant account. */
 	autopayCancel: (tenantAccountId: number) =>
 		idempotentMutation(`portal:autopay:cancel:${tenantAccountId}`, (key) =>
-			api.post<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay/cancel`, {}, {
-				headers: { 'Idempotency-Key': key }
-			})
+			api.post<AutopayStatus>(
+				`/portal/tenant-accounts/${tenantAccountId}/autopay/cancel`,
+				{},
+				{
+					headers: { 'Idempotency-Key': key },
+				}
+			)
 		),
 
 	/**
@@ -316,17 +445,24 @@ export const portal = {
 		list: () => api.get<ConversationSummary[]>('/portal/conversations'),
 		/** Mark one thread read, then fetch its full history. */
 		get: async (id: number) => {
-			await idempotentMutation(`portal:conversations:read:${id}`, (operationKey) =>
-				api.post<void>(`/portal/conversations/${id}/read`, {}, {
-					headers: { 'Idempotency-Key': operationKey }
-				})
+			await idempotentMutation(
+				`portal:conversations:read:${id}`,
+				(operationKey) =>
+					api.post<void>(
+						`/portal/conversations/${id}/read`,
+						{},
+						{
+							headers: { 'Idempotency-Key': operationKey },
+						}
+					)
 			);
 			return api.get<Conversation>(`/portal/conversations/${id}`);
 		},
 		/** Start a new thread to the landlord. */
-		start: (data: StartPortalConversationRequest) => api.post<Conversation>('/portal/conversations', data),
+		start: (data: StartPortalConversationRequest) =>
+			api.post<Conversation>('/portal/conversations', data),
 		/** Reply to an existing thread. */
 		sendMessage: (id: number, data: SendTenantConversationMessageRequest) =>
-			api.post<Conversation>(`/portal/conversations/${id}/messages`, data)
-	}
+			api.post<Conversation>(`/portal/conversations/${id}/messages`, data),
+	},
 };

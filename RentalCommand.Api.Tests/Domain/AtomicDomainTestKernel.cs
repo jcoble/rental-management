@@ -6,8 +6,10 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -25,18 +27,7 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForWorkOrders(string connectionString)
     {
         var services = Core(connectionString);
-        services.AddAtomicCommandHandler<
-            CreateWorkOrderCommand,
-            OperationMutationResult,
-            CreateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            UpdateWorkOrderCommand,
-            OperationMutationResult,
-            UpdateWorkOrderHandler>();
-        services.AddAtomicCommandHandler<
-            CreateTenantWorkOrderCommand,
-            OperationMutationResult,
-            CreateTenantWorkOrderHandler>();
+        AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }
 
@@ -84,22 +75,69 @@ internal static class AtomicDomainTestKernel
 
     internal static ServiceProvider CreateForWorkOrdersPostgreSql(
         string connectionString,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = CorePostgreSql(connectionString, timeProvider);
+        var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        AddWorkOrderHandlers(services);
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForVendorDispatchPostgreSql(
+        string connectionString,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var services = CorePostgreSql(connectionString, timeProvider, interceptors);
+        services.AddAtomicCommandHandler<
+            DispatchWorkOrderToVendorCommand,
+            DispatchWorkOrderToVendorResult,
+            DispatchWorkOrderToVendorHandler>();
+        services.AddAtomicCommandHandler<
+            CancelVendorDispatchCommand,
+            CancelVendorDispatchResult,
+            CancelVendorDispatchHandler>();
+        services.AddAtomicCommandHandler<
+            RecoverVendorDispatchChronologyCommand,
+            RecoverVendorDispatchChronologyResult,
+            RecoverVendorDispatchChronologyHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    private static void AddWorkOrderHandlers(IServiceCollection services)
+    {
         services.AddAtomicCommandHandler<
             CreateWorkOrderCommand,
-            OperationMutationResult,
+            WorkOrderMutationResult,
             CreateWorkOrderHandler>();
         services.AddAtomicCommandHandler<
             UpdateWorkOrderCommand,
-            OperationMutationResult,
+            WorkOrderMutationResult,
             UpdateWorkOrderHandler>();
         services.AddAtomicCommandHandler<
+            DeleteWorkOrderCommand,
+            WorkOrderMutationResult,
+            DeleteWorkOrderHandler>();
+        services.AddAtomicCommandHandler<
             CreateTenantWorkOrderCommand,
-            OperationMutationResult,
+            WorkOrderMutationResult,
             CreateTenantWorkOrderHandler>();
-        return services.BuildServiceProvider();
+        services.AddAtomicCommandHandler<
+            AddStaffWorkOrderCommentCommand,
+            WorkOrderMutationResult,
+            AddStaffWorkOrderCommentHandler>();
+        services.AddAtomicCommandHandler<
+            AddTenantWorkOrderCommentCommand,
+            WorkOrderMutationResult,
+            AddTenantWorkOrderCommentHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateTenantWorkOrderCommand,
+            WorkOrderMutationResult,
+            UpdateTenantWorkOrderHandler>();
+        services.AddAtomicCommandHandler<
+            CancelTenantWorkOrderCommand,
+            WorkOrderMutationResult,
+            CancelTenantWorkOrderHandler>();
     }
 
     internal static ServiceProvider CreateForApplications(string connectionString)
@@ -157,13 +195,23 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForScheduledTenantChargesPostgreSql(string connectionString)
+    internal static ServiceProvider CreateForScheduledTenantChargesPostgreSql(
+        string connectionString,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = CorePostgreSql(connectionString);
+        var services = CorePostgreSql(connectionString, interceptors: interceptors);
         services.AddAtomicCommandHandler<
-            ApplyScheduledTenantChargeBatchCommand,
-            ApplyScheduledTenantChargeBatchResult,
-            ApplyScheduledTenantChargeBatchHandler>();
+            ApplyScheduledRentChargeBatchCommand,
+            ApplyScheduledRentChargeBatchResult,
+            ApplyScheduledRentChargeBatchHandler>();
+        services.AddAtomicCommandHandler<
+            ApplyScheduledLateFeeChargeBatchCommand,
+            ApplyScheduledLateFeeChargeBatchResult,
+            ApplyScheduledLateFeeChargeBatchHandler>();
+        services.AddAtomicCommandHandler<
+            RecoverLateFeeChargesCommand,
+            RecoverLateFeeChargesResult,
+            RecoverLateFeeChargesHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -184,6 +232,18 @@ internal static class AtomicDomainTestKernel
             BootstrapAccountCommand,
             BootstrapAccountResult,
             BootstrapAccountHandler>();
+        services.AddAtomicCommandHandler<
+            StartAuthSessionCommand,
+            StartAuthSessionResult,
+            StartAuthSessionHandler>();
+        services.AddAtomicCommandHandler<
+            RotateSessionRefreshCredentialCommand,
+            SessionRefreshMutationResult,
+            RotateSessionRefreshCredentialHandler>();
+        services.AddAtomicCommandHandler<
+            RevokeAuthSessionCommand,
+            RevokeAuthSessionResult,
+            RevokeAuthSessionHandler>();
         return services.BuildServiceProvider();
     }
 

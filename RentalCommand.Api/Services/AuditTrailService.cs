@@ -12,11 +12,17 @@ namespace RentalCommand.Api.Services;
 /// </summary>
 public sealed class AuditTrailService : IAuditTrailService
 {
-    private readonly IAtomicAuditEventSink _sink;
+    private readonly IAtomicCommandContext _atomicContext;
 
-    public AuditTrailService(IAtomicAuditEventSink sink) => _sink = sink;
+    public AuditTrailService(IAtomicCommandContext atomicContext) => _atomicContext = atomicContext;
 
-    public void EnsureAtomicCommand() => _sink.EnsureActive();
+    public void EnsureAtomicCommand()
+    {
+        if (!_atomicContext.IsActive)
+        {
+            throw new AtomicArchitectureException("Audit events must be staged inside an active atomic command.");
+        }
+    }
 
     /// <inheritdoc />
     public Task LogAsync(
@@ -33,7 +39,7 @@ public sealed class AuditTrailService : IAuditTrailService
         CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        _sink.Stage(new AtomicSemanticAudit(
+        _atomicContext.StageSemanticEvent(new AtomicSemanticAudit(
             portfolioId,
             entityType,
             entityId,

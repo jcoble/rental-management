@@ -239,6 +239,19 @@ const _loanFieldOrder = <String>[
   'notes',
 ];
 
+const _leaseEndingNoticeFieldOrder = <String>[
+  'lease_management_id',
+  'unit_id',
+  'tenant_name',
+  'property_name',
+  'unit_number',
+  'notice_type',
+  'notice_given_date',
+  'planned_move_out_date',
+  'reason',
+  'notes',
+];
+
 const _loanStatementPrincipalFieldNames = [
   'statement_principal_amount',
   'statementPrincipalAmount',
@@ -314,10 +327,18 @@ const _knownScalarFields = {
   'statement_effective_date',
   'statementEffectiveDate',
   'statement_date',
+  'notice_given_date',
+  'planned_move_out_date',
   'escrow_covers_taxes',
   'escrow_covers_insurance',
   'property_id',
   'property_address',
+  'lease_management_id',
+  'tenant_name',
+  'property_name',
+  'unit_number',
+  'notice_type',
+  'reason',
 };
 
 // Money fields use a decimal number keypad; date fields open a date picker so a
@@ -368,6 +389,9 @@ const _dateFields = {
   'statement_date',
   'statement_effective_date',
   'statementEffectiveDate',
+  // Lease-ending notice fields
+  'notice_given_date',
+  'planned_move_out_date',
 };
 
 enum LeaseScanReviewDisposition {
@@ -452,6 +476,13 @@ const _labelOverrides = <String, String>{
   'statementEffectiveDate': 'Statement effective date',
   'escrow_covers_taxes': 'Escrow covers taxes',
   'escrow_covers_insurance': 'Escrow covers insurance',
+  // Lease-ending notices
+  'lease_management_id': 'Rental relationship',
+  'unit_id': 'Unit',
+  'notice_type': 'Notice type',
+  'notice_given_date': 'Notice date',
+  'planned_move_out_date': 'Planned move-out',
+  'reason': 'Reason',
 };
 
 /// Turns a raw snake_case field name into a human-readable label, e.g.
@@ -530,6 +561,7 @@ Map<String, dynamic> buildOverridesMap({
   required bool isLease,
   required bool isApplication,
   required bool isLoan,
+  required bool isLeaseEndingNotice,
   required bool isPaid,
   required int? selectedTenantAccountId,
   // Extracted, in-portfolio-validated property/unit link for an Application
@@ -648,6 +680,19 @@ Map<String, dynamic> buildOverridesMap({
     }
     if (includeLoanStatementPaymentOverrides) {
       _addLoanStatementPaymentOverrideAliases(overrides, editedFields);
+    }
+  } else if (isLeaseEndingNotice) {
+    if (editedFields['lease_management_id'] != null) {
+      overrides['leaseManagementId'] = editedFields['lease_management_id'];
+    }
+    if (editedFields['unit_id'] != null) {
+      overrides['unitId'] = editedFields['unit_id'];
+    }
+    if (editedFields['notice_given_date'] != null) {
+      overrides['noticeGivenDate'] = editedFields['notice_given_date'];
+    }
+    if (editedFields['planned_move_out_date'] != null) {
+      overrides['plannedMoveOutDate'] = editedFields['planned_move_out_date'];
     }
   } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
@@ -859,7 +904,8 @@ String? expenseScanReadinessMessage({
       draft.isWorkOrder ||
       draft.isLease ||
       draft.isApplication ||
-      draft.isLoan) {
+      draft.isLoan ||
+      draft.isLeaseEndingNotice) {
     return null;
   }
 
@@ -1365,6 +1411,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isLease: draft.isLease,
         isApplication: draft.isApplication,
         isLoan: draft.isLoan,
+        isLeaseEndingNotice: draft.isLeaseEndingNotice,
         isPaid: _isPaid,
         selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
         applicationPropertyId: _extractedInt(draft, 'property_id'),
@@ -1418,6 +1465,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 ? 'Payment recorded!'
                 : draft.isWorkOrder
                 ? 'Work order created!'
+                : draft.isLeaseEndingNotice
+                ? 'Move-out workflow started!'
                 : draft.isLease
                 ? _leaseReviewDisposition ==
                           LeaseScanReviewDisposition.alreadyFullySigned
@@ -1487,7 +1536,11 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         );
         return;
       }
-      Navigator.of(context).pop();
+      // Keep the canonical addressable scan route mounted after confirmation.
+      // Popping here can remove the root GoRouter page when the review was
+      // opened directly (for example `/scan/166`), leaving a black Navigator
+      // and corrupting the next attempt to reactivate that same route.
+      ref.invalidate(_draftProvider(draft.id));
     } on ApiException catch (e) {
       if (!mounted) return;
       _showError(e.message);
@@ -1913,6 +1966,19 @@ class _ReviewBody extends ConsumerWidget {
         (loanReviewMode == _LoanReviewMode.addNewLoan
             ? addLoanReady
             : matchLoanReady);
+    final noticeLeaseManagementReady =
+        (editedFields['lease_management_id']?.trim().isNotEmpty ?? false) ||
+        draft.captureContext?.leaseManagementId != null;
+    final noticeUnitReady =
+        (editedFields['unit_id']?.trim().isNotEmpty ?? false) ||
+        draft.captureContext?.unitId != null;
+    final leaseEndingNoticeReady =
+        !draft.isLeaseEndingNotice ||
+        (noticeLeaseManagementReady &&
+            noticeUnitReady &&
+            (editedFields['notice_given_date']?.trim().isNotEmpty ?? false) &&
+            (editedFields['planned_move_out_date']?.trim().isNotEmpty ??
+                false));
     final paymentConflictMessage = paymentContextConflictMessage(
       draft: draft,
       selectedTenantAccountId: selectedTenantAccountId,
@@ -1934,7 +2000,8 @@ class _ReviewBody extends ConsumerWidget {
         leaseReady &&
         rentTrackingReady &&
         applicationReady &&
-        loanReady;
+        loanReady &&
+        leaseEndingNoticeReady;
     final leaseActionLabel = switch (leaseReviewDisposition) {
       LeaseScanReviewDisposition.alreadyFullySigned => 'Import Signed Lease',
       LeaseScanReviewDisposition.needsSignatures => 'Prepare for Signatures',
@@ -1960,6 +2027,10 @@ class _ReviewBody extends ConsumerWidget {
         : existingLoanPaymentId == null
         ? 'Choose the loan payment this statement should attach to.'
         : 'Review the statement principal, interest, escrow, opening balance, and effective date.';
+    final leaseEndingNoticeReadinessMessage =
+        !noticeLeaseManagementReady || !noticeUnitReady
+        ? 'Choose the existing rental relationship this notice belongs to.'
+        : 'Review the notice date and planned move-out date.';
     final loanActionLabel = loanReviewMode == _LoanReviewMode.addNewLoan
         ? 'Create Loan'
         : 'Match & record payment';
@@ -1984,7 +2055,7 @@ class _ReviewBody extends ConsumerWidget {
       body: extracting
           ? _ProcessingView(draftId: draft.id)
           : ListView(
-              padding: const EdgeInsets.only(bottom: 140),
+              padding: EdgeInsets.only(bottom: isTerminal ? 24 : 140),
               children: [
                 _ReviewCheckpointCard(draft: draft),
 
@@ -2028,7 +2099,7 @@ class _ReviewBody extends ConsumerWidget {
                 const Divider(height: 1),
 
                 // ---- Lease selector (Payment only) ----
-                if (draft.isPayment)
+                if (draft.isPayment && !isTerminal)
                   _TenantAccountSelector(
                     selectedTenantAccountId: selectedTenantAccountId,
                     contextualTenantAccountId:
@@ -2037,7 +2108,9 @@ class _ReviewBody extends ConsumerWidget {
                     onTenantAccountSelected: onTenantAccountSelected,
                   ),
 
-                if (draft.isPayment && savingTenantAccountSelection)
+                if (draft.isPayment &&
+                    savingTenantAccountSelection &&
+                    !isTerminal)
                   _Banner(
                     color: colorScheme.surfaceContainerHighest,
                     borderColor: colorScheme.outlineVariant,
@@ -2045,7 +2118,9 @@ class _ReviewBody extends ConsumerWidget {
                     child: const Text('Saving rental account selection...'),
                   ),
 
-                if (draft.isPayment && tenantAccountSelectionError != null)
+                if (draft.isPayment &&
+                    tenantAccountSelectionError != null &&
+                    !isTerminal)
                   _Banner(
                     color: colorScheme.errorContainer,
                     borderColor: colorScheme.error.withValues(alpha: 0.4),
@@ -2053,7 +2128,7 @@ class _ReviewBody extends ConsumerWidget {
                     child: Text(tenantAccountSelectionError!),
                   ),
 
-                if (paymentConflictMessage != null)
+                if (paymentConflictMessage != null && !isTerminal)
                   _Banner(
                     color: colorScheme.errorContainer,
                     borderColor: colorScheme.error.withValues(alpha: 0.4),
@@ -2061,7 +2136,11 @@ class _ReviewBody extends ConsumerWidget {
                     child: Text(paymentConflictMessage),
                   ),
 
-                if (draft.isLease) ...[
+                if (isTerminal) ...[
+                  _ReadOnlyFieldsSection(draft: draft),
+                  if (draft.lineItems.isNotEmpty)
+                    _LineItemsSection(items: draft.lineItems),
+                ] else if (draft.isLease) ...[
                   // ---- "What confirming will do" proposal summary ----
                   if (draft.leaseProposal != null)
                     _LeaseProposalSummary(proposal: draft.leaseProposal!),
@@ -2148,6 +2227,14 @@ class _ReviewBody extends ConsumerWidget {
                       editedFields: editedFields,
                       onFieldChanged: onFieldChanged,
                     ),
+                ] else if (draft.isLeaseEndingNotice) ...[
+                  if (draft.scalarFields.isNotEmpty ||
+                      draft.status != 'Pending')
+                    _LeaseEndingNoticeFieldsSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
                 ] else ...[
                   // ---- Extracted field groups ----
                   if (draft.scalarFields.isNotEmpty)
@@ -2179,192 +2266,232 @@ class _ReviewBody extends ConsumerWidget {
               ],
             ),
       // ---- Bottom action bar ----
-      bottomSheet: Container(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          12,
-          16,
-          12 + MediaQuery.of(context).padding.bottom,
-        ),
-        decoration: BoxDecoration(
-          color: colorScheme.surface,
-          border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (draft.isPayment &&
-                selectedTenantAccountId == null &&
-                !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Select a rental account above to enable payment creation.',
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
+      bottomSheet: isTerminal
+          ? null
+          : Container(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                12 + MediaQuery.of(context).padding.bottom,
+              ),
+              decoration: BoxDecoration(
+                color: colorScheme.surface,
+                border: Border(
+                  top: BorderSide(color: colorScheme.outlineVariant),
                 ),
               ),
-            if (draft.isPayment && savingTenantAccountSelection && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Saving rental account selection...',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (paymentConflictMessage != null && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  paymentConflictMessage,
-                  style: TextStyle(fontSize: 12, color: colorScheme.error),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (draft.isLease && !leaseReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  leaseReadinessMessage,
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (draft.isApplication && !applicationReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Enter the applicant’s first and last name to create this application.',
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (draft.isLoan && !loanReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  loanReadinessMessage,
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (expenseReadinessMessage != null && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  expenseReadinessMessage,
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            // Surface the interim "Confirming" state (L19): the server is mid-
-            // confirm even though this client didn't start it.
-            if (draft.isInFlight && !isFailed && !confirming)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Saving this record…',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            // Why `OverflowBar` and not a plain `Row`: this Scaffold.bottomSheet
-            // is driven by a DraggableScrollableActuator/Stack that lays its
-            // child out with an unbounded width (constraints: unconstrained in
-            // the render tree). A horizontal `Row` in that context hands its
-            // non-flex children an unbounded width; a default OutlinedButton
-            // (ButtonStyle.maximumSize == Size.infinite) cannot accept that and
-            // trips RenderConstrainedBox's "BoxConstraints forces an infinite
-            // width" assert, which aborts layout of the whole bottom-sheet
-            // subtree — the symptom was a bottom bar that never rendered, a body
-            // ListView that would not scroll, and a lease dropdown that would
-            // not open. Wrapping the buttons in Expanded does NOT help, because
-            // an Expanded child of an unbounded-width Row also fails to resolve.
-            // `OverflowBar` lays its children out without forcing an unbounded
-            // width, so the buttons size to their content (and wrap to a second
-            // line if they ever overflow). Mirrors the guided-flow fix in
-            // commit cee9e78.
-            OverflowBar(
-              alignment: MainAxisAlignment.spaceBetween,
-              overflowAlignment: OverflowBarAlignment.end,
-              overflowSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: confirmEnabled ? onConfirm : null,
-                  child: (confirming || (draft.isInFlight && !isFailed))
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          draft.isPayment
-                              ? 'Create Payment'
-                              : draft.isWorkOrder
-                              ? 'Create Work Order'
-                              : draft.isLease
-                              ? leaseActionLabel
-                              : draft.isApplication
-                              ? 'Create Application'
-                              : draft.isLoan
-                              ? loanActionLabel
-                              : 'Confirm & Create Expense',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (draft.isPayment &&
+                      selectedTenantAccountId == null &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Select a rental account above to enable payment creation.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
                         ),
-                ),
-                if (isFailed)
-                  OutlinedButton.icon(
-                    onPressed: retryEnabled ? onRetry : null,
-                    icon: retrying
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: colorScheme.primary,
-                            ),
-                          )
-                        : const Icon(Icons.refresh),
-                    label: const Text('Retry extraction'),
-                  ),
-                // design#9: Reject is clearly destructive (error-coloured text +
-                // border) so it can't be mistaken for a secondary action.
-                OutlinedButton(
-                  onPressed: rejectEnabled ? onReject : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colorScheme.error,
-                    side: BorderSide(
-                      color: rejectEnabled
-                          ? colorScheme.error
-                          : colorScheme.outlineVariant,
+                        textAlign: TextAlign.center,
+                      ),
                     ),
-                  ),
-                  child: rejecting
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: colorScheme.error,
+                  if (draft.isPayment &&
+                      savingTenantAccountSelection &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Saving rental account selection...',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (paymentConflictMessage != null && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        paymentConflictMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.error,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLease && !leaseReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        leaseReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isApplication && !applicationReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Enter the applicant’s first and last name to create this application.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLoan && !loanReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        loanReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLeaseEndingNotice &&
+                      !leaseEndingNoticeReady &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        leaseEndingNoticeReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (expenseReadinessMessage != null && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        expenseReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  // Surface the interim "Confirming" state (L19): the server is mid-
+                  // confirm even though this client didn't start it.
+                  if (draft.isInFlight && !isFailed && !confirming)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Saving this record…',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  // Why `OverflowBar` and not a plain `Row`: this Scaffold.bottomSheet
+                  // is driven by a DraggableScrollableActuator/Stack that lays its
+                  // child out with an unbounded width (constraints: unconstrained in
+                  // the render tree). A horizontal `Row` in that context hands its
+                  // non-flex children an unbounded width; a default OutlinedButton
+                  // (ButtonStyle.maximumSize == Size.infinite) cannot accept that and
+                  // trips RenderConstrainedBox's "BoxConstraints forces an infinite
+                  // width" assert, which aborts layout of the whole bottom-sheet
+                  // subtree — the symptom was a bottom bar that never rendered, a body
+                  // ListView that would not scroll, and a lease dropdown that would
+                  // not open. Wrapping the buttons in Expanded does NOT help, because
+                  // an Expanded child of an unbounded-width Row also fails to resolve.
+                  // `OverflowBar` lays its children out without forcing an unbounded
+                  // width, so the buttons size to their content (and wrap to a second
+                  // line if they ever overflow). Mirrors the guided-flow fix in
+                  // commit cee9e78.
+                  OverflowBar(
+                    alignment: MainAxisAlignment.spaceBetween,
+                    overflowAlignment: OverflowBarAlignment.end,
+                    overflowSpacing: 8,
+                    children: [
+                      FilledButton(
+                        onPressed: confirmEnabled ? onConfirm : null,
+                        child: (confirming || (draft.isInFlight && !isFailed))
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                draft.isPayment
+                                    ? 'Create Payment'
+                                    : draft.isWorkOrder
+                                    ? 'Create Work Order'
+                                    : draft.isLease
+                                    ? leaseActionLabel
+                                    : draft.isApplication
+                                    ? 'Create Application'
+                                    : draft.isLoan
+                                    ? loanActionLabel
+                                    : draft.isLeaseEndingNotice
+                                    ? 'Record Move-out Notice'
+                                    : 'Confirm & Create Expense',
+                              ),
+                      ),
+                      if (isFailed)
+                        OutlinedButton.icon(
+                          onPressed: retryEnabled ? onRetry : null,
+                          icon: retrying
+                              ? SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: colorScheme.primary,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh),
+                          label: const Text('Retry extraction'),
+                        ),
+                      // design#9: Reject is clearly destructive (error-coloured text +
+                      // border) so it can't be mistaken for a secondary action.
+                      OutlinedButton(
+                        onPressed: rejectEnabled ? onReject : null,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: colorScheme.error,
+                          side: BorderSide(
+                            color: rejectEnabled
+                                ? colorScheme.error
+                                : colorScheme.outlineVariant,
                           ),
-                        )
-                      : const Text('Reject'),
-                ),
-              ],
+                        ),
+                        child: rejecting
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: colorScheme.error,
+                                ),
+                              )
+                            : const Text('Reject'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
     ).hideShellQuickAction();
   }
 }
@@ -2383,6 +2510,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
     if (draft.isLease) return 'Create one lease agreement';
     if (draft.isApplication) return 'Create one rental application';
     if (draft.isLoan) return 'Create one property loan';
+    if (draft.isLeaseEndingNotice) return 'Record one move-out notice';
     return 'Create one expense';
   }
 
@@ -2400,6 +2528,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
     if (draft.isPayment) return 'Rental account selected below';
     if (draft.isLease) return 'Property and unit selected below';
     if (draft.isLoan) return 'Property selected below';
+    if (draft.isLeaseEndingNotice) return 'Rental relationship selected below';
     return 'Current workspace';
   }
 
@@ -2411,6 +2540,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
         .where((field) => field.confidence < 0.8)
         .length;
     final target = scanTargetFor(draft.targetEntityType);
+    final isTerminal = draft.isTerminal;
 
     return Card.filled(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -2442,19 +2572,24 @@ class _ReviewCheckpointCard extends StatelessWidget {
                   : 'Uploaded document #${draft.id}',
             ),
             _CheckpointRow(
-              label: 'Review',
-              value: draft.fields.isEmpty
+              label: isTerminal ? 'Result' : 'Review',
+              value: isTerminal
+                  ? draft.status
+                  : draft.fields.isEmpty
                   ? 'Waiting for extracted fields'
                   : lowConfidence == 0
                   ? '${draft.scalarFields.length} fields ready to verify'
                   : '$lowConfidence field${lowConfidence == 1 ? '' : 's'} need extra attention',
-              warning: lowConfidence > 0,
+              warning: !isTerminal && lowConfidence > 0,
             ),
             _CheckpointRow(label: 'Destination', value: _destination),
-            _CheckpointRow(label: 'Save command', value: _command),
+            if (!isTerminal)
+              _CheckpointRow(label: 'Save command', value: _command),
             const SizedBox(height: 8),
             Text(
-              'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
+              isTerminal
+                  ? 'This result is final and read-only.'
+                  : 'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -4682,6 +4817,134 @@ class _LoanFieldsSection extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LeaseEndingNoticeFieldsSection extends StatelessWidget {
+  const _LeaseEndingNoticeFieldsSection({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fieldMap = {for (final f in draft.scalarFields) f.name: f};
+    final fields = _leaseEndingNoticeFieldOrder.map((name) {
+      return fieldMap[name] ??
+          ScanField(name: name, value: editedFields[name] ?? '', confidence: 1);
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'MOVE-OUT NOTICE',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fields.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FieldInput(
+                field: field,
+                value: editedFields[field.name] ?? field.value,
+                onChanged: (v) => onFieldChanged(field.name, v),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadOnlyFieldsSection extends StatelessWidget {
+  const _ReadOnlyFieldsSection({required this.draft});
+
+  final ScanDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fields = draft.scalarFields;
+    if (fields.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'CONFIRMED DETAILS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fields.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _ReadOnlyFieldRow(field: field),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadOnlyFieldRow extends StatelessWidget {
+  const _ReadOnlyFieldRow({required this.field});
+
+  final ScanField field;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final value = field.value.trim().isEmpty ? 'Not captured' : field.value;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _prettifyLabel(field.name),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

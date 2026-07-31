@@ -123,6 +123,39 @@ public class OwnerEntityController : ManagementControllerBase
         }
     }
 
+    [HttpPost("{id:int}/portal-access/revoke")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
+    [ProducesResponseType(typeof(RevokeOwnerPortalAccessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RevokeOwnerPortalAccessResponse>> RevokePortalAccess(
+        int id,
+        [FromBody] RevokeOwnerPortalAccessRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+
+        try
+        {
+            var result = await _service.RevokeOwnerPortalAccessAsync(
+                scope,
+                id,
+                request,
+                operationKey,
+                ct);
+            return result.Outcome == RevokeOwnerPortalAccessOutcome.NotFound
+                ? NotFound(result)
+                : Ok(result);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

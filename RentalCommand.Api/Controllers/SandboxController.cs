@@ -42,17 +42,24 @@ public class SandboxController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(SandboxStateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<SandboxStateResponse>> GoLive(CancellationToken ct)
+    public async Task<ActionResult<SandboxStateResponse>> GoLive(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var state = await _sandbox.GoLiveAsync(GetPortfolioId(), ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+        {
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 128 characters)." });
+        }
+
+        var state = await _sandbox.GoLiveAsync(GetWorkspaceReadScope(), key, ct);
         return state is null ? NotFound(new { error = "Portfolio not found" }) : Ok(state);
     }
 
     /// <summary>
     /// Records the first-login Sandbox-vs-Live decision for the caller's own account.
-    /// <c>{ "mode": "sandbox" }</c> seeds the demo portfolio; <c>{ "mode": "live" }</c> keeps an empty real
-    /// portfolio. Idempotent — once a choice is recorded, repeat calls return the current state without
-    /// re-seeding or wiping. Returns the resulting sandbox state.
+    /// <c>{ "mode": "sandbox" }</c> records a Sandbox account; <c>{ "mode": "live" }</c> keeps an empty
+    /// real portfolio. Idempotent — once a choice is recorded, repeat calls return the current state
+    /// without wiping. Returns the resulting sandbox state.
     /// </summary>
     [HttpPost("onboarding-choice")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
@@ -60,8 +67,15 @@ public class SandboxController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SandboxStateResponse>> OnboardingChoice(
-        [FromBody] OnboardingChoiceRequest request, CancellationToken ct)
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] OnboardingChoiceRequest request,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+        {
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 128 characters)." });
+        }
+
         var mode = request.Mode?.Trim().ToLowerInvariant();
         OnboardingChoice choice = mode switch
         {
@@ -75,7 +89,7 @@ public class SandboxController : ManagementControllerBase
             return BadRequest(new { error = "mode must be 'sandbox' or 'live'" });
         }
 
-        var state = await _sandbox.ApplyOnboardingChoiceAsync(GetPortfolioId(), choice, ct);
+        var state = await _sandbox.ApplyOnboardingChoiceAsync(GetWorkspaceReadScope(), choice, key, ct);
         return state is null ? NotFound(new { error = "Portfolio not found" }) : Ok(state);
     }
 }

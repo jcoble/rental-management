@@ -176,7 +176,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         AtomicCommandOutcome<LoginContextSelectionChallengeResult> issued;
         try
         {
-            issued = await RuntimeAtomic.ExecuteAsync(
+            issued = await ExecuteRuntimeAtomicAsync(
                 SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
                 challenge,
                 ChallengeCodec);
@@ -188,7 +188,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
                 _queryCapture!.DescribeRecentCommands(),
                 exception);
         }
-        var issuedReplay = await RuntimeAtomic.ExecuteAsync(
+        var issuedReplay = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
@@ -199,11 +199,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         var startOperation = Guid.NewGuid();
         var start = Start(challenge);
-        var started = await RuntimeAtomic.ExecuteAsync(
+        var started = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
-        var startedReplay = await RuntimeAtomic.ExecuteAsync(
+        var startedReplay = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
@@ -226,12 +226,12 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var challenge = Challenge();
-        await RuntimeAtomic.ExecuteAsync(
+        await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             challenge,
             ChallengeCodec);
         var start = Start(challenge);
-        var started = await RuntimeAtomic.ExecuteAsync(
+        var started = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
@@ -290,8 +290,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             $"auth.email.{emailKind}",
             $"{_userId}:{operationDigest}");
 
-        var enqueued = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
+        var enqueued = await ExecuteRuntimeAtomicAsync(identity, command, AuthEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, AuthEmailCodec);
 
         enqueued.Value.Enqueued.Should().BeTrue();
         enqueued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -321,8 +321,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.email.confirm",
             $"{_userId}:{operationDigest}");
 
-        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var confirmed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
 
         confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
         confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -352,8 +352,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.password.reset",
             $"{_userId}:{operationDigest}");
 
-        var reset = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+        var reset = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
 
         reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
         reset.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -386,7 +386,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.password.reset",
             $"{_userId}:{operationDigest}");
 
-        var reset = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+        var reset = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
 
         reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
         await using var verify = NewPlainContext();
@@ -440,7 +440,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.password.change",
             $"{_userId}:{_firstContextId}:{operationDigest}");
 
-        var changed = await Atomic.ExecuteAsync(identity, command, ChangePasswordCodec);
+        var changed = await ExecuteAtomicAsync(identity, command, ChangePasswordCodec);
 
         changed.Value.Outcome.Should().Be(ChangePasswordOutcome.Changed);
         await using var verify = NewPlainContext();
@@ -493,8 +493,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.email.google-confirm",
             $"{_userId}:{subjectHash}");
 
-        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var confirmed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
 
         confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
         confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -515,11 +515,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var challengeOperation = Guid.NewGuid();
         var challenge = Challenge();
 
-        var firstChallenge = await Atomic.ExecuteAsync(
+        var firstChallenge = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
-        var replayedChallenge = await Atomic.ExecuteAsync(
+        var replayedChallenge = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
@@ -531,11 +531,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         var startOperation = Guid.NewGuid();
         var start = Start(challenge);
-        var firstStart = await Atomic.ExecuteAsync(
+        var firstStart = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
-        var replayedStart = await Atomic.ExecuteAsync(
+        var replayedStart = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
@@ -570,7 +570,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var operation = Guid.NewGuid();
         _failureInterceptor!.FailNextSessionStart = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(operation),
             start,
             StartCodec);
@@ -606,8 +606,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         };
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), first, StartCodec),
-            Atomic.ExecuteAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), second, StartCodec));
+            ExecuteAtomicAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), first, StartCodec),
+            ExecuteAtomicAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), second, StartCodec));
 
         outcomes.Count(item => item.Value.Started).Should().Be(1);
         outcomes.Count(item => !item.Value.Started).Should().Be(1);
@@ -629,7 +629,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var expired = await IssueChallengeAsync(expiresAtUtc: _now.AddMinutes(1));
         var expiredStart = Start(expired) with { IssuedAtUtc = _now.AddMinutes(1) };
 
-        var expiredOutcome = await Atomic.ExecuteAsync(
+        var expiredOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             expiredStart,
             StartCodec);
@@ -646,14 +646,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             await revokeDb.SaveChangesAsync();
         }
 
-        var staleOutcome = await Atomic.ExecuteAsync(
+        var staleOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             Start(stale) with { IssuedAtUtc = _now.AddSeconds(2) },
             StartCodec);
         staleOutcome.Value.Started.Should().BeFalse(
             "a challenge issued for multiple choices must not silently become a single-context login");
         var noLongerNeeded = Challenge() with { IssuedAtUtc = _now.AddSeconds(2) };
-        var issueOutcome = await Atomic.ExecuteAsync(
+        var issueOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             noLongerNeeded,
             ChallengeCodec);
@@ -685,7 +685,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         }
 
         var start = Start(challenge) with { IssuedAtUtc = _now.AddSeconds(2) };
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
@@ -705,7 +705,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var challenge = Challenge();
         _failureInterceptor!.FailNextChallengeIssue = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(operation),
             challenge,
             ChallengeCodec);
@@ -792,12 +792,12 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             CredentialExpiresAtUtc = simAheadUtc.AddDays(7),
             AbsoluteFamilyExpiresAtUtc = simAheadUtc.AddDays(30),
         };
-        var started = await Atomic.ExecuteAsync(
+        var started = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
         var currentChallenge = await IssueChallengeAsync();
-        var currentStarted = await Atomic.ExecuteAsync(
+        var currentStarted = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             Start(currentChallenge),
             StartCodec);
@@ -1189,7 +1189,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         DateTime? expiresAtUtc = null)
     {
         var command = Challenge(expiresAtUtc);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             command,
             ChallengeCodec);
@@ -1201,7 +1201,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         var challenge = await IssueChallengeAsync();
         var start = Start(challenge);
-        var started = await RuntimeAtomic.ExecuteAsync(
+        var started = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
@@ -1424,11 +1424,35 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private IServiceProvider Services =>
         _services ?? throw new InvalidOperationException("Auth start services are unavailable.");
 
-    private IAtomicUnitOfWork Atomic => Services.GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        ExecuteAtomicAsync(Services, identity, command, codec);
 
-    private IAtomicUnitOfWork RuntimeAtomic =>
-        (_runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
-        .GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<TResult>> ExecuteRuntimeAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        ExecuteAtomicAsync(RuntimeServices, identity, command, codec);
+
+    private static async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = services.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
 
     private ServiceProvider RuntimeServices =>
         _runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable.");

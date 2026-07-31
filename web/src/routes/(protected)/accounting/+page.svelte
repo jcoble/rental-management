@@ -67,7 +67,13 @@
 	);
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
-	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
+	const TENANT_MONEY_CATEGORY_OPTIONS = [
+		{ value: 'RentCharge', label: 'Rent' },
+		{ value: 'DepositCharge', label: 'Security deposit' },
+		{ value: 'LateFeeCharge', label: 'Late fee' },
+		{ value: 'AddendumCharge', label: 'Lease/addendum charge' },
+		{ value: 'ManualCharge', label: 'Manual/other charge' }
+	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	// --- Ledger grid state, persisted in the URL query string -------------------
@@ -1178,7 +1184,7 @@
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES.map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : [...PAYMENT_TYPES.map((value) => ({ value, label: formatMoneyCategoryLabel(value) })), ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) }))]) as option}
+							{#each (transactionKindFilter === 'Payment' ? TENANT_MONEY_CATEGORY_OPTIONS : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : [...TENANT_MONEY_CATEGORY_OPTIONS, ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) }))]) as option}
 								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>

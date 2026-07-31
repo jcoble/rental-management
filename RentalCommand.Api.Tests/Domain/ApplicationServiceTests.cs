@@ -359,6 +359,110 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ApproveAsync_CreatesSyntheticScreeningAndApplicantCommunicationOnce()
+    {
+        var now = DateTime.UtcNow;
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Hector",
+            LastName = "Reed",
+            Email = "tenant.043@example.local",
+            Phone = "555-0143",
+            ConsentGiven = true,
+            ConsentAtUtc = now.AddMinutes(-5),
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = now.AddMinutes(-10),
+            CreatedAt = now.AddMinutes(-10),
+            UpdatedAt = now.AddMinutes(-10),
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var first = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, "approve-hector-primary");
+        var second = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, "approve-hector-recovery");
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        second!.TenantId.Should().Be(first!.TenantId);
+
+        _db.ChangeTracker.Clear();
+        (await _db.Tenants.CountAsync(t => t.Email == "tenant.043@example.local")).Should().Be(1);
+
+        var screening = await _db.ApplicantScreenings.SingleAsync(s => s.ApplicationId == app.Id);
+        screening.Mode.Should().Be(ScreeningMode.External);
+        screening.Status.Should().Be(ApplicantScreeningStatus.Completed);
+        screening.ProviderDisplayName.Should().Be("Synthetic test screening");
+        screening.Decision.Should().Be(ScreeningDecision.Accept);
+        screening.ConsumerReportUsedForDecision.Should().BeFalse();
+        screening.CreditReportingAgencyName.Should().BeNull();
+
+        (await _db.ApplicantScreeningMilestones.CountAsync(m =>
+            m.ApplicantScreeningId == screening.Id
+            && m.Source == "application-approval"
+            && m.EventType == "synthetic.completed")).Should().Be(1);
+
+        var conversation = await _db.Conversations
+            .Include(c => c.Messages)
+            .SingleAsync(c => c.TenantId == first.TenantId && c.Subject == $"Rental application #{app.Id}");
+        conversation.PortfolioId.Should().Be(PortfolioId);
+        conversation.WorkOrderId.Should().BeNull();
+        conversation.TenantUnreadCount.Should().Be(1);
+        conversation.Messages.Should().ContainSingle();
+        conversation.Messages.Single().SenderRole.Should().Be(ConversationSenderRole.Landlord);
+        conversation.Messages.Single().Channels.Should().Be("Portal");
+    }
+
+    [Fact]
+    public async Task ApproveAsync_ApprovedApplicationRecoversMissingArtifactsWithoutDuplicateTenant()
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Existing",
+            LastName = "Applicant",
+            Email = "existing.approved@example.local",
+            CreatedAt = now.AddMinutes(-20),
+            UpdatedAt = now.AddMinutes(-20),
+        };
+        _db.Tenants.Add(tenant);
+        await _db.SaveChangesAsync();
+
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = tenant.FirstName,
+            LastName = tenant.LastName,
+            Email = tenant.Email,
+            ConsentGiven = true,
+            ConsentAtUtc = now.AddMinutes(-30),
+            Status = ApplicationStatus.Approved,
+            SubmittedAtUtc = now.AddMinutes(-40),
+            ReviewedAtUtc = now.AddMinutes(-20),
+            ApprovedTenantId = tenant.Id,
+            CreatedAt = now.AddMinutes(-40),
+            UpdatedAt = now.AddMinutes(-20),
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, "recover-approved-application");
+        var replay = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, "recover-approved-application-retry");
+
+        result.Should().NotBeNull();
+        replay.Should().NotBeNull();
+        result!.TenantId.Should().Be(tenant.Id);
+        replay!.TenantId.Should().Be(tenant.Id);
+
+        _db.ChangeTracker.Clear();
+        (await _db.Tenants.CountAsync(t => t.Email == tenant.Email)).Should().Be(1);
+        (await _db.ApplicantScreenings.CountAsync(s => s.ApplicationId == app.Id)).Should().Be(1);
+        (await _db.Conversations.CountAsync(c =>
+            c.TenantId == tenant.Id && c.Subject == $"Rental application #{app.Id}")).Should().Be(1);
+    }
+
+    [Fact]
     public async Task SubmitAsync_FullScannedAddress_DoesNotDuplicateStructuredParts()
     {
         var request = new SubmitApplicationRequest

@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
@@ -19,8 +18,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IWorkOrderService"/>
 public class WorkOrderService : IWorkOrderService
 {
-    private static readonly AtomicJsonResultCodec<OperationMutationResult> MutationCodec =
-        new("work-order.mutation.v1");
+    private static readonly AtomicJsonResultCodec<WorkOrderMutationResult> MutationCodec =
+        new("work-order.mutation.v2");
     private const string EntityType = "WorkOrder";
 
     private readonly RentalCommandDbContext _db;
@@ -281,9 +280,7 @@ public class WorkOrderService : IWorkOrderService
         response.TenantName = row.TenantName;
         if (!row.CanReadFinancialDetails)
         {
-            response.EstimatedCost = null;
-            response.ActualCost = null;
-            response.LeaseManagementId = null;
+            ApplyMaintenanceVisibility(response);
         }
         return response;
     }
@@ -313,11 +310,7 @@ public class WorkOrderService : IWorkOrderService
                 _db,
                 scope,
                 new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead },
-                _timeProvider.UtcNow())
-            .Include(w => w.Property)
-            .Include(w => w.Unit)
-            .Include(w => w.Vendor)
-            .Include(w => w.Tenant);
+                _timeProvider.UtcNow());
 
         var managementProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, [CapabilityKeys.WorkRead], _timeProvider.UtcNow());
@@ -337,31 +330,102 @@ public class WorkOrderService : IWorkOrderService
             return null;
         }
 
-        var events = await _db.WorkOrderStatusEvents
+        var hasManagementAccess = managementProperties is null || await managementProperties.AnyAsync(property =>
+            property.Id == entity.PropertyId && property.PortfolioId == entity.PortfolioId, ct);
+        if (hasManagementAccess && managementProperties is not null)
+        {
+            entity = await _db.WorkOrders
+                .AsNoTracking()
+                .Include(w => w.Property)
+                .Include(w => w.Unit)
+                .Include(w => w.Vendor)
+                .Include(w => w.Tenant)
+                .SingleAsync(
+                    item => item.Id == id && item.PortfolioId == portfolioId,
+                    ct);
+        }
+
+        var recentEvents = _db.WorkOrderStatusEvents
             .AsNoTracking()
             .Where(e => e.WorkOrderId == id && e.PortfolioId == portfolioId)
+            .Where(e => hasManagementAccess || e.Visibility == "Public")
+            .OrderByDescending(e => e.CreatedAtUtc)
+            .ThenByDescending(e => e.Id)
+            .Take(50);
+
+        var events = await recentEvents
             .OrderBy(e => e.CreatedAtUtc)
             .ThenBy(e => e.Id)
             .ToListAsync(ct);
 
         var response = WorkOrderDetailResponse.FromEntity(entity, events);
-        if (managementProperties is not null && !await managementProperties.AnyAsync(property =>
-                property.Id == entity.PropertyId && property.PortfolioId == entity.PortfolioId, ct))
+        if (!hasManagementAccess)
         {
-            response.EstimatedCost = null;
-            response.ActualCost = null;
-            response.LeaseManagementId = null;
+            var safeContext = await _db.Database
+                .SqlQuery<AssignedWorkOrderDetailContextRow>($"""
+                    SELECT assigned_context."WorkOrderId",
+                           assigned_context."PropertyName",
+                           assigned_context."UnitNumber",
+                           assigned_context."TenantName"
+                    FROM public.rc_api_assigned_work_order_detail_context(
+                        {portfolioId}, {id}) AS assigned_context
+                    """)
+                .SingleOrDefaultAsync(ct);
+            if (safeContext is null)
+            {
+                return null;
+            }
+
+            response.PropertyName = safeContext.PropertyName;
+            response.UnitNumber = safeContext.UnitNumber;
+            response.TenantName = safeContext.TenantName;
+        }
+        response.DetailRole = "manager";
+        response.Capabilities = WorkOrderDetailCapabilities.Manager(response.Status);
+        response.ResidentNames = string.IsNullOrWhiteSpace(response.TenantName)
+            ? []
+            : [response.TenantName];
+        response.Activity = events.Select(e => new WorkOrderActivityResponse
+        {
+            Id = e.Id,
+            Kind = e.Kind,
+            FromStatus = e.FromStatus,
+            ToStatus = e.ToStatus,
+            Note = e.Note,
+            ActorLabel = e.ChangedByLabel ?? "System",
+            Visibility = e.Visibility,
+            CreatedAtUtc = e.CreatedAtUtc,
+        }).ToList();
+        if (!hasManagementAccess)
+        {
+            response.DetailRole = "maintenance";
+            response.Capabilities = WorkOrderDetailCapabilities.Maintenance(response.Status);
+            ApplyMaintenanceVisibility(response);
         }
 
         // Whether an OPEN vendor dispatch (texted, still awaiting the vendor's DONE) exists for this work
         // order — a single EXISTS computed DB-side, never loaded-then-counted. Drives the detail page's
         // "vendor has the job … will close on DONE" banner so it reflects a real dispatch rather than a
         // mere vendor assignment. "Open" = Dispatched/Acknowledged, matching VendorDispatchService.
-        response.HasActiveDispatch = await _db.VendorDispatches
-            .AnyAsync(d => d.WorkOrderId == id
+        var activeDispatch = await _db.VendorDispatches
+            .AsNoTracking()
+            .Where(d => d.WorkOrderId == id
                 && d.PortfolioId == portfolioId
                 && (d.Status == VendorDispatchStatus.Dispatched
-                    || d.Status == VendorDispatchStatus.Acknowledged), ct);
+                    || d.Status == VendorDispatchStatus.Acknowledged))
+            .OrderByDescending(d => d.DispatchedAtUtc)
+            .ThenByDescending(d => d.Id)
+            .Select(d => new
+            {
+                DispatchId = d.Id,
+                d.VendorId,
+                VendorName = d.Vendor == null ? null : d.Vendor.Name,
+            })
+            .FirstOrDefaultAsync(ct);
+        response.HasActiveDispatch = activeDispatch is not null;
+        response.ActiveDispatchId = activeDispatch?.DispatchId;
+        response.ActiveDispatchVendorId = activeDispatch?.VendorId;
+        response.ActiveDispatchVendorName = activeDispatch?.VendorName;
 
         var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
         if (scan is not null)
@@ -371,6 +435,33 @@ public class WorkOrderService : IWorkOrderService
         }
 
         return response;
+    }
+
+    private sealed class AssignedWorkOrderDetailContextRow
+    {
+        public int WorkOrderId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public string? UnitNumber { get; init; }
+        public string? TenantName { get; init; }
+    }
+
+    private static void ApplyMaintenanceVisibility(WorkOrderResponse response)
+    {
+        response.PortfolioId = null;
+        response.PropertyId = null;
+        response.UnitId = null;
+        response.TenantId = null;
+        response.LeaseManagementId = null;
+        response.VendorId = null;
+        response.RecurringMaintenanceTaskId = null;
+        response.EstimatedCost = null;
+        response.ActualCost = null;
+        response.CreatedBy = null;
+        response.VendorName = null;
+        if (response is WorkOrderDetailResponse detail)
+        {
+            detail.PrivateManagementNotes = null;
+        }
     }
 
     public async Task<WorkOrderResponse?> CreateAuthorizedAsync(
@@ -383,12 +474,16 @@ public class WorkOrderService : IWorkOrderService
         var command = new CreateWorkOrderCommand(
             scope.PortfolioId, actor, request.PropertyId, request.UnitId, request.TenantId,
             request.LeaseManagementId, request.VendorId, request.Title, request.Description,
-            request.TechnicianAccessInstructions, request.Category, request.Priority, request.Status,
+            request.TechnicianAccessInstructions,
+            request.SubmittedByLabel, request.RequesterName, request.RequesterPhone, request.RequesterEmail,
+            request.ResidentMustBePresent, request.CallBeforeEntry, request.CallIfNotHome,
+            request.PermissionToEnter, request.EntryNotes, request.PetWarnings, request.AccessWarnings,
+            request.Category, request.Priority, request.Status,
             request.RequestedAt?.ToUtc(),
             request.ScheduledFor, request.ScheduledWindowEnd,
             request.ScheduledFor.ToUtcDateTime(), request.ScheduledWindowEnd.ToUtcDateTime(),
             request.CompletedAt.ToUtc(), request.EstimatedCost, request.ActualCost,
-            request.CreatedBy, request.ExtractedData, idempotencyKey);
+            request.CreatedBy, request.ExtractedData, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("work-order.create", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -405,12 +500,16 @@ public class WorkOrderService : IWorkOrderService
             scope.PortfolioId, Actor(scope), id, request.UnitId, request.ClearUnit,
             request.TenantId, request.ClearTenant, request.LeaseManagementId,
             request.ClearLeaseManagement, request.VendorId, request.Title, request.Description,
-            request.TechnicianAccessInstructions, request.Category, request.Priority, request.Status,
+            request.TechnicianAccessInstructions,
+            request.SubmittedByLabel, request.RequesterName, request.RequesterPhone, request.RequesterEmail,
+            request.ResidentMustBePresent, request.CallBeforeEntry, request.CallIfNotHome,
+            request.PermissionToEnter, request.EntryNotes, request.PetWarnings, request.AccessWarnings,
+            request.Category, request.Priority, request.Status,
             request.StatusNote,
             request.RequestedAt?.ToUtc(), request.ScheduledFor.ToUtcDateTime(),
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
             request.EstimatedCost, request.ActualCost,
-            _timeProvider.GetUtcNow().UtcDateTime, idempotencyKey);
+            _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("work-order.update", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -423,10 +522,25 @@ public class WorkOrderService : IWorkOrderService
         CancellationToken ct = default)
     {
         var command = new DeleteWorkOrderCommand(
-            scope.PortfolioId, Actor(scope), id, idempotencyKey);
+            scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("work-order.delete", idempotencyKey), command, MutationCodec, ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;
+    }
+
+    public async Task<WorkOrderMutationReceipt?> CommentAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        WorkOrderCommentRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var command = new AddStaffWorkOrderCommentCommand(
+            scope.PortfolioId, Actor(scope), id, request.Body, request.IsPrivate,
+            _timeProvider.UtcNow(), idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("work-order.comment", idempotencyKey), command, MutationCodec, ct);
+        return Receipt(outcome.Value);
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
@@ -441,9 +555,63 @@ public class WorkOrderService : IWorkOrderService
         return new AtomicCommandIdentity(operation, digest);
     }
 
-    private static WorkOrderResponse? Response(OperationMutationResult result) =>
-        result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null
+    private static WorkOrderResponse? Response(WorkOrderMutationResult result) =>
+        result.Outcome == OperationMutationOutcome.NotFound || result.Snapshot is null
             ? null
-            : JsonSerializer.Deserialize<WorkOrderResponse>(result.ResponseJson);
+            : ToResponse(result.Snapshot);
+
+    private static WorkOrderMutationReceipt? Receipt(WorkOrderMutationResult result) =>
+        result.Outcome == OperationMutationOutcome.NotFound || result.Receipt is null
+            ? null
+            : ToReceipt(result.Receipt);
+
+    private static WorkOrderResponse ToResponse(WorkOrderMutationSnapshot snapshot) => new()
+    {
+        Id = snapshot.Id,
+        PortfolioId = snapshot.PortfolioId,
+        PropertyId = snapshot.PropertyId,
+        UnitId = snapshot.UnitId,
+        TenantId = snapshot.TenantId,
+        LeaseManagementId = snapshot.LeaseManagementId,
+        VendorId = snapshot.VendorId,
+        RecurringMaintenanceTaskId = snapshot.RecurringMaintenanceTaskId,
+        Title = snapshot.Title,
+        Description = snapshot.Description,
+        TechnicianAccessInstructions = snapshot.TechnicianAccessInstructions,
+        SubmittedByLabel = snapshot.SubmittedByLabel,
+        RequesterName = snapshot.RequesterName,
+        RequesterPhone = snapshot.RequesterPhone,
+        RequesterEmail = snapshot.RequesterEmail,
+        ResidentMustBePresent = snapshot.ResidentMustBePresent,
+        CallBeforeEntry = snapshot.CallBeforeEntry,
+        CallIfNotHome = snapshot.CallIfNotHome,
+        PermissionToEnter = snapshot.PermissionToEnter,
+        EntryNotes = snapshot.EntryNotes,
+        PetWarnings = snapshot.PetWarnings,
+        AccessWarnings = snapshot.AccessWarnings,
+        Category = snapshot.Category,
+        Priority = snapshot.Priority,
+        Status = snapshot.Status,
+        RequestedAt = snapshot.RequestedAt,
+        ScheduledFor = snapshot.ScheduledFor,
+        ScheduledWindowEnd = snapshot.ScheduledWindowEnd,
+        CompletedAt = snapshot.CompletedAt,
+        EstimatedCost = snapshot.EstimatedCost,
+        ActualCost = snapshot.ActualCost,
+        CreatedBy = snapshot.CreatedBy,
+        UpdatedAt = snapshot.UpdatedAt,
+        PropertyName = snapshot.PropertyName,
+        UnitNumber = snapshot.UnitNumber,
+        VendorName = snapshot.VendorName,
+        TenantName = snapshot.TenantName,
+    };
+
+    private static WorkOrderMutationReceipt ToReceipt(WorkOrderMutationActivityReceipt receipt) => new()
+    {
+        EntityId = receipt.EntityId,
+        Outcome = receipt.Outcome.ToString(),
+        ActivityId = receipt.ActivityId,
+        CommittedAtUtc = receipt.CommittedAtUtc,
+    };
 
 }

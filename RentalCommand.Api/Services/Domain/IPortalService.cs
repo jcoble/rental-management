@@ -43,6 +43,11 @@ public interface IPortalService
         int tenantAccountId,
         PortalTenantLedgerEntryListQuery query,
         CancellationToken ct = default);
+    Task<PortalTenantAccountHistoryResponse?> GetTenantAccountHistoryAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantAccountHistoryQuery query,
+        CancellationToken ct = default);
     Task<PortalTenantChargePageResponse?> ListTenantAccountChargesPageAsync(
         PortalTenantReadScope scope,
         int tenantAccountId,
@@ -75,6 +80,18 @@ public interface IPortalService
     Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
         ActiveAccessContext access, CreateTenantWorkOrderRequest request,
         string idempotencyKey, CancellationToken ct = default);
+
+    Task<WorkOrderMutationReceipt?> CommentTenantWorkOrderAsync(
+        ActiveAccessContext access, int tenantId, int workOrderId,
+        WorkOrderCommentRequest request, string idempotencyKey, CancellationToken ct = default);
+
+    Task<WorkOrderMutationReceipt?> UpdateTenantWorkOrderAsync(
+        ActiveAccessContext access, int tenantId, int workOrderId,
+        TenantWorkOrderUpdateRequest request, string idempotencyKey, CancellationToken ct = default);
+
+    Task<WorkOrderMutationReceipt?> CancelTenantWorkOrderAsync(
+        ActiveAccessContext access, int tenantId, int workOrderId,
+        TenantWorkOrderCancelRequest request, string idempotencyKey, CancellationToken ct = default);
 
     /// <summary>
     /// Answers a tenant's question grounded in an agreement on their effective rental relationship.

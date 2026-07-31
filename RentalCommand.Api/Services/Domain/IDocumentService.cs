@@ -67,7 +67,8 @@ public interface IDocumentService
 
     /// <summary>
     /// Soft-delete a <see cref="StoredFile"/> row (set <c>DeletedAt</c>).
-    /// Returns false when not found or already deleted.
+    /// Returns true when the delete committed or an identical committed delete is replayed;
+    /// returns false when not found or already deleted under a different operation key.
     /// </summary>
     Task<bool> DeleteAsync(
         int portfolioId,

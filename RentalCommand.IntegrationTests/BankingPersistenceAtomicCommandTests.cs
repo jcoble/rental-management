@@ -145,8 +145,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             $"{_portfolioId}:plaid-request-replay");
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, ConnectionCodec),
-            Atomic.ExecuteAsync(identity, command, ConnectionCodec));
+            ExecuteAtomicAsync(identity, command, ConnectionCodec),
+            ExecuteAtomicAsync(identity, command, ConnectionCodec));
 
         outcomes.Select(result => result.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -161,11 +161,17 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     public async Task PlaidExchange_PrepareAdmitAndRemoteReceipt_AreDurableAndReplayCanonicalState()
     {
         SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
         var prepareIdentity = new AtomicCommandIdentity(
             "banking.plaid.exchange.prepare",
             $"{_portfolioId}:durable-exchange");
         var prepare = new PreparePlaidTokenExchangeCommand(
             _portfolioId,
+            auth.UserId,
+            auth.SessionId,
+            auth.AccessContextId,
+            auth.AccessRevision,
+            CapabilityKeys.BankConnectionsManage,
             "durable-exchange",
             new string('1', 64),
             new string('2', 64),
@@ -179,8 +185,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             _now);
 
         var prepared = await Task.WhenAll(
-            Atomic.ExecuteAsync(prepareIdentity, prepare, ExchangePrepareCodec),
-            Atomic.ExecuteAsync(prepareIdentity, prepare, ExchangePrepareCodec));
+            ExecuteAtomicAsync(prepareIdentity, prepare, ExchangePrepareCodec),
+            ExecuteAtomicAsync(prepareIdentity, prepare, ExchangePrepareCodec));
 
         prepared.Select(row => row.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -195,7 +201,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             attempt.RemoteReceiptRecordedAtUtc.Should().BeNull();
         }
 
-        var admitted = await Atomic.ExecuteAsync(
+        var admitted = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.plaid.exchange.admit", $"{_portfolioId}:{exchangeAttemptId:N}"),
             new AdmitPlaidTokenExchangeCommand(_portfolioId, exchangeAttemptId, _now.AddSeconds(1)),
             ExchangeAdmitCodec);
@@ -221,8 +227,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             "protected-access",
             _now.AddSeconds(2));
         var receipts = await Task.WhenAll(
-            Atomic.ExecuteAsync(receiptIdentity, receipt, ExchangeReceiptCodec),
-            Atomic.ExecuteAsync(receiptIdentity, receipt, ExchangeReceiptCodec));
+            ExecuteAtomicAsync(receiptIdentity, receipt, ExchangeReceiptCodec),
+            ExecuteAtomicAsync(receiptIdentity, receipt, ExchangeReceiptCodec));
 
         receipts.Select(row => row.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -235,6 +241,52 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == prepareIdentity.CommandType || row.CommandType == receiptIdentity.CommandType))
             .Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task PlaidExchange_PrepareReplayAfterSessionRevocation_IsDeniedBeforeReturningGlobalReceipt()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        var identity = new AtomicCommandIdentity(
+            "banking.plaid.exchange.prepare",
+            $"{_portfolioId}:revoked-prepare");
+        var command = new PreparePlaidTokenExchangeCommand(
+            _portfolioId,
+            auth.UserId,
+            auth.SessionId,
+            auth.AccessContextId,
+            auth.AccessRevision,
+            CapabilityKeys.BankConnectionsManage,
+            "revoked-prepare",
+            new string('1', 64),
+            new string('2', 64),
+            "Revoked bank",
+            "Operating",
+            "4321",
+            "depository",
+            "checking",
+            "protected-account",
+            new string('3', 64),
+            _now);
+        await ExecuteAtomicAsync(identity, command, ExchangePrepareCodec);
+        await using (var revoke = NewContext())
+        {
+            var session = await revoke.AuthSessions.SingleAsync(row => row.Id == auth.SessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = DateTime.UtcNow;
+            await revoke.SaveChangesAsync();
+        }
+        Recorder.Clear();
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, ExchangePrepareCodec))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        var authorizationSql = Recorder.Commands.Where(sql =>
+            sql.Contains("MembershipRoleAssignments", StringComparison.Ordinal)).ToArray();
+        authorizationSql.Should().ContainSingle("replay authorization is one EF-translated policy query");
+        authorizationSql[0].Should().Contain("AuthSessions");
+        authorizationSql[0].Should().Contain("WorkspaceAccessContexts");
+        Recorder.ParameterValues.Should().Contain(CapabilityKeys.BankConnectionsManage);
     }
 
     [SkippableFact]
@@ -253,7 +305,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var command = new ApplyPlaidConnectionCommand(_portfolioId, exchangeAttemptId, _now);
         Failures.FailAtomicAudit = true;
 
-        var failure = await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ConnectionCodec))
+        var failure = await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, ConnectionCodec))
             .Should().ThrowAsync<DbUpdateException>();
         failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
             .Which.Message.Should().Be("injected atomic audit failure");
@@ -268,7 +320,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             (await failed.AtomicCommandReceipts.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(0);
         }
 
-        var recovered = await Atomic.ExecuteAsync(identity, command, ConnectionCodec);
+        var recovered = await ExecuteAtomicAsync(identity, command, ConnectionCodec);
         recovered.Value.ConnectionId.Should().BePositive();
         await using var verify = NewContext();
         (await verify.BankConnections.CountAsync()).Should().Be(1);
@@ -285,8 +337,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         Recorder.Clear();
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, ImportCodec),
-            Atomic.ExecuteAsync(identity, command, ImportCodec));
+            ExecuteAtomicAsync(identity, command, ImportCodec),
+            ExecuteAtomicAsync(identity, command, ImportCodec));
 
         outcomes.Select(result => result.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -331,7 +383,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             _portfolioId, "Manual", "Duplicate bank", "Checking", "1000", null, null,
             [input, input, input], 3, "duplicate-input", _now);
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:duplicate-input"),
             command,
             ImportCodec);
@@ -349,17 +401,117 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Import_StatementOnly_PersistsControlsWithoutInventingBankTransactions_AndReplaysExactly()
+    {
+        SkipIfNoDocker();
+        var statement = new BankStatementInput(
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 1, 31),
+            54250m,
+            55925m,
+            1675m,
+            "USD");
+        var command = new ImportBankTransactionsCommand(
+            _portfolioId,
+            "Manual",
+            "Blue Door Synthetic Bank",
+            "Security deposits",
+            "1818",
+            "depository",
+            "checking",
+            [],
+            0,
+            "jan-2027-security-deposit-statement",
+            _now,
+            statement);
+        var identity = new AtomicCommandIdentity(
+            "banking.import.apply",
+            $"{_portfolioId}:jan-2027-security-deposit-statement");
+
+        var first = await ExecuteAtomicAsync(identity, command, ImportCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ImportCodec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        first.Value.ImportedCount.Should().Be(0);
+        first.Value.ImportedTransactionIds.Should().BeEmpty();
+        first.Value.StatementMovement.Should().Be(1675m);
+        await using var db = NewContext();
+        (await db.BankTransactions.CountAsync(row =>
+            row.BankConnection!.AccountMask == "1818")).Should().Be(0);
+        var persisted = await db.BankStatements.AsNoTracking()
+            .Where(row => row.PortfolioId == _portfolioId
+                && row.BankConnection!.AccountMask == "1818"
+                && row.PeriodStart == statement.PeriodStart
+                && row.PeriodEnd == statement.PeriodEnd)
+            .Select(row => new
+            {
+                row.OpeningBalance,
+                row.ClosingBalance,
+                row.StatementMovement,
+                row.IsoCurrencyCode,
+            })
+            .SingleAsync();
+        persisted.OpeningBalance.Should().Be(54250m);
+        persisted.ClosingBalance.Should().Be(55925m);
+        persisted.StatementMovement.Should().Be(1675m);
+        persisted.IsoCurrencyCode.Should().Be("USD");
+        (await db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Import_StatementCompanionFailure_RollsBackConnectionStatementNotificationAndReceipt()
+    {
+        SkipIfNoDocker();
+        Failures.FailNotifications = true;
+        var statement = new BankStatementInput(
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 1, 31),
+            50000m,
+            50000m,
+            0m,
+            "USD");
+        var command = new ImportBankTransactionsCommand(
+            _portfolioId, "Manual", "Blue Door Synthetic Bank", "Reserve", "7070", null, null,
+            [], 0, "jan-2027-reserve-statement", _now, statement);
+        var identity = new AtomicCommandIdentity(
+            "banking.import.apply",
+            $"{_portfolioId}:jan-2027-reserve-statement");
+
+        var act = () => ExecuteAtomicAsync(identity, command, ImportCodec);
+        await act.Should().ThrowAsync<DbUpdateException>();
+        Failures.FailNotifications = false;
+
+        await using var db = NewContext();
+        (await db.BankConnections.CountAsync(row => row.AccountMask == "7070")).Should().Be(0);
+        (await db.BankStatements.CountAsync(row => row.PeriodStart == statement.PeriodStart)).Should().Be(0);
+        (await db.BankTransactions.CountAsync(row =>
+            row.BankConnection!.AccountMask == "7070")).Should().Be(0);
+        (await db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await db.Notifications.CountAsync(row =>
+            row.Type == "BankImportCompleted"
+            && row.CreatedAt == command.ImportedAtUtc)).Should().Be(0);
+        (await db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task Import_NewReceiptForPersistedProviderIds_ReturnsDatabaseShapedSkipsWithoutNewAuditOrNotification()
     {
         SkipIfNoDocker();
         var first = Import("persisted-duplicate", 2);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:persisted-duplicate:first"),
             first,
             ImportCodec);
 
         var replayUnderNewReceipt = first with { RequestIdentity = "persisted-duplicate-second" };
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:persisted-duplicate:second"),
             replayUnderNewReceipt,
             ImportCodec);
@@ -396,7 +548,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             "ordinal-provider-ids",
             _now);
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:ordinal-provider-ids"),
             command,
             ImportCodec);
@@ -414,7 +566,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         Failures.FailNotifications = true;
         var identity = new AtomicCommandIdentity("banking.import.apply", $"{_portfolioId}:rollback");
 
-        var act = () => Atomic.ExecuteAsync(identity, Import("rollback", 2), ImportCodec);
+        var act = () => ExecuteAtomicAsync(identity, Import("rollback", 2), ImportCodec);
         var failure = await act.Should().ThrowAsync<DbUpdateException>();
         failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
             .Which.Message.Should().Be("injected notification failure");
@@ -453,8 +605,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         var first = Sync(connectionId, "cursor-a", "sync-a");
         var second = Sync(connectionId, "cursor-b", "sync-b");
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:sync-a"), first, SyncCodec),
-            Atomic.ExecuteAsync(new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:sync-b"), second, SyncCodec));
+            ExecuteAtomicAsync(new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:sync-a"), first, SyncCodec),
+            ExecuteAtomicAsync(new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:sync-b"), second, SyncCodec));
 
         outcomes.Count(result => result.Value.Outcome == ApplyPlaidSyncOutcome.Applied).Should().Be(1);
         outcomes.Count(result => result.Value.Outcome == ApplyPlaidSyncOutcome.StaleCursor).Should().Be(1);
@@ -514,7 +666,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             "set-merge-request", _now.AddMinutes(2));
         Recorder.Clear();
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.plaid.sync.apply", $"{_portfolioId}:{connectionId}:set-merge"),
             command,
             SyncCodec);
@@ -595,12 +747,16 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             otherTransactionId = transaction.Id;
         }
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{otherTransactionId}:cross-portfolio"),
             new ReconcileBankTransactionCommand(
                 _portfolioId,
                 otherTransactionId,
                 BankReconciliationAction.Ignore,
+                null,
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,
@@ -620,6 +776,534 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         untouched.PortfolioId.Should().Be(otherPortfolioId);
         untouched.MatchStatus.Should().Be("Unmatched");
         (await verify.AtomicAuditLogs.CountAsync(row => row.CommandIdempotencyKey.EndsWith("cross-portfolio"))).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ExpenseMatch_CommitsPaidLifecycleAndReplaysExactResult()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Expense lifecycle property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Approved plumbing bill",
+                Status = ExpenseStatus.Approved,
+                Amount = 245.60m,
+                IncurredAt = _now.AddDays(-2),
+                CreatedAt = _now.AddDays(-2),
+                UpdatedAt = _now.AddDays(-2),
+            };
+            var connection = SeedBankConnection(db, "Expense lifecycle bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "expense-lifecycle-paid", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+        }
+        var identity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-lifecycle-paid");
+        var command = ReconcileExpense(transactionId, expenseId, auth, "expense-lifecycle-paid");
+
+        var committed = await ExecuteAtomicAsync(identity, command, ReconcileCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ReconcileCodec);
+
+        committed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(committed.Value);
+        await using var verify = NewContext();
+        var state = await (
+            from transaction in verify.BankTransactions.AsNoTracking()
+            join expense in verify.Expenses.AsNoTracking()
+                on transaction.MatchedExpenseId equals expense.Id
+            where transaction.Id == transactionId
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                ExpenseStatus = expense.Status,
+                expense.PaidAt,
+                ExpenseUpdatedAt = expense.UpdatedAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Matched");
+        state.MatchedExpenseId.Should().Be(expenseId);
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Paid);
+        state.PaidAt.Should().Be(_now);
+        state.ExpenseUpdatedAt.Should().Be(_now.AddSeconds(1));
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ExpenseMatch_FinalAuditFailureRollsBackMatchAndPaidLifecycle()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Expense rollback property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending electrical bill",
+                Status = ExpenseStatus.Pending,
+                Amount = 180m,
+                IncurredAt = _now.AddDays(-1),
+                CreatedAt = _now.AddDays(-1),
+                UpdatedAt = _now.AddDays(-1),
+            };
+            var connection = SeedBankConnection(db, "Expense rollback bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "expense-lifecycle-rollback", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+        }
+        var identity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-lifecycle-rollback");
+        var command = ReconcileExpense(
+            transactionId, expenseId, auth, "expense-lifecycle-rollback");
+        Failures.FailAtomicAudit = true;
+
+        var failure = await FluentActions.Invoking(
+                () => ExecuteAtomicAsync(identity, command, ReconcileCodec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("injected atomic audit failure");
+        Failures.FailAtomicAudit = false;
+
+        await using var verify = NewContext();
+        var state = await (
+            from transaction in verify.BankTransactions.AsNoTracking()
+            from expense in verify.Expenses.AsNoTracking()
+            where transaction.Id == transactionId && expense.Id == expenseId
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                ExpenseStatus = expense.Status,
+                expense.PaidAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Unmatched");
+        state.MatchedExpenseId.Should().BeNull();
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Pending);
+        state.PaidAt.Should().BeNull();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ExpenseMatchThenClear_RestoresExactPriorLifecycleAndReplaysClear()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+        var originalPaidAt = _now.AddDays(-3);
+        var originalUpdatedAt = _now.AddDays(-2);
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Expense clear lifecycle property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Previously paid plumbing bill",
+                Status = ExpenseStatus.Paid,
+                Amount = 245.60m,
+                IncurredAt = _now.AddDays(-5),
+                PaidAt = originalPaidAt,
+                CreatedAt = _now.AddDays(-5),
+                UpdatedAt = originalUpdatedAt,
+            };
+            var connection = SeedBankConnection(db, "Expense clear lifecycle bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "expense-lifecycle-clear", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+        }
+        var matchIdentity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-lifecycle-clear-match");
+        var match = ReconcileExpense(
+            transactionId, expenseId, auth, "expense-lifecycle-clear-match");
+        var matched = await ExecuteAtomicAsync(matchIdentity, match, ReconcileCodec);
+        var clearIdentity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-lifecycle-clear");
+        var clear = ReconcileClear(
+            transactionId,
+            auth,
+            "expense-lifecycle-clear",
+            matched.Value.Transaction!.UpdatedAt,
+            _now.AddSeconds(2));
+
+        var committed = await ExecuteAtomicAsync(clearIdentity, clear, ReconcileCodec);
+        var replay = await ExecuteAtomicAsync(clearIdentity, clear, ReconcileCodec);
+
+        committed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(committed.Value);
+        await using var verify = NewContext();
+        var state = await (
+            from transaction in verify.BankTransactions.AsNoTracking()
+            from expense in verify.Expenses.AsNoTracking()
+            where transaction.Id == transactionId && expense.Id == expenseId
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                transaction.ExpenseMatchAppliedAt,
+                transaction.ExpenseMatchPreviousStatus,
+                transaction.ExpenseMatchPreviousPaidAt,
+                transaction.ExpenseMatchPreviousUpdatedAt,
+                ExpenseStatus = expense.Status,
+                expense.PaidAt,
+                ExpenseUpdatedAt = expense.UpdatedAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Unmatched");
+        state.MatchedExpenseId.Should().BeNull();
+        state.ExpenseMatchAppliedAt.Should().BeNull();
+        state.ExpenseMatchPreviousStatus.Should().BeNull();
+        state.ExpenseMatchPreviousPaidAt.Should().BeNull();
+        state.ExpenseMatchPreviousUpdatedAt.Should().BeNull();
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Paid);
+        state.PaidAt.Should().Be(originalPaidAt);
+        state.ExpenseUpdatedAt.Should().Be(originalUpdatedAt);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == clearIdentity.CommandType
+            && row.IdempotencyKey == clearIdentity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ExpenseClear_FinalAuditFailureRollsBackClearAndLifecycleRestore()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Expense clear rollback property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Approved electrical bill",
+                Status = ExpenseStatus.Approved,
+                Amount = 180m,
+                IncurredAt = _now.AddDays(-1),
+                CreatedAt = _now.AddDays(-1),
+                UpdatedAt = _now.AddDays(-1),
+            };
+            var connection = SeedBankConnection(db, "Expense clear rollback bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "expense-clear-rollback", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+        }
+        var matchIdentity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-clear-rollback-match");
+        var matched = await ExecuteAtomicAsync(
+            matchIdentity,
+            ReconcileExpense(transactionId, expenseId, auth, "expense-clear-rollback-match"),
+            ReconcileCodec);
+        var clearIdentity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-clear-rollback");
+        var clear = ReconcileClear(
+            transactionId,
+            auth,
+            "expense-clear-rollback",
+            matched.Value.Transaction!.UpdatedAt,
+            _now.AddSeconds(2));
+        Failures.FailAtomicAudit = true;
+
+        var failure = await FluentActions.Invoking(
+                () => ExecuteAtomicAsync(clearIdentity, clear, ReconcileCodec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("injected atomic audit failure");
+        Failures.FailAtomicAudit = false;
+
+        await using var verify = NewContext();
+        var state = await (
+            from transaction in verify.BankTransactions.AsNoTracking()
+            join expense in verify.Expenses.AsNoTracking()
+                on transaction.MatchedExpenseId equals expense.Id
+            where transaction.Id == transactionId
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                ExpenseStatus = expense.Status,
+                expense.PaidAt,
+                ExpenseUpdatedAt = expense.UpdatedAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Matched");
+        state.MatchedExpenseId.Should().Be(expenseId);
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Paid);
+        state.PaidAt.Should().Be(_now);
+        state.ExpenseUpdatedAt.Should().Be(_now.AddSeconds(1));
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == clearIdentity.CommandType
+            && row.IdempotencyKey == clearIdentity.IdempotencyKey)).Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == clearIdentity.CommandType
+            && row.CommandIdempotencyKey == clearIdentity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ExpenseClear_WhenLifecycleChangedAfterMatch_RefusesUnsafeRestore()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int expenseId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Expense unsafe clear property");
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Approved roof bill",
+                Status = ExpenseStatus.Approved,
+                Amount = 420m,
+                IncurredAt = _now.AddDays(-1),
+                CreatedAt = _now.AddDays(-1),
+                UpdatedAt = _now.AddDays(-1),
+            };
+            var connection = SeedBankConnection(db, "Expense unsafe clear bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "expense-unsafe-clear", -expense.Amount, property.Id);
+            db.Expenses.Add(expense);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            expenseId = expense.Id;
+        }
+        var matchIdentity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile",
+            $"{_portfolioId}:{transactionId}:expense-unsafe-clear-match");
+        var matched = await ExecuteAtomicAsync(
+            matchIdentity,
+            ReconcileExpense(transactionId, expenseId, auth, "expense-unsafe-clear-match"),
+            ReconcileCodec);
+        var concurrentPaidAt = _now.AddHours(3);
+        var concurrentUpdatedAt = _now.AddHours(4);
+        await using (var db = NewContext())
+        {
+            var expense = await db.Expenses.SingleAsync(row => row.Id == expenseId);
+            expense.PaidAt = concurrentPaidAt;
+            expense.UpdatedAt = concurrentUpdatedAt;
+            await db.SaveChangesAsync();
+        }
+
+        var result = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:expense-unsafe-clear"),
+            ReconcileClear(
+                transactionId,
+                auth,
+                "expense-unsafe-clear",
+                matched.Value.Transaction!.UpdatedAt,
+                _now.AddSeconds(2)),
+            ReconcileCodec);
+
+        result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.TargetNotFound);
+        await using var verify = NewContext();
+        var state = await (
+            from transaction in verify.BankTransactions.AsNoTracking()
+            join expense in verify.Expenses.AsNoTracking()
+                on transaction.MatchedExpenseId equals expense.Id
+            where transaction.Id == transactionId
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                ExpenseStatus = expense.Status,
+                expense.PaidAt,
+                ExpenseUpdatedAt = expense.UpdatedAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Matched");
+        state.MatchedExpenseId.Should().Be(expenseId);
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Paid);
+        state.PaidAt.Should().Be(concurrentPaidAt);
+        state.ExpenseUpdatedAt.Should().Be(concurrentUpdatedAt);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ConcurrentDifferentBankLines_CannotClaimSameLoanPayment()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int firstTransactionId;
+        int secondTransactionId;
+        int loanPaymentId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Loan target property");
+            var loan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = property.Id,
+                Lender = "Atomic Mortgage",
+                OriginalAmount = 200000m,
+                CurrentBalance = 180000m,
+                AnnualInterestRatePct = 6m,
+                TermMonths = 360,
+                StartDate = _now.AddYears(-1),
+                DayOfMonthDue = _now.Day,
+                MonthlyPrincipalInterest = 1250m,
+                Status = LoanStatus.Active,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var payment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                Loan = loan,
+                PeriodKey = "2026-07",
+                DueDate = _now,
+                PaidDate = _now,
+                InterestAmount = 700m,
+                PrincipalAmount = 550m,
+                TotalAmount = 1250m,
+                BalanceAfter = 179450m,
+                Status = LoanPaymentStatus.Paid,
+                CreatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Loan duplicate bank");
+            var first = SeedBankTransaction(db, connection.Id, "loan-duplicate-first", -1250m, property.Id);
+            var second = SeedBankTransaction(db, connection.Id, "loan-duplicate-second", -1250m, property.Id);
+            db.LoanPayments.Add(payment);
+            await db.SaveChangesAsync();
+            firstTransactionId = first.Id;
+            secondTransactionId = second.Id;
+            loanPaymentId = payment.Id;
+        }
+
+        var outcomes = await Task.WhenAll(
+            ExecuteAtomicAsync(
+                new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{firstTransactionId}:loan-duplicate-first"),
+                ReconcileLoanPayment(firstTransactionId, loanPaymentId, auth, "loan-duplicate-first"),
+                ReconcileCodec),
+            ExecuteAtomicAsync(
+                new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{secondTransactionId}:loan-duplicate-second"),
+                ReconcileLoanPayment(secondTransactionId, loanPaymentId, auth, "loan-duplicate-second"),
+                ReconcileCodec));
+
+        outcomes.Count(result => result.Value.Outcome == ReconcileBankTransactionOutcome.Applied).Should().Be(1);
+        outcomes.Count(result => result.Value.Outcome == ReconcileBankTransactionOutcome.TargetNotFound).Should().Be(1);
+        await using var verify = NewContext();
+        var matchedRows = await verify.BankTransactions.AsNoTracking()
+            .Where(row => row.PortfolioId == _portfolioId && row.MatchedLoanPaymentId == loanPaymentId)
+            .Select(row => row.Id)
+            .ToListAsync();
+        matchedRows.Should().ContainSingle();
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_ConcurrentDifferentBankLines_CannotClaimSameOwnerDistribution()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int firstTransactionId;
+        int secondTransactionId;
+        int distributionId;
+        await using (var db = NewContext())
+        {
+            var owner = new OwnerEntity
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntityType = OwnerEntityType.LLC,
+                Name = "Atomic Owner LLC",
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var distribution = new OwnerDistribution
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntity = owner,
+                Date = _now,
+                Amount = 900m,
+                Method = DistributionMethod.Ach,
+                Status = OwnerDistributionStatus.Approved,
+                ApprovedAt = _now,
+                ApprovedBusinessDate = _now,
+                ApprovedByUserId = auth.UserId,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Owner duplicate bank");
+            var first = SeedBankTransaction(db, connection.Id, "owner-duplicate-first", -900m, null);
+            var second = SeedBankTransaction(db, connection.Id, "owner-duplicate-second", -900m, null);
+            db.OwnerDistributions.Add(distribution);
+            await db.SaveChangesAsync();
+            firstTransactionId = first.Id;
+            secondTransactionId = second.Id;
+            distributionId = distribution.Id;
+        }
+
+        var outcomes = await Task.WhenAll(
+            ExecuteAtomicAsync(
+                new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{firstTransactionId}:owner-duplicate-first"),
+                ReconcileOwnerDistribution(firstTransactionId, distributionId, auth, "owner-duplicate-first"),
+                ReconcileCodec),
+            ExecuteAtomicAsync(
+                new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{secondTransactionId}:owner-duplicate-second"),
+                ReconcileOwnerDistribution(secondTransactionId, distributionId, auth, "owner-duplicate-second"),
+                ReconcileCodec));
+
+        outcomes.Count(result => result.Value.Outcome == ReconcileBankTransactionOutcome.Applied).Should().Be(1);
+        outcomes.Count(result => result.Value.Outcome == ReconcileBankTransactionOutcome.TargetNotFound).Should().Be(1);
+        await using var verify = NewContext();
+        var matchedRows = await verify.BankTransactions.AsNoTracking()
+            .Where(row => row.PortfolioId == _portfolioId && row.MatchedOwnerDistributionId == distributionId)
+            .Select(row => row.Id)
+            .ToListAsync();
+        matchedRows.Should().ContainSingle();
     }
 
     private ImportBankTransactionsCommand Import(string identity, int count) => new(
@@ -659,7 +1343,247 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         null,
         "{}");
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicTestAuthority> SeedAllPropertiesAuthorityAsync()
+    {
+        await using var db = NewContext();
+        const int userId = 801;
+        var sessionId = Guid.NewGuid();
+        var authorizationNow = DateTime.UtcNow;
+        var user = await db.Users.FindAsync(userId);
+        if (user is null)
+        {
+            user = new ApplicationUser
+            {
+                Id = userId,
+                UserName = "banking-atomic@example.test",
+                NormalizedUserName = "BANKING-ATOMIC@EXAMPLE.TEST",
+                Email = "banking-atomic@example.test",
+                NormalizedEmail = "BANKING-ATOMIC@EXAMPLE.TEST",
+                DisplayName = "Banking Atomic",
+                CreatedAt = authorizationNow,
+            };
+            db.Users.Add(user);
+        }
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = userId,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = authorizationNow,
+            UpdatedAtUtc = authorizationNow,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            EffectiveFromUtc = authorizationNow.AddDays(-1),
+            CreatedAtUtc = authorizationNow,
+            UpdatedAtUtc = authorizationNow,
+        };
+        membership.RoleAssignments.Add(new MembershipRoleAssignment
+        {
+            PortfolioId = _portfolioId,
+            RoleProfileId = 1,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            Status = MembershipRoleAssignmentStatus.Active,
+            EffectiveFromUtc = authorizationNow.AddDays(-1),
+            CreatedAtUtc = authorizationNow,
+            UpdatedAtUtc = authorizationNow,
+        });
+        db.WorkspaceMemberships.Add(membership);
+        db.AuthSessions.Add(new AuthSession
+        {
+            Id = sessionId,
+            UserId = userId,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = authorizationNow,
+            LastSeenAtUtc = authorizationNow,
+            ExpiresAtUtc = authorizationNow.AddHours(1),
+        });
+        await db.SaveChangesAsync();
+        return new AtomicTestAuthority(userId, sessionId, accessContext.Id, accessContext.AccessRevision);
+    }
+
+    private ReconcileBankTransactionCommand ReconcileLoanPayment(
+        int transactionId,
+        int loanPaymentId,
+        AtomicTestAuthority auth,
+        string operationKey) => new(
+        _portfolioId,
+        transactionId,
+        BankReconciliationAction.MatchLoanPayment,
+        null,
+        null,
+        null,
+        loanPaymentId,
+        null,
+        null,
+        null,
+        _now,
+        _now.AddSeconds(1),
+        auth.UserId,
+        auth.SessionId,
+        auth.AccessContextId,
+        auth.AccessRevision,
+        CapabilityKeys.MoneyReconciliationOperate,
+        operationKey);
+
+    private ReconcileBankTransactionCommand ReconcileExpense(
+        int transactionId,
+        int expenseId,
+        AtomicTestAuthority auth,
+        string operationKey) => new(
+        _portfolioId,
+        transactionId,
+        BankReconciliationAction.MatchExpense,
+        null,
+        null,
+        expenseId,
+        null,
+        null,
+        null,
+        null,
+        _now,
+        _now.AddSeconds(1),
+        auth.UserId,
+        auth.SessionId,
+        auth.AccessContextId,
+        auth.AccessRevision,
+        CapabilityKeys.MoneyReconciliationOperate,
+        operationKey);
+
+    private ReconcileBankTransactionCommand ReconcileClear(
+        int transactionId,
+        AtomicTestAuthority auth,
+        string operationKey,
+        DateTime expectedUpdatedAtUtc,
+        DateTime appliedAtUtc) => new(
+        _portfolioId,
+        transactionId,
+        BankReconciliationAction.Clear,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        expectedUpdatedAtUtc,
+        appliedAtUtc,
+        auth.UserId,
+        auth.SessionId,
+        auth.AccessContextId,
+        auth.AccessRevision,
+        CapabilityKeys.MoneyReconciliationDestructive,
+        operationKey);
+
+    private ReconcileBankTransactionCommand ReconcileOwnerDistribution(
+        int transactionId,
+        int ownerDistributionId,
+        AtomicTestAuthority auth,
+        string operationKey) => new(
+        _portfolioId,
+        transactionId,
+        BankReconciliationAction.MatchOwnerDistribution,
+        null,
+        null,
+        null,
+        null,
+        ownerDistributionId,
+        null,
+        null,
+        _now,
+        _now.AddSeconds(1),
+        auth.UserId,
+        auth.SessionId,
+        auth.AccessContextId,
+        auth.AccessRevision,
+        CapabilityKeys.MoneyReconciliationOperate,
+        operationKey);
+
+    private Property SeedProperty(RentalCommandDbContext db, string name)
+    {
+        var property = new Property
+        {
+            PortfolioId = _portfolioId,
+            Name = name,
+            AddressLine1 = "1 Atomic Lane",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        db.Properties.Add(property);
+        db.SaveChanges();
+        return property;
+    }
+
+    private BankConnection SeedBankConnection(RentalCommandDbContext db, string institutionName)
+    {
+        var connection = new BankConnection
+        {
+            PortfolioId = _portfolioId,
+            Provider = "Manual",
+            InstitutionName = institutionName,
+            AccountName = "Operating checking",
+            Status = "Active",
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        db.BankConnections.Add(connection);
+        db.SaveChanges();
+        return connection;
+    }
+
+    private BankTransaction SeedBankTransaction(
+        RentalCommandDbContext db,
+        int connectionId,
+        string providerTransactionId,
+        decimal amount,
+        int? propertyId)
+    {
+        var transaction = new BankTransaction
+        {
+            PortfolioId = _portfolioId,
+            BankConnectionId = connectionId,
+            ProviderTransactionId = providerTransactionId,
+            PostedAt = _now,
+            Description = providerTransactionId,
+            Amount = amount,
+            IsoCurrencyCode = "USD",
+            PropertyId = propertyId,
+            MatchStatus = "Unmatched",
+            CreatedAt = _now,
+            UpdatedAt = _now,
+        };
+        db.BankTransactions.Add(transaction);
+        db.SaveChanges();
+        return transaction;
+    }
+
+    private sealed record AtomicTestAuthority(
+        int UserId,
+        Guid SessionId,
+        int AccessContextId,
+        long AccessRevision);
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec, ct);
+    }
+
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private NotificationFailureInterceptor Failures => _services!.GetRequiredService<NotificationFailureInterceptor>();
 
@@ -702,10 +1626,13 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     private sealed class CommandRecorder : DbCommandInterceptor
     {
         private readonly ConcurrentQueue<string> _commands = new();
+        private readonly ConcurrentQueue<object?> _parameterValues = new();
         public IReadOnlyCollection<string> Commands => _commands.ToArray();
+        public IReadOnlyCollection<object?> ParameterValues => _parameterValues.ToArray();
         public void Clear()
         {
             while (_commands.TryDequeue(out _)) { }
+            while (_parameterValues.TryDequeue(out _)) { }
         }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
@@ -715,6 +1642,10 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             _commands.Enqueue(command.CommandText);
+            foreach (DbParameter parameter in command.Parameters)
+            {
+                _parameterValues.Enqueue(parameter.Value);
+            }
             return ValueTask.FromResult(result);
         }
     }

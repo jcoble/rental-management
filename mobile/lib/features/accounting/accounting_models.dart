@@ -146,6 +146,7 @@ class PastDueLease {
     required this.overduePaymentCount,
     required this.oldestDueOn,
     required this.oldestLedgerEntryId,
+    required this.oldestLedgerEntryOpenAmount,
     this.currentAgreementId,
     this.tenantName,
     this.tenantPhone,
@@ -162,6 +163,7 @@ class PastDueLease {
   final int overduePaymentCount;
   final DateTime oldestDueOn;
   final int oldestLedgerEntryId;
+  final double oldestLedgerEntryOpenAmount;
   final String? tenantName;
   final String? tenantPhone;
   final String? relationshipNumber;
@@ -187,6 +189,8 @@ class PastDueLease {
       overduePaymentCount: (json['overduePaymentCount'] as num).toInt(),
       oldestDueOn: DateTime.parse(json['oldestDueOn'] as String),
       oldestLedgerEntryId: (json['oldestLedgerEntryId'] as num).toInt(),
+      oldestLedgerEntryOpenAmount: (json['oldestLedgerEntryOpenAmount'] as num)
+          .toDouble(),
       tenantName: json['tenantName'] as String?,
       tenantPhone: json['tenantPhone'] as String?,
       relationshipNumber: json['relationshipNumber'] as String?,

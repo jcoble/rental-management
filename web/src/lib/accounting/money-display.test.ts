@@ -21,6 +21,9 @@ describe('money display labels', () => {
 	it('turns unknown identifiers into readable fallback labels', () => {
 		assert.equal(formatMoneyEntryLabel('ManualAdjustment'), 'Manual adjustment');
 		assert.equal(formatMoneyCategoryLabel('CleaningMaintenance'), 'Cleaning & maintenance');
+		assert.equal(formatMoneyCategoryLabel('DepositCharge'), 'Security deposit');
+		assert.equal(formatMoneyCategoryLabel('AddendumCharge'), 'Lease/addendum charge');
+		assert.equal(formatMoneyCategoryLabel('ManualCharge'), 'Manual/other charge');
 	});
 
 	it('builds rental context from names instead of internal ids', () => {

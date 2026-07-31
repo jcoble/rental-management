@@ -1,9 +1,11 @@
 const MONEY_ENTRY_LABELS: Record<string, string> = {
 	ApplicationFee: 'Application fee',
 	Bank: 'Bank activity',
+	AddendumCharge: 'Lease/addendum charge',
 	Charge: 'Charge',
 	Credit: 'Credit',
 	Deposit: 'Bank deposit',
+	DepositCharge: 'Security deposit',
 	Expense: 'Expense',
 	LateFee: 'Late fee',
 	LateFeeCharge: 'Late fee',
@@ -26,6 +28,7 @@ const MONEY_CATEGORY_LABELS: Record<string, string> = {
 	CleaningMaintenance: 'Cleaning & maintenance',
 	LegalProfessional: 'Legal & professional fees',
 	ManagementFees: 'Management fees',
+	ManualCharge: 'Manual/other charge',
 	MortgageInterest: 'Mortgage interest',
 	Repairs: 'Repairs & maintenance',
 };

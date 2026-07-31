@@ -72,9 +72,9 @@ public sealed class RoleExperienceCommandContractTests
             .Should().Be("messages/{notificationId:int}/replies");
 
         var handler = Source("RentalCommand.Data", "Owners", "OwnerPortalCommandHandlers.cs");
-        handler.Should().Contain("IAtomicReplayAuthorizer<DecideOwnerApprovalCommand>");
-        handler.Should().Contain("IAtomicReplayAuthorizer<ReplyToOwnerMessageCommand>");
-        handler.Should().Contain("persistence.Query<OwnerUserAccess>()");
+        handler.Should().Contain("AuthorizeReplayAsync(");
+        handler.Should().Contain("AuthorizeReplayAsync(");
+        handler.Should().Contain("db.Set<OwnerUserAccess>().Any(access =>");
         handler.Should().Contain("session.ActiveAccessContextId == actorAccessContextId");
         handler.Should().Contain("CapabilityKeys.MoneyOwnerReportsRead");
         handler.Should().Contain("MembershipRoleAssignmentScopeKind.SelectedProperties");

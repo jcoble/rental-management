@@ -126,6 +126,7 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
             scenario.ManagerSessionId,
             scenario.ManagerScope.AccessContextId,
             scenario.ManagerScope.AccessRevision);
+        await _context.ActivateApiScopeAsync(managerWorkspaceScope);
         (await _context.Db.Properties.AsNoTracking()
             .WhereAuthorized(
                 _context.Db,
@@ -427,7 +428,8 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
                 PortfolioId = portfolioId,
                 OwnerEntityId = ownerId,
                 OwnershipSharePercent = 100m,
-                EffectiveFromUtc = now,
+                EffectiveFromUtc = new DateTime(
+                    now.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 StatementRecipientName = name,
                 PayeeName = name,
             },
@@ -451,6 +453,7 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         DateTime now) => new()
     {
         PortfolioId = portfolioId,
+        OperationalScope = ExpenseOperationalScope.Property,
         PropertyId = propertyId,
         Description = "Owner statement boundary expense",
         Category = ScheduleECategory.Repairs,
@@ -475,6 +478,9 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         Date = new DateTime(year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         Amount = amount,
         Method = DistributionMethod.Ach,
+        Status = OwnerDistributionStatus.Approved,
+        ApprovedAt = now,
+        ApprovedBusinessDate = new DateTime(year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         CreatedAt = now,
         UpdatedAt = now,
     };

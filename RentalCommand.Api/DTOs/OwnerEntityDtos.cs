@@ -92,6 +92,26 @@ public sealed record ActivateOwnerPortalAccessResponse(
     DateTime? InvitationExpiresAtUtc,
     string Message);
 
+public sealed record RevokeOwnerPortalAccessRequest(string? Reason = null);
+
+public enum RevokeOwnerPortalAccessOutcome
+{
+    Revoked,
+    AlreadyRevoked,
+    NotFound,
+}
+
+public sealed record RevokeOwnerPortalAccessResponse(
+    RevokeOwnerPortalAccessOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int RevokedRelationshipCount,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool Replayed,
+    string Message);
+
 public class OwnerEntityListResponse
 {
     public IReadOnlyList<OwnerEntityResponse> Items { get; set; } = [];

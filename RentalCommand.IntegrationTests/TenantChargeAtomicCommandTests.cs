@@ -148,8 +148,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "tenant-account.charge.post", command.DeliveryIdempotencyKey);
 
-        var first = await Atomic.ExecuteAsync(identity, command, ChargeCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, ChargeCodec);
+        var first = await ExecuteAtomicAsync(identity, command, ChargeCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ChargeCodec);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -185,7 +185,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var command = PostCharge(scenario, "replay-auth", 75m);
         var identity = new AtomicCommandIdentity(
             "tenant-account.charge.post", command.DeliveryIdempotencyKey);
-        await Atomic.ExecuteAsync(identity, command, ChargeCodec);
+        await ExecuteAtomicAsync(identity, command, ChargeCodec);
 
         await using (var mutate = NewContext())
         {
@@ -205,7 +205,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             await mutate.SaveChangesAsync();
         }
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ChargeCodec))
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, ChargeCodec))
             .Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var verify = NewContext();
@@ -228,13 +228,13 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             RequiredCapability = CapabilityKeys.MoneyChargesManage,
         };
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 new AtomicCommandIdentity(
                     "tenant-account.receipt.record", receipt.DeliveryIdempotencyKey),
                 receipt, ReceiptCodec))
             .Should().ThrowAsync<ArgumentException>()
             .WithMessage("*payment-management capability*");
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 new AtomicCommandIdentity(
                     "tenant-account.payment.refund", refund.DeliveryIdempotencyKey),
                 refund, RefundCodec))
@@ -249,6 +249,166 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.IdempotencyKey == receipt.DeliveryIdempotencyKey
             || row.IdempotencyKey == refund.DeliveryIdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Receipt_RejectsInvalidTargetBeforeAttemptReceiptAllocationOrAtomicReceipt()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("receipt-invalid-target");
+        var crossAccountCharge = await SeedLedgerEntryAsync(
+            scenario, scenario.OtherAccountId, TenantLedgerEntryType.ManualCharge,
+            TenantLedgerDirection.Debit, "receipt-cross-account-target", 40m,
+            DateOnly.FromDateTime(DateTime.UtcNow));
+        var command = Receipt(scenario, "invalid-target", 25m, crossAccountCharge);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, ReceiptCodec))
+            .Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*open debit*");
+
+        await using var verify = NewContext();
+        (await verify.TenantPaymentAttempts.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(0);
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Receipt_TargetsSelectedChargeFirstThenSpillsRemainingToOldestOpenCharges_AndReplaysUnchanged()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("receipt-exact-target");
+        var olderChargeCommand = PostCharge(scenario, "older-open-charge", 50m);
+        var olderCharge = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.charge.post", olderChargeCommand.DeliveryIdempotencyKey),
+            olderChargeCommand,
+            ChargeCodec);
+        var remainingOlderChargeCommand = PostCharge(scenario, "remaining-older-open-charge", 25m);
+        var remainingOlderCharge = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.charge.post", remainingOlderChargeCommand.DeliveryIdempotencyKey),
+            remainingOlderChargeCommand,
+            ChargeCodec);
+        var targetChargeCommand = PostCharge(scenario, "selected-open-charge", 550m);
+        var targetCharge = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.charge.post", targetChargeCommand.DeliveryIdempotencyKey),
+            targetChargeCommand,
+            ChargeCodec);
+        var receiptCommand = Receipt(
+            scenario, "exact-target-surplus", 600m, targetCharge.Value.LedgerEntryId);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey);
+
+        var first = await ExecuteAtomicAsync(identity, receiptCommand, ReceiptCodec);
+        var replay = await ExecuteAtomicAsync(identity, receiptCommand, ReceiptCodec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        first.Value.AllocatedAmount.Should().Be(600m);
+        first.Value.AllocationCount.Should().Be(2);
+
+        await using var verify = NewContext();
+        var paymentAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == first.Value.PaymentAttemptId);
+        paymentAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.Charge);
+        paymentAttempt.ChargeLedgerEntryId.Should().Be(targetCharge.Value.LedgerEntryId);
+        var allocations = await verify.TenantLedgerAllocations
+            .Where(row => row.CreditEntryId == first.Value.LedgerEntryId)
+            .OrderBy(row => row.DebitEntryId == targetCharge.Value.LedgerEntryId ? 0 : 1)
+            .ToListAsync();
+        allocations.Should().HaveCount(2);
+        allocations[0].DebitEntryId.Should().Be(targetCharge.Value.LedgerEntryId);
+        allocations[0].Amount.Should().Be(550m);
+        allocations[1].DebitEntryId.Should().Be(olderCharge.Value.LedgerEntryId);
+        allocations[1].Amount.Should().Be(50m);
+        allocations.Should().NotContain(row => row.DebitEntryId == remainingOlderCharge.Value.LedgerEntryId);
+        (await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == olderCharge.Value.LedgerEntryId)).OpenAmount.Should().Be(0m);
+        (await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == remainingOlderCharge.Value.LedgerEntryId)).OpenAmount.Should().Be(25m);
+        (await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == targetCharge.Value.LedgerEntryId)).OpenAmount.Should().Be(0m);
+    }
+
+    [SkippableFact]
+    public async Task Receipt_WithNoSelectedCharge_PersistsDeliberateUnappliedIntent()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("receipt-deliberately-unapplied");
+        var command = Receipt(scenario, "deliberately-unapplied", 45m);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
+
+        var first = await ExecuteAtomicAsync(identity, command, ReceiptCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ReceiptCodec);
+
+        first.Value.AllocatedAmount.Should().Be(0m);
+        first.Value.AllocationCount.Should().Be(0);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        await using var verify = NewContext();
+        var paymentAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == first.Value.PaymentAttemptId);
+        paymentAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.UnappliedReceipt);
+        paymentAttempt.ChargeLedgerEntryId.Should().BeNull();
+        (await verify.TenantLedgerAllocations.AnyAsync(row =>
+            row.CreditEntryId == first.Value.LedgerEntryId)).Should().BeFalse();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Receipt_PartiallyAllocatesOnlyTheTargetCharge()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("receipt-partial-target");
+        var olderChargeCommand = PostCharge(scenario, "partial-older-open-charge", 60m);
+        var olderCharge = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.charge.post", olderChargeCommand.DeliveryIdempotencyKey),
+            olderChargeCommand,
+            ChargeCodec);
+        var targetChargeCommand = PostCharge(scenario, "partial-selected-open-charge", 150m);
+        var targetCharge = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.charge.post", targetChargeCommand.DeliveryIdempotencyKey),
+            targetChargeCommand,
+            ChargeCodec);
+        var receiptCommand = Receipt(
+            scenario, "partial-target", 75m, targetCharge.Value.LedgerEntryId);
+
+        var receipt = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey),
+            receiptCommand,
+            ReceiptCodec);
+
+        receipt.Value.AllocatedAmount.Should().Be(75m);
+        receipt.Value.AllocationCount.Should().Be(1);
+        await using var verify = NewContext();
+        var allocations = await verify.TenantLedgerAllocations
+            .Where(row => row.CreditEntryId == receipt.Value.LedgerEntryId)
+            .ToListAsync();
+        allocations.Should().ContainSingle();
+        allocations.Single().DebitEntryId.Should().Be(targetCharge.Value.LedgerEntryId);
+        allocations.Single().Amount.Should().Be(75m);
+        (await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == olderCharge.Value.LedgerEntryId)).OpenAmount.Should().Be(60m);
+        (await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == targetCharge.Value.LedgerEntryId)).OpenAmount.Should().Be(75m);
     }
 
     [SkippableFact]
@@ -273,7 +433,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             var command = ReverseCharge(scenario, entryId, suffix);
             var identity = new AtomicCommandIdentity(
                 "tenant-account.charge.reverse", command.DeliveryIdempotencyKey);
-            await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, ChargeCodec))
+            await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, ChargeCodec))
                 .Should().ThrowAsync<UnauthorizedAccessException>();
         }
 
@@ -289,12 +449,12 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("allocated-reversal");
         var chargeCommand = PostCharge(scenario, "allocated-charge", 300m);
-        var charge = await Atomic.ExecuteAsync(
+        var charge = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.charge.post", chargeCommand.DeliveryIdempotencyKey),
             chargeCommand,
             ChargeCodec);
-        var receiptCommand = Receipt(scenario, "allocated-receipt", 125m);
-        await Atomic.ExecuteAsync(
+        var receiptCommand = Receipt(scenario, "allocated-receipt", 125m, charge.Value.LedgerEntryId);
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey),
             receiptCommand,
             ReceiptCodec);
@@ -303,7 +463,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var reversalIdentity = new AtomicCommandIdentity(
             "tenant-account.charge.reverse", reversalCommand.DeliveryIdempotencyKey);
         Failures.Clear();
-        var reversal = await Atomic.ExecuteAsync(reversalIdentity, reversalCommand, ChargeCodec);
+        var reversal = await ExecuteAtomicAsync(reversalIdentity, reversalCommand, ChargeCodec);
 
         reversal.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         await using var db = NewContext();
@@ -346,12 +506,12 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("reversal-rollback");
         var chargeCommand = PostCharge(scenario, "rollback-charge", 220m);
-        var charge = await Atomic.ExecuteAsync(
+        var charge = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.charge.post", chargeCommand.DeliveryIdempotencyKey),
             chargeCommand,
             ChargeCodec);
-        var receiptCommand = Receipt(scenario, "rollback-receipt", 80m);
-        await Atomic.ExecuteAsync(
+        var receiptCommand = Receipt(scenario, "rollback-receipt", 80m, charge.Value.LedgerEntryId);
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey),
             receiptCommand,
             ReceiptCodec);
@@ -363,7 +523,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         try
         {
             var failure = await FluentActions
-                .Invoking(() => Atomic.ExecuteAsync(identity, reversalCommand, ChargeCodec))
+                .Invoking(() => ExecuteAtomicAsync(identity, reversalCommand, ChargeCodec))
                 .Should().ThrowAsync<DbUpdateException>();
             failure.WithInnerException<InvalidOperationException>()
                 .WithMessage("injected tenant-charge audit failure");
@@ -393,7 +553,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("credit-concurrent");
         var chargeCommand = PostCharge(scenario, "credit-open-charge", 100m);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.charge.post", chargeCommand.DeliveryIdempotencyKey),
             chargeCommand,
             ChargeCodec);
@@ -402,13 +562,13 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             "tenant-account.credit.post", command.DeliveryIdempotencyKey);
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, LedgerCodec),
-            Atomic.ExecuteAsync(identity, command, LedgerCodec));
+            ExecuteAtomicAsync(identity, command, LedgerCodec),
+            ExecuteAtomicAsync(identity, command, LedgerCodec));
 
         outcomes.Select(result => result.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
         outcomes[0].Value.Should().Be(outcomes[1].Value);
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 identity,
                 command with { Amount = 61m },
                 LedgerCodec))
@@ -422,7 +582,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             session.RevocationReason = "canonical ledger replay proof";
             await revoke.SaveChangesAsync();
         }
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, LedgerCodec))
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, LedgerCodec))
             .Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var db = NewContext();
@@ -451,7 +611,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var debit = Adjustment(scenario, "debit", TenantLedgerDirection.Debit, 35m);
         var debitIdentity = new AtomicCommandIdentity(
             "tenant-account.adjustment.post", debit.DeliveryIdempotencyKey);
-        var posted = await Atomic.ExecuteAsync(debitIdentity, debit, LedgerCodec);
+        var posted = await ExecuteAtomicAsync(debitIdentity, debit, LedgerCodec);
 
         posted.Value.EntryType.Should().Be(TenantLedgerEntryType.Adjustment);
         posted.Value.Direction.Should().Be(TenantLedgerDirection.Debit);
@@ -474,7 +634,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         try
         {
             var failure = await FluentActions
-                .Invoking(() => Atomic.ExecuteAsync(creditIdentity, credit, LedgerCodec))
+                .Invoking(() => ExecuteAtomicAsync(creditIdentity, credit, LedgerCodec))
                 .Should().ThrowAsync<DbUpdateException>();
             failure.WithInnerException<InvalidOperationException>()
                 .WithMessage("injected tenant-charge audit failure");
@@ -512,7 +672,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "tenant-account.ledger.reverse", command.DeliveryIdempotencyKey);
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(identity, command, LedgerCodec))
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, LedgerCodec))
             .Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var verify = NewContext();
@@ -559,7 +719,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var scenario = await SeedScenarioAsync("ordinary-adjustment-reversal");
         var adjustmentCommand = Adjustment(
             scenario, "ordinary-adjustment-reversal", TenantLedgerDirection.Debit, 45m);
-        var adjustment = await Atomic.ExecuteAsync(
+        var adjustment = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.adjustment.post", adjustmentCommand.DeliveryIdempotencyKey),
             adjustmentCommand,
@@ -567,7 +727,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var reversalCommand = ReverseLedger(
             scenario, adjustment.Value.LedgerEntryId, "ordinary-adjustment");
 
-        var reversal = await Atomic.ExecuteAsync(
+        var reversal = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.ledger.reverse", reversalCommand.DeliveryIdempotencyKey),
             reversalCommand,
@@ -592,40 +752,40 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var scenario = await SeedScenarioAsync("general-exact");
 
         var firstChargeCommand = PostCharge(scenario, "general-debit", 100m);
-        var firstCharge = await Atomic.ExecuteAsync(
+        var firstCharge = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.charge.post", firstChargeCommand.DeliveryIdempotencyKey),
             firstChargeCommand,
             ChargeCodec);
         var firstCreditCommand = Credit(scenario, "general-debit-allocation", 40m);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.credit.post", firstCreditCommand.DeliveryIdempotencyKey),
             firstCreditCommand,
             LedgerCodec);
         var reverseDebitCommand = ReverseLedger(
             scenario, firstCharge.Value.LedgerEntryId, "general-debit");
-        var reverseDebit = await Atomic.ExecuteAsync(
+        var reverseDebit = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.ledger.reverse", reverseDebitCommand.DeliveryIdempotencyKey),
             reverseDebitCommand,
             LedgerCodec);
 
         var secondChargeCommand = PostCharge(scenario, "general-credit", 90m);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.charge.post", secondChargeCommand.DeliveryIdempotencyKey),
             secondChargeCommand,
             ChargeCodec);
         var secondCreditCommand = Credit(scenario, "general-credit-allocation", 30m);
-        var secondCredit = await Atomic.ExecuteAsync(
+        var secondCredit = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.credit.post", secondCreditCommand.DeliveryIdempotencyKey),
             secondCreditCommand,
             LedgerCodec);
         var reverseCreditCommand = ReverseLedger(
             scenario, secondCredit.Value.LedgerEntryId, "general-credit");
-        var reverseCredit = await Atomic.ExecuteAsync(
+        var reverseCredit = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.ledger.reverse", reverseCreditCommand.DeliveryIdempotencyKey),
             reverseCreditCommand,
@@ -668,13 +828,14 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("payment-correction-boundary");
         var chargeCommand = PostCharge(scenario, "payment-correction-charge", 100m);
-        await Atomic.ExecuteAsync(
+        var charge = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.charge.post", chargeCommand.DeliveryIdempotencyKey),
             chargeCommand,
             ChargeCodec);
-        var receiptCommand = Receipt(scenario, "payment-correction-receipt", 100m);
-        var receipt = await Atomic.ExecuteAsync(
+        var receiptCommand = Receipt(
+            scenario, "payment-correction-receipt", 100m, charge.Value.LedgerEntryId);
+        var receipt = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey),
             receiptCommand,
@@ -682,7 +843,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
 
         var chargeCapabilityReversal = ReverseLedger(
             scenario, receipt.Value.LedgerEntryId, "forbidden-payment-reversal");
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 new AtomicCommandIdentity(
                     "tenant-account.ledger.reverse",
                     chargeCapabilityReversal.DeliveryIdempotencyKey),
@@ -698,7 +859,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         try
         {
             await FluentActions.Invoking(() =>
-                    Atomic.ExecuteAsync(correctionIdentity, correction, RefundCodec))
+                    ExecuteAtomicAsync(correctionIdentity, correction, RefundCodec))
                 .Should().ThrowAsync<DbUpdateException>();
         }
         finally
@@ -717,11 +878,11 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
                 row.CommandType == correctionIdentity.CommandType
                 && row.IdempotencyKey == correctionIdentity.IdempotencyKey)).Should().Be(0);
         }
-        var corrected = await Atomic.ExecuteAsync(
+        var corrected = await ExecuteAtomicAsync(
             correctionIdentity,
             correction,
             RefundCodec);
-        var correctionReplay = await Atomic.ExecuteAsync(
+        var correctionReplay = await ExecuteAtomicAsync(
             correctionIdentity,
             correction,
             RefundCodec);
@@ -732,7 +893,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         corrected.Value.CompensatedAllocationAmount.Should().Be(100m);
         var refundCapabilityReversal = ReverseLedger(
             scenario, corrected.Value.RefundEntryId!.Value, "forbidden-refund-reversal");
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 new AtomicCommandIdentity(
                     "tenant-account.ledger.reverse",
                     refundCapabilityReversal.DeliveryIdempotencyKey),
@@ -767,12 +928,52 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task UnappliedManualReceipt_CanBeRefundedWithoutInventingAllocationContext()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("unapplied-receipt-correction");
+        var receiptCommand = Receipt(
+            scenario, "unapplied-receipt-correction", 45m);
+        var receipt = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.receipt.record", receiptCommand.DeliveryIdempotencyKey),
+            receiptCommand,
+            ReceiptCodec);
+        var correction = RefundPayment(
+            scenario, receipt.Value.LedgerEntryId, "unapplied-receipt-correction");
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.payment.refund", correction.DeliveryIdempotencyKey);
+
+        var corrected = await ExecuteAtomicAsync(identity, correction, RefundCodec);
+        var replay = await ExecuteAtomicAsync(identity, correction, RefundCodec);
+
+        corrected.Value.Outcome.Should().Be(TenantPaymentRefundOutcome.Refunded);
+        corrected.Value.CompensatedAllocationAmount.Should().Be(0m);
+        corrected.Value.CompensatedAllocationCount.Should().Be(0);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(corrected.Value);
+        await using var verify = NewContext();
+        var originalAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == receipt.Value.PaymentAttemptId);
+        originalAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.UnappliedReceipt);
+        var refundAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == corrected.Value.ProviderPaymentAttemptId);
+        refundAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.Refund);
+        refundAttempt.RefundsPaymentAttemptId.Should().Be(receipt.Value.PaymentAttemptId);
+        (await verify.TenantLedgerAllocations.AnyAsync(row =>
+            row.CreditEntryId == receipt.Value.LedgerEntryId)).Should().BeFalse();
+        var balance = await verify.TenantAccountBalanceProjections.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId);
+        balance.UnappliedCredit.Should().Be(0m);
+    }
+
+    [SkippableFact]
     public async Task ProviderRefund_ReturnsUnavailableWithoutBusinessWrites()
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("provider-refund-boundary");
         var chargeCommand = PostCharge(scenario, "provider-refund-charge", 82m);
-        var charge = await Atomic.ExecuteAsync(
+        var charge = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.charge.post", chargeCommand.DeliveryIdempotencyKey),
             chargeCommand,
@@ -796,8 +997,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             auditCount = await baseline.AtomicAuditLogs.CountAsync();
             outboxCount = await baseline.OutboxMessages.CountAsync();
         }
-        var unavailable = await Atomic.ExecuteAsync(identity, command, RefundCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, RefundCodec);
+        var unavailable = await ExecuteAtomicAsync(identity, command, RefundCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, RefundCodec);
         unavailable.Value.Outcome.Should().Be(
             TenantPaymentRefundOutcome.ExternalCorrectionUnavailable);
         unavailable.Value.Applied.Should().BeFalse();
@@ -827,12 +1028,12 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             TenantLedgerEntryType.DepositCharge, TenantLedgerDirection.Debit,
             "deposit-deduction-charge", 100m, DateOnly.FromDateTime(DateTime.UtcNow));
         var fund = FundDeposit(scenario, "deposit-deduction-result", 100m);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.deposit.fund", fund.DeliveryIdempotencyKey),
             fund,
             DepositCodec);
         var deduction = DeductDeposit(scenario, "deposit-deduction-result", 40m);
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.deposit.deduct", deduction.DeliveryIdempotencyKey),
             deduction,
@@ -854,15 +1055,85 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task DepositFunding_AllocatesOpenDepositChargeWithExactReplayAndRollback()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("deposit-fund-unapplied");
+        var depositChargeId = await SeedLedgerEntryAsync(
+            scenario,
+            scenario.AccountId,
+            TenantLedgerEntryType.DepositCharge,
+            TenantLedgerDirection.Debit,
+            "deposit-fund-unapplied:charge",
+            100m,
+            DateOnly.FromDateTime(DateTime.UtcNow));
+        var command = FundDeposit(scenario, "deposit-fund-unapplied", 100m);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.deposit.fund", command.DeliveryIdempotencyKey);
+
+        Failures.FailAtomicAudit = true;
+        try
+        {
+            await FluentActions.Invoking(() =>
+                    ExecuteAtomicAsync(identity, command, DepositCodec))
+                .Should().ThrowAsync<DbUpdateException>();
+        }
+        finally
+        {
+            Failures.FailAtomicAudit = false;
+        }
+        await using (var rolledBack = NewContext())
+        {
+            (await rolledBack.TenantPaymentAttempts.CountAsync(row =>
+                row.IdempotencyKey == command.DeliveryIdempotencyKey)).Should().Be(0);
+            (await rolledBack.TenantLedgerEntries.CountAsync(row =>
+                row.BusinessKey == $"{command.BusinessKey}:tenant-receipt")).Should().Be(0);
+            (await rolledBack.SecurityDepositEntries.CountAsync(row =>
+                row.BusinessKey == command.BusinessKey)).Should().Be(0);
+            (await rolledBack.TenantLedgerAllocations.CountAsync(row =>
+                row.BusinessKey.StartsWith($"{command.BusinessKey}:allocation"))).Should().Be(0);
+            (await rolledBack.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        }
+
+        var funded = await ExecuteAtomicAsync(identity, command, DepositCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, DepositCodec);
+
+        funded.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(funded.Value);
+        await using var db = NewContext();
+        var receipt = await db.TenantLedgerEntries.SingleAsync(row =>
+            row.Id == funded.Value.TenantLedgerEntryId);
+        var paymentAttempt = await db.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == receipt.ProviderPaymentAttemptId);
+        paymentAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.DepositReceipt);
+        paymentAttempt.ChargeLedgerEntryId.Should().BeNull();
+        var allocation = await db.TenantLedgerAllocations.SingleAsync(row =>
+            row.CreditEntryId == funded.Value.TenantLedgerEntryId);
+        allocation.DebitEntryId.Should().Be(depositChargeId);
+        allocation.Amount.Should().Be(100m);
+        (await db.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == depositChargeId)).OpenAmount.Should().Be(0m);
+        (await db.SecurityDepositEntries.CountAsync(row =>
+            row.Id == funded.Value.SecurityDepositEntryId
+            && row.TenantLedgerEntryId == funded.Value.TenantLedgerEntryId)).Should().Be(1);
+        (await db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task DepositReceiptReversal_AppendsExactSubledgerAndLedgerCompensationAtomically()
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("deposit-reversal");
-        await SeedLedgerEntryAsync(scenario, scenario.AccountId,
+        var depositChargeId = await SeedLedgerEntryAsync(scenario, scenario.AccountId,
             TenantLedgerEntryType.DepositCharge, TenantLedgerDirection.Debit,
             "deposit-reversal-charge", 150m, DateOnly.FromDateTime(DateTime.UtcNow));
         var fund = FundDeposit(scenario, "deposit-reversal", 100m);
-        var funded = await Atomic.ExecuteAsync(
+        var funded = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("tenant-account.deposit.fund", fund.DeliveryIdempotencyKey),
             fund,
             DepositCodec);
@@ -874,7 +1145,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         try
         {
             await FluentActions.Invoking(() =>
-                    Atomic.ExecuteAsync(identity, reverse, DepositCodec))
+                    ExecuteAtomicAsync(identity, reverse, DepositCodec))
                 .Should().ThrowAsync<DbUpdateException>();
         }
         finally
@@ -887,9 +1158,18 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
                 row.ReversesEntryId == funded.Value.SecurityDepositEntryId)).Should().Be(0);
             (await rolledBack.TenantLedgerEntries.CountAsync(row =>
                 row.ReversesEntryId == funded.Value.TenantLedgerEntryId)).Should().Be(0);
+            (await rolledBack.TenantLedgerAllocations.CountAsync(row =>
+                row.CreditEntryId == funded.Value.TenantLedgerEntryId
+                && row.ReversesAllocationId != null)).Should().Be(0);
+            (await rolledBack.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            (await rolledBack.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
         }
 
-        var reversed = await Atomic.ExecuteAsync(identity, reverse, DepositCodec);
+        var reversed = await ExecuteAtomicAsync(identity, reverse, DepositCodec);
         await using var db = NewContext();
         var depositReversal = await db.SecurityDepositEntries.SingleAsync(row =>
             row.Id == reversed.Value.SecurityDepositEntryId);
@@ -899,15 +1179,39 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         depositReversal.ReversesEntryId.Should().Be(funded.Value.SecurityDepositEntryId);
         var ledgerReversal = await db.TenantLedgerEntries.SingleAsync(row =>
             row.Id == reversed.Value.TenantLedgerEntryId);
+        depositReversal.TenantLedgerEntryId.Should().Be(ledgerReversal.Id);
         ledgerReversal.EntryType.Should().Be(TenantLedgerEntryType.Reversal);
         ledgerReversal.Direction.Should().Be(TenantLedgerDirection.Debit);
         ledgerReversal.Amount.Should().Be(100m);
         ledgerReversal.ReversesEntryId.Should().Be(funded.Value.TenantLedgerEntryId);
-        var allocations = await db.TenantLedgerAllocations
-            .Where(row => row.CreditEntryId == funded.Value.TenantLedgerEntryId)
-            .OrderBy(row => row.Id)
-            .ToListAsync();
-        AssertExactAllocationCompensation(allocations);
+        var allocationQuery = db.TenantLedgerAllocations
+            .Where(row => row.CreditEntryId == funded.Value.TenantLedgerEntryId);
+        (await allocationQuery.CountAsync()).Should().Be(2);
+        var originalAllocation = await allocationQuery.SingleAsync(row =>
+            row.ReversesAllocationId == null);
+        var compensatingAllocation = await allocationQuery.SingleAsync(row =>
+            row.ReversesAllocationId != null);
+        originalAllocation.DebitEntryId.Should().Be(depositChargeId);
+        originalAllocation.Amount.Should().Be(100m);
+        compensatingAllocation.ReversesAllocationId.Should().Be(originalAllocation.Id);
+        compensatingAllocation.DebitEntryId.Should().Be(originalAllocation.DebitEntryId);
+        compensatingAllocation.CreditEntryId.Should().Be(originalAllocation.CreditEntryId);
+        compensatingAllocation.Amount.Should().Be(-originalAllocation.Amount);
+        (await db.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == depositChargeId)).OpenAmount.Should().Be(150m);
+        var tenantBalance = await db.TenantAccountBalanceProjections.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId);
+        tenantBalance.ReceivableBalance.Should().Be(150m);
+        tenantBalance.UnappliedCredit.Should().Be(0m);
+        (await db.SecurityDepositBalanceProjections.SingleAsync(row =>
+            row.SecurityDepositAccountId == scenario.DepositAccountId))
+            .HeldBalance.Should().Be(0m);
+        (await db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
     }
 
     private async Task<Scenario> SeedScenarioAsync(string suffix)
@@ -1120,10 +1424,11 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             scenario.AccessContextId, scenario.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"manual-charge:{suffix}", $"tenant-charge:{scenario.PortfolioId}:{scenario.AccountId}:{suffix}");
 
-    private static RecordTenantReceiptCommand Receipt(Scenario scenario, string suffix, decimal amount) =>
+    private static RecordTenantReceiptCommand Receipt(
+        Scenario scenario, string suffix, decimal amount, long? targetChargeEntryId = null) =>
         new(scenario.PortfolioId, scenario.AccountId, amount,
             DateOnly.FromDateTime(DateTime.UtcNow), $"Receipt {suffix}", "Check", null, null,
-            null, null, null, true, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
+            null, null, null, targetChargeEntryId, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
             scenario.AccessRevision, CapabilityKeys.MoneyPaymentsManage, $"receipt:{suffix}",
             $"tenant-receipt:{scenario.PortfolioId}:{scenario.AccountId}:{suffix}");
 
@@ -1235,13 +1540,13 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             100m,
             DateOnly.FromDateTime(DateTime.UtcNow));
         var fund = FundDeposit(scenario, suffix, 100m);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.deposit.fund", fund.DeliveryIdempotencyKey),
             fund,
             DepositCodec);
         var deduct = DeductDeposit(scenario, suffix, 40m);
-        var deduction = await Atomic.ExecuteAsync(
+        var deduction = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "tenant-account.deposit.deduct", deduct.DeliveryIdempotencyKey),
             deduct,
@@ -1265,8 +1570,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity(
             "tenant-account.ledger.reverse", command.DeliveryIdempotencyKey);
 
-        var rejected = await Atomic.ExecuteAsync(identity, command, LedgerCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, LedgerCodec);
+        var rejected = await ExecuteAtomicAsync(identity, command, LedgerCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, LedgerCodec);
 
         rejected.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         rejected.Value.Applied.Should().BeFalse();
@@ -1329,6 +1634,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             ProviderObjectId = $"pi_{suffix}",
             IdempotencyKey = $"provider-receipt:{suffix}",
             AttemptType = TenantPaymentAttemptType.Charge,
+            ChargeLedgerEntryId = debitEntryId,
             State = TenantPaymentAttemptState.Succeeded,
             Amount = amount,
             Currency = "USD",
@@ -1371,7 +1677,18 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         return receipt.Id;
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        return await atomic.ExecuteAsync(identity, command, codec);
+    }
+
     private CompanionFailureInterceptor Failures =>
         _services!.GetRequiredService<CompanionFailureInterceptor>();
 

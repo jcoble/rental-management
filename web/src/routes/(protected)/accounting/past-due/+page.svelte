@@ -89,7 +89,7 @@
 	let busyAccountId = $state<number | null>(null);
 
 	// --- Record receipt modal ---
-	// Capture how/when the money arrived once, then allocate it to the oldest open charges.
+	// Capture how/when the money arrived once, then target the oldest past-due charge returned by the server.
 	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
 	// receipt command accepts paidDate / method / externalReference / notes. Methods come from the shared
 	// canonical list so web + mobile offer identical values.
@@ -140,20 +140,20 @@
 		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: Record<string, unknown> }) => {
 			receiptOperationKey ??= crypto.randomUUID();
 			return payments.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
-				amount: lease.pastDueAmount,
+				amount: lease.oldestLedgerEntryOpenAmount,
 				effectiveOn: String(data.paidDate),
 				description: String(data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`),
 				paymentMethodSummary: String(data.method),
 				externalReference: data.externalReference ? String(data.externalReference) : undefined,
 				payerName: lease.tenantName || undefined,
-				allocateOldestCharges: true
+				targetChargeEntryId: lease.oldestLedgerEntryId
 			});
 		},
 		onMutate: ({ lease }) => {
 			busyAccountId = lease.tenantAccountId;
 		},
 		onSuccess: (_result, vars) => {
-			showSuccess('Receipt recorded and applied to the oldest open charges.');
+			showSuccess('Receipt recorded against the selected past-due charge.');
 			rememberLastMethod(String(vars.data.method ?? ''));
 			closeMarkPaid();
 			skip = 0;

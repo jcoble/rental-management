@@ -1,11 +1,14 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
 /// A registered push notification token for one user's device. Supports FCM (Android),
-/// APNs (iOS), and web push. Registration is an upsert by <see cref="Token"/> — the same
-/// physical device re-registering does not create a duplicate row.
+/// APNs (iOS), and web push. Registration is an upsert by the selected workspace plus
+/// <see cref="Token"/> so the same physical device can receive notifications for each
+/// workspace it signs into without duplicating rows inside one workspace.
 /// </summary>
-public class DeviceToken
+public class DeviceToken : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

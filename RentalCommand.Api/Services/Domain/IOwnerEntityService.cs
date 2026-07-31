@@ -20,6 +20,12 @@ public interface IOwnerEntityService
         ActivateOwnerPortalAccessRequest request,
         string operationKey,
         CancellationToken ct = default);
+    Task<RevokeOwnerPortalAccessResponse> RevokeOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        RevokeOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default);
     Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,

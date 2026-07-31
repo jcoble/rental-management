@@ -17,6 +17,8 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
   String? tenantName,
   String? rentalLabel,
   double? initialAmount,
+  int? targetChargeEntryId,
+  bool initialLeaveUnapplied = false,
 }) {
   return showModalBottomSheet<RecordTenantReceiptResult>(
     context: context,
@@ -29,6 +31,8 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
       tenantName: tenantName,
       rentalLabel: rentalLabel,
       initialAmount: initialAmount,
+      targetChargeEntryId: targetChargeEntryId,
+      initialLeaveUnapplied: initialLeaveUnapplied,
     ),
   );
 }
@@ -218,6 +222,8 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
     this.tenantName,
     this.rentalLabel,
     this.initialAmount,
+    this.targetChargeEntryId,
+    this.initialLeaveUnapplied = false,
   });
 
   final int tenantAccountId;
@@ -225,6 +231,8 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
   final String? tenantName;
   final String? rentalLabel;
   final double? initialAmount;
+  final int? targetChargeEntryId;
+  final bool initialLeaveUnapplied;
 
   @override
   ConsumerState<_RecordTenantReceiptSheet> createState() =>
@@ -246,6 +254,8 @@ class _RecordTenantReceiptSheetState
   late final String _operationKey =
       'mobile-receipt-${widget.tenantAccountId}-${DateTime.now().microsecondsSinceEpoch}';
   DateTime _receivedOn = DateTime.now();
+  late bool _leaveUnapplied =
+      widget.targetChargeEntryId == null && widget.initialLeaveUnapplied;
   bool _saving = false;
   String? _error;
 
@@ -287,6 +297,13 @@ class _RecordTenantReceiptSheetState
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (widget.targetChargeEntryId == null && !_leaveUnapplied) {
+      setState(
+        () => _error =
+            'Choose Leave unapplied/advance receipt to record this without a charge target.',
+      );
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -303,6 +320,7 @@ class _RecordTenantReceiptSheetState
               paymentMethodSummary: _method.text.trim(),
               externalReference: _reference.text,
               payerName: _payer.text,
+              targetChargeEntryId: widget.targetChargeEntryId,
             ),
             operationKey: _operationKey,
           );
@@ -379,6 +397,24 @@ class _RecordTenantReceiptSheetState
                 trailing: const Icon(Icons.calendar_today_outlined),
                 onTap: _pickDate,
               ),
+              if (widget.targetChargeEntryId == null)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _leaveUnapplied,
+                  onChanged: _saving
+                      ? null
+                      : (value) =>
+                            setState(() => _leaveUnapplied = value ?? false),
+                  title: const Text('Leave unapplied/advance receipt'),
+                  controlAffinity: ListTileControlAffinity.leading,
+                )
+              else
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('Apply to selected past-due charge'),
+                  subtitle: Text('Charge #${widget.targetChargeEntryId}'),
+                ),
               TextFormField(
                 controller: _reference,
                 decoration: const InputDecoration(

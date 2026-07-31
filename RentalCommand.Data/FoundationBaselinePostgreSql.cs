@@ -16,6 +16,7 @@ internal static class FoundationBaselinePostgreSql
     [
         CreateAuditSearchInfrastructure,
         CreatePropertyOwnershipInfrastructureSql,
+        CreateBankStatementControlsInfrastructureSql,
         LeaseEffectiveClockSql.CreateEffectiveNowUtc,
         LeaseEffectiveClockSql.CreateBusinessDate,
         ScheduleEDepreciationFunctionSql.Create,
@@ -34,6 +35,7 @@ internal static class FoundationBaselinePostgreSql
         CreateWorkOrderResponsibilityInfrastructure,
         BuildRolesAndGrantSql(),
         RlsAuthorityFunctionSql,
+        GrantApiVendorDispatchAuditChronologyRecoverySql,
         BuildCreateRlsSql(),
         CreateSandboxGraduationGlobalDeleteGuards,
     ]);
@@ -43,7 +45,9 @@ internal static class FoundationBaselinePostgreSql
     private static readonly Lazy<IReadOnlyList<string>> DropStatementsValue = new(() =>
     [
         DropSandboxGraduationGlobalDeleteGuards,
+        RevokeApiVendorDispatchAuditChronologyRecoverySql,
         BuildDropRlsSql(),
+        DropBankStatementControlsInfrastructureSql,
         DropRlsAuthorityFunctions,
         BuildRevokeRoleGrantsSql(),
         DropWorkOrderResponsibilityInfrastructure,
@@ -68,6 +72,18 @@ internal static class FoundationBaselinePostgreSql
 
     internal static IReadOnlyList<string> DropStatements => DropStatementsValue.Value;
 
+    private const string GrantApiVendorDispatchAuditChronologyRecoverySql = """
+        GRANT SELECT ON TABLE public."AtomicAuditLogs"
+          TO rentalcommand_api;
+        GRANT UPDATE ("Timestamp") ON TABLE public."AtomicAuditLogs"
+          TO rentalcommand_api;
+        """;
+
+    private const string RevokeApiVendorDispatchAuditChronologyRecoverySql = """
+        REVOKE UPDATE ("Timestamp") ON TABLE public."AtomicAuditLogs"
+          FROM rentalcommand_api;
+        """;
+
     /// <summary>Mapped tables with a required PortfolioId and a direct tenant-isolation policy.</summary>
     internal static IReadOnlyList<string> DirectPortfolioTables { get; } =
     [
@@ -83,6 +99,7 @@ internal static class FoundationBaselinePostgreSql
         "Appointments",
         "AtomicAuditLogs",
         "BankConnections",
+        "BankStatements",
         "BankTransactions",
         "CapitalAssets",
         "Conversations",
@@ -366,6 +383,12 @@ internal static class FoundationBaselinePostgreSql
         "TenantLedgerEntries", "LegalDocumentSourceVersions", "WorkspaceNoticeTemplateVersions",
     };
 
+    // Approved notice replay can repair business chronology on the already-rendered approval row.
+    private static readonly HashSet<string> ApiAppendPreservedUpdateTables = new(StringComparer.Ordinal)
+    {
+        "RenderedNotices",
+    };
+
     // Catalogs and supplied system templates are data, not runtime configuration mutation surfaces.
     private static readonly HashSet<string> ApiReadOnlyTables = new(StringComparer.Ordinal)
     {
@@ -409,7 +432,7 @@ internal static class FoundationBaselinePostgreSql
             "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
             "ApplicationFinancialAccounts", "ApplicationFinancialEntries",
             "Appointments", "AtomicAuditLogs", "AtomicCommandReceipts",
-            "BankTransactions", "CapitalAssets", "ConversationMessages",
+            "BankStatements", "BankTransactions", "CapitalAssets", "ConversationMessages",
             "Conversations", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
             "EvictionCaseRespondents", "EvictionCases", "ExpenseAllocations", "ExpenseLineItems", "Expenses",
             "ExternalListingSignals", "InspectionItems", "Inspections", "LeaseAddenda",
@@ -468,7 +491,7 @@ internal static class FoundationBaselinePostgreSql
         "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
         "ApplicationFinancialAccounts", "ApplicationFinancialEntries", "AtomicCommandReceipts",
         "AuthSessionRefreshCredentials", "AuthSessionRefreshTokenFamilies", "AuthSessions",
-        "BankConnections", "BankTransactions", "CapitalAssets", "ConversationMessages",
+        "BankConnections", "BankStatements", "BankTransactions", "CapitalAssets", "ConversationMessages",
         "Conversations", "DocumentTemplates", "EvictionCaseEvents", "EvictionCaseRespondents",
         "EvictionCases", "Expenses", "ExternalListingSignals", "LeaseAddenda", "LeaseAgreements",
         "LeaseManagementParties", "LeaseManagements", "LeaseRenewalAddendumDecisions",
@@ -534,7 +557,7 @@ internal static class FoundationBaselinePostgreSql
     {
         "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
         "ApplicationFinancialAccounts", "ApplicationFinancialEntries", "Appointments",
-        "AspNetUsers", "CapabilityDefinitions", "CapitalAssets",
+        "AspNetUsers", "BankStatements", "CapabilityDefinitions", "CapitalAssets",
         "DeviceTokens", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
         "EvictionCaseRespondents", "EvictionCases", "ExternalListingSignals", "InspectionItems",
         "Inspections", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
@@ -569,6 +592,65 @@ internal static class FoundationBaselinePostgreSql
           ON "AtomicAuditLogs" USING gin (lower("ActorLabel") gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS "IX_AtomicAuditLogs_IpAddress_trgm"
           ON "AtomicAuditLogs" USING gin (lower("IpAddress") gin_trgm_ops);
+        """;
+
+    internal const string CreateBankStatementControlsInfrastructureSql = """
+        DO $bank_statement_key$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'AK_BankConnections_Id_PortfolioId'
+              AND conrelid = '"BankConnections"'::regclass
+          ) THEN
+            ALTER TABLE "BankConnections"
+              ADD CONSTRAINT "AK_BankConnections_Id_PortfolioId"
+              UNIQUE ("Id", "PortfolioId");
+          END IF;
+        END
+        $bank_statement_key$;
+
+        CREATE TABLE IF NOT EXISTS "BankStatements" (
+          "Id" integer GENERATED BY DEFAULT AS IDENTITY,
+          "PortfolioId" integer NOT NULL,
+          "BankConnectionId" integer NOT NULL,
+          "PeriodStart" date NOT NULL,
+          "PeriodEnd" date NOT NULL,
+          "OpeningBalance" numeric(18,2) NOT NULL,
+          "ClosingBalance" numeric(18,2) NOT NULL,
+          "StatementMovement" numeric(18,2) NOT NULL,
+          "IsoCurrencyCode" character varying(8) NOT NULL,
+          "ImportedAtUtc" timestamp with time zone NOT NULL,
+          "CreatedAt" timestamp with time zone NOT NULL,
+          "UpdatedAt" timestamp with time zone NOT NULL,
+          CONSTRAINT "PK_BankStatements" PRIMARY KEY ("Id"),
+          CONSTRAINT "FK_BankStatements_BankConnections_BankConnectionId_PortfolioId"
+            FOREIGN KEY ("BankConnectionId", "PortfolioId")
+            REFERENCES "BankConnections" ("Id", "PortfolioId")
+            ON DELETE CASCADE,
+          CONSTRAINT "FK_BankStatements_Portfolios_PortfolioId"
+            FOREIGN KEY ("PortfolioId")
+            REFERENCES "Portfolios" ("Id")
+            ON DELETE CASCADE,
+          CONSTRAINT "CK_BankStatements_Period"
+            CHECK ("PeriodStart" <= "PeriodEnd"),
+          CONSTRAINT "CK_BankStatements_Movement"
+            CHECK ("StatementMovement" = "ClosingBalance" - "OpeningBalance")
+        );
+
+        CREATE INDEX IF NOT EXISTS "IX_BankStatements_PortfolioId"
+          ON "BankStatements" ("PortfolioId");
+        CREATE UNIQUE INDEX IF NOT EXISTS
+          "IX_BankStatements_BankConnectionId_PeriodStart_PeriodEnd"
+          ON "BankStatements" ("BankConnectionId", "PeriodStart", "PeriodEnd");
+        CREATE INDEX IF NOT EXISTS "IX_BankStatements_BankConnectionId_PortfolioId"
+          ON "BankStatements" ("BankConnectionId", "PortfolioId");
+        """;
+
+    private const string DropBankStatementControlsInfrastructureSql = """
+        DROP TABLE IF EXISTS "BankStatements";
+        ALTER TABLE "BankConnections"
+          DROP CONSTRAINT IF EXISTS "AK_BankConnections_Id_PortfolioId";
         """;
 
     internal const string CreatePropertyOwnershipInfrastructureSql = """
@@ -656,6 +738,56 @@ internal static class FoundationBaselinePostgreSql
         DROP INDEX IF EXISTS "IX_AtomicAuditLogs_EntityType_trgm";
         """;
 
+    internal const string AtomicReadOnlyRoleSqlV20260729 = """
+        DO $atomic_role$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_roles
+            WHERE rolname = 'rentalcommand_atomic_readonly'
+          ) THEN
+            CREATE ROLE rentalcommand_atomic_readonly
+              NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+              NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
+          ELSIF EXISTS (
+            SELECT 1
+            FROM pg_roles atomic_role
+            WHERE atomic_role.rolname = 'rentalcommand_atomic_readonly'
+              AND (atomic_role.rolcanlogin OR atomic_role.rolsuper OR atomic_role.rolinherit
+                OR atomic_role.rolcreatedb OR atomic_role.rolcreaterole OR atomic_role.rolreplication
+                OR atomic_role.rolbypassrls OR atomic_role.rolconnlimit <> -1
+                OR atomic_role.rolvaliduntil IS NOT NULL OR atomic_role.rolconfig IS NOT NULL)
+          ) OR EXISTS (
+            SELECT 1
+            FROM pg_roles atomic_role
+            JOIN pg_auth_members membership
+              ON membership.member = atomic_role.oid
+            WHERE atomic_role.rolname = 'rentalcommand_atomic_readonly'
+          ) OR EXISTS (
+            SELECT 1
+            FROM pg_roles atomic_role
+            JOIN pg_auth_members membership
+              ON membership.roleid = atomic_role.oid
+            JOIN pg_roles member_role
+              ON member_role.oid = membership.member
+            WHERE atomic_role.rolname = 'rentalcommand_atomic_readonly'
+              AND (member_role.rolname NOT IN ('rentalcommand_api', 'rentalcommand_engine')
+                OR membership.admin_option
+                OR membership.inherit_option
+                OR NOT membership.set_option)
+          ) THEN
+            RAISE EXCEPTION
+              'Existing role rentalcommand_atomic_readonly has incompatible cluster-wide attributes or membership';
+          END IF;
+        END
+        $atomic_role$;
+
+        GRANT rentalcommand_atomic_readonly TO rentalcommand_api
+          WITH INHERIT FALSE, SET TRUE;
+        GRANT rentalcommand_atomic_readonly TO rentalcommand_engine
+          WITH INHERIT FALSE, SET TRUE;
+        """;
+
     private static string BuildRolesAndGrantSql()
     {
         var statements = new List<string>
@@ -676,8 +808,15 @@ internal static class FoundationBaselinePostgreSql
                 SELECT 1
                 FROM pg_roles runtime_role
                 JOIN pg_auth_members inherited_membership
-                  ON inherited_membership.member = runtime_role.oid
-                  OR inherited_membership.roleid = runtime_role.oid
+                  ON inherited_membership.roleid = runtime_role.oid
+                  OR (inherited_membership.member = runtime_role.oid
+                    AND (inherited_membership.admin_option
+                      OR inherited_membership.inherit_option
+                      OR NOT inherited_membership.set_option
+                      OR inherited_membership.roleid IS DISTINCT FROM (
+                        SELECT oid
+                        FROM pg_roles
+                        WHERE rolname = 'rentalcommand_atomic_readonly')))
                 WHERE runtime_role.rolname = 'rentalcommand_api'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_api has incompatible cluster-wide attributes';
@@ -695,8 +834,15 @@ internal static class FoundationBaselinePostgreSql
                 SELECT 1
                 FROM pg_roles runtime_role
                 JOIN pg_auth_members inherited_membership
-                  ON inherited_membership.member = runtime_role.oid
-                  OR inherited_membership.roleid = runtime_role.oid
+                  ON inherited_membership.roleid = runtime_role.oid
+                  OR (inherited_membership.member = runtime_role.oid
+                    AND (inherited_membership.admin_option
+                      OR inherited_membership.inherit_option
+                      OR NOT inherited_membership.set_option
+                      OR inherited_membership.roleid IS DISTINCT FROM (
+                        SELECT oid
+                        FROM pg_roles
+                        WHERE rolname = 'rentalcommand_atomic_readonly')))
                 WHERE runtime_role.rolname = 'rentalcommand_engine'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_engine has incompatible cluster-wide attributes';
@@ -723,6 +869,7 @@ internal static class FoundationBaselinePostgreSql
             END
             $role$;
             """,
+            AtomicReadOnlyRoleSqlV20260729,
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_api', current_database()); END $grant$;",
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_engine', current_database()); END $grant$;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_api;",
@@ -2531,7 +2678,84 @@ internal static class FoundationBaselinePostgreSql
             "\n\n",
             EffectiveCapabilityScopeFunctionSqlV20260727);
 
-    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260727;
+    private static readonly string RlsResourceScopeAllowsFunctionSqlV20260728 =
+        ExtractFunction(
+            RlsAuthorityFunctionSqlV20260727,
+            "CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(",
+            "CREATE OR REPLACE FUNCTION rc_account_bootstrap_audit_allows(")
+        .Replace(
+            "WITH resource AS (",
+            """
+            WITH business_clock AS MATERIALIZED (
+              SELECT COALESCE(
+                (
+                  SELECT CASE clock."Mode"
+                    WHEN 'Frozen' THEN clock."SimAnchorUtc"
+                    WHEN 'Offset' THEN
+                      clock."SimAnchorUtc" + (CURRENT_TIMESTAMP - clock."RealAnchorUtc")
+                    ELSE CURRENT_TIMESTAMP
+                  END
+                  FROM public."SimulationClocks" clock
+                  WHERE clock."Id" = 1
+                ),
+                CURRENT_TIMESTAMP) AS effective_at_utc
+            ),
+            resource AS (
+            """,
+            StringComparison.Ordinal)
+        .Replace(
+            "  END;\n$function$;",
+            "  END\n  FROM business_clock;\n$function$;",
+            StringComparison.Ordinal)
+        .Replace(
+            "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+            "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "membership.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+            "membership.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "assignment.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+            "assignment.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "assignment.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+            "assignment.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "ownership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+            "ownership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "ownership.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+            "ownership.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "owner_access.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+            "owner_access.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "owner_access.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+            "owner_access.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "responsibility.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP",
+            "responsibility.\"EffectiveFromUtc\" <= business_clock.effective_at_utc",
+            StringComparison.Ordinal)
+        .Replace(
+            "responsibility.\"EffectiveToUtc\" > CURRENT_TIMESTAMP",
+            "responsibility.\"EffectiveToUtc\" > business_clock.effective_at_utc",
+            StringComparison.Ordinal);
+
+    internal static readonly string RlsAuthorityFunctionSqlV20260728 =
+        ReplaceFunction(
+            RlsAuthorityFunctionSqlV20260727,
+            RlsResourceScopeAllowsFunctionSqlV20260728,
+            "CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(",
+            "CREATE OR REPLACE FUNCTION rc_account_bootstrap_audit_allows(");
+
+    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260728;
 
     private static string ReplaceInitialScopeAuthorityFunction(
         string historicalAuthoritySql,
@@ -2555,6 +2779,34 @@ internal static class FoundationBaselinePostgreSql
             currentScopeAuthoritySql,
             "\n\n",
             historicalAuthoritySql[markerIndex..]);
+    }
+
+    private static string ReplaceFunction(
+        string authoritySql,
+        string replacementFunctionSql,
+        string startMarker,
+        string nextMarker)
+    {
+        var start = authoritySql.IndexOf(startMarker, StringComparison.Ordinal);
+        var next = authoritySql.IndexOf(nextMarker, start + startMarker.Length, StringComparison.Ordinal);
+        if (start < 0 || next <= start)
+        {
+            throw new InvalidOperationException($"Could not replace authority SQL function starting with {startMarker}.");
+        }
+
+        return string.Concat(authoritySql[..start], replacementFunctionSql, authoritySql[next..]);
+    }
+
+    private static string ExtractFunction(string authoritySql, string startMarker, string nextMarker)
+    {
+        var start = authoritySql.IndexOf(startMarker, StringComparison.Ordinal);
+        var next = authoritySql.IndexOf(nextMarker, start + startMarker.Length, StringComparison.Ordinal);
+        if (start < 0 || next <= start)
+        {
+            throw new InvalidOperationException($"Could not extract authority SQL function starting with {startMarker}.");
+        }
+
+        return authoritySql[start..next];
     }
 
     private const string DropRlsAuthorityFunctions = """
@@ -3151,6 +3403,9 @@ internal static class FoundationBaselinePostgreSql
             ? TableOperation.Select
             : AppendOnlyTables.Contains(table)
                 ? TableOperation.Select | TableOperation.Insert
+                  | (ApiAppendPreservedUpdateTables.Contains(table)
+                      ? TableOperation.Update
+                      : TableOperation.None)
                 : ApiDeleteTables.Contains(table)
                     ? TableOperation.All
                     : ApiMutableTables.Contains(table)

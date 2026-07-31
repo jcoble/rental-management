@@ -11,12 +11,15 @@ namespace RentalCommand.Data.Leasing;
 
 /// <summary>Pure database implementation of the pre-possession relationship command.</summary>
 public sealed class PrepareMoveInHandler
-    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>,
-      IAtomicReplayAuthorizer<PrepareMoveInCommand>
+    : IAtomicCommandHandler<PrepareMoveInCommand, PrepareMoveInResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PrepareMoveInHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<PrepareMoveInResult> HandleAsync(
         PrepareMoveInCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var hasInvalidPartyRole = command.Parties.Any(party => !Enum.IsDefined(party.Role));
@@ -26,22 +29,22 @@ public sealed class PrepareMoveInHandler
 
         // Every command taking both locks uses this order. The Unit id is explicit in the request
         // so no unlocked application read is needed to discover the first aggregate lock.
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
         if (command.ApplicationId is { } applicationId)
         {
-            await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, applicationId, ct);
+            await context.AcquireLockAsync("RentalApplication", applicationId, ct);
         }
 
         // Query 1 reads the database wall clock and simulation-aware business date together.
         // Security eligibility uses only the wall clock; rent tracking uses only the business date.
         // Query 2 combines the live access envelope and application facts.
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var wallClockUtc = times.WallClockUtc;
-        attempt.UseDatabaseWallClockForAudit(wallClockUtc);
+        context.UseDatabaseWallClockForAudit(wallClockUtc);
         var target = command.ApplicationId.HasValue
-            ? await AuthorizedApplications(command, attempt.Persistence)
+            ? await AuthorizedApplications(command, _db)
                 .SelectMany(candidate =>
-                    AuthorizedUnits(command, attempt.Persistence, wallClockUtc)
+                    AuthorizedUnits(command, _db, wallClockUtc)
                         .Where(unit =>
                             (candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId)
                             && (candidate.UnitId == null || candidate.UnitId == unit.Id))
@@ -51,14 +54,14 @@ public sealed class PrepareMoveInHandler
                             unit.Id,
                             unit.Property!.Portfolio!.Currency,
                             command.DocumentTemplateId == null
-                            || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                            || _db.Set<DocumentTemplate>().Any(template =>
                                 template.Id == customTemplateId
                                 && template.PortfolioId == command.PortfolioId
                                 && template.Kind == DocumentTemplateKind.Lease
                                 && template.Status == DocumentTemplateStatus.Active
                                 && template.ArchivedAtUtc == null
                                 && (template.PropertyId == null || template.PropertyId == unit.PropertyId)),
-                            attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
+                            _db.Set<LeaseManagement>().Any(relationship =>
                                 relationship.PortfolioId == command.PortfolioId
                                 && relationship.PropertyId == unit.PropertyId
                                 && relationship.UnitId == unit.Id
@@ -69,28 +72,28 @@ public sealed class PrepareMoveInHandler
                                     || relationship.PossessionReturnedAtUtc > wallClockUtc)
                                 && (command.PlannedPossessionAtUtc == null
                                     || command.PlannedPossessionAtUtc <= wallClockUtc)),
-                            attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
+                            _db.Set<UnitOperationalPeriod>().Any(period =>
                                 period.PortfolioId == command.PortfolioId
                                 && period.PropertyId == unit.PropertyId
                                 && period.UnitId == unit.Id
                                 && period.StartedAtUtc <= wallClockUtc
                                 && (period.EndedAtUtc == null || period.EndedAtUtc > wallClockUtc)))))
                 .SingleOrDefaultAsync(ct)
-            : await AuthorizedUnits(command, attempt.Persistence, wallClockUtc)
+            : await AuthorizedUnits(command, _db, wallClockUtc)
                 .Select(unit => new PreparationTarget(
                     null,
                     unit.PropertyId,
                     unit.Id,
                     unit.Property!.Portfolio!.Currency,
                 command.DocumentTemplateId == null
-                || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                || _db.Set<DocumentTemplate>().Any(template =>
                     template.Id == customTemplateId
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
                     && template.ArchivedAtUtc == null
                     && (template.PropertyId == null || template.PropertyId == unit.PropertyId)),
-                attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
+                _db.Set<LeaseManagement>().Any(relationship =>
                     relationship.PortfolioId == command.PortfolioId
                     && relationship.PropertyId == unit.PropertyId
                     && relationship.UnitId == command.UnitId
@@ -101,7 +104,7 @@ public sealed class PrepareMoveInHandler
                         || relationship.PossessionReturnedAtUtc > wallClockUtc)
                     && (command.PlannedPossessionAtUtc == null
                         || command.PlannedPossessionAtUtc <= wallClockUtc)),
-                attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
+                _db.Set<UnitOperationalPeriod>().Any(period =>
                     period.PortfolioId == command.PortfolioId
                     && period.PropertyId == unit.PropertyId
                     && period.UnitId == command.UnitId
@@ -156,7 +159,7 @@ public sealed class PrepareMoveInHandler
         }
 
         var unitHasPreparedUpcomingOrCurrentRelationship =
-            await attempt.Persistence.Query<LeaseManagement>()
+            await _db.Set<LeaseManagement>()
                 .AnyAsync(relationship =>
                     relationship.PortfolioId == command.PortfolioId
                     && relationship.PropertyId == target.PropertyId
@@ -202,7 +205,7 @@ public sealed class PrepareMoveInHandler
         // Existence, signer-email presence, and normalized signer-email uniqueness are evaluated
         // by PostgreSQL in one aggregate query. The following row query supplies only the snapshot
         // values needed to construct the new legal signer records.
-        var tenantValidation = await attempt.Persistence.Query<Tenant>()
+        var tenantValidation = await _db.Set<Tenant>()
             .Where(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && requestedTenantIds.Contains(candidate.Id))
@@ -220,7 +223,7 @@ public sealed class PrepareMoveInHandler
                     .Count()))
             .SingleOrDefaultAsync(ct);
 
-        var tenants = await attempt.Persistence.Query<Tenant>()
+        var tenants = await _db.Set<Tenant>()
             .Where(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && requestedTenantIds.Contains(candidate.Id))
@@ -258,7 +261,7 @@ public sealed class PrepareMoveInHandler
 
         var existingTenantHasActiveNonGuarantorRelationship =
             requestedExistingNonGuarantorTenantIds.Length > 0
-            && await attempt.Persistence.Query<LeaseManagementParty>()
+            && await _db.Set<LeaseManagementParty>()
                 .AnyAsync(party =>
                     party.PortfolioId == command.PortfolioId
                     && requestedExistingNonGuarantorTenantIds.Contains(party.TenantId)
@@ -294,7 +297,7 @@ public sealed class PrepareMoveInHandler
                 command,
                 "Each new household member must use a unique email address.");
         }
-        if (newTenantEmails.Length > 0 && await attempt.Persistence.Query<Tenant>()
+        if (newTenantEmails.Length > 0 && await _db.Set<Tenant>()
                 .AnyAsync(candidate => candidate.PortfolioId == command.PortfolioId
                     && candidate.Email != null
                     && newTenantEmails.Contains(candidate.Email.Trim().ToLower()), ct))
@@ -322,11 +325,11 @@ public sealed class PrepareMoveInHandler
         }
 
         var sourceVersion = command.DocumentTemplateId is { } documentTemplateId
-            ? await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-                command.PortfolioId, target.PropertyId, 0, documentTemplateId,
+            ? await AtomicLeaseMutationPersistence.ResolveAuthoredDocumentSourceVersionAsync(_db,
+                context, command.PortfolioId, target.PropertyId, 0, documentTemplateId,
                 command.CreatedByUserId, wallClockUtc, ct)
-            : await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
-                command.PortfolioId, command.CreatedByUserId, wallClockUtc, ct);
+            : await AtomicLeaseMutationPersistence.ResolveBuiltInDocumentSourceVersionAsync(_db,
+                context, command.PortfolioId, command.CreatedByUserId, wallClockUtc, ct);
         if (!sourceVersion.Resolved)
         {
             return Empty(PrepareMoveInOutcome.InvalidTemplate, command,
@@ -351,13 +354,13 @@ public sealed class PrepareMoveInHandler
             .ToArray();
         foreach (var tenant in newTenantRows)
         {
-            attempt.Persistence.Add(tenant);
-            attempt.BindSemanticAudit(tenant, CreatedAudit(
+            _db.Add(tenant);
+            context.BindSemanticAudit(tenant, CreatedAudit(
                 command, nameof(Tenant), "Created Tenant while preparing a lease relationship."));
         }
         if (newTenantRows.Length > 0)
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
 
         var resolvedParties = new List<ResolvedParty>(command.Parties.Count);
@@ -467,11 +470,11 @@ public sealed class PrepareMoveInHandler
             })
             .ToArray();
 
-        attempt.Persistence.Add(relationship);
-        attempt.Persistence.Add(account);
-        attempt.Persistence.Add(agreement);
-        attempt.Persistence.AddRange(partyRows);
-        attempt.Persistence.AddRange(signerRows);
+        _db.Add(relationship);
+        _db.Add(account);
+        _db.Add(agreement);
+        _db.AddRange(partyRows);
+        _db.AddRange(signerRows);
         SecurityDepositAccount? depositAccount = null;
         if (command.CreateSecurityDepositAccount)
         {
@@ -484,7 +487,7 @@ public sealed class PrepareMoveInHandler
                 CreatedAtUtc = wallClockUtc,
                 CreatedByUserId = command.CreatedByUserId,
             };
-            attempt.Persistence.Add(depositAccount);
+            _db.Add(depositAccount);
         }
 
         if (target.Application is { } trackedApplication)
@@ -493,7 +496,7 @@ public sealed class PrepareMoveInHandler
             trackedApplication.UnitId = target.UnitId;
             trackedApplication.PreparedLeaseManagement = relationship;
             trackedApplication.UpdatedAt = wallClockUtc;
-            attempt.BindSemanticAudit(trackedApplication, new AtomicSemanticAudit(
+            context.BindSemanticAudit(trackedApplication, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(RentalApplication),
                 trackedApplication.Id,
@@ -502,13 +505,13 @@ public sealed class PrepareMoveInHandler
                 ChangeReason: "Application prepared for move-in."));
         }
 
-        attempt.BindSemanticAudit(relationship, CreatedAudit(
+        context.BindSemanticAudit(relationship, CreatedAudit(
             command, nameof(LeaseManagement), "Prepared lease relationship and initial Agreement."));
-        attempt.BindSemanticAudit(account, CreatedAudit(
+        context.BindSemanticAudit(account, CreatedAudit(
             command, nameof(TenantAccount), "Opened tenant account during move-in preparation."));
-        attempt.BindSemanticAudit(agreement, CreatedAudit(
+        context.BindSemanticAudit(agreement, CreatedAudit(
             command, nameof(LeaseAgreement), "Created initial lease agreement draft."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         TenantLedgerEntry? openingBalance = null;
         if (command.OpeningBalanceAmount is { } signedOpening && signedOpening != 0m)
@@ -532,9 +535,9 @@ public sealed class PrepareMoveInHandler
                 LeaseAgreementId = agreement.Id,
                 CreatedByUserId = command.CreatedByUserId,
             };
-            attempt.Persistence.Add(openingBalance);
-            await attempt.FlushBusinessAsync(ct);
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            _db.Add(openingBalance);
+            await context.FlushBusinessAsync(ct);
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(TenantAccount),
                 account.Id,
@@ -550,7 +553,7 @@ public sealed class PrepareMoveInHandler
                 }),
                 ChangeReason: "Posted opening balance while preparing the tenant account."),
                 wallClockUtc);
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "data-update",
@@ -568,7 +571,7 @@ public sealed class PrepareMoveInHandler
             });
         }
 
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -606,20 +609,18 @@ public sealed class PrepareMoveInHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        PrepareMoveInCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        PrepareMoveInCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ValidateAuthorizationShape(command);
-        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var authorized = command.ApplicationId.HasValue
-            ? await AuthorizedApplications(command, persistence)
-                .SelectMany(candidate => AuthorizedUnits(command, persistence, securityNowUtc)
+            ? await AuthorizedApplications(command, _db)
+                .SelectMany(candidate => AuthorizedUnits(command, _db, securityNowUtc)
                     .Where(unit =>
                         (candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId)
                         && (candidate.UnitId == null || candidate.UnitId == unit.Id)))
                 .AnyAsync(ct)
-            : await AuthorizedUnits(command, persistence, securityNowUtc).AnyAsync(ct);
+            : await AuthorizedUnits(command, _db, securityNowUtc).AnyAsync(ct);
         if (!authorized)
         {
             throw new UnauthorizedAccessException(
@@ -629,9 +630,9 @@ public sealed class PrepareMoveInHandler
 
     private static IQueryable<RentalApplication> AuthorizedApplications(
         PrepareMoveInCommand command,
-        IAtomicPersistenceSession persistence)
+        RentalCommandDbContext db)
     {
-        return persistence.Query<RentalApplication>()
+        return db.Set<RentalApplication>()
             .Where(candidate =>
                 candidate.Id == command.ApplicationId
                 && candidate.PortfolioId == command.PortfolioId
@@ -640,10 +641,10 @@ public sealed class PrepareMoveInHandler
 
     private static IQueryable<Unit> AuthorizedUnits(
         PrepareMoveInCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var effectiveAssignments = persistence.Query<MembershipRoleAssignment>()
+        var effectiveAssignments = db.Set<MembershipRoleAssignment>()
             .Where(assignment =>
                 assignment.Status == MembershipRoleAssignmentStatus.Active
                 && assignment.SuspendedAtUtc == null
@@ -651,20 +652,20 @@ public sealed class PrepareMoveInHandler
                 && assignment.EffectiveFromUtc <= securityNowUtc
                 && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
 
-        return persistence.Query<Unit>()
+        return db.Set<Unit>()
             .Where(unit =>
                 unit.Id == command.UnitId
                 && unit.PortfolioId == command.PortfolioId
                 && unit.Property != null
                 && unit.Property.PortfolioId == command.PortfolioId
-                && persistence.Query<AuthSession>().Any(session =>
+                && db.Set<AuthSession>().Any(session =>
                     session.Id == command.AuthSessionId
                     && session.UserId == command.CreatedByUserId
                     && session.ActiveAccessContextId == command.AccessContextId
                     && session.Status == AuthSessionStatus.Active
                     && session.RevokedAtUtc == null
                     && session.ExpiresAtUtc > securityNowUtc)
-                && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                && db.Set<WorkspaceAccessContext>().Any(context =>
                     context.Id == command.AccessContextId
                     && context.UserId == command.CreatedByUserId
                     && context.PortfolioId == command.PortfolioId
@@ -672,7 +673,7 @@ public sealed class PrepareMoveInHandler
                     && context.Status == WorkspaceAccessContextStatus.Active
                     && context.SuspendedAtUtc == null
                     && context.RevokedAtUtc == null)
-                && persistence.Query<WorkspaceMembership>().Any(membership =>
+                && db.Set<WorkspaceMembership>().Any(membership =>
                     membership.AccessContextId == command.AccessContextId
                     && membership.PortfolioId == command.PortfolioId
                     && membership.Status == WorkspaceMembershipStatus.Active

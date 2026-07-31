@@ -42,7 +42,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         var command = new RecordTenantReceiptCommand(envelope.PortfolioId, tenantAccountId,
             request.Amount, request.EffectiveOn, request.Description, request.PaymentMethodSummary,
             request.ExternalReference, request.PayerName, request.CheckNumber, request.BankName,
-            request.SourceStoredFileId, request.AllocateOldestCharges, envelope.UserId,
+            request.SourceStoredFileId, request.TargetChargeEntryId, envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
             CapabilityKeys.MoneyPaymentsManage, $"manual-receipt:{envelope.KeyDigest}",
             $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",

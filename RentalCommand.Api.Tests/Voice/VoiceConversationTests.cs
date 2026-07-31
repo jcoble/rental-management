@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -9,6 +10,11 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Voice;
@@ -17,25 +23,51 @@ namespace RentalCommand.Api.Tests.Voice;
 /// The slot-filling "Tell me" conversation: speak a partial expense, get asked
 /// for the missing field, answer it, and reach a complete draft.
 /// </summary>
-public class VoiceConversationTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class VoiceConversationTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
-    private readonly WorkspaceReadScope _scope;
-    private readonly ServiceProvider _services;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
 
-    public VoiceConversationTests()
+    public VoiceConversationTests(MigratedPostgreSqlFixture fixture)
     {
-        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceConversationTests));
-        _services = VoiceAtomicTestKernel.Create(_ctx.ConnectionString);
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceConversationTests));
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            CreateVoiceScanDraftCommand,
+            ScanDraftMutationResult,
+            CreateVoiceScanDraftHandler>();
+        services.AddAtomicCommandHandler<
+            AnswerVoiceScanDraftCommand,
+            ScanDraftMutationResult,
+            AnswerVoiceScanDraftHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(
+                    _ctx.Db.Database.GetDbConnection(),
+                    contextOwnsConnection: false)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     private VoiceIntakeService CreateSut() => new(
@@ -88,6 +120,7 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
             scope: _scope,
@@ -103,6 +136,7 @@ public class VoiceConversationTests : IDisposable
         turn1.MissingRequired.Should().Contain("amount");
         turn1.NextPrompt.Should().Be("How much was it?");
 
+        _services.GetRequiredService<RentalCommandDbContext>().ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
             scope: _scope,
             draftId: draft.Id,
@@ -134,6 +168,7 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
             scope: _scope,
@@ -175,6 +210,7 @@ public class VoiceConversationTests : IDisposable
             """);
 
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var draft = await sut.CreateDraftAsync(
             scope: _scope,
@@ -186,6 +222,7 @@ public class VoiceConversationTests : IDisposable
 
         ScanDraftResponse.FromEntity(draft).WithVoiceSlots().Ambiguous.Should().BeTrue();
 
+        _services.GetRequiredService<RentalCommandDbContext>().ChangeTracker.Clear();
         var answered = await sut.AnswerAsync(
             scope: _scope,
             draftId: draft.Id,
@@ -206,6 +243,7 @@ public class VoiceConversationTests : IDisposable
     public async Task Answer_UnknownDraft_Throws()
     {
         var sut = CreateSut();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         var act = () => sut.AnswerAsync(
             scope: _scope,

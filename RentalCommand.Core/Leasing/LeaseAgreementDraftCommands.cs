@@ -8,10 +8,10 @@ public interface ILeaseAgreementDraftCommand : IAtomicCommandData
     int PortfolioId { get; }
     int LeaseManagementId { get; }
     int ActorUserId { get; }
-    Guid AuthSessionId { get; }
-    int AccessContextId { get; }
-    long ExpectedAccessRevision { get; }
-    string DeliveryIdempotencyKey { get; }
+    [AtomicFingerprintIgnore] Guid AuthSessionId { get; }
+    [AtomicFingerprintIgnore] int AccessContextId { get; }
+    [AtomicFingerprintIgnore] long ExpectedAccessRevision { get; }
+    [AtomicFingerprintIgnore] string DeliveryIdempotencyKey { get; }
 }
 
 public sealed record LeaseAgreementDraftSignerInput(
@@ -121,7 +121,7 @@ public sealed record CancelLeaseAgreementSuccessorDraftResult(
     DateTime? DraftCanceledAtUtc,
     int? DraftCanceledByUserId,
     string? DraftCancellationReason,
-    string? Error) : IAtomicResultData;
+    string? Error);
 
 public sealed record LeaseAgreementDraftMutationResult(
     LeaseAgreementDraftMutationOutcome Outcome,
@@ -133,4 +133,4 @@ public sealed record LeaseAgreementDraftMutationResult(
     IReadOnlyList<int> LeaseAgreementSignerIds,
     IReadOnlyList<int> AddendumDecisionIds,
     IReadOnlyList<int> ReplacementAddendumIds,
-    string? Error) : IAtomicResultData;
+    string? Error);

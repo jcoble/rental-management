@@ -72,7 +72,7 @@ public class BankingController : ManagementControllerBase
             return BadRequest(new { error = "Plaid operation id, public token, and account id are required." });
         }
 
-        return Ok(await _service.ExchangePlaidPublicTokenAsync(GetPortfolioId(), request, ct));
+        return Ok(await _service.ExchangePlaidPublicTokenAsync(GetWorkspaceReadScope(), request, ct));
     }
 
     [HttpPost("connections/{id:int}/sync")]
@@ -104,9 +104,9 @@ public class BankingController : ManagementControllerBase
         [FromBody] ImportBankTransactionsRequest request,
         CancellationToken ct)
     {
-        if (request.Transactions.Count == 0)
+        if (request.Statement is null && request.Transactions.Count == 0)
         {
-            return BadRequest(new { error = "At least one bank transaction is required." });
+            return BadRequest(new { error = "A bank statement or at least one bank transaction is required." });
         }
 
         return Ok(await _service.ImportAsync(GetPortfolioId(), request, ct));

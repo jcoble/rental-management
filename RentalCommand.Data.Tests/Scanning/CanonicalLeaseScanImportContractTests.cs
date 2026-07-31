@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Scanning;
@@ -11,7 +12,8 @@ public sealed class CanonicalLeaseScanImportContractTests
     [Fact]
     public void Production_writer_activates_the_canonical_lease_target()
     {
-        var writer = new ProductionScanConfirmationTargetWriter();
+        using var db = CreateContext();
+        var writer = new ProductionScanConfirmationTargetWriter(db);
 
         writer.Supports(ScanConfirmationTargetKind.LeaseAgreement).Should().BeTrue();
         typeof(ScanLeaseTargetData).GetProperty("LeaseId").Should().BeNull();
@@ -126,4 +128,15 @@ public sealed class CanonicalLeaseScanImportContractTests
             RentDueDay: 1,
             ReviewDisposition: disposition,
             DocumentTemplateId: documentTemplateId);
+
+    private static TestDbContext CreateContext()
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseInMemoryDatabase($"canonical-lease-scan-{Guid.NewGuid():N}")
+            .Options;
+        return new TestDbContext(options);
+    }
+
+    private sealed class TestDbContext(DbContextOptions<RentalCommandDbContext> options)
+        : RentalCommandDbContext(options);
 }

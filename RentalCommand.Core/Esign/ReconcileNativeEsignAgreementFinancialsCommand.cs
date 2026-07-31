@@ -10,11 +10,11 @@ public sealed record ReconcileNativeEsignAgreementFinancialsResult(
     Guid PublicId,
     int SignatureRequestId,
     int LeaseAgreementId,
-    int DepositChargeCount) : IAtomicResultData;
+    int DepositChargeCount);
 
 public sealed record ReconcileNativeEsignAgreementFinancialsBatchCommand(
     Guid RunToken,
     int BatchSize) : IAtomicCommandData;
 
 public sealed record ReconcileNativeEsignAgreementFinancialsBatchResult(
-    int DepositChargeCount) : IAtomicResultData;
+    int DepositChargeCount);

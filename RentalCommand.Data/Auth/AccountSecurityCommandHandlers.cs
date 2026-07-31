@@ -11,21 +11,25 @@ namespace RentalCommand.Data.Auth;
 public sealed class BootstrapAccountHandler
     : IAtomicCommandHandler<BootstrapAccountCommand, BootstrapAccountResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public BootstrapAccountHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<BootstrapAccountResult> HandleAsync(
         BootstrapAccountCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.EmailLockId, ct);
-        if (await attempt.Persistence.Query<ApplicationUser>().AsNoTracking()
+        await context.AcquireLockAsync("ApplicationUser", command.EmailLockId, ct);
+        if (await _db.Set<ApplicationUser>().AsNoTracking()
                 .AnyAsync(user => user.NormalizedEmail == command.NormalizedEmail, ct))
         {
             return new BootstrapAccountResult(BootstrapAccountOutcome.DuplicateEmail, 0, 0, 0);
         }
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         var user = new ApplicationUser
         {
             UserName = command.Email,
@@ -39,11 +43,11 @@ public sealed class BootstrapAccountHandler
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = now,
         };
-        attempt.Persistence.Add(user);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(user);
+        await context.FlushBusinessAsync(ct);
 
-        var workspace = await attempt.AccountSecurity.BootstrapInitialWorkspaceAsync(
-            user.Id,
+        var workspace = await AtomicAccountSecurityPersistence.BootstrapInitialWorkspaceAsync(_db,
+            context, user.Id,
             command.PortfolioName,
             command.ManagementCompanyName,
             command.OwnerName,
@@ -52,14 +56,14 @@ public sealed class BootstrapAccountHandler
             ct);
 
         var legalReplacementQuery =
-                from latest in attempt.Persistence.Query<SystemNoticeTemplateVersion>()
+                from latest in _db.Set<SystemNoticeTemplateVersion>()
                 where latest.Version > SuppliedNoticeTemplateBaseline.Version
-                    && !attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(candidate =>
+                    && !_db.Set<SystemNoticeTemplateVersion>().Any(candidate =>
                         candidate.SystemKey == latest.SystemKey && candidate.Version > latest.Version)
-                join current in attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                join current in _db.Set<WorkspaceNoticeTemplateVersion>()
                     on new { latest.SystemKey, PortfolioId = workspace.PortfolioId }
                     equals new { current.SystemKey, current.PortfolioId }
-                join policy in attempt.Persistence.Query<TenantNoticePolicy>()
+                join policy in _db.Set<TenantNoticePolicy>()
                     on new
                     {
                         current.PortfolioId,
@@ -107,8 +111,8 @@ public sealed class BootstrapAccountHandler
             CreatedByUserId = user.Id,
             CreatedAtUtc = now,
         }).ToArray();
-        attempt.Persistence.AddRange(replacementRows);
-        await attempt.FlushBusinessAsync(ct);
+        _db.AddRange(replacementRows);
+        await context.FlushBusinessAsync(ct);
 
         for (var index = 0; index < legalReplacements.Count; index++)
         {
@@ -117,7 +121,7 @@ public sealed class BootstrapAccountHandler
             selected.Policy.WorkspaceNoticeTemplateVersionId = replacement.Id;
             selected.Policy.UpdatedAtUtc = now;
 
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 workspace.PortfolioId,
                 nameof(WorkspaceNoticeTemplateVersion),
                 replacement.Id,
@@ -133,7 +137,7 @@ public sealed class BootstrapAccountHandler
                     replacement.Version,
                 }),
                 ChangeReason: "Fresh workspace supplied legal template replaced with latest immutable version"), now);
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 workspace.PortfolioId,
                 nameof(TenantNoticePolicy),
                 selected.Policy.Id,
@@ -150,10 +154,10 @@ public sealed class BootstrapAccountHandler
                 ChangeReason: "Fresh workspace Draft policy rebound to latest supplied legal template"), now);
         }
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var deletedTemplateCount =
-            await attempt.AccountSecurity.DeleteFreshWorkspaceSuppliedNoticeTemplateVersionsAsync(
-                user.Id,
+            await AtomicAccountSecurityPersistence.DeleteFreshWorkspaceSuppliedNoticeTemplateVersionsAsync(_db,
+                context, user.Id,
                 workspace.PortfolioId,
                 legalReplacements.Select(row => row.Current.Id).ToArray(),
                 ct);
@@ -163,25 +167,25 @@ public sealed class BootstrapAccountHandler
                 "Fresh workspace notice bootstrap did not remove both replaced v1 templates.");
         }
 
-        var finalNoticeBootstrap = await attempt.Persistence.Query<Portfolio>()
+        var finalNoticeBootstrap = await _db.Set<Portfolio>()
             .Where(portfolio => portfolio.Id == workspace.PortfolioId)
             .Select(portfolio => new
             {
-                TemplateCount = attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                TemplateCount = _db.Set<WorkspaceNoticeTemplateVersion>()
                     .Count(template => template.PortfolioId == portfolio.Id),
-                PolicyCount = attempt.Persistence.Query<TenantNoticePolicy>()
+                PolicyCount = _db.Set<TenantNoticePolicy>()
                     .Count(policy => policy.PortfolioId == portfolio.Id),
-                NonLatestTemplateCount = attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                NonLatestTemplateCount = _db.Set<WorkspaceNoticeTemplateVersion>()
                     .Count(template => template.PortfolioId == portfolio.Id &&
-                        attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(system =>
+                        _db.Set<SystemNoticeTemplateVersion>().Any(system =>
                             system.SystemKey == template.SystemKey && system.Version > template.Version)),
-                IncorrectPolicyBindingCount = attempt.Persistence.Query<TenantNoticePolicy>()
+                IncorrectPolicyBindingCount = _db.Set<TenantNoticePolicy>()
                     .Count(policy => policy.PortfolioId == portfolio.Id &&
                         (policy.Mode != TenantNoticeMode.Draft ||
-                         !attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>().Any(template =>
+                         !_db.Set<WorkspaceNoticeTemplateVersion>().Any(template =>
                              template.Id == policy.WorkspaceNoticeTemplateVersionId &&
                              template.PortfolioId == policy.PortfolioId &&
-                             !attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(system =>
+                             !_db.Set<SystemNoticeTemplateVersion>().Any(system =>
                                  system.SystemKey == template.SystemKey &&
                                  system.Version > template.Version)))),
             })
@@ -197,7 +201,7 @@ public sealed class BootstrapAccountHandler
                 "Fresh workspace notice bootstrap must contain exactly five latest templates and five Draft policies.");
         }
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             workspace.PortfolioId,
             nameof(ApplicationUser),
             user.Id,
@@ -218,6 +222,26 @@ public sealed class BootstrapAccountHandler
             user.Id,
             workspace.PortfolioId,
             workspace.AccessContextId);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        BootstrapAccountCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+
+        var userExists = await _db.Set<ApplicationUser>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(user =>
+                user.NormalizedEmail == command.NormalizedEmail &&
+                user.Email == command.Email,
+                ct);
+        if (!userExists)
+        {
+            throw new UnauthorizedAccessException("The original account bootstrap identity is unavailable.");
+        }
     }
 
     private static void Validate(BootstrapAccountCommand command)
@@ -245,17 +269,20 @@ public sealed class BootstrapAccountHandler
 }
 
 public sealed class ConfirmAccountEmailHandler
-    : IAtomicCommandHandler<ConfirmAccountEmailCommand, ConfirmAccountEmailResult>,
-      IAtomicReplayAuthorizer<ConfirmAccountEmailCommand>
+    : IAtomicCommandHandler<ConfirmAccountEmailCommand, ConfirmAccountEmailResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ConfirmAccountEmailHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConfirmAccountEmailResult> HandleAsync(
         ConfirmAccountEmailCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.UserId, ct);
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct);
         if (user is null)
         {
@@ -271,11 +298,11 @@ public sealed class ConfirmAccountEmailHandler
         }
         EnsureStamp(user, command.ExpectedSecurityStamp);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var root = await RequireAuditRootAsync(user.Id, attempt.Persistence, now, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var root = await RequireAuditRootAsync(user.Id, _db, now, ct);
         user.EmailConfirmed = true;
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
-        attempt.StageSemanticEvent(SecurityAudit(
+        context.StageSemanticEvent(SecurityAudit(
             root,
             user.Id,
             "EmailConfirmed",
@@ -285,13 +312,11 @@ public sealed class ConfirmAccountEmailHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ConfirmAccountEmailCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ConfirmAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        _ = await RequireAuditRootAsync(command.UserId, persistence, now, ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        _ = await RequireAuditRootAsync(command.UserId, _db, now, ct);
     }
 
     private static void Validate(ConfirmAccountEmailCommand command)
@@ -310,10 +335,10 @@ public sealed class ConfirmAccountEmailHandler
 
     internal static async Task<AtomicEffectiveLoginContext> RequireAuditRootAsync(
         int userId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        await persistence.ReadEffectiveLoginContextRootAsync(userId, now, ct)
+        await AtomicEffectiveLoginContextQueries.ReadRootAsync(db, userId, now, ct)
         ?? throw new UnauthorizedAccessException("The account has no current workspace authority.");
 
     internal static AtomicSemanticAudit SecurityAudit(
@@ -339,17 +364,20 @@ public sealed class ConfirmAccountEmailHandler
 }
 
 public sealed class ResetAccountPasswordHandler
-    : IAtomicCommandHandler<ResetAccountPasswordCommand, ResetAccountPasswordResult>,
-      IAtomicReplayAuthorizer<ResetAccountPasswordCommand>
+    : IAtomicCommandHandler<ResetAccountPasswordCommand, ResetAccountPasswordResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ResetAccountPasswordHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ResetAccountPasswordResult> HandleAsync(
         ResetAccountPasswordCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.UserId, ct);
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct);
         if (user is null)
         {
@@ -361,20 +389,20 @@ public sealed class ResetAccountPasswordHandler
         }
         ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, attempt.Persistence, now, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
         user.PasswordHash = command.PasswordHash;
         user.SecurityStamp = Guid.NewGuid().ToString("N");
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
         user.AccessFailedCount = 0;
         user.LockoutEnd = null;
         user.EmailConfirmed = true;
-        await attempt.AccountSecurity.RevokeActiveSessionsForPasswordResetAsync(
-            user.Id,
+        await AtomicAccountSecurityPersistence.RevokeActiveSessionsForPasswordResetAsync(_db,
+            context, user.Id,
             now,
             "Password reset completed",
             ct);
-        attempt.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
+        context.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
             root,
             user.Id,
             "PasswordReset",
@@ -384,13 +412,11 @@ public sealed class ResetAccountPasswordHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ResetAccountPasswordCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ResetAccountPasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, persistence, now, ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
     }
 
     private static void Validate(ResetAccountPasswordCommand command)
@@ -402,27 +428,30 @@ public sealed class ResetAccountPasswordHandler
 }
 
 public sealed class ConfirmGoogleAccountEmailHandler
-    : IAtomicCommandHandler<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult>,
-      IAtomicReplayAuthorizer<ConfirmGoogleAccountEmailCommand>
+    : IAtomicCommandHandler<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ConfirmGoogleAccountEmailHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConfirmAccountEmailResult> HandleAsync(
         ConfirmGoogleAccountEmailCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
         BootstrapAccountHandler.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.UserId, ct);
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct);
         if (user is null) return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.UserNotFound, command.UserId);
         if (user.EmailConfirmed) return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.AlreadyConfirmed, user.Id);
         ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, attempt.Persistence, now, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
         user.EmailConfirmed = true;
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
-        attempt.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
+        context.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
             root,
             user.Id,
             "GoogleEmailConfirmed",
@@ -432,41 +461,42 @@ public sealed class ConfirmGoogleAccountEmailHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ConfirmGoogleAccountEmailCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ConfirmGoogleAccountEmailCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
         BootstrapAccountHandler.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, persistence, now, ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
     }
 }
 
 public sealed class AuthEmailOutboxHandler
-    : IAtomicCommandHandler<AuthEmailOutboxCommand, AuthEmailOutboxResult>,
-      IAtomicReplayAuthorizer<AuthEmailOutboxCommand>
+    : IAtomicCommandHandler<AuthEmailOutboxCommand, AuthEmailOutboxResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AuthEmailOutboxHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AuthEmailOutboxResult> HandleAsync(
         AuthEmailOutboxCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.UserId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var user = await attempt.Persistence.Query<ApplicationUser>().AsNoTracking()
+        await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var user = await _db.Set<ApplicationUser>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct)
             ?? throw new UnauthorizedAccessException("The account is unavailable.");
         ConfirmAccountEmailHandler.EnsureStamp(user, command.ExpectedSecurityStamp);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, attempt.Persistence, now, ct);
+        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(user.Id, _db, now, ct);
         if (command.ExpectedPortfolioId is { } expectedPortfolioId &&
             root.PortfolioId != expectedPortfolioId)
         {
             throw new UnauthorizedAccessException("The email command is outside the account workspace.");
         }
 
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = root.PortfolioId,
             MessageType = "email",
@@ -475,7 +505,7 @@ public sealed class AuthEmailOutboxHandler
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             root.PortfolioId,
             nameof(ApplicationUser),
             user.Id,
@@ -494,13 +524,11 @@ public sealed class AuthEmailOutboxHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        AuthEmailOutboxCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        AuthEmailOutboxCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, persistence, now, ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var root = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, _db, now, ct);
         if (command.ExpectedPortfolioId is { } expectedPortfolioId &&
             root.PortfolioId != expectedPortfolioId)
         {

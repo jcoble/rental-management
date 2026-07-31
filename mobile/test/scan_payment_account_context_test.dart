@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:rental_command/features/scan/scan_models.dart';
 import 'package:rental_command/features/scan/scan_repository.dart';
 import 'package:rental_command/features/scan/scan_review_screen.dart';
@@ -205,6 +206,57 @@ void main() {
     await tester.pump(const Duration(seconds: 11));
   });
 
+  testWidgets(
+    'root scan route stays mounted and shows confirmed payment result',
+    (tester) async {
+      final scanRepo = _FakePaymentScanRepository();
+      final router = GoRouter(
+        initialLocation: '/scan/166',
+        routes: [
+          GoRoute(
+            path: '/scan/:draftId',
+            builder: (_, state) => ScanReviewScreen(
+              draftId: int.parse(state.pathParameters['draftId']!),
+            ),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [scanRepositoryProvider.overrideWithValue(scanRepo)],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Create Payment'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(router.state.uri.path, '/scan/166');
+      expect(
+        find.text('This scan has already been confirmed.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Which rental account is this payment for?'),
+        findsNothing,
+      );
+      await tester.scrollUntilVisible(
+        find.text('CONFIRMED DETAILS'),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text('CONFIRMED DETAILS'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Create Payment'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 11));
+    },
+  );
+
   testWidgets('draft67-shaped payment conflict disables Create Payment', (
     tester,
   ) async {
@@ -286,6 +338,7 @@ class _FakePaymentScanRepository extends ScanRepository {
   Map<String, dynamic>? lastOverrides;
   int exactAccountReads = 0;
   int confirmCount = 0;
+  bool confirmed = false;
 
   @override
   Future<ScanDraft> getDraft(int id) async {
@@ -294,7 +347,7 @@ class _FakePaymentScanRepository extends ScanRepository {
         'id': id,
         'portfolioId': 1,
         'targetEntityType': 'Payment',
-        'status': 'Reviewing',
+        'status': confirmed ? 'Confirmed' : 'Reviewing',
         'fileUrl': '/api/v1/scans/$id/file',
         'fields': [
           {'name': 'total', 'value': '1250.00', 'confidence': 0.98},
@@ -334,7 +387,7 @@ class _FakePaymentScanRepository extends ScanRepository {
       'id': id,
       'portfolioId': 1,
       'targetEntityType': 'Payment',
-      'status': 'Reviewing',
+      'status': confirmed ? 'Confirmed' : 'Reviewing',
       'fileUrl': '/api/v1/scans/$id/file',
       'fields': [
         {'name': 'total', 'value': '1250.00', 'confidence': 0.98},
@@ -411,6 +464,7 @@ class _FakePaymentScanRepository extends ScanRepository {
     Map<String, dynamic> overrides,
   ) async {
     confirmCount += 1;
+    confirmed = true;
     lastConfirmId = id;
     lastOverrides = Map<String, dynamic>.from(overrides);
     return {

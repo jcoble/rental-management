@@ -20,4 +20,38 @@ describe('propertyUpdateFields', () => {
 		assert.equal('rentalStructure' in payload, false);
 		assert.equal('ownerEntityId' in payload, false);
 	});
+
+	it('keeps explicit optional text clears in the PATCH payload', () => {
+		const payload = propertyUpdateFields({
+			name: 'Rimview',
+			type: 'SingleFamily',
+			rentalStructure: 'SingleRental',
+			ownerEntityId: 42,
+			addressLine2: null
+		});
+
+		assert.deepEqual(payload, {
+			name: 'Rimview',
+			type: 'SingleFamily',
+			addressLine2: ''
+		});
+	});
+
+	it('preserves non-addressLine2 null values', () => {
+		const payload = propertyUpdateFields({
+			name: 'Rimview',
+			type: 'SingleFamily',
+			rentalStructure: 'SingleRental',
+			ownerEntityId: 42,
+			addressLine2: null,
+			notes: null
+		});
+
+		assert.deepEqual(payload, {
+			name: 'Rimview',
+			type: 'SingleFamily',
+			addressLine2: '',
+			notes: null
+		});
+	});
 });

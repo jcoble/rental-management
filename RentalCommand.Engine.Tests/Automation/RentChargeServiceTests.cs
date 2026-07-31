@@ -15,7 +15,7 @@ public sealed class RentChargeServiceTests
     public async Task Generate_DelegatesToCanonicalAtomicRentBatch()
     {
         var atomic = new CapturingAtomicUnitOfWork(
-            new ApplyScheduledTenantChargeBatchResult(3, 0));
+            new ApplyScheduledRentChargeBatchResult(3));
         var service = new RentChargeService(
             atomic,
             new FixedTimeProvider(BusinessNowUtc),
@@ -24,11 +24,24 @@ public sealed class RentChargeServiceTests
         var count = await service.GenerateAsync();
 
         count.Should().Be(3);
-        var command = atomic.Command.Should().BeOfType<ApplyScheduledTenantChargeBatchCommand>().Subject;
-        command.IncludeRentCharges.Should().BeTrue();
-        command.IncludeLateFeeCharges.Should().BeFalse();
+        var command = atomic.Command.Should().BeOfType<ApplyScheduledRentChargeBatchCommand>().Subject;
         command.BusinessNowUtc.Should().Be(BusinessNowUtc);
         command.BatchSize.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Generate_RethrowsAtomicFailureSoSimulationCommandCanSurfaceError()
+    {
+        var failure = new InvalidOperationException("permission denied for table TenantLedgerEntries");
+        var service = new RentChargeService(
+            new CapturingAtomicUnitOfWork(failure),
+            new FixedTimeProvider(BusinessNowUtc),
+            NullLogger<RentChargeService>.Instance);
+
+        var act = async () => await service.GenerateAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*TenantLedgerEntries*");
     }
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider

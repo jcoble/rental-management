@@ -27,8 +27,9 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         new("listing-workspace.connected-persistence.result.v1");
     private static readonly AtomicJsonResultCodec<ConnectedListingPersistenceResult> ConnectedApplicationCodec =
         new("listing-workspace.connected-application.result.v1");
+    private static readonly AtomicJsonResultCodec<IngestExternalListingSignalResult> SignalIngestCodec =
+        new("listing-workspace.signal-ingest.result.v1");
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicInfrastructureWriteGate _infrastructureWrites;
     private readonly IFileStorage _files;
     private readonly IPendingFileUploadStore _pendingUploads;
     private readonly IListingChannelAdapterResolver _listingChannels;
@@ -37,11 +38,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private readonly IAtomicUnitOfWork _atomic;
 
     public ListingWorkspaceService(RentalCommandDbContext db,
-        IAtomicInfrastructureWriteGate infrastructureWrites, IFileStorage files,
+        IFileStorage files,
         IPendingFileUploadStore pendingUploads, IListingChannelAdapterResolver listingChannels,
         ILogger<ListingWorkspaceService> logger, TimeProvider time, IAtomicUnitOfWork atomic)
-        => (_db, _infrastructureWrites, _files, _pendingUploads, _listingChannels, _logger, _time, _atomic) =
-            (db, infrastructureWrites, files, pendingUploads, listingChannels, logger, time, atomic);
+        => (_db, _files, _pendingUploads, _listingChannels, _logger, _time, _atomic) =
+            (db, files, pendingUploads, listingChannels, logger, time, atomic);
 
     public Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default)
         => _db.Units.AsNoTracking().AnyAsync(unit => unit.Id == unitId && unit.PortfolioId == portfolioId, ct);
@@ -437,62 +438,31 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         return await GetAsync(snapshot.Package.PortfolioId, snapshot.Package.UnitId, ct);
     }
 
-    public async Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
+    public async Task<ExternalListingSignalResponse?> IngestSignalAsync(
+        WorkspaceReadScope scope, int unitId, int publicationId,
         string providerMessageKey, IngestExternalListingSignalRequest request, CancellationToken ct = default)
     {
         providerMessageKey = CleanRequiredMax(providerMessageKey, "Provider message key", 160);
         var signalType = CleanRequired(request.SignalType, "Signal type");
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        var publicationExists = await _db.ListingPublications.AsNoTracking().AnyAsync(publication =>
-            publication.Id == publicationId && publication.PortfolioId == portfolioId
-            && publication.RentalListing != null && publication.RentalListing.UnitId == unitId, ct);
-        if (!publicationExists) return null;
-
         var suggestedExternalListingId = CleanOptional(request.SuggestedExternalListingId);
         var suggestedListingUrl = CleanOptional(request.SuggestedListingUrl);
         var suggestedExternalStatus = CleanOptional(request.SuggestedExternalStatus);
-        var receivedAtUtc = _time.UtcNow();
-
-        // The unique portfolio/message key is the concurrency boundary. PostgreSQL waits for
-        // an in-flight conflicting insert, then this statement either owns the row or performs
-        // a no-op. The following DB-side read therefore returns the same response to every
-        // concurrent delivery instead of surfacing a unique-constraint error.
-        using (_infrastructureWrites.BeginExternalListingSignalAdmission())
-        {
-            await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-                INSERT INTO "ExternalListingSignals"
-                    ("PortfolioId", "ListingPublicationId", "ProviderMessageKey", "SignalType",
-                     "SuggestedExternalListingId", "SuggestedListingUrl", "SuggestedExternalStatus",
-                     "Disposition", "ReceivedAtUtc")
-                VALUES
-                    ({{portfolioId}}, {{publicationId}}, {{providerMessageKey}}, {{signalType}},
-                     {{suggestedExternalListingId}}, {{suggestedListingUrl}}, {{suggestedExternalStatus}},
-                     {{ExternalListingSignalDisposition.Unconfirmed.ToString()}}, {{receivedAtUtc}})
-                ON CONFLICT ("PortfolioId", "ProviderMessageKey") DO NOTHING
-                """, ct);
-        }
-
-        var admitted = await _db.ExternalListingSignals.AsNoTracking()
-            .Where(signal => signal.PortfolioId == portfolioId && signal.ProviderMessageKey == providerMessageKey)
-            .Select(signal => new
-            {
-                signal.ListingPublicationId,
-                signal.Id,
-                signal.SignalType,
-                signal.SuggestedExternalListingId,
-                signal.SuggestedListingUrl,
-                signal.SuggestedExternalStatus,
-                Disposition = signal.Disposition.ToString(),
-                signal.ReceivedAtUtc,
-            })
-            .SingleAsync(ct);
-        if (admitted.ListingPublicationId != publicationId)
-            throw new DomainValidationException("Provider message key is already assigned to another listing publication.");
-
-        await transaction.CommitAsync(ct);
-        return new ExternalListingSignalResponse(admitted.Id, admitted.SignalType,
-            admitted.SuggestedExternalListingId, admitted.SuggestedListingUrl, admitted.SuggestedExternalStatus,
-            admitted.Disposition, admitted.ReceivedAtUtc);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("listing-workspace.signal.ingest", scope.PortfolioId, unitId, providerMessageKey),
+            new IngestExternalListingSignalCommand(
+                scope.PortfolioId, unitId, scope.UserId, scope.SessionId,
+                scope.AccessContextId, scope.AccessRevision, publicationId, providerMessageKey,
+                signalType, suggestedExternalListingId, suggestedListingUrl,
+                suggestedExternalStatus),
+            SignalIngestCodec,
+            ct);
+        var admitted = outcome.Value;
+        return !admitted.Found
+            ? null
+            : new ExternalListingSignalResponse(
+                admitted.SignalId, admitted.SignalType, admitted.SuggestedExternalListingId,
+                admitted.SuggestedListingUrl, admitted.SuggestedExternalStatus,
+                admitted.Disposition.ToString(), admitted.ReceivedAtUtc);
     }
 
     public async Task<ListingWorkspaceResponse?> ConfirmSignalAsync(

@@ -91,8 +91,7 @@
 				skip: (resultPage - 1) * pageSize,
 				take: pageSize
 			}),
-		enabled: open && !disabled,
-		placeholderData: (previous: RemoteRecordPage | undefined) => previous
+		enabled: open && !disabled
 	}));
 
 	const totalPages = $derived(Math.max(1, Math.ceil((recordsQuery.data?.totalCount ?? 0) / pageSize)));

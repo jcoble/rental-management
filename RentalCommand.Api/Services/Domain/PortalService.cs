@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
@@ -19,8 +22,12 @@ public class PortalService : IPortalService
     private readonly ILeaseQaService _leaseQa;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork? _atomic;
-    private static readonly AtomicJsonResultCodec<OperationMutationResult> WorkOrderMutationCodec =
-        new("portal.work-order.mutation.v1");
+    private static readonly AtomicJsonResultCodec<WorkOrderMutationResult> WorkOrderMutationCodec =
+        new("portal.work-order.mutation.v2");
+    private static readonly JsonSerializerOptions PortalHistoryJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider,
         IAtomicUnitOfWork? atomic = null)
@@ -234,6 +241,72 @@ public class PortalService : IPortalService
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
+        };
+    }
+
+    public async Task<PortalTenantAccountHistoryResponse?> GetTenantAccountHistoryAsync(
+        PortalTenantReadScope scope,
+        int tenantAccountId,
+        PortalTenantAccountHistoryQuery query,
+        CancellationToken ct = default)
+    {
+        var from = query.From.HasValue ? DateOnly.FromDateTime(query.From.Value) : (DateOnly?)null;
+        var to = query.To.HasValue ? DateOnly.FromDateTime(query.To.Value) : (DateOnly?)null;
+        var rows = await _db.Database.SqlQueryRaw<PortalTenantAccountHistorySqlRow>(
+                """
+                SELECT *
+                FROM rc_portal_tenant_account_history(
+                    @portfolio_id, @user_id, @access_context_id, @access_revision,
+                    @tenant_account_id, @period, @from_on, @to_on, @skip, @take, @focused_entry_id)
+                """,
+                new NpgsqlParameter<int>("portfolio_id", scope.PortfolioId),
+                new NpgsqlParameter<int>("user_id", scope.UserId),
+                new NpgsqlParameter<int>("access_context_id", scope.AccessContextId),
+                new NpgsqlParameter<long>("access_revision", scope.AccessRevision),
+                new NpgsqlParameter<int>("tenant_account_id", tenantAccountId),
+                new NpgsqlParameter<string>("period", query.NormalizedPeriod),
+                new NpgsqlParameter("from_on", NpgsqlDbType.Date)
+                {
+                    Value = from.HasValue ? from.Value : DBNull.Value,
+                },
+                new NpgsqlParameter("to_on", NpgsqlDbType.Date)
+                {
+                    Value = to.HasValue ? to.Value : DBNull.Value,
+                },
+                new NpgsqlParameter<int>("skip", query.NormalizedSkip),
+                new NpgsqlParameter<int>("take", query.NormalizedTake),
+                new NpgsqlParameter("focused_entry_id", NpgsqlDbType.Bigint)
+                {
+                    Value = query.FocusedEntryId.HasValue
+                        ? query.FocusedEntryId.Value
+                        : DBNull.Value,
+                })
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        var summary = rows[0];
+        return new PortalTenantAccountHistoryResponse
+        {
+            TenantAccountId = summary.TenantAccountId,
+            LeaseManagementId = summary.LeaseManagementId,
+            Currency = summary.Currency,
+            BusinessDate = summary.BusinessDate,
+            Period = summary.Period,
+            PeriodFrom = summary.PeriodFrom,
+            PeriodTo = summary.PeriodTo,
+            CurrentDue = summary.CurrentDue,
+            BeginningBalance = summary.BeginningBalance,
+            ClosingBalance = summary.ClosingBalance,
+            TotalCount = summary.TotalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+            Items = JsonSerializer.Deserialize<List<PortalTenantAccountHistoryItemResponse>>(
+                summary.ItemsJson,
+                PortalHistoryJsonOptions) ?? [],
         };
     }
 
@@ -462,7 +535,22 @@ public class PortalService : IPortalService
             join entry in _db.TenantLedgerEntries.AsNoTracking()
                 on new { account.PortfolioId, TenantAccountId = account.Id }
                 equals new { entry.PortfolioId, entry.TenantAccountId }
+            join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { balance.PortfolioId, balance.TenantAccountId }
+            from reversedEntry in _db.TenantLedgerEntries.AsNoTracking()
+                .Where(original => original.PortfolioId == entry.PortfolioId
+                    && original.TenantAccountId == entry.TenantAccountId
+                    && original.Id == entry.ReversesEntryId)
+                .DefaultIfEmpty()
             where account.Id == tenantAccountId
+                && entry.EffectiveOn <= balance.BusinessDate
+                && (!account.RentTrackingStartOn.HasValue
+                    || entry.EffectiveOn >= account.RentTrackingStartOn.Value)
+                && (!account.RentTrackingStartOn.HasValue
+                    || entry.EntryType != TenantLedgerEntryType.Reversal
+                    || reversedEntry == null
+                    || reversedEntry.EffectiveOn >= account.RentTrackingStartOn.Value)
             select new PortalTenantLedgerEntryResponse
             {
                 TenantAccountId = account.Id,
@@ -741,6 +829,22 @@ public class PortalService : IPortalService
         public int LeaseManagementId { get; init; }
     }
 
+    private sealed class PortalTenantAccountHistorySqlRow
+    {
+        public int TenantAccountId { get; set; }
+        public int LeaseManagementId { get; set; }
+        public string Currency { get; set; } = string.Empty;
+        public DateOnly BusinessDate { get; set; }
+        public string Period { get; set; } = string.Empty;
+        public DateOnly? PeriodFrom { get; set; }
+        public DateOnly PeriodTo { get; set; }
+        public decimal CurrentDue { get; set; }
+        public decimal BeginningBalance { get; set; }
+        public decimal ClosingBalance { get; set; }
+        public int TotalCount { get; set; }
+        public string ItemsJson { get; set; } = "[]";
+    }
+
     public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(
         int portfolioId,
         int accessContextId,
@@ -781,6 +885,7 @@ public class PortalService : IPortalService
                 LeaseManagementId = appointment.LeaseManagementId,
                 RentalApplicationId = appointment.RentalApplicationId,
                 TenantId = appointment.TenantId,
+                WorkOrderId = appointment.WorkOrderId,
                 Title = appointment.Title,
                 ProspectName = appointment.ProspectName,
                 ProspectEmail = appointment.ProspectEmail,
@@ -829,49 +934,7 @@ public class PortalService : IPortalService
                     : (appointment.Tenant.FirstName + " " + appointment.Tenant.LastName).Trim(),
             });
 
-        var maintenanceVisits = _db.WorkOrders
-            .AsNoTracking()
-            .Where(workOrder => workOrder.PortfolioId == portfolioId
-                && workOrder.TenantId == tenantId
-                && workOrder.LeaseManagementId != null
-                && workOrder.ScheduledFor != null
-                && workOrder.ScheduledFor >= now
-                && workOrder.Status != WorkOrderStatus.Completed
-                && workOrder.Status != WorkOrderStatus.Cancelled
-                && workOrder.Status != WorkOrderStatus.Archived
-                && effectiveRelationships.Any(access =>
-                    access.LeaseManagementId == workOrder.LeaseManagementId))
-            .Select(workOrder => new AppointmentResponse
-            {
-                Id = -workOrder.Id,
-                PortfolioId = workOrder.PortfolioId,
-                PropertyId = workOrder.PropertyId,
-                UnitId = workOrder.UnitId,
-                LeaseManagementId = workOrder.LeaseManagementId,
-                RentalApplicationId = null,
-                TenantId = workOrder.TenantId,
-                Title = workOrder.Title,
-                ProspectName = null,
-                ProspectEmail = null,
-                Type = AppointmentType.MaintenanceVisit,
-                Status = workOrder.Status == WorkOrderStatus.Scheduled
-                    ? AppointmentStatus.Confirmed
-                    : AppointmentStatus.Scheduled,
-                ScheduledStart = workOrder.ScheduledFor!.Value,
-                ScheduledEnd = workOrder.ScheduledWindowEnd,
-                AssignedTo = workOrder.Vendor == null ? null : workOrder.Vendor.Name,
-                Notes = workOrder.TechnicianAccessInstructions ?? workOrder.Description,
-                CreatedAt = workOrder.RequestedAt,
-                UpdatedAt = workOrder.UpdatedAt,
-                PropertyName = workOrder.Property == null ? null : workOrder.Property.Name,
-                UnitNumber = workOrder.Unit == null ? null : workOrder.Unit.UnitNumber,
-                TenantName = workOrder.Tenant == null
-                    ? null
-                    : (workOrder.Tenant.FirstName + " " + workOrder.Tenant.LastName).Trim(),
-            });
-
         return appointments
-            .Concat(maintenanceVisits)
             .OrderBy(appointment => appointment.ScheduledStart)
             .ThenBy(appointment => appointment.Id)
             .Take(50);
@@ -912,13 +975,6 @@ public class PortalService : IPortalService
             .Select(w => new WorkOrderResponse
             {
                 Id = w.Id,
-                PortfolioId = w.PortfolioId,
-                PropertyId = w.PropertyId,
-                UnitId = w.UnitId,
-                TenantId = w.TenantId,
-                LeaseManagementId = w.LeaseManagementId,
-                VendorId = w.VendorId,
-                RecurringMaintenanceTaskId = w.RecurringMaintenanceTaskId,
                 Title = w.Title,
                 Description = w.Description,
                 Category = w.Category,
@@ -928,16 +984,13 @@ public class PortalService : IPortalService
                 ScheduledFor = w.ScheduledFor,
                 ScheduledWindowEnd = w.ScheduledWindowEnd,
                 CompletedAt = w.CompletedAt,
-                EstimatedCost = w.EstimatedCost,
-                ActualCost = w.ActualCost,
-                CreatedBy = w.CreatedBy,
                 UpdatedAt = w.UpdatedAt,
                 PropertyName = w.Property == null ? null : w.Property.Name,
                 UnitNumber = w.Unit == null ? null : w.Unit.UnitNumber,
-                VendorName = w.Vendor == null ? null : w.Vendor.Name,
                 TenantName = w.Tenant == null
                     ? null
                     : (w.Tenant.FirstName + " " + w.Tenant.LastName).Trim(),
+                SubmittedByLabel = w.SubmittedByLabel ?? w.CreatedBy ?? "Resident",
             });
 
         if (query.Status is { } status)
@@ -1009,21 +1062,52 @@ public class PortalService : IPortalService
         // found, so we never leak its existence or its timeline. Mirrors the lease-ledger restriction.
         var effectiveRelationships = EffectiveTenantRelationshipQuery(scope, tenantId);
         var workOrder = await _db.WorkOrders.AsNoTracking()
-            .FirstOrDefaultAsync(w => w.Id == workOrderId
+            .Where(w => w.Id == workOrderId
                 && w.PortfolioId == scope.PortfolioId
                 && w.TenantId == tenantId
                 && w.LeaseManagementId != null
                 && effectiveRelationships.Any(access =>
-                    access.LeaseManagementId == w.LeaseManagementId), ct);
+                    access.LeaseManagementId == w.LeaseManagementId))
+            .Select(w => new WorkOrderDetailResponse
+            {
+                Id = w.Id,
+                Title = w.Title,
+                Description = w.Description,
+                Category = w.Category,
+                Priority = w.Priority,
+                Status = w.Status,
+                RequestedAt = w.RequestedAt,
+                ScheduledFor = w.ScheduledFor,
+                ScheduledWindowEnd = w.ScheduledWindowEnd,
+                CompletedAt = w.CompletedAt,
+                UpdatedAt = w.UpdatedAt,
+                PropertyName = w.Property == null ? null : w.Property.Name,
+                UnitNumber = w.Unit == null ? null : w.Unit.UnitNumber,
+                TenantName = w.Tenant == null
+                    ? null
+                    : (w.Tenant.FirstName + " " + w.Tenant.LastName).Trim(),
+                SubmittedByLabel = w.SubmittedByLabel ?? w.CreatedBy ?? "Resident",
+                DetailRole = "tenant",
+                RequesterPhone = w.RequesterPhone,
+                RequesterEmail = w.RequesterEmail,
+                ResidentMustBePresent = w.ResidentMustBePresent,
+                PermissionToEnter = w.PermissionToEnter,
+                EntryNotes = w.EntryNotes,
+                PetWarnings = w.PetWarnings,
+                AccessWarnings = w.AccessWarnings,
+                Capabilities = WorkOrderDetailCapabilities.Tenant(w.Status),
+            })
+            .SingleOrDefaultAsync(ct);
         if (workOrder is null)
         {
             return null;
         }
 
-        var events = await _db.WorkOrderStatusEvents
+        var recentActivity = _db.WorkOrderStatusEvents
             .AsNoTracking()
             .Where(e => e.WorkOrderId == workOrderId
                 && e.PortfolioId == scope.PortfolioId
+                && e.Visibility == "Public"
                 && _db.WorkOrders.Any(candidate =>
                     candidate.Id == e.WorkOrderId
                     && candidate.PortfolioId == scope.PortfolioId
@@ -1031,11 +1115,94 @@ public class PortalService : IPortalService
                     && candidate.LeaseManagementId != null
                     && effectiveRelationships.Any(access =>
                         access.LeaseManagementId == candidate.LeaseManagementId)))
+            .OrderByDescending(e => e.CreatedAtUtc)
+            .ThenByDescending(e => e.Id)
+            .Take(50);
+
+        var activity = await recentActivity
             .OrderBy(e => e.CreatedAtUtc)
             .ThenBy(e => e.Id)
+            .Select(e => new WorkOrderActivityResponse
+            {
+                Id = e.Id,
+                Kind = e.Kind,
+                FromStatus = e.FromStatus,
+                ToStatus = e.ToStatus,
+                Note = e.Note,
+                ActorLabel = e.ChangedByLabel ?? "System",
+                Visibility = e.Visibility,
+                CreatedAtUtc = e.CreatedAtUtc,
+            })
             .ToListAsync(ct);
 
-        return WorkOrderDetailResponse.FromEntity(workOrder, events);
+        workOrder.ResidentNames = string.IsNullOrWhiteSpace(workOrder.TenantName)
+            ? []
+            : [workOrder.TenantName];
+        workOrder.Timeline = activity.Select(item => new WorkOrderStatusEventResponse
+        {
+            Id = item.Id,
+            Kind = item.Kind,
+            Visibility = item.Visibility,
+            FromStatus = item.FromStatus,
+            ToStatus = item.ToStatus,
+            Note = item.Note,
+            ChangedByLabel = item.ActorLabel,
+            CreatedAtUtc = item.CreatedAtUtc,
+        }).ToList();
+        workOrder.Activity = activity;
+        return workOrder;
+    }
+
+    public async Task<WorkOrderMutationReceipt?> CommentTenantWorkOrderAsync(
+        ActiveAccessContext access,
+        int tenantId,
+        int workOrderId,
+        WorkOrderCommentRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var command = new AddTenantWorkOrderCommentCommand(
+            access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
+            access.AccessRevision, workOrderId, request.Body, _timeProvider.UtcNow(), idempotencyKey);
+        var outcome = await AtomicWorkOrderAsync(
+            "portal.work-order.comment", idempotencyKey, command, ct);
+        return Receipt(outcome);
+    }
+
+    public async Task<WorkOrderMutationReceipt?> UpdateTenantWorkOrderAsync(
+        ActiveAccessContext access,
+        int tenantId,
+        int workOrderId,
+        TenantWorkOrderUpdateRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var command = new UpdateTenantWorkOrderCommand(
+            access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
+            access.AccessRevision, workOrderId, request.Title, request.Description,
+            request.RequesterName, request.RequesterPhone, request.RequesterEmail,
+            request.ResidentMustBePresent, request.CallBeforeEntry, request.CallIfNotHome,
+            request.PermissionToEnter, request.EntryNotes, request.PetWarnings,
+            request.AccessWarnings, _timeProvider.UtcNow(), idempotencyKey);
+        var outcome = await AtomicWorkOrderAsync(
+            "portal.work-order.update", idempotencyKey, command, ct);
+        return Receipt(outcome);
+    }
+
+    public async Task<WorkOrderMutationReceipt?> CancelTenantWorkOrderAsync(
+        ActiveAccessContext access,
+        int tenantId,
+        int workOrderId,
+        TenantWorkOrderCancelRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        var command = new CancelTenantWorkOrderCommand(
+            access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
+            access.AccessRevision, workOrderId, request.Note, _timeProvider.UtcNow(), idempotencyKey);
+        var outcome = await AtomicWorkOrderAsync(
+            "portal.work-order.cancel", idempotencyKey, command, ct);
+        return Receipt(outcome);
     }
 
     public async Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
@@ -1047,17 +1214,92 @@ public class PortalService : IPortalService
         var command = new CreateTenantWorkOrderCommand(
             access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
             access.AccessRevision, request.Title, request.Description, request.Category,
-            request.Priority, _timeProvider.UtcNow(), idempotencyKey);
+            request.Priority, _timeProvider.UtcNow(),
+            request.ContactPhone, request.ContactEmail, request.ResidentMustBePresent,
+            request.CallBeforeEntry, request.CallIfNotHome, request.PermissionToEnter,
+            request.EntryNotes, request.PetWarnings, request.AccessWarnings,
+            idempotencyKey);
         var digest = Convert.ToHexString(SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
         var outcome = await (_atomic ?? throw new InvalidOperationException(
                 "Atomic tenant work-order mutations are not configured."))
             .ExecuteAsync(new AtomicCommandIdentity("portal.work-order.create", digest),
                 command, WorkOrderMutationCodec, ct);
-        return outcome.Value.Outcome == OperationMutationOutcome.NotFound || outcome.Value.ResponseJson is null
+        return outcome.Value.Outcome == OperationMutationOutcome.NotFound || outcome.Value.Snapshot is null
             ? null
-            : JsonSerializer.Deserialize<WorkOrderResponse>(outcome.Value.ResponseJson);
+            : ToWorkOrderResponse(outcome.Value.Snapshot);
     }
+
+    private async Task<WorkOrderMutationResult> AtomicWorkOrderAsync<TCommand>(
+        string operation,
+        string idempotencyKey,
+        TCommand command,
+        CancellationToken ct)
+        where TCommand : RentalCommand.Core.Atomic.IAtomicCommandData
+    {
+        var digest = Convert.ToHexString(SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
+        var outcome = await (_atomic ?? throw new InvalidOperationException(
+                "Atomic tenant work-order mutations are not configured."))
+            .ExecuteAsync(new AtomicCommandIdentity(operation, digest),
+                command, WorkOrderMutationCodec, ct);
+        return outcome.Value;
+    }
+
+    private static WorkOrderMutationReceipt? Receipt(WorkOrderMutationResult result) =>
+        result.Outcome == OperationMutationOutcome.NotFound || result.Receipt is null
+            ? null
+            : ToWorkOrderReceipt(result.Receipt);
+
+    private static WorkOrderResponse ToWorkOrderResponse(WorkOrderMutationSnapshot snapshot) => new()
+    {
+        Id = snapshot.Id,
+        PortfolioId = snapshot.PortfolioId,
+        PropertyId = snapshot.PropertyId,
+        UnitId = snapshot.UnitId,
+        TenantId = snapshot.TenantId,
+        LeaseManagementId = snapshot.LeaseManagementId,
+        VendorId = snapshot.VendorId,
+        RecurringMaintenanceTaskId = snapshot.RecurringMaintenanceTaskId,
+        Title = snapshot.Title,
+        Description = snapshot.Description,
+        TechnicianAccessInstructions = snapshot.TechnicianAccessInstructions,
+        SubmittedByLabel = snapshot.SubmittedByLabel,
+        RequesterName = snapshot.RequesterName,
+        RequesterPhone = snapshot.RequesterPhone,
+        RequesterEmail = snapshot.RequesterEmail,
+        ResidentMustBePresent = snapshot.ResidentMustBePresent,
+        CallBeforeEntry = snapshot.CallBeforeEntry,
+        CallIfNotHome = snapshot.CallIfNotHome,
+        PermissionToEnter = snapshot.PermissionToEnter,
+        EntryNotes = snapshot.EntryNotes,
+        PetWarnings = snapshot.PetWarnings,
+        AccessWarnings = snapshot.AccessWarnings,
+        Category = snapshot.Category,
+        Priority = snapshot.Priority,
+        Status = snapshot.Status,
+        RequestedAt = snapshot.RequestedAt,
+        ScheduledFor = snapshot.ScheduledFor,
+        ScheduledWindowEnd = snapshot.ScheduledWindowEnd,
+        CompletedAt = snapshot.CompletedAt,
+        EstimatedCost = snapshot.EstimatedCost,
+        ActualCost = snapshot.ActualCost,
+        CreatedBy = snapshot.CreatedBy,
+        UpdatedAt = snapshot.UpdatedAt,
+        PropertyName = snapshot.PropertyName,
+        UnitNumber = snapshot.UnitNumber,
+        VendorName = snapshot.VendorName,
+        TenantName = snapshot.TenantName,
+    };
+
+    private static WorkOrderMutationReceipt ToWorkOrderReceipt(
+        WorkOrderMutationActivityReceipt receipt) => new()
+    {
+        EntityId = receipt.EntityId,
+        Outcome = receipt.Outcome.ToString(),
+        ActivityId = receipt.ActivityId,
+        CommittedAtUtc = receipt.CommittedAtUtc,
+    };
 
     public async Task<LeaseQuestionResponse?> AskLeaseAsync(
         int portfolioId,

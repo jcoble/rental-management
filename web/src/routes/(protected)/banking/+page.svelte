@@ -199,7 +199,7 @@
 	const importMutation = createMutation(() => ({
 		mutationFn: (request: ImportBankTransactionsRequest) => banking.importTransactions(request),
 		onSuccess: (result) => {
-			showSuccess(`Imported ${result.importedCount} bank transaction${result.importedCount === 1 ? '' : 's'}.`);
+			showSuccess(`Processed ${result.importedCount} statement transaction${result.importedCount === 1 ? '' : 's'}; existing provider IDs are never duplicated.`);
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err))

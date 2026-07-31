@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -23,7 +22,7 @@ public static class ScopedNotificationRecipientQuery
     /// does the configured, visible Workspace Administrator fallback apply.
     /// </summary>
     public static IQueryable<int> ForTeamTopic(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
         int portfolioId,
         TeamRoutingTopic topic,
         int? propertyId,
@@ -36,7 +35,7 @@ public static class ScopedNotificationRecipientQuery
         if (workOrderId is not null && topic != TeamRoutingTopic.WorkOrders)
             throw new ArgumentException("Direct work responsibility applies only to work-order routing.", nameof(workOrderId));
 
-        var rules = attempt.Persistence.Query<TeamRoutingRule>();
+        var rules = db.Set<TeamRoutingRule>();
         var matchingRules = rules.Where(rule =>
             rule.PortfolioId == portfolioId
             && rule.Topic == topic
@@ -47,11 +46,11 @@ public static class ScopedNotificationRecipientQuery
                     && exact.PropertyId == propertyId)));
 
         var assignments =
-            from context in attempt.Persistence.Query<WorkspaceAccessContext>()
-            join membership in attempt.Persistence.Query<WorkspaceMembership>()
+            from context in db.Set<WorkspaceAccessContext>()
+            join membership in db.Set<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
-            join assignment in attempt.Persistence.Query<MembershipRoleAssignment>()
+            join assignment in db.Set<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
             where context.PortfolioId == portfolioId
@@ -84,18 +83,18 @@ public static class ScopedNotificationRecipientQuery
 
         var explicitRecipients =
             from rule in matchingRules
-            join recipient in attempt.Persistence.Query<TeamRoutingRuleRecipient>()
+            join recipient in db.Set<TeamRoutingRuleRecipient>()
                 on new { RuleId = rule.Id, rule.PortfolioId }
                 equals new { RuleId = recipient.TeamRoutingRuleId, recipient.PortfolioId }
             join assignment in assignments on recipient.UserId equals assignment.UserId
             select recipient.UserId;
 
         var directAssignments =
-            from context in attempt.Persistence.Query<WorkspaceAccessContext>()
-            join membership in attempt.Persistence.Query<WorkspaceMembership>()
+            from context in db.Set<WorkspaceAccessContext>()
+            join membership in db.Set<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
-            join assignment in attempt.Persistence.Query<MembershipRoleAssignment>()
+            join assignment in db.Set<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
             where topic == TeamRoutingTopic.WorkOrders
@@ -126,7 +125,7 @@ public static class ScopedNotificationRecipientQuery
 
         var directRecipients =
             from assignment in directAssignments
-            join responsibility in attempt.Persistence.Query<WorkOrderResponsibility>()
+            join responsibility in db.Set<WorkOrderResponsibility>()
                 on new
                 {
                     assignment.MembershipId,
@@ -149,7 +148,7 @@ public static class ScopedNotificationRecipientQuery
         var administratorFallback =
             from rule in matchingRules
             from assignment in assignments
-            join roleAssignment in attempt.Persistence.Query<MembershipRoleAssignment>()
+            join roleAssignment in db.Set<MembershipRoleAssignment>()
                 on assignment.AssignmentId equals roleAssignment.Id
             where rule.UseWorkspaceAdministratorFallback
                 && !resolved.Any()
@@ -191,7 +190,7 @@ public static class ScopedNotificationRecipientQuery
     /// revision, exact-property override, and administrator fallback remain inside one SQL query.
     /// </summary>
     public static IQueryable<int> ForTenantTeamTopic(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
         int portfolioId,
         int tenantId,
         TeamRoutingTopic topic,
@@ -202,8 +201,8 @@ public static class ScopedNotificationRecipientQuery
             throw new ArgumentException("Tenant relationship routing requires a property-scoped topic.", nameof(topic));
 
         var effectiveProperties =
-            from party in attempt.Persistence.Query<LeaseManagementParty>()
-            join lifecycle in attempt.Persistence.Query<LeaseManagementLifecycleProjection>()
+            from party in db.Set<LeaseManagementParty>()
+            join lifecycle in db.Set<LeaseManagementLifecycleProjection>()
                 on new { party.LeaseManagementId, party.PortfolioId }
                 equals new { lifecycle.LeaseManagementId, lifecycle.PortfolioId }
             where party.PortfolioId == portfolioId
@@ -214,14 +213,14 @@ public static class ScopedNotificationRecipientQuery
                 && lifecycle.TenantAccountId != null
                 && !lifecycle.HasReconciliationException
                 && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                && attempt.Persistence.Query<LeaseAgreementStatusProjection>().Any(agreement =>
+                && db.Set<LeaseAgreementStatusProjection>().Any(agreement =>
                     agreement.PortfolioId == portfolioId
                     && agreement.LeaseManagementId == lifecycle.LeaseManagementId
                     && agreement.AgreementId == lifecycle.CurrentAgreementId
                     && agreement.IsGoverning)
             select lifecycle.PropertyId;
 
-        var rules = attempt.Persistence.Query<TeamRoutingRule>();
+        var rules = db.Set<TeamRoutingRule>();
         var exactRules = rules.Where(rule => rule.PortfolioId == portfolioId
             && rule.Topic == topic
             && rule.PropertyId != null
@@ -232,11 +231,11 @@ public static class ScopedNotificationRecipientQuery
             && !exactRules.Any()));
 
         var assignments =
-            from context in attempt.Persistence.Query<WorkspaceAccessContext>()
-            join membership in attempt.Persistence.Query<WorkspaceMembership>()
+            from context in db.Set<WorkspaceAccessContext>()
+            join membership in db.Set<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
-            join assignment in attempt.Persistence.Query<MembershipRoleAssignment>()
+            join assignment in db.Set<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
             where context.PortfolioId == portfolioId
@@ -262,7 +261,7 @@ public static class ScopedNotificationRecipientQuery
 
         var explicitRecipients =
             from rule in matchingRules
-            join recipient in attempt.Persistence.Query<TeamRoutingRuleRecipient>()
+            join recipient in db.Set<TeamRoutingRuleRecipient>()
                 on new { RuleId = rule.Id, rule.PortfolioId }
                 equals new { RuleId = recipient.TeamRoutingRuleId, recipient.PortfolioId }
             join assignment in assignments on recipient.UserId equals assignment.UserId
@@ -271,7 +270,7 @@ public static class ScopedNotificationRecipientQuery
         var administratorFallback =
             from rule in matchingRules
             from assignment in assignments
-            join roleAssignment in attempt.Persistence.Query<MembershipRoleAssignment>()
+            join roleAssignment in db.Set<MembershipRoleAssignment>()
                 on assignment.AssignmentId equals roleAssignment.Id
             where rule.UseWorkspaceAdministratorFallback
                 && !explicitRecipients.Any()

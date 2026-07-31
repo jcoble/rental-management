@@ -58,6 +58,7 @@ public sealed class LeaseManagementSummaryResponse
     public int CurrentResidentCount { get; init; }
     public int CurrentFinanciallyResponsiblePartyCount { get; init; }
     public bool HasReconciliationException { get; init; }
+    public bool HasGoverningAgreementWithoutPossession { get; init; }
     public DateTime? PlannedPossessionAtUtc { get; init; }
     public DateTime? PossessionGivenAtUtc { get; init; }
     public DateTime? PlannedMoveOutAtUtc { get; init; }

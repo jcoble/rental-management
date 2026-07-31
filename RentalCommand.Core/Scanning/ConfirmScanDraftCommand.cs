@@ -14,6 +14,8 @@ public enum ScanConfirmationTargetKind
     LeaseAgreement,
     Application,
     Loan,
+    PropertyAcquisition,
+    LeaseEndingNotice,
 }
 
 public sealed record ScanReceiptLineData(
@@ -78,6 +80,17 @@ public sealed record ScanWorkOrderTargetData(
     int? VendorId,
     string? Title,
     string? Description,
+    string? TechnicianAccessInstructions,
+    string? RequesterName,
+    string? RequesterPhone,
+    string? RequesterEmail,
+    bool? ResidentMustBePresent,
+    bool? CallBeforeEntry,
+    bool? CallIfNotHome,
+    bool? PermissionToEnter,
+    string? EntryNotes,
+    string? PetWarnings,
+    string? AccessWarnings,
     string? Category,
     WorkOrderPriority Priority,
     decimal? EstimatedCost) : IAtomicCommandData;
@@ -159,6 +172,30 @@ public sealed record ScanLoanTargetData(
     decimal? StatementTotalAmount = null,
     DateTime? StatementEffectiveDate = null) : IAtomicCommandData;
 
+public sealed record ScanPropertyAcquisitionOwnerData(
+    int OwnerEntityId,
+    decimal OwnershipSharePercent,
+    string? StatementRecipientName = null,
+    string? StatementRecipientEmail = null,
+    string? PayeeName = null) : IAtomicCommandData;
+
+public sealed record ScanPropertyAcquisitionTargetData(
+    int PropertyId,
+    DateTime? AcquisitionDate,
+    decimal? PurchasePrice,
+    decimal? LandValue,
+    DateTime? InServiceDate,
+    string? Notes,
+    IReadOnlyList<ScanPropertyAcquisitionOwnerData> Ownerships) : IAtomicCommandData;
+
+public sealed record ScanLeaseEndingNoticeTargetData(
+    int LeaseManagementId,
+    int UnitId,
+    DateTime? NoticeGivenAtUtc,
+    DateTime? PlannedMoveOutAtUtc,
+    string? NoticeType,
+    string? Reason) : IAtomicCommandData;
+
 /// <summary>
 /// Sealed discriminated envelope accepted by the atomic admission validator. Exactly the member named
 /// by <see cref="Kind"/> must be present; no raw request JSON or API-layer type crosses the boundary.
@@ -170,7 +207,9 @@ public sealed record ScanConfirmationTargetData(
     ScanWorkOrderTargetData? WorkOrder = null,
     ScanLeaseTargetData? LeaseAgreement = null,
     ScanApplicationTargetData? Application = null,
-    ScanLoanTargetData? Loan = null) : IAtomicCommandData
+    ScanLoanTargetData? Loan = null,
+    ScanPropertyAcquisitionTargetData? PropertyAcquisition = null,
+    ScanLeaseEndingNoticeTargetData? LeaseEndingNotice = null) : IAtomicCommandData
 {
     public void Validate()
     {
@@ -179,7 +218,9 @@ public sealed record ScanConfirmationTargetData(
             + (WorkOrder is null ? 0 : 1)
             + (LeaseAgreement is null ? 0 : 1)
             + (Application is null ? 0 : 1)
-            + (Loan is null ? 0 : 1);
+            + (Loan is null ? 0 : 1)
+            + (PropertyAcquisition is null ? 0 : 1)
+            + (LeaseEndingNotice is null ? 0 : 1);
         var selectedIsPresent = Kind switch
         {
             ScanConfirmationTargetKind.Expense => Expense is not null,
@@ -188,6 +229,8 @@ public sealed record ScanConfirmationTargetData(
             ScanConfirmationTargetKind.LeaseAgreement => LeaseAgreement is not null,
             ScanConfirmationTargetKind.Application => Application is not null,
             ScanConfirmationTargetKind.Loan => Loan is not null,
+            ScanConfirmationTargetKind.PropertyAcquisition => PropertyAcquisition is not null,
+            ScanConfirmationTargetKind.LeaseEndingNotice => LeaseEndingNotice is not null,
             _ => false,
         };
         if (populated != 1 || !selectedIsPresent)
@@ -203,14 +246,14 @@ public sealed record ConfirmScanDraftCommand(
     int PortfolioId,
     int DraftId,
     int ConfirmedByUserId,
-    DateTime ConfirmedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime ConfirmedAtUtc,
     string ExpectedDraftFingerprint,
     ScanConfirmationTargetData Target,
     int? SourceStoredFileId = null,
-    Guid AuthSessionId = default,
-    int AccessContextId = 0,
-    long ExpectedAccessRevision = 0,
-    string DeliveryIdempotencyKey = "",
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId = default,
+    [property: AtomicFingerprintIgnore] int AccessContextId = 0,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision = 0,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey = "",
     string? SourceContentSha256 = null,
     string? SourceLabel = null,
     ScanCaptureContextData? CaptureContext = null) : IAtomicCommandData;
@@ -372,7 +415,7 @@ public sealed record ConfirmScanDraftResult(
     string? Error = null,
     long? LedgerEntryId = null,
     int? LeaseManagementId = null,
-    int? LoanPaymentId = null) : IAtomicResultData;
+    int? LoanPaymentId = null);
 
 /// <summary>Internal writer result; the handler turns it into the stable receipt result contract.</summary>
 public sealed record ScanConfirmationTargetWriteResult(
@@ -385,21 +428,21 @@ public sealed record ScanConfirmationTargetWriteResult(
     bool TargetAuditRecorded = false);
 
 /// <summary>
-/// Transaction-only target seam. Implementations must be sealed, data/persistence-only atomic
-/// dependencies; remote work and broadcasting are forbidden and represented by durable outbox intent.
+/// Transaction-only target writer. Implementations must stay data/persistence-only; remote work and
+/// broadcasting are forbidden and represented by durable outbox intent.
 /// </summary>
-public interface IScanConfirmationTargetWriter : IAtomicTransactionSafeDependency
+public interface IScanConfirmationTargetWriter
 {
     bool Supports(ScanConfirmationTargetKind kind);
 
     Task<ScanConfirmationTargetWriteResult> WriteAsync(
         ConfirmScanDraftCommand command,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct);
 
     Task AuthorizeReplayAsync(
         ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct) => Task.CompletedTask;
 }

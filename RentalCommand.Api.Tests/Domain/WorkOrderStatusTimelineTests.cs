@@ -407,7 +407,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         page.Items.Should().ContainSingle();
         page.Items[0].Id.Should().Be(first!.Id);
         page.Items[0].Id.Should().NotBe(second!.Id);
-        page.Items.Should().OnlyContain(item => item.TenantId == tenant.Id);
+        page.Items.Should().OnlyContain(item => item.TenantName == "Maria Tenant");
     }
 
     private Task<WorkOrderResponse?> CreateAsync(CreateWorkOrderRequest request) =>

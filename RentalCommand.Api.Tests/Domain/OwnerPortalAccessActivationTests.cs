@@ -13,6 +13,7 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -33,8 +34,6 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     private const int ActorUserId = 1;
     private static readonly DateTime FrozenBusinessNowUtc =
         new(2027, 1, 25, 5, 0, 0, DateTimeKind.Utc);
-    private static readonly AtomicJsonResultCodec<OwnerRelationshipAccessMutationResult> OwnerAccessCodec =
-        new("owner-relationship-access.mutation.v1");
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private ServiceProvider _services = null!;
@@ -455,39 +454,315 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GrantCommand_ReplaysWithoutWritingSecondAuditOrAccessRow()
+    public async Task RevocationLookup_IsOneTranslatedOwnerAccessGraphQuery()
     {
-        var owner = SeedOwner("owner-replay@example.test");
-        var target = SeedTargetUserAndContext("owner-replay@example.test");
+        var owner = SeedOwner("owner-revoke-sql@example.test");
+        var target = SeedTargetUserAndContext("owner-revoke-sql@example.test");
+        _ctx.Db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = target,
+            ApplicationUser = target.User!,
+            OwnerEntity = owner,
+            EffectiveFromUtc = FrozenBusinessNowUtc,
+            GrantedAtUtc = FrozenBusinessNowUtc,
+            GrantedByUserId = ActorUserId,
+            Reason = "SQL proof",
+        });
         await _ctx.Db.SaveChangesAsync();
-        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
-        var command = new GrantOwnerUserAccessCommand(
-            PortfolioId,
+
+        var handler = new RevokeOwnerPortalAccessHandler(_ctx.Db);
+        var method = typeof(RevokeOwnerPortalAccessHandler).GetMethod(
+            "BuildRevocationTargetQuery",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var query = (IQueryable<OwnerUserAccess>)method!.Invoke(
+            handler,
+            [PortfolioId, owner.Id])!;
+        var sql = query.ToQueryString();
+
+        sql.Should().Contain("\"OwnerUserAccesses\"");
+        sql.Should().Contain("\"WorkspaceAccessContexts\"");
+        sql.Should().Contain("\"WorkspaceInvitations\"");
+        sql.Should().Contain("\"MembershipRoleAssignments\"");
+        sql.Should().Contain("\"RevokedAtUtc\" IS NULL");
+        sql.Count(character => character == ';').Should().BeLessThanOrEqualTo(1);
+    }
+
+    [Fact]
+    public async Task RevokePendingInvitation_RevokesRelationshipInvitationAndOwnerAssignment()
+    {
+        var owner = SeedOwner("owner-revoke-pending@example.test");
+        await _ctx.Db.SaveChangesAsync();
+        var activation = await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
             owner.Id,
-            target.Id,
-            1,
-            DateTime.UtcNow,
-            null,
-            "Replay proof",
-            _scope.UserId,
-            _scope.SessionId,
-            _scope.AccessContextId,
-            _scope.AccessRevision);
-        var identity = new AtomicCommandIdentity(
-            "owner-entity.portal-access.activate",
-            $"{PortfolioId}:{owner.Id}:{target.Id}:replay-proof");
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-before-pending-revoke");
 
-        var first = await atomic.ExecuteAsync(identity, command, OwnerAccessCodec);
-        var replay = await atomic.ExecuteAsync(identity, command, OwnerAccessCodec);
+        var result = await _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-pending-owner");
 
-        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
-        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        replay.Value.OwnerUserAccessId.Should().Be(first.Value.OwnerUserAccessId);
+        result.Outcome.Should().Be(RevokeOwnerPortalAccessOutcome.Revoked);
+        result.RevokedRelationshipCount.Should().Be(1);
+        var access = await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(row => row.OwnerEntityId == owner.Id);
+        access.RevokedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        access.RevokedByUserId.Should().Be(ActorUserId);
+        (await _ctx.Db.WorkspaceInvitations.AsNoTracking()
+            .SingleAsync(row =>
+                row.WorkspaceMembership!.AccessContextId == activation.TargetAccessContextId))
+            .RevokedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        var assignment = await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .SingleAsync(row =>
+                row.WorkspaceMembership!.AccessContextId == activation.TargetAccessContextId &&
+                row.RoleProfile!.Key == RoleProfileKeys.OwnerPortal);
+        assignment.Status.Should().Be(MembershipRoleAssignmentStatus.Revoked);
+        assignment.RevokedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        (await _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
+            .SingleAsync(row => row.Id == activation.TargetAccessContextId))
+            .AccessRevision.Should().Be(3);
+        (await ProjectOwnerForGridAsync(owner.Id)).HasPendingOwnerPortalInvitation.Should().BeFalse();
+        (await _ctx.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey.Contains("owner-portal-revoke-data-update"))).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RevokeActiveAccess_RevokesRelationshipAndReplaysWithoutDuplicateAuditOrOutbox()
+    {
+        var owner = SeedOwner("owner-revoke-active@example.test");
+        SeedTargetUserAndContext("owner-revoke-active@example.test");
+        await _ctx.Db.SaveChangesAsync();
+        await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-before-active-revoke");
+
+        var first = await _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-active-owner");
+        var replay = await _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-active-owner");
+
+        first.Outcome.Should().Be(RevokeOwnerPortalAccessOutcome.Revoked);
+        replay.Outcome.Should().Be(RevokeOwnerPortalAccessOutcome.Revoked);
+        replay.Replayed.Should().BeTrue();
         (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
-            .CountAsync(row => row.OwnerEntityId == owner.Id)).Should().Be(1);
+            .SingleAsync(row => row.OwnerEntityId == owner.Id))
+            .RevokedAtUtc.Should().Be(FrozenBusinessNowUtc);
+        (await ProjectOwnerForGridAsync(owner.Id)).HasActiveOwnerPortalAccess.Should().BeFalse();
         (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
             row.EntityType == nameof(OwnerUserAccess) &&
-            row.ChangeReason == "Owner portal relationship granted")).Should().Be(1);
+            row.ChangeReason == "Owner portal relationship revoked")).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey.Contains("owner-portal-revoke-data-update"))).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RevokeNewlyActivatedAccess_WhenGrantIsAfterFrozenBusinessTime_UsesGrantInstant()
+    {
+        var owner = SeedOwner("owner-revoke-newly-activated@example.test");
+        var target = SeedTargetUserAndContext("owner-revoke-newly-activated@example.test");
+        var grantedAtUtc = FrozenBusinessNowUtc.AddTicks(10);
+        _ctx.Db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = target,
+            ApplicationUser = target.User!,
+            OwnerEntity = owner,
+            EffectiveFromUtc = FrozenBusinessNowUtc,
+            GrantedAtUtc = grantedAtUtc,
+            GrantedByUserId = ActorUserId,
+            Reason = "Newly activated",
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var first = await _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-newly-activated-owner");
+        var replay = await _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-newly-activated-owner");
+
+        first.Outcome.Should().Be(RevokeOwnerPortalAccessOutcome.Revoked);
+        replay.Replayed.Should().BeTrue();
+        (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(row => row.OwnerEntityId == owner.Id))
+            .RevokedAtUtc.Should().Be(grantedAtUtc);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
+            row.EntityType == nameof(OwnerUserAccess) &&
+            row.ChangeReason == "Owner portal relationship revoked")).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.AsNoTracking().CountAsync(row =>
+            row.IdempotencyKey.Contains("owner-portal-revoke-data-update"))).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AdjacentRoleWithoutTeamManage_CannotRevokeOwnerPortalAccess()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
+        _ctx = await _fixture.CreateContextAsync();
+        _services = BuildServices(_ctx.ConnectionString, timeProvider: new FixedTimeProvider(FrozenBusinessNowUtc));
+        _scope = SeedActor(RoleProfileKeys.LeasingAgent);
+        _sut = Service();
+
+        var owner = SeedOwner("owner-revoke-denied@example.test");
+        var target = SeedTargetUserAndContext("owner-revoke-denied@example.test");
+        _ctx.Db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            OwnerEntity = owner,
+            ApplicationUser = target.User,
+            AccessContext = target,
+            EffectiveFromUtc = FrozenBusinessNowUtc.AddMinutes(-1),
+            GrantedAtUtc = FrozenBusinessNowUtc.AddMinutes(-1),
+            GrantedByUserId = ActorUserId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var act = () => _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-owner-denied");
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(row => row.OwnerEntityId == owner.Id))
+            .RevokedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RevokeDataUpdateFailure_RollsBackRelationshipInvitationAssignmentRevisionAndAudit()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
+        var failure = new ThrowOnOwnerPortalRevokeDataUpdateInterceptor();
+        _ctx = await _fixture.CreateContextAsync();
+        _services = BuildServices(
+            _ctx.ConnectionString,
+            failure,
+            new FixedTimeProvider(FrozenBusinessNowUtc));
+        _scope = SeedActor(RoleProfileKeys.WorkspaceAdministrator);
+        _sut = Service();
+
+        var owner = SeedOwner("owner-revoke-rollback@example.test");
+        await _ctx.Db.SaveChangesAsync();
+        var activation = await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-before-revoke-rollback");
+
+        var act = () => _sut.RevokeOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new RevokeOwnerPortalAccessRequest(),
+            "revoke-owner-rollback");
+
+        await act.Should().ThrowAsync<DbUpdateException>();
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(row => row.OwnerEntityId == owner.Id))
+            .RevokedAtUtc.Should().BeNull();
+        (await _ctx.Db.WorkspaceInvitations.AsNoTracking()
+            .SingleAsync(row => row.WorkspaceMembership!.AccessContextId == activation.TargetAccessContextId))
+            .RevokedAtUtc.Should().BeNull();
+        (await _ctx.Db.MembershipRoleAssignments.AsNoTracking()
+            .SingleAsync(row =>
+                row.WorkspaceMembership!.AccessContextId == activation.TargetAccessContextId &&
+                row.RoleProfile!.Key == RoleProfileKeys.OwnerPortal))
+            .Status.Should().Be(MembershipRoleAssignmentStatus.Active);
+        (await _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
+            .SingleAsync(row => row.Id == activation.TargetAccessContextId))
+            .AccessRevision.Should().Be(2);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
+            row.ChangeReason == "Owner portal relationship revoked")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DeleteOwner_WithPortalAccess_FailsClosedWithoutSoftDelete()
+    {
+        var owner = SeedOwner("owner-delete-portal-guard@example.test");
+        SeedTargetUserAndContext("owner-delete-portal-guard@example.test");
+        await _ctx.Db.SaveChangesAsync();
+        await _sut.ActivateOwnerPortalAccessAsync(
+            _scope,
+            owner.Id,
+            new ActivateOwnerPortalAccessRequest(),
+            "activate-before-delete-guard");
+
+        var act = () => _sut.DeleteAsync(_scope, owner.Id, "delete-owner-with-portal");
+
+        (await act.Should().ThrowAsync<DomainValidationException>())
+            .Which.Message.Should().Contain("Revoke this owner's portal access");
+        (await _ctx.Db.OwnerEntities.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(row => row.Id == owner.Id)).DeletedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteOwner_WithFutureUnendedPropertyOwnership_FailsClosedWithoutSoftDelete()
+    {
+        var owner = SeedOwner("owner-delete-future-ownership@example.test");
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Future ownership guard",
+            AddressLine1 = "12 Guard St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = FrozenBusinessNowUtc,
+            UpdatedAt = FrozenBusinessNowUtc,
+        };
+        _ctx.Db.Add(property);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = owner.Id,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = FrozenBusinessNowUtc.AddDays(18),
+            StatementRecipientName = owner.Name,
+            StatementRecipientEmail = owner.Email,
+            PayeeName = owner.Name,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var act = () => _sut.DeleteAsync(_scope, owner.Id, "delete-owner-with-future-ownership");
+
+        (await act.Should().ThrowAsync<DomainValidationException>())
+            .Which.Message.Should().Contain("assigned to 1 property");
+        (await _ctx.Db.OwnerEntities.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(row => row.Id == owner.Id)).DeletedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public void RevocationEndpoint_RequiresTeamManagePolicy()
+    {
+        var method = typeof(OwnerEntityController).GetMethod(nameof(OwnerEntityController.RevokePortalAccess))
+            ?? throw new InvalidOperationException("Missing owner portal revocation endpoint.");
+        var policy = method.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .OfType<AuthorizeAttribute>()
+            .Single()
+            .Policy;
+
+        policy.Should().Be(CapabilityPolicy.Prefix + CapabilityKeys.TeamManage);
     }
 
     private OwnerEntityService Service() => new(
@@ -510,13 +785,17 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
-            GrantOwnerUserAccessCommand,
-            OwnerRelationshipAccessMutationResult,
-            GrantOwnerUserAccessHandler>();
-        services.AddAtomicCommandHandler<
             ActivateOwnerPortalAccessCommand,
             ActivateOwnerPortalAccessMutationResult,
             ActivateOwnerPortalAccessHandler>();
+        services.AddAtomicCommandHandler<
+            RevokeOwnerPortalAccessCommand,
+            RevokeOwnerPortalAccessMutationResult,
+            RevokeOwnerPortalAccessHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicCoreCrudMutationCommand,
+            AtomicCoreCrudMutationResult,
+            AtomicCoreCrudMutationHandler>();
         services.AddAtomicCommandHandler<
             ActivateWorkspaceInvitationCommand,
             ActivateWorkspaceInvitationResult,
@@ -837,6 +1116,41 @@ public sealed class OwnerPortalAccessActivationTests : IAsyncLifetime
                     parameter.Value?.ToString()?.Contains("owner-portal-invitation", StringComparison.Ordinal) == true))
             {
                 throw new InvalidOperationException("Injected owner-portal invitation outbox failure.");
+            }
+        }
+    }
+
+    private sealed class ThrowOnOwnerPortalRevokeDataUpdateInterceptor : DbCommandInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfTarget(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfTarget(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private static void ThrowIfTarget(DbCommand command)
+        {
+            if (command.CommandText.Contains("INSERT INTO \"OutboxMessages\"", StringComparison.OrdinalIgnoreCase) &&
+                command.Parameters.Cast<DbParameter>().Any(parameter =>
+                    parameter.Value?.ToString()?.Contains(
+                        "owner-portal-revoke-data-update",
+                        StringComparison.Ordinal) == true))
+            {
+                throw new InvalidOperationException("Injected owner-portal revoke data-update failure.");
             }
         }
     }

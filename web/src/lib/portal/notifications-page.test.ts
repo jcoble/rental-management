@@ -103,6 +103,18 @@ function tenantLedgerIntent(
 	};
 }
 
+function tenantAccountIntent(
+	overrides: Partial<NotificationNavigationIntent> = {}
+): NotificationNavigationIntent {
+	return {
+		...tenantMessageIntent({
+			destination: 'TenantAccount',
+			resource: { kind: 'TenantAccount', id: 8 }
+		}),
+		...overrides
+	};
+}
+
 describe('notification intent URL mapping', () => {
 	it('maps a current typed tenant message intent without accepting a raw URL', () => {
 		assert.equal(
@@ -137,6 +149,21 @@ describe('notification intent URL mapping', () => {
 				tenantLedgerIntent({ resource: { kind: 'Payment', id: 872 } }),
 				tenantAuthority,
 				Date.UTC(2026, 0, 27)
+			),
+			'/portal'
+		);
+	});
+
+	it('routes tenant account reminders to the scoped portal payment screen', () => {
+		assert.equal(
+			notificationIntentUrl(tenantAccountIntent(), tenantAuthority, Date.UTC(2027, 1, 2)),
+			'/portal/payments?account=8'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				tenantAccountIntent({ resource: { kind: 'Unit', id: 8 } }),
+				tenantAuthority,
+				Date.UTC(2027, 1, 2)
 			),
 			'/portal'
 		);

@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -136,7 +137,8 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, CreateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -147,7 +149,8 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int id, UpdateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -158,7 +161,8 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;
@@ -174,7 +178,8 @@ public class LoanService : ILoanService
     {
         request.LoanId = loanId;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, paymentId, idempotencyKey, request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, paymentId, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -198,7 +203,7 @@ public class LoanService : ILoanService
             return null;
 
         return await BuildPaymentQuery(
-                _db.LoanPayments.AsNoTracking()
+                LoanPaymentEffectiveQuery.From(_db)
                     .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId),
                 query)
             .ToListAsync(ct);
@@ -214,14 +219,14 @@ public class LoanService : ILoanService
             return null;
 
         return await BuildPaymentQuery(
-                _db.LoanPayments.AsNoTracking()
+                LoanPaymentEffectiveQuery.From(_db)
                     .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId),
                 query)
             .ToListAsync(ct);
     }
 
     private static IQueryable<LoanPaymentResponse> BuildPaymentQuery(
-        IQueryable<LoanPayment> payments,
+        IQueryable<LoanPaymentEffectiveRow> payments,
         LoanPaymentQuery? query)
     {
         query ??= new LoanPaymentQuery();

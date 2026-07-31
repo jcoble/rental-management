@@ -351,6 +351,39 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Worker_dispatches_canonical_lease_entity_update_payload_without_embedded_data()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            PortfolioId = 17,
+            MessageType = "data-update",
+            Payload = """
+                {"action":"addendum-draft-created","entityId":1,"entityType":"LeaseAddendum","leaseManagementId":39}
+                """,
+            IdempotencyKey = "addendum-create:17:39:regression",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var updates = new CapturingDataUpdateService();
+
+        await RunWorkerAsync(
+            new CapturingChannel(),
+            new CapturingPushSender(),
+            dataUpdateService: updates);
+
+        updates.Updates.Should().ContainSingle().Which.Should().Be((17, "LeaseAddendum", 1));
+        await using var verify = NewContext();
+        var row = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "addendum-create:17:39:regression");
+        row.AcceptedAtUtc.Should().NotBeNull();
+        row.DeadLetteredAtUtc.Should().BeNull();
+        row.Provider.Should().Be("postgres-notify");
+    }
+
+    [SkippableFact]
     public async Task Worker_retries_durable_blob_cleanup_until_storage_accepts_it()
     {
         SkipIfDockerUnavailable();

@@ -7,30 +7,35 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CancelPlannedRelationshipHandler
-    : IAtomicCommandHandler<CancelPlannedRelationshipCommand, CancelPlannedRelationshipResult>,
-      IAtomicReplayAuthorizer<CancelPlannedRelationshipCommand>
+    : IAtomicCommandHandler<CancelPlannedRelationshipCommand, CancelPlannedRelationshipResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CancelPlannedRelationshipHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CancelPlannedRelationshipResult> HandleAsync(
         CancelPlannedRelationshipCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedRelationships(command, attempt.Persistence, nowUtc).AnyAsync(ct))
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        if (!await AuthorizedRelationships(
+                command, _db, businessNowUtc, securityNowUtc).AnyAsync(ct))
         {
             throw Unauthorized();
         }
 
-        var mutation = await attempt.Leasing.CancelPlannedRelationshipAsync(
-            command.PortfolioId,
+        var mutation = await AtomicLeaseMutationPersistence.CancelPlannedRelationshipAsync(_db,
+            context, command.PortfolioId,
             command.LeaseManagementId,
             command.Accesses.Select(item => new AtomicCancelPlannedAccessInput(
                 item.TenantUserAccessId, item.Disposition)).ToArray(),
             command.CreatedByUserId,
-            nowUtc,
+            businessNowUtc,
             command.CancellationReasonCode,
             command.CancellationNote,
             command.DraftCancellationReason,
@@ -43,30 +48,30 @@ public sealed class CancelPlannedRelationshipHandler
 
         foreach (var agreementId in mutation.CanceledAgreementDraftIds)
         {
-            attempt.StageSemanticEvent(Updated(command, nameof(LeaseAgreement), agreementId,
-                "Unissued Agreement draft canceled with the planned relationship."), nowUtc);
+            context.StageSemanticEvent(Updated(command, nameof(LeaseAgreement), agreementId,
+                "Unissued Agreement draft canceled with the planned relationship."), businessNowUtc);
         }
         foreach (var addendumId in mutation.CanceledAddendumDraftIds)
         {
-            attempt.StageSemanticEvent(Updated(command, nameof(LeaseAddendum), addendumId,
-                "Unissued Addendum draft canceled with the planned relationship."), nowUtc);
+            context.StageSemanticEvent(Updated(command, nameof(LeaseAddendum), addendumId,
+                "Unissued Addendum draft canceled with the planned relationship."), businessNowUtc);
         }
         foreach (var accessId in mutation.RevokedAccessIds)
         {
-            attempt.StageSemanticEvent(Updated(command, nameof(TenantUserAccess), accessId,
-                "Tenant access revoked under the explicit cancellation policy."), nowUtc);
+            context.StageSemanticEvent(Updated(command, nameof(TenantUserAccess), accessId,
+                "Tenant access revoked under the explicit cancellation policy."), businessNowUtc);
         }
         if (mutation.TenantAccountId is int tenantAccountId)
         {
-            attempt.StageSemanticEvent(Updated(command, nameof(TenantAccount), tenantAccountId,
-                "Empty Tenant Account closed with the canceled planned relationship."), nowUtc);
+            context.StageSemanticEvent(Updated(command, nameof(TenantAccount), tenantAccountId,
+                "Empty Tenant Account closed with the canceled planned relationship."), businessNowUtc);
         }
-        attempt.StageSemanticEvent(Updated(command, nameof(LeaseManagement),
-            command.LeaseManagementId, "Planned lease relationship canceled before possession."), nowUtc);
-        attempt.StageOutbox(PossessionOutbox.Create(
+        context.StageSemanticEvent(Updated(command, nameof(LeaseManagement),
+            command.LeaseManagementId, "Planned lease relationship canceled before posdb."), businessNowUtc);
+        context.StageOutbox(PossessionOutbox.Create(
             command.PortfolioId,
             command.DeliveryIdempotencyKey,
-            nowUtc,
+            businessNowUtc,
             "planned-relationship-canceled",
             nameof(LeaseManagement),
             command.LeaseManagementId,
@@ -87,13 +92,12 @@ public sealed class CancelPlannedRelationshipHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        CancelPlannedRelationshipCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        CancelPlannedRelationshipCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedRelationships(command, persistence, nowUtc).AnyAsync(ct))
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedRelationships(
+                command, _db, command.BusinessNowUtc, securityNowUtc).AnyAsync(ct))
         {
             throw Unauthorized();
         }
@@ -101,10 +105,11 @@ public sealed class CancelPlannedRelationshipHandler
 
     private static IQueryable<LeaseManagement> AuthorizedRelationships(
         CancelPlannedRelationshipCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime nowUtc) =>
+        RentalCommandDbContext db,
+        DateTime businessNowUtc,
+        DateTime securityNowUtc) =>
         PossessionCommandAuthorization.AuthorizedRelationships(
-            persistence,
+            db,
             command.PortfolioId,
             command.LeaseManagementId,
             command.UnitId,
@@ -112,7 +117,8 @@ public sealed class CancelPlannedRelationshipHandler
             command.AuthSessionId,
             command.AccessContextId,
             command.ExpectedAccessRevision,
-            nowUtc);
+            businessNowUtc,
+            securityNowUtc);
 
     private static void Validate(CancelPlannedRelationshipCommand command)
     {
@@ -124,6 +130,7 @@ public sealed class CancelPlannedRelationshipHandler
             command.AuthSessionId,
             command.AccessContextId,
             command.ExpectedAccessRevision,
+            command.BusinessNowUtc,
             command.DeliveryIdempotencyKey);
         if (string.IsNullOrWhiteSpace(command.CancellationReasonCode)
             || command.CancellationReasonCode.Trim().Length > 40

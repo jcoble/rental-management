@@ -4,14 +4,17 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Automation;
+using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -122,8 +125,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var identity = ExpenseIdentity(claim.ClaimToken, "canonical");
         var command = ExpenseCommand(claim);
 
-        var first = await Atomic.ExecuteAsync(identity, command, ExpenseCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, ExpenseCodec);
+        var first = await ExecuteAtomicAsync(identity, command, ExpenseCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ExpenseCodec);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -154,16 +157,292 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var command = new ApplyClaimedDebtServiceBatchCommand(
             [claim.Id], claim.ClaimToken, _today, _today.AddMinutes(1));
 
-        var first = await Atomic.ExecuteAsync(identity, command, DebtCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, DebtCodec);
+        Recorder.Clear();
+        var first = await ExecuteAtomicAsync(identity, command, DebtCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, DebtCodec);
 
         first.Value.GeneratedRowCount.Should().Be(1);
         replay.Value.Should().Be(first.Value);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        var effectiveTailCommands = Recorder.Commands.Where(sql =>
+            sql.Contains("FROM \"LoanPayments\"", StringComparison.Ordinal) &&
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.Ordinal)).ToArray();
+        effectiveTailCommands.Should().ContainSingle(
+            "the Engine must select and shape all effective loan tails in one reader command");
+        effectiveTailCommands[0].Should()
+            .Contain("ORDER BY")
+            .And.Contain("GROUP BY")
+            .And.Contain("ROW_NUMBER()")
+            .And.Contain("row <= 1");
         await using var verify = NewContext();
         (await verify.LoanPayments.CountAsync(row => row.LoanId == loanId)).Should().Be(1);
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType)).Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [SkippableFact]
+    public async Task DebtService_February20RerunPreservesCorrectedPaymentsBalancesAuditsAndOutbox()
+    {
+        SkipIfNoDocker();
+        var february20 = new DateTime(2027, 2, 20, 0, 0, 0, DateTimeKind.Utc);
+        var statementAttemptId = Guid.NewGuid();
+        int arborLoanId;
+        int arborPaymentId;
+        int briarLoanId;
+        int briarPaymentId;
+        await using (var seed = NewContext())
+        {
+            var arbor = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _propertyId,
+                Lender = "Arbor correction-aware rerun",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 124_963m,
+                AnnualInterestRatePct = 4.5m,
+                TermMonths = 360,
+                StartDate = new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                DebtServiceAutomationStartDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc),
+                DayOfMonthDue = 20,
+                MonthlyPrincipalInterest = 1_046m,
+                MonthlyEscrow = 318m,
+                Status = LoanStatus.Active,
+                CreatedAt = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = february20,
+            };
+            var briar = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _propertyId,
+                Lender = "Briar correction-aware rerun",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 130_016m,
+                AnnualInterestRatePct = 5.8m,
+                TermMonths = 360,
+                StartDate = new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                DebtServiceAutomationStartDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc),
+                DayOfMonthDue = 20,
+                MonthlyPrincipalInterest = 1_070m,
+                MonthlyEscrow = 318m,
+                Status = LoanStatus.Active,
+                CreatedAt = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = february20,
+            };
+            seed.Loans.AddRange(arbor, briar);
+            await seed.SaveChangesAsync();
+
+            var arborPayment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = arbor.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 470.23m,
+                PrincipalAmount = 583.77m,
+                EscrowAmount = 318m,
+                TotalAmount = 1_372m,
+                BalanceAfter = 124_810.23m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+            };
+            var briarPayment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = briar.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 633.81m,
+                PrincipalAmount = 444.19m,
+                EscrowAmount = 0m,
+                TotalAmount = 1_078m,
+                BalanceAfter = 130_013.81m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+            };
+            seed.LoanPayments.AddRange(arborPayment, briarPayment);
+            await seed.SaveChangesAsync();
+
+            var arborCorrection = new LoanPaymentCorrection
+            {
+                PortfolioId = _portfolioId,
+                LoanPaymentId = arborPayment.Id,
+                AttemptId = statementAttemptId,
+                DueDate = february20,
+                PaidDate = february20,
+                InterestAmount = 615m,
+                PrincipalAmount = 431m,
+                EscrowAmount = 318m,
+                TotalAmount = 1_364m,
+                BalanceAfter = 124_963m,
+                Status = LoanPaymentStatus.Paid,
+                CreatedAtUtc = february20,
+            };
+            var briarCorrection = new LoanPaymentCorrection
+            {
+                PortfolioId = _portfolioId,
+                LoanPaymentId = briarPayment.Id,
+                AttemptId = statementAttemptId,
+                DueDate = february20,
+                PaidDate = february20,
+                InterestAmount = 628m,
+                PrincipalAmount = 442m,
+                EscrowAmount = 318m,
+                TotalAmount = 1_388m,
+                BalanceAfter = 130_016m,
+                Status = LoanPaymentStatus.Paid,
+                CreatedAtUtc = february20,
+            };
+            seed.LoanPaymentCorrections.AddRange(arborCorrection, briarCorrection);
+            await seed.SaveChangesAsync();
+
+            seed.AtomicAuditLogs.AddRange(
+                new AtomicAuditLog
+                {
+                    AttemptId = statementAttemptId,
+                    CommandType = "scan-confirmation.confirm",
+                    CommandIdempotencyKey = "ys295:arbor",
+                    MutationOrdinal = 1,
+                    PortfolioId = _portfolioId,
+                    ActorLabel = "integration:scheduled-finance",
+                    EntityType = nameof(LoanPaymentCorrection),
+                    EntityId = arborCorrection.Id,
+                    Operation = AuditLogOperation.Created,
+                    Timestamp = february20,
+                },
+                new AtomicAuditLog
+                {
+                    AttemptId = statementAttemptId,
+                    CommandType = "scan-confirmation.confirm",
+                    CommandIdempotencyKey = "ys295:briar",
+                    MutationOrdinal = 1,
+                    PortfolioId = _portfolioId,
+                    ActorLabel = "integration:scheduled-finance",
+                    EntityType = nameof(LoanPaymentCorrection),
+                    EntityId = briarCorrection.Id,
+                    Operation = AuditLogOperation.Created,
+                    Timestamp = february20,
+                },
+                new AtomicAuditLog
+                {
+                    AttemptId = statementAttemptId,
+                    CommandType = "scan-confirmation.confirm",
+                    CommandIdempotencyKey = "ys295:arbor",
+                    MutationOrdinal = 2,
+                    PortfolioId = _portfolioId,
+                    ActorLabel = "integration:scheduled-finance",
+                    EntityType = nameof(Loan),
+                    EntityId = arbor.Id,
+                    Operation = AuditLogOperation.Updated,
+                    Timestamp = february20,
+                },
+                new AtomicAuditLog
+                {
+                    AttemptId = statementAttemptId,
+                    CommandType = "scan-confirmation.confirm",
+                    CommandIdempotencyKey = "ys295:briar",
+                    MutationOrdinal = 2,
+                    PortfolioId = _portfolioId,
+                    ActorLabel = "integration:scheduled-finance",
+                    EntityType = nameof(Loan),
+                    EntityId = briar.Id,
+                    Operation = AuditLogOperation.Updated,
+                    Timestamp = february20,
+                });
+            seed.OutboxMessages.AddRange(
+                new OutboxMessage
+                {
+                    PortfolioId = _portfolioId,
+                    MessageType = "data-update",
+                    Payload = "{}",
+                    IdempotencyKey = $"ys295:LoanPayment:{arborPayment.Id}:data-update",
+                    CreatedAtUtc = february20,
+                    NextAttemptAtUtc = february20,
+                },
+                new OutboxMessage
+                {
+                    PortfolioId = _portfolioId,
+                    MessageType = "data-update",
+                    Payload = "{}",
+                    IdempotencyKey = $"ys295:LoanPayment:{briarPayment.Id}:data-update",
+                    CreatedAtUtc = february20,
+                    NextAttemptAtUtc = february20,
+                },
+                new OutboxMessage
+                {
+                    PortfolioId = _portfolioId,
+                    MessageType = "data-update",
+                    Payload = "{}",
+                    IdempotencyKey = $"ys295:Loan:{arbor.Id}:data-update",
+                    CreatedAtUtc = february20,
+                    NextAttemptAtUtc = february20,
+                },
+                new OutboxMessage
+                {
+                    PortfolioId = _portfolioId,
+                    MessageType = "data-update",
+                    Payload = "{}",
+                    IdempotencyKey = $"ys295:Loan:{briar.Id}:data-update",
+                    CreatedAtUtc = february20,
+                    NextAttemptAtUtc = february20,
+                });
+            await seed.SaveChangesAsync();
+            arborLoanId = arbor.Id;
+            arborPaymentId = arborPayment.Id;
+            briarLoanId = briar.Id;
+            briarPaymentId = briarPayment.Id;
+        }
+
+        var loanIds = new[] { arborLoanId, briarLoanId };
+        var paymentIds = new[] { arborPaymentId, briarPaymentId };
+        async Task<(int Occurrences, int Corrections, decimal[] Balances, int Audits, int Outbox)> SnapshotAsync()
+        {
+            await using var db = NewContext();
+            return (
+                await db.LoanPayments.CountAsync(row =>
+                    loanIds.Contains(row.LoanId) && row.PeriodKey == "2027-02"),
+                await db.LoanPaymentCorrections.CountAsync(row =>
+                    paymentIds.Contains(row.LoanPaymentId)),
+                await db.Loans
+                    .Where(row => loanIds.Contains(row.Id))
+                    .OrderBy(row => row.Id)
+                    .Select(row => row.CurrentBalance)
+                    .ToArrayAsync(),
+                await db.AtomicAuditLogs.CountAsync(row =>
+                    row.PortfolioId == _portfolioId),
+                await db.OutboxMessages.CountAsync(row =>
+                    row.PortfolioId == _portfolioId));
+        }
+
+        var before = await SnapshotAsync();
+        Recorder.Clear();
+        await using (var runScope = _services!.CreateAsyncScope())
+        {
+            var runDb = runScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var service = new DebtServiceService(
+                runScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+                new FixedTimeProvider(february20),
+                new FixedTimeZoneProvider(TimeZoneInfo.Utc),
+                new ScheduledAutomationClaimStore(runDb),
+                NullLogger<DebtServiceService>.Instance);
+
+            (await service.GenerateAsync()).Should().Be(0);
+        }
+        Recorder.Commands.Should().NotContain(sql =>
+                sql.Contains("FROM \"LoanPayments\"", StringComparison.Ordinal) &&
+                sql.Contains("\"LoanPaymentCorrections\"", StringComparison.Ordinal),
+            "an already-corrected February schedule must not enter the Atomic Engine tail reader");
+        var after = await SnapshotAsync();
+
+        before.Occurrences.Should().Be(2);
+        after.Occurrences.Should().Be(before.Occurrences);
+        before.Corrections.Should().Be(2);
+        after.Corrections.Should().Be(before.Corrections);
+        before.Balances.Should().Equal(124_963m, 130_016m);
+        after.Balances.Should().Equal(before.Balances);
+        before.Audits.Should().Be(4);
+        after.Audits.Should().Be(before.Audits);
+        before.Outbox.Should().Be(4);
+        after.Outbox.Should().Be(before.Outbox);
     }
 
     [SkippableFact]
@@ -173,14 +452,14 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var templateId = await SeedRecurringExpenseAsync(_today.AddMonths(-40));
         var firstClaim = await ClaimExpenseAsync();
 
-        var first = await Atomic.ExecuteAsync(
+        var first = await ExecuteAtomicAsync(
             ExpenseIdentity(firstClaim.ClaimToken, "bounded-first"),
             ExpenseCommand(firstClaim),
             ExpenseCodec);
 
         first.Value.GeneratedRowCount.Should().Be(36);
         var secondClaim = await ClaimExpenseAsync();
-        var second = await Atomic.ExecuteAsync(
+        var second = await ExecuteAtomicAsync(
             ExpenseIdentity(secondClaim.ClaimToken, "bounded-second"),
             ExpenseCommand(secondClaim),
             ExpenseCodec);
@@ -198,7 +477,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var loanId = await SeedLoanAsync(_today.AddMonths(-40));
         var firstClaim = (await ClaimDebtAsync()).Single();
-        var first = await Atomic.ExecuteAsync(
+        var first = await ExecuteAtomicAsync(
             DebtIdentity(firstClaim.ClaimToken, "bounded-first"),
             new ApplyClaimedDebtServiceBatchCommand(
                 [firstClaim.Id], firstClaim.ClaimToken, _today, _today.AddMinutes(1)),
@@ -206,7 +485,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
 
         first.Value.GeneratedRowCount.Should().Be(36);
         var secondClaim = (await ClaimDebtAsync()).Single();
-        var second = await Atomic.ExecuteAsync(
+        var second = await ExecuteAtomicAsync(
             DebtIdentity(secondClaim.ClaimToken, "bounded-second"),
             new ApplyClaimedDebtServiceBatchCommand(
                 [secondClaim.Id], secondClaim.ClaimToken, _today, _today.AddMinutes(2)),
@@ -241,7 +520,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
 
         (await ClaimDebtAsync(importDate)).Should().BeEmpty();
         var claim = (await ClaimDebtAsync(firstDueDate)).Single();
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             DebtIdentity(claim.ClaimToken, "imported-current-balance"),
             new ApplyClaimedDebtServiceBatchCommand(
                 [claim.Id], claim.ClaimToken, firstDueDate, firstDueDate.AddMinutes(1)),
@@ -275,7 +554,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
 
         (await ClaimDebtAsync(importDate)).Should().BeEmpty();
         var claim = (await ClaimDebtAsync(nextDueDate)).Single();
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             DebtIdentity(claim.ClaimToken, "imported-after-due-day"),
             new ApplyClaimedDebtServiceBatchCommand(
                 [claim.Id], claim.ClaimToken, nextDueDate, nextDueDate.AddMinutes(1)),
@@ -321,7 +600,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         (await ClaimDebtAsync(importDate)).Should().BeEmpty();
 
         var claim = (await ClaimDebtAsync(firstDueDate)).Single();
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             DebtIdentity(claim.ClaimToken, "imported-pre-import-tail"),
             new ApplyClaimedDebtServiceBatchCommand(
                 [claim.Id], claim.ClaimToken, firstDueDate, firstDueDate.AddMinutes(1)),
@@ -364,7 +643,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var replacement = await ClaimExpenseAsync();
         var staleIdentity = ExpenseIdentity(stale.ClaimToken, "stale");
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 staleIdentity, ExpenseCommand(stale), ExpenseCodec))
             .Should().ThrowAsync<ScheduledFinanceClaimLostException>();
 
@@ -381,7 +660,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             durable.NextRunDate.Should().Be(_today);
         }
 
-        (await Atomic.ExecuteAsync(
+        (await ExecuteAtomicAsync(
             ExpenseIdentity(replacement.ClaimToken, "replacement"),
             ExpenseCommand(replacement),
             ExpenseCodec)).Value.GeneratedRowCount.Should().Be(1);
@@ -400,7 +679,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         Failures.FailAtomicAudit = failure == "audit";
         Failures.FailReceiptCompletion = failure == "receipt";
 
-        var failureAssertion = await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        var failureAssertion = await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 identity, ExpenseCommand(claim), ExpenseCodec))
             .Should().ThrowAsync<DbUpdateException>();
         failureAssertion.Which.InnerException.Should().BeOfType<InvalidOperationException>();
@@ -419,7 +698,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             template.WorkerClaimToken.Should().Be(claim.ClaimToken);
         }
 
-        (await Atomic.ExecuteAsync(identity, ExpenseCommand(claim), ExpenseCodec))
+        (await ExecuteAtomicAsync(identity, ExpenseCommand(claim), ExpenseCodec))
             .Value.GeneratedRowCount.Should().Be(1);
     }
 
@@ -429,7 +708,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var templateId = await SeedRecurringExpenseAsync(_today);
         var firstClaim = await ClaimExpenseAsync();
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             ExpenseIdentity(firstClaim.ClaimToken, "first"), ExpenseCommand(firstClaim), ExpenseCodec);
 
         var secondToken = Guid.NewGuid();
@@ -444,7 +723,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         }
         var secondIdentity = ExpenseIdentity(secondToken, "different-key");
 
-        await FluentActions.Invoking(() => Atomic.ExecuteAsync(
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(
                 secondIdentity,
                 new ApplyClaimedRecurringExpenseBatchCommand(
                     [templateId], secondToken, _today, _today.AddMinutes(1)),
@@ -472,8 +751,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
             [claim.Id], claim.ClaimToken, _today, _today.AddMinutes(1), "America/New_York");
 
-        var first = await Atomic.ExecuteAsync(identity, command, MaintenanceCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, MaintenanceCodec);
+        var first = await ExecuteAtomicAsync(identity, command, MaintenanceCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, MaintenanceCodec);
 
         replay.Value.Should().BeEquivalentTo(first.Value);
         await using var verify = NewContext();
@@ -492,7 +771,6 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         var template = new RecurringExpense
         {
             PortfolioId = _portfolioId,
-            PropertyId = _propertyId,
             Category = ScheduleECategory.Insurance,
             Description = "Insurance",
             Amount = 250m,
@@ -619,7 +897,19 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     private static AtomicCommandIdentity DebtIdentity(Guid token, string suffix) =>
         new("scheduled-finance.debt-service.apply", $"{token:N}:{suffix}");
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
+
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private CompanionFailureInterceptor Failures =>
         _services!.GetRequiredService<CompanionFailureInterceptor>();
@@ -637,6 +927,16 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         public int? UserId => null;
         public string? ActorLabel => "integration:scheduled-finance";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
+    }
+
+    private sealed class FixedTimeZoneProvider(TimeZoneInfo timeZone) : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone { get; } = timeZone;
     }
 
     private sealed class CommandRecorder : DbCommandInterceptor

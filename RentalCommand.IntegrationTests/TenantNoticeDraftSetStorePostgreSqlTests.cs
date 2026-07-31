@@ -467,6 +467,11 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         persisted.Body.Should().Contain("Casey A",
             because: "each durable notice draft is rendered for one exact eligible relationship party");
         persisted.Body.Should().Contain("$1,000");
+        persisted.Body.Should().Contain(
+            "Hello Casey A, this is a reminder that $1,000 is due on July 1, 2026");
+        persisted.Body.Should().NotContain("{",
+            because: "set-based draft rendering must replace the full double-brace merge token");
+        persisted.Body.Should().NotContain("}");
     }
 
     private static TenantNoticeWorkItem ClaimedWork(

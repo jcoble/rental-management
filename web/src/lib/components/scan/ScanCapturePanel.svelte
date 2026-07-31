@@ -40,7 +40,12 @@
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
 		{ value: 'LeaseAgreement', label: 'Lease Agreement', hint: 'Becomes an agreement record' },
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
-		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' }
+		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' },
+		{
+			value: 'LeaseEndingNotice',
+			label: 'Move-out Notice',
+			hint: 'Attaches notice and starts move-out'
+		}
 	];
 
 	let {

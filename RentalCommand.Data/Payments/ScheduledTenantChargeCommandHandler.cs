@@ -6,52 +6,142 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Core.Payments;
 using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Payments;
 
 /// <summary>
 /// Atomic, set-based scheduled tenant billing. PostgreSQL owns every eligibility and duplicate
-/// decision; this handler only attaches durable audit/outbox companions to rows returned by the
-/// two bounded insert statements.
+/// decision; these handlers only attach durable audit/outbox companions to rows returned by each
+/// bounded insert statement.
 /// </summary>
-public sealed class ApplyScheduledTenantChargeBatchHandler
-    : IAtomicCommandHandler<ApplyScheduledTenantChargeBatchCommand, ApplyScheduledTenantChargeBatchResult>
+public sealed class ApplyScheduledRentChargeBatchHandler
+    : IAtomicCommandHandler<ApplyScheduledRentChargeBatchCommand, ApplyScheduledRentChargeBatchResult>
 {
-    public async Task<ApplyScheduledTenantChargeBatchResult> HandleAsync(
-        ApplyScheduledTenantChargeBatchCommand command,
-        IAtomicWriteAttempt attempt,
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyScheduledRentChargeBatchHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<ApplyScheduledRentChargeBatchResult> HandleAsync(
+        ApplyScheduledRentChargeBatchCommand command,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        if (command.RunToken == Guid.Empty)
-            throw new ArgumentException("A scheduled tenant-charge run token is required.");
-        if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
-            throw new ArgumentException("Scheduled tenant-charge business time must be UTC.");
-        if (command.BatchSize is <= 0 or > 500)
-            throw new ArgumentOutOfRangeException(nameof(command.BatchSize));
-        if (!command.IncludeRentCharges && !command.IncludeLateFeeCharges)
-            throw new ArgumentException("At least one scheduled tenant-charge type is required.");
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.StateLateFeeCapsJson);
-        attempt.UseDatabaseWallClockForAudit(command.BusinessNowUtc);
+        ScheduledTenantChargeCompanionStaging.Validate(
+            command.RunToken,
+            command.BusinessNowUtc,
+            command.BatchSize);
 
-        var rent = command.IncludeRentCharges
-            ? await attempt.TenantMoney.PostScheduledRentChargesAsync(
+        var rent = await TenantMoneyPersistence.PostScheduledRentChargesAsync(_db, context,
                 command.BatchSize,
                 command.BusinessNowUtc,
-                ct)
-            : [];
-        var lateFees = command.IncludeLateFeeCharges
-            ? await attempt.TenantMoney.PostScheduledLateFeesAsync(
+                ct);
+
+        await ScheduledTenantChargeCompanionStaging.StageChargeCompanionsAsync(
+            context,
+            rent,
+            command.BusinessNowUtc,
+            ct);
+        await ScheduledTenantChargeCompanionStaging.StageRentChargeTenantNotificationsAsync(
+            _db,
+            context,
+            rent,
+            command.BusinessNowUtc,
+            ct);
+
+        return new ApplyScheduledRentChargeBatchResult(rent.Count);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyScheduledRentChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ScheduledTenantChargeCompanionStaging.Validate(
+            command.RunToken,
+            command.BusinessNowUtc,
+            command.BatchSize);
+
+        // Scheduled rent is a system-owned global batch with no user/session envelope. Replay
+        // authority is the command-owned run token plus the same bounded ledger surface.
+        await _db.Set<TenantLedgerEntry>()
+            .AsNoTracking()
+            .Where(entry => entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .Select(entry => entry.Id)
+            .Take(1)
+            .ToListAsync(ct);
+    }
+}
+
+public sealed class ApplyScheduledLateFeeChargeBatchHandler
+    : IAtomicCommandHandler<ApplyScheduledLateFeeChargeBatchCommand, ApplyScheduledLateFeeChargeBatchResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyScheduledLateFeeChargeBatchHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<ApplyScheduledLateFeeChargeBatchResult> HandleAsync(
+        ApplyScheduledLateFeeChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ScheduledTenantChargeCompanionStaging.Validate(
+            command.RunToken,
+            command.BusinessNowUtc,
+            command.BatchSize);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.StateLateFeeCapsJson);
+
+        var lateFees = await TenantMoneyPersistence.PostScheduledLateFeesAsync(_db, context,
                 command.BatchSize,
                 command.StateLateFeeCapsJson,
                 command.BusinessNowUtc,
-                ct)
-            : [];
+                ct);
 
-        var now = command.BusinessNowUtc;
-        foreach (var charge in rent.Concat(lateFees))
+        await ScheduledTenantChargeCompanionStaging.StageChargeCompanionsAsync(
+            context,
+            lateFees,
+            command.BusinessNowUtc,
+            ct);
+
+        return new ApplyScheduledLateFeeChargeBatchResult(lateFees.Count);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyScheduledLateFeeChargeBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ScheduledTenantChargeCompanionStaging.Validate(
+            command.RunToken,
+            command.BusinessNowUtc,
+            command.BatchSize);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.StateLateFeeCapsJson);
+
+        // Scheduled late fees are a system-owned global batch with no user/session envelope.
+        // Replay authority is the command-owned run token plus the same bounded ledger surface.
+        await _db.Set<TenantLedgerEntry>()
+            .AsNoTracking()
+            .Where(entry => entry.EntryType == TenantLedgerEntryType.LateFeeCharge)
+            .Select(entry => entry.Id)
+            .Take(1)
+            .ToListAsync(ct);
+    }
+}
+
+internal static class ScheduledTenantChargeCompanionStaging
+{
+    public static async Task StageChargeCompanionsAsync(
+        IAtomicCommandContext context,
+        IReadOnlyCollection<TenantMoneyScheduledCharge> charges,
+        DateTime now,
+        CancellationToken ct)
+    {
+        context.UseDatabaseWallClockForAudit(now);
+
+        foreach (var charge in charges)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 charge.PortfolioId,
                 nameof(TenantAccount),
                 charge.TenantAccountId,
@@ -71,7 +161,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                     ? "Posted scheduled agreement rent charge."
                     : "Posted scheduled late-fee charge."),
                 now);
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = charge.PortfolioId,
                 MessageType = "data-update",
@@ -94,14 +184,22 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
             });
         }
 
-        await StageRentChargeTenantNotificationsAsync(attempt, rent, now, ct);
-
-        return new ApplyScheduledTenantChargeBatchResult(rent.Count, lateFees.Count);
     }
 
-    private static async Task StageRentChargeTenantNotificationsAsync(
-        IAtomicWriteAttempt attempt,
-        IReadOnlyCollection<AtomicScheduledTenantCharge> rentCharges,
+    public static void Validate(Guid runToken, DateTime businessNowUtc, int batchSize)
+    {
+        if (runToken == Guid.Empty)
+            throw new ArgumentException("A scheduled tenant-charge run token is required.");
+        if (businessNowUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Scheduled tenant-charge business time must be UTC.");
+        if (batchSize is <= 0 or > 500)
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+    }
+
+    public static async Task StageRentChargeTenantNotificationsAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyCollection<TenantMoneyScheduledCharge> rentCharges,
         DateTime now,
         CancellationToken ct)
     {
@@ -112,16 +210,16 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
 
         var ledgerEntryIds = rentCharges.Select(charge => charge.LedgerEntryId).ToArray();
         var recipientRows = await (
-                from entry in attempt.Persistence.Query<TenantLedgerEntry>()
-                join account in attempt.Persistence.Query<TenantAccount>()
+                from entry in db.Set<TenantLedgerEntry>()
+                join account in db.Set<TenantAccount>()
                     on new { TenantAccountId = entry.TenantAccountId, entry.PortfolioId }
                     equals new { TenantAccountId = account.Id, account.PortfolioId }
-                join access in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
+                join access in db.Set<EffectiveTenantAccessProjection>().AsNoTracking()
                     on new { entry.PortfolioId, entry.TenantAccountId }
                     equals new { access.PortfolioId, TenantAccountId = access.TenantAccountId!.Value }
-                join user in attempt.Persistence.Query<ApplicationUser>().AsNoTracking()
+                join user in db.Set<ApplicationUser>().AsNoTracking()
                     on access.UserId equals user.Id
-                join savedPreference in attempt.Persistence.Query<UserAlertPreference>().AsNoTracking()
+                join savedPreference in db.Set<UserAlertPreference>().AsNoTracking()
                         .Select(preference => new
                         {
                             preference.PortfolioId,
@@ -137,8 +235,8 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                     && entry.EntryType == TenantLedgerEntryType.RentCharge
                     && access.TenantAccountId != null
                     && access.AccessContextId == (
-                        from candidate in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
-                        join candidateParty in attempt.Persistence.Query<LeaseManagementParty>().AsNoTracking()
+                        from candidate in db.Set<EffectiveTenantAccessProjection>().AsNoTracking()
+                        join candidateParty in db.Set<LeaseManagementParty>().AsNoTracking()
                             on new { candidate.LeaseManagementPartyId, candidate.PortfolioId }
                             equals new { LeaseManagementPartyId = candidateParty.Id, candidateParty.PortfolioId }
                         where candidate.PortfolioId == entry.PortfolioId
@@ -150,7 +248,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                             candidate.UserId,
                             candidate.AccessContextId
                         select candidate.AccessContextId).First()
-                    && !attempt.Persistence.Query<Notification>().Any(notification =>
+                    && !db.Set<Notification>().Any(notification =>
                         notification.PortfolioId == entry.PortfolioId
                         && notification.Type == ScheduledRentNotificationType
                         && notification.UserId == access.UserId
@@ -173,7 +271,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                     preference.EnableEmail ?? true,
                     preference.EnableSms ?? false,
                     (preference.EnableMobilePush ?? true)
-                        ? attempt.Persistence.Query<DeviceToken>().AsNoTracking()
+                        ? db.Set<DeviceToken>().AsNoTracking()
                             .Where(token => token.PortfolioId == entry.PortfolioId
                                 && token.UserId == access.UserId)
                             .OrderByDescending(token => token.LastSeenAt)
@@ -215,12 +313,12 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                 CreatedAt = now,
             }))
             .ToList();
-        attempt.Persistence.AddRange(notifications.Select(projection => projection.Notification));
+        db.AddRange(notifications.Select(projection => projection.Notification));
         foreach (var projection in notifications)
         {
             var row = projection.Recipient;
             var notification = projection.Notification;
-            attempt.BindSemanticAudit(notification, new AtomicSemanticAudit(
+            context.BindSemanticAudit(notification, new AtomicSemanticAudit(
                 row.PortfolioId,
                 nameof(Notification),
                 0,
@@ -235,13 +333,13 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                 }),
                 ChangeReason: "Posted scheduled rent charge tenant notification."));
         }
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         foreach (var projection in notifications)
         {
             var row = projection.Recipient;
             var notification = projection.Notification;
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = row.PortfolioId,
                 MessageType = "data-update",
@@ -261,12 +359,12 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
                 CreatedAtUtc = now,
                 NextAttemptAtUtc = now,
             });
-            StageDeliveryOutbox(attempt, row, now);
+            StageDeliveryOutbox(context, row, now);
         }
     }
 
     private static void StageDeliveryOutbox(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         RentChargeTenantRecipient row,
         DateTime now)
     {
@@ -275,7 +373,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
         var previewBody = "A rent charge was posted to your Rental Command tenant account.";
         if (row.EnableEmail && !string.IsNullOrWhiteSpace(row.Email))
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = row.PortfolioId,
                 MessageType = "email",
@@ -293,7 +391,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
 
         if (row.EnableSms && !string.IsNullOrWhiteSpace(row.PhoneNumber))
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = row.PortfolioId,
                 MessageType = "sms",
@@ -310,7 +408,7 @@ public sealed class ApplyScheduledTenantChargeBatchHandler
 
         if (row.EnableMobilePush && !string.IsNullOrWhiteSpace(row.PushToken))
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = row.PortfolioId,
                 MessageType = "push",

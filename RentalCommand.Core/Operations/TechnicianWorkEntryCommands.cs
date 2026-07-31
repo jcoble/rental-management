@@ -7,8 +7,8 @@ public sealed record RecordTechnicianWorkEntryCommand(
     int PortfolioId,
     int ActorUserId,
     Guid ActorSessionId,
-    int ActorAccessContextId,
-    long ActorAccessRevision,
+    [property: AtomicFingerprintIgnore] int ActorAccessContextId,
+    [property: AtomicFingerprintIgnore] long ActorAccessRevision,
     int WorkOrderId,
     TechnicianWorkEntryKind Kind,
     string? Note,
@@ -16,38 +16,38 @@ public sealed record RecordTechnicianWorkEntryCommand(
     string? Unit,
     int? StoredFileId,
     DateTime OccurredAtUtc,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record RecordTechnicianWorkEntryResult(
     int EntryId,
     int WorkOrderId,
     TechnicianWorkEntryKind Kind,
-    DateTime CreatedAtUtc) : IAtomicResultData;
+    DateTime CreatedAtUtc);
 
 public sealed record SendTechnicianAssignmentMessageCommand(
     int PortfolioId,
     int ActorUserId,
     Guid ActorSessionId,
-    int ActorAccessContextId,
-    long ActorAccessRevision,
+    [property: AtomicFingerprintIgnore] int ActorAccessContextId,
+    [property: AtomicFingerprintIgnore] long ActorAccessRevision,
     int WorkOrderId,
     string Body,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record SendTechnicianAssignmentMessageResult(
     int ConversationId,
     int MessageId,
-    DateTime CreatedAtUtc) : IAtomicResultData;
+    DateTime CreatedAtUtc);
 
 public sealed record MarkTechnicianAssignmentConversationReadCommand(
     int PortfolioId,
     int ActorUserId,
     Guid ActorSessionId,
-    int ActorAccessContextId,
-    long ActorAccessRevision,
+    [property: AtomicFingerprintIgnore] int ActorAccessContextId,
+    [property: AtomicFingerprintIgnore] long ActorAccessRevision,
     int WorkOrderId,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record MarkTechnicianAssignmentConversationReadResult(
     int? ConversationId,
-    bool Found) : IAtomicResultData;
+    bool Found);

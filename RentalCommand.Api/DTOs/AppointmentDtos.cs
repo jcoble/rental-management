@@ -14,6 +14,7 @@ public class AppointmentResponse
     public int? LeaseManagementId { get; set; }
     public int? RentalApplicationId { get; set; }
     public int? TenantId { get; set; }
+    public int? WorkOrderId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? ProspectName { get; set; }
     public string? ProspectEmail { get; set; }
@@ -48,6 +49,7 @@ public class AppointmentResponse
         LeaseManagementId = e.LeaseManagementId,
         RentalApplicationId = e.RentalApplicationId,
         TenantId = e.TenantId,
+        WorkOrderId = e.WorkOrderId,
         Title = e.Title,
         ProspectName = e.ProspectName,
         ProspectEmail = e.ProspectEmail,
@@ -111,6 +113,9 @@ public class CreateAppointmentRequest
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
 
+    [Range(1, int.MaxValue)]
+    public int? WorkOrderId { get; set; }
+
     [Required]
     [MaxLength(200)]
     public string Title { get; set; } = string.Empty;
@@ -156,6 +161,9 @@ public class UpdateAppointmentRequest
 
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? WorkOrderId { get; set; }
 
     [MaxLength(200)]
     public string? Title { get; set; }

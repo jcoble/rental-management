@@ -95,6 +95,20 @@ String messagesEmptyInstruction({
   return 'You can read conversations here. Ask a workspace admin for access to start one.';
 }
 
+@visibleForTesting
+String conversationDisplayTitle(Conversation conversation) =>
+    conversation.displayName;
+
+@visibleForTesting
+String conversationAvatarInitials(Conversation conversation) {
+  final name = conversationDisplayTitle(conversation).trim();
+  if (name.isEmpty) return '?';
+  final parts = name.split(RegExp(r'\s+'));
+  if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+  return (parts.first.characters.first + parts.last.characters.first)
+      .toUpperCase();
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 /// Landlord inbox — a list of conversation threads (Google Messages style).
@@ -169,7 +183,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     Widget detailBuilder(BuildContext _) {
       return MessageDetailScreen(
         conversationId: convo.id,
-        title: convo.tenantName,
+        title: conversationDisplayTitle(convo),
         subtitle: convo.subject,
       );
     }
@@ -207,7 +221,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     Widget detailBuilder(BuildContext _) {
       return MessageDetailScreen(
         conversationId: created.id,
-        title: created.tenantName,
+        title: conversationDisplayTitle(created),
         subtitle: created.subject,
       );
     }
@@ -393,15 +407,6 @@ class _ConversationTile extends StatelessWidget {
   final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
-  String _avatarInitials() {
-    final name = conversation.tenantName.trim();
-    if (name.isEmpty) return '?';
-    final parts = name.split(RegExp(r'\s+'));
-    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
-    return (parts.first.characters.first + parts.last.characters.first)
-        .toUpperCase();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -417,7 +422,7 @@ class _ConversationTile extends StatelessWidget {
         radius: 24,
         backgroundColor: colorScheme.primaryContainer,
         child: Text(
-          _avatarInitials(),
+          conversationAvatarInitials(conversation),
           style: theme.textTheme.titleMedium?.copyWith(
             color: colorScheme.onPrimaryContainer,
             fontWeight: FontWeight.w600,
@@ -425,7 +430,7 @@ class _ConversationTile extends StatelessWidget {
         ),
       ),
       title: Text(
-        conversation.tenantName,
+        conversationDisplayTitle(conversation),
         style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
         ),

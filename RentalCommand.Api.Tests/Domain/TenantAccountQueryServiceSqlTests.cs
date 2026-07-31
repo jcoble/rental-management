@@ -420,6 +420,7 @@ public sealed class TenantAccountQueryServiceSqlTests
         AssertAuthorized(sql);
         sql.Should().Contain("vw_tenant_charge_balances");
         sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("\"OpenAmount\" > 0.0");
         sql.Should().Contain("ILIKE");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");

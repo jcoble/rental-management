@@ -38,25 +38,25 @@ public sealed record FinalizeScanUploadFile(
 public sealed record FinalizeScanUploadCommand(
     int PortfolioId,
     int UploadedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string ClientOperationId,
     string RequestFingerprint,
     string TargetEntityType,
     bool CreateBatch,
     string? BatchName,
-    DateTime UploadedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime UploadedAtUtc,
     IReadOnlyList<FinalizeScanUploadFile> Files,
     ScanCaptureContextData? CaptureContext = null) : IAtomicCommandData;
 
 public sealed record FinalizedScanDraft(
     int DraftId,
     string Status,
-    string FilePath) : IAtomicResultData;
+    string FilePath);
 
 public sealed record FinalizeScanUploadResult(
     int? BatchId,
     string? BatchName,
     string TargetEntityType,
-    IReadOnlyList<FinalizedScanDraft> Drafts) : IAtomicResultData;
+    IReadOnlyList<FinalizedScanDraft> Drafts);

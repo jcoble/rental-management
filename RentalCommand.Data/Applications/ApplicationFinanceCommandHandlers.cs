@@ -9,23 +9,26 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Applications;
 
 public sealed class RecordApplicationFeeHandler
-    : IAtomicCommandHandler<RecordApplicationFeeCommand, ApplicationFinanceMutationResult>,
-      IAtomicReplayAuthorizer<RecordApplicationFeeCommand>
+    : IAtomicCommandHandler<RecordApplicationFeeCommand, ApplicationFinanceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ApplicationFinanceMutationResult> HandleAsync(
         RecordApplicationFeeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ApplicationFinanceCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, command.ApplicationId, ct);
+        await context.AcquireLockAsync("RentalApplication", command.ApplicationId, ct);
 
-        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
                 additionalCapability: CapabilityKeys.LeasingApplicationFeesCollect,
-                attempt.Persistence, securityNowUtc)
+                _db, securityNowUtc)
             .Select(row => new { row.Id, row.PropertyId, row.UnitId })
             .SingleOrDefaultAsync(ct);
         if (application is null)
@@ -35,7 +38,7 @@ public sealed class RecordApplicationFeeHandler
         }
 
         var nowUtc = securityNowUtc;
-        var account = await attempt.Persistence.Query<ApplicationFinancialAccount>()
+        var account = await _db.Set<ApplicationFinancialAccount>()
             .SingleOrDefaultAsync(row =>
                 row.PortfolioId == command.PortfolioId
                 && row.RentalApplicationId == command.ApplicationId,
@@ -51,14 +54,14 @@ public sealed class RecordApplicationFeeHandler
                 OpenedAtUtc = nowUtc,
                 CreatedByUserId = command.ActorUserId,
             };
-            attempt.Persistence.Add(account);
-            attempt.BindSemanticAudit(account, ApplicationFinanceCommandSupport.Audit(
+            _db.Add(account);
+            context.BindSemanticAudit(account, ApplicationFinanceCommandSupport.Audit(
                 command.PortfolioId,
                 nameof(ApplicationFinancialAccount),
                 command.ActorUserId,
                 AuditLogOperation.Created,
                 "Opened the application's pre-tenancy financial account."));
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
         else if (!string.Equals(account.Currency, command.Currency, StringComparison.Ordinal))
         {
@@ -86,15 +89,15 @@ public sealed class RecordApplicationFeeHandler
             IdempotencyKey = command.IdempotencyKey,
             CreatedByUserId = command.ActorUserId,
         };
-        attempt.Persistence.Add(entry);
-        attempt.BindSemanticAudit(entry, ApplicationFinanceCommandSupport.Audit(
+        _db.Add(entry);
+        context.BindSemanticAudit(entry, ApplicationFinanceCommandSupport.Audit(
             command.PortfolioId,
             nameof(ApplicationFinancialEntry),
             command.ActorUserId,
             AuditLogOperation.Created,
             "Recorded an append-only application fee collection."));
-        await attempt.FlushBusinessAsync(ct);
-        ApplicationFinanceCommandSupport.StageOutbox(attempt, command.PortfolioId,
+        await context.FlushBusinessAsync(ct);
+        ApplicationFinanceCommandSupport.StageOutbox(context, command.PortfolioId,
             command.ApplicationId, account.Id, entry, nowUtc, command.IdempotencyKey);
 
         return ApplicationFinanceCommandSupport.Posted(
@@ -102,39 +105,40 @@ public sealed class RecordApplicationFeeHandler
     }
 
     public Task AuthorizeReplayAsync(
-        RecordApplicationFeeCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        RecordApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
             additionalCapability: CapabilityKeys.LeasingApplicationFeesCollect,
-            persistence, ct);
+            _db, ct);
 }
 
 public sealed class RefundApplicationFeeHandler
-    : IAtomicCommandHandler<RefundApplicationFeeCommand, ApplicationFinanceMutationResult>,
-      IAtomicReplayAuthorizer<RefundApplicationFeeCommand>
+    : IAtomicCommandHandler<RefundApplicationFeeCommand, ApplicationFinanceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RefundApplicationFeeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ApplicationFinanceMutationResult> HandleAsync(
         RefundApplicationFeeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ApplicationFinanceCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, command.ApplicationId, ct);
+        await context.AcquireLockAsync("RentalApplication", command.ApplicationId, ct);
 
-        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var application = await ApplicationFinanceCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                additionalCapability: null, attempt.Persistence, securityNowUtc)
+                additionalCapability: null, _db, securityNowUtc)
             .Select(row => new { row.PropertyId, row.UnitId })
             .SingleOrDefaultAsync(ct)
             ?? throw new UnauthorizedAccessException(
                 "Application fee refund is outside the caller's current access scope.");
 
-        var account = await attempt.Persistence.Query<ApplicationFinancialAccount>()
+        var account = await _db.Set<ApplicationFinancialAccount>()
             .Where(row => row.PortfolioId == command.PortfolioId
                 && row.RentalApplicationId == command.ApplicationId)
             .Select(row => new
@@ -147,7 +151,7 @@ public sealed class RefundApplicationFeeHandler
             return ApplicationFinanceCommandSupport.NotFound(command.ApplicationId);
         }
 
-        var collection = await attempt.Persistence.Query<ApplicationFinancialEntry>()
+        var collection = await _db.Set<ApplicationFinancialEntry>()
             .SingleOrDefaultAsync(row =>
                 row.PortfolioId == command.PortfolioId
                 && row.ApplicationFinancialAccountId == account.Entity.Id
@@ -173,7 +177,7 @@ public sealed class RefundApplicationFeeHandler
                 "The fee collection does not exist on this application's financial account.");
         }
 
-        var alreadyRefunded = await attempt.Persistence.Query<ApplicationFinancialEntry>()
+        var alreadyRefunded = await _db.Set<ApplicationFinancialEntry>()
             .Where(row => row.PortfolioId == command.PortfolioId
                 && row.ApplicationFinancialAccountId == account.Entity.Id
                 && row.RelatedEntryId == collection.Id
@@ -220,15 +224,15 @@ public sealed class RefundApplicationFeeHandler
             RelatedEntryId = collection.Id,
             CreatedByUserId = command.ActorUserId,
         };
-        attempt.Persistence.Add(entry);
-        attempt.BindSemanticAudit(entry, ApplicationFinanceCommandSupport.Audit(
+        _db.Add(entry);
+        context.BindSemanticAudit(entry, ApplicationFinanceCommandSupport.Audit(
             command.PortfolioId,
             nameof(ApplicationFinancialEntry),
             command.ActorUserId,
             AuditLogOperation.Created,
             "Recorded an append-only application fee refund."));
-        await attempt.FlushBusinessAsync(ct);
-        ApplicationFinanceCommandSupport.StageOutbox(attempt, command.PortfolioId,
+        await context.FlushBusinessAsync(ct);
+        ApplicationFinanceCommandSupport.StageOutbox(context, command.PortfolioId,
             command.ApplicationId, account.Entity.Id, entry, nowUtc, command.IdempotencyKey);
 
         return ApplicationFinanceCommandSupport.Posted(
@@ -236,13 +240,11 @@ public sealed class RefundApplicationFeeHandler
     }
 
     public Task AuthorizeReplayAsync(
-        RefundApplicationFeeCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        RefundApplicationFeeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ApplicationFinanceCommandSupport.AuthorizeReplayAsync(
             command.PortfolioId, command.ApplicationId, command.ActorUserId,
             command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-            additionalCapability: null, persistence, ct);
+            additionalCapability: null, _db, ct);
 }
 
 internal static class ApplicationFinanceCommandSupport
@@ -356,7 +358,7 @@ internal static class ApplicationFinanceCommandSupport
             ChangeReason: reason);
 
     internal static void StageOutbox(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         int portfolioId,
         int applicationId,
         int accountId,
@@ -364,7 +366,7 @@ internal static class ApplicationFinanceCommandSupport
         DateTime nowUtc,
         string idempotencyKey)
     {
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = portfolioId,
             MessageType = "data-update",
@@ -398,16 +400,16 @@ internal static class ApplicationFinanceCommandSupport
         int accessContextId,
         long expectedAccessRevision,
         string? additionalCapability,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (portfolioId <= 0 || applicationId <= 0 || actorUserId <= 0
             || authSessionId == Guid.Empty || accessContextId <= 0 || expectedAccessRevision < 1)
             throw new UnauthorizedAccessException();
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var nowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var authorized = await AuthorizedApplications(
                 portfolioId, applicationId, actorUserId, authSessionId, accessContextId,
-                expectedAccessRevision, additionalCapability, persistence, nowUtc)
+                expectedAccessRevision, additionalCapability, db, nowUtc)
             .AnyAsync(ct);
         if (!authorized)
             throw new UnauthorizedAccessException();
@@ -421,33 +423,33 @@ internal static class ApplicationFinanceCommandSupport
         int accessContextId,
         long expectedAccessRevision,
         string? additionalCapability,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == portfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= securityNowUtc
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
 
-        return persistence.Query<RentalApplication>().Where(application =>
+        return db.Set<RentalApplication>().Where(application =>
             application.Id == applicationId
             && application.PortfolioId == portfolioId
             && application.Property != null
             && application.Property.PortfolioId == portfolioId
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == authSessionId && session.UserId == actorUserId
                 && session.ActiveAccessContextId == accessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > securityNowUtc)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == accessContextId && context.UserId == actorUserId
                 && context.PortfolioId == portfolioId
                 && context.AccessRevision == expectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == accessContextId
                 && membership.PortfolioId == portfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active

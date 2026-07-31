@@ -1,4 +1,12 @@
-export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan'] as const;
+export const SCAN_DOC_TYPES = [
+	'Expense',
+	'Payment',
+	'WorkOrder',
+	'LeaseAgreement',
+	'Application',
+	'Loan',
+	'LeaseEndingNotice',
+] as const;
 export type ScanDocType = (typeof SCAN_DOC_TYPES)[number];
 export type ScanIntakeType = ScanDocType | 'Auto';
 
@@ -99,7 +107,11 @@ export function appendScanContext(href: string, context: ScanContext = {}): stri
 	return `${url.pathname}${query ? `?${query}` : ''}${url.hash}`;
 }
 
-function setIfMissing(overrides: Record<string, unknown>, key: string, value: number | undefined): void {
+function setIfMissing(
+	overrides: Record<string, unknown>,
+	key: string,
+	value: number | undefined
+): void {
 	if (!value) return;
 	const current = overrides[key];
 	if (current !== undefined && current !== null && current !== '') return;
@@ -139,5 +151,11 @@ export function applyScanContextOverrides(
 	if (targetEntityType === 'Loan') {
 		// The property the loan attaches to comes from the deep-link the landlord launched the scan from.
 		setIfMissing(overrides, 'propertyId', context.propertyId);
+		return;
+	}
+
+	if (targetEntityType === 'LeaseEndingNotice') {
+		setIfMissing(overrides, 'leaseManagementId', context.leaseManagementId);
+		setIfMissing(overrides, 'unitId', context.unitId);
 	}
 }

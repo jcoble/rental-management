@@ -209,6 +209,7 @@ public class AppointmentService : IAppointmentService
                 LeaseManagementId = a.LeaseManagementId,
                 RentalApplicationId = a.RentalApplicationId,
                 TenantId = a.TenantId,
+                WorkOrderId = a.WorkOrderId,
                 Title = a.Title,
                 ProspectName = a.ProspectName,
                 ProspectEmail = a.ProspectEmail,
@@ -262,6 +263,7 @@ public class AppointmentService : IAppointmentService
         var command = new CreateAppointmentCommand(
             scope.PortfolioId, Actor(scope), request.PropertyId, request.UnitId,
             request.LeaseManagementId, request.RentalApplicationId, request.TenantId,
+            request.WorkOrderId,
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
@@ -277,6 +279,7 @@ public class AppointmentService : IAppointmentService
         var command = new UpdateAppointmentCommand(
             scope.PortfolioId, Actor(scope), id, request.PropertyId, request.UnitId,
             request.LeaseManagementId, request.RentalApplicationId, request.TenantId,
+            request.WorkOrderId,
             request.Title, request.ProspectName, request.ProspectEmail, request.Type,
             request.Status, request.ScheduledStart?.ToUtc(), request.ScheduledEnd.ToUtc(),
             request.AssignedTo, request.Notes, _timeProvider.UtcNow(), idempotencyKey);

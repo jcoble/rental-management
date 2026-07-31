@@ -10,6 +10,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
@@ -250,7 +251,11 @@ public sealed class ScanService : IScanService
                     portfolioId, fields.PropertyId, fields, ct);
             target = new(kind, WorkOrder: new ScanWorkOrderTargetData(
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.LeaseManagementId, fields.VendorId,
-                fields.Title, fields.Description, fields.Category, fields.Priority, fields.EstimatedCost));
+                fields.Title, fields.Description, fields.TechnicianAccessInstructions,
+                fields.RequesterName, fields.RequesterPhone, fields.RequesterEmail,
+                fields.ResidentMustBePresent, fields.CallBeforeEntry, fields.CallIfNotHome,
+                fields.PermissionToEnter, fields.EntryNotes, fields.PetWarnings, fields.AccessWarnings,
+                fields.Category, fields.Priority, fields.EstimatedCost));
         }
         else if (kind == ScanConfirmationTargetKind.LeaseAgreement)
         {
@@ -316,9 +321,16 @@ public sealed class ScanService : IScanService
                 throw new ScanConfirmationValidationException(
                     "Choose whether the uploaded lease is AlreadyFullySigned or NeedsSignatures.");
             }
-            var rentTrackingModeText = TryGetOverrideString(
+            var hasRentTrackingModeOverride = TryGetOverrideString(
                 overrideRoot, out var suppliedRentTrackingMode,
-                "rentTrackingStartMode", "rent_tracking_start_mode")
+                "rentTrackingStartMode", "rent_tracking_start_mode");
+            var importsIntoExistingAccount = tenantAccountId is > 0 || leaseManagementId is > 0;
+            if (!hasRentTrackingModeOverride && importsIntoExistingAccount)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Choose whether rent starts today, at the lease start, or on a custom date.");
+            }
+            var rentTrackingModeText = hasRentTrackingModeOverride
                 ? suppliedRentTrackingMode
                 : nameof(RentTrackingStartMode.ForwardOnly);
             if (!Enum.TryParse<RentTrackingStartMode>(
@@ -401,6 +413,43 @@ public sealed class ScanService : IScanService
                 fields.FirstName, fields.LastName, fields.Email, fields.Phone, fields.DateOfBirth,
                 fields.CurrentAddress, fields.Employer, fields.MonthlyIncome, fields.DesiredMoveInDate,
                 fields.ApplyingFor, fields.IdLast4, fields.CoSignerName, fields.Notes, propertyId, unitId));
+        }
+        else if (kind == ScanConfirmationTargetKind.PropertyAcquisition)
+        {
+            var fields = BuildPropertyAcquisitionFields(draft.ExtractedFields);
+            ApplyPropertyAcquisitionOverrides(fields, normalizedOverrides);
+            fields.PropertyId = fields.PropertyId > 0 ? fields.PropertyId : draft.CapturePropertyId ?? 0;
+            target = new(kind, PropertyAcquisition: new ScanPropertyAcquisitionTargetData(
+                fields.PropertyId,
+                fields.AcquisitionDate,
+                fields.PurchasePrice,
+                fields.LandValue,
+                fields.InServiceDate,
+                fields.Notes,
+                fields.Ownerships.Select(owner => new ScanPropertyAcquisitionOwnerData(
+                    owner.OwnerEntityId,
+                    owner.OwnershipSharePercent,
+                    owner.StatementRecipientName,
+                    owner.StatementRecipientEmail,
+                    owner.PayeeName)).ToArray()));
+        }
+        else if (kind == ScanConfirmationTargetKind.LeaseEndingNotice)
+        {
+            var fields = BuildLeaseEndingNoticeFields(draft.ExtractedFields);
+            ApplyLeaseEndingNoticeOverrides(fields, normalizedOverrides);
+            fields.LeaseManagementId = fields.LeaseManagementId > 0
+                ? fields.LeaseManagementId
+                : draft.CaptureLeaseManagementId ?? 0;
+            fields.UnitId = fields.UnitId > 0
+                ? fields.UnitId
+                : draft.CaptureUnitId ?? 0;
+            target = new(kind, LeaseEndingNotice: new ScanLeaseEndingNoticeTargetData(
+                fields.LeaseManagementId,
+                fields.UnitId,
+                fields.NoticeGivenAtUtc,
+                fields.PlannedMoveOutAtUtc,
+                fields.NoticeType,
+                fields.Reason));
         }
         else
         {
@@ -910,21 +959,41 @@ public sealed class ScanService : IScanService
     private static readonly Dictionary<string, string> StreetSuffixAbbreviations =
         new(StringComparer.Ordinal)
         {
-            ["st"] = "street", ["str"] = "street", ["street"] = "street",
-            ["ave"] = "avenue", ["av"] = "avenue", ["avenue"] = "avenue",
-            ["rd"] = "road", ["road"] = "road",
-            ["dr"] = "drive", ["drive"] = "drive",
-            ["ln"] = "lane", ["lane"] = "lane",
-            ["ct"] = "court", ["court"] = "court",
-            ["blvd"] = "boulevard", ["boulevard"] = "boulevard",
-            ["pl"] = "place", ["place"] = "place",
-            ["cir"] = "circle", ["circle"] = "circle",
-            ["ter"] = "terrace", ["terrace"] = "terrace",
-            ["pkwy"] = "parkway", ["parkway"] = "parkway",
-            ["hwy"] = "highway", ["highway"] = "highway",
+            ["st"] = "street",
+            ["str"] = "street",
+            ["street"] = "street",
+            ["ave"] = "avenue",
+            ["av"] = "avenue",
+            ["avenue"] = "avenue",
+            ["rd"] = "road",
+            ["road"] = "road",
+            ["dr"] = "drive",
+            ["drive"] = "drive",
+            ["ln"] = "lane",
+            ["lane"] = "lane",
+            ["ct"] = "court",
+            ["court"] = "court",
+            ["blvd"] = "boulevard",
+            ["boulevard"] = "boulevard",
+            ["pl"] = "place",
+            ["place"] = "place",
+            ["cir"] = "circle",
+            ["circle"] = "circle",
+            ["ter"] = "terrace",
+            ["terrace"] = "terrace",
+            ["pkwy"] = "parkway",
+            ["parkway"] = "parkway",
+            ["hwy"] = "highway",
+            ["highway"] = "highway",
             ["way"] = "way",
-            ["apt"] = "apt", ["unit"] = "unit", ["ste"] = "suite", ["suite"] = "suite",
-            ["n"] = "north", ["s"] = "south", ["e"] = "east", ["w"] = "west",
+            ["apt"] = "apt",
+            ["unit"] = "unit",
+            ["ste"] = "suite",
+            ["suite"] = "suite",
+            ["n"] = "north",
+            ["s"] = "south",
+            ["e"] = "east",
+            ["w"] = "west",
         };
 
     private static string CollapseWhitespace(string value) =>
@@ -945,10 +1014,12 @@ public sealed class ScanService : IScanService
         var reasonDigest = Convert.ToHexString(SHA256.HashData(
                 Encoding.UTF8.GetBytes(normalizedReason ?? string.Empty)))
             .ToLowerInvariant();
+        var reviewedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
         var command = new RejectScanDraftCommand(
             scope.PortfolioId,
             draftId,
             userId,
+            reviewedAtUtc,
             scope.SessionId,
             scope.AccessContextId,
             scope.AccessRevision,
@@ -997,11 +1068,11 @@ public sealed class ScanService : IScanService
             var root = doc.RootElement;
 
             // ---- Vendor ----
-            dto.VendorName    = ReadFieldValue(root, "vendor_name");
+            dto.VendorName = ReadFieldValue(root, "vendor_name");
             dto.VendorAddress = ReadFieldValue(root, "vendor_address");
-            dto.VendorPhone   = ReadFieldValue(root, "vendor_phone");
+            dto.VendorPhone = ReadFieldValue(root, "vendor_phone");
             dto.VendorWebsite = ReadFieldValue(root, "vendor_website");
-            dto.VendorTaxId   = ReadFieldValue(root, "vendor_tax_id");
+            dto.VendorTaxId = ReadFieldValue(root, "vendor_tax_id");
 
             // ---- Receipt header ----
             dto.ReceiptNumber = ReadFieldValue(root, "receipt_number");
@@ -1017,18 +1088,18 @@ public sealed class ScanService : IScanService
 
             // ---- Money breakdown ----
             dto.Subtotal = ParseDecimalField(root, "subtotal");
-            dto.Tax      = ParseDecimalField(root, "tax");
-            dto.TaxRate  = ParseDecimalField(root, "tax_rate");
-            dto.Tip      = ParseDecimalField(root, "tip");
+            dto.Tax = ParseDecimalField(root, "tax");
+            dto.TaxRate = ParseDecimalField(root, "tax_rate");
+            dto.Tip = ParseDecimalField(root, "tip");
             dto.Discount = ParseDecimalField(root, "discount");
             dto.Shipping = ParseDecimalField(root, "shipping");
             // Accept "amount" as an alias for "total" — single-amount documents (rent checks,
             // simple receipts) naturally use "amount"; "total" wins when both are present.
-            dto.Total    = ParseDecimalField(root, "total") ?? ParseDecimalField(root, "amount");
+            dto.Total = ParseDecimalField(root, "total") ?? ParseDecimalField(root, "amount");
 
             // ---- Payment ----
             dto.PaymentMethod = ReadFieldValue(root, "payment_method");
-            dto.CardLast4     = ReadFieldValue(root, "card_last4");
+            dto.CardLast4 = ReadFieldValue(root, "card_last4");
 
             // ---- Classification ----
             dto.Category = ParseScheduleECategory(ReadFieldValue(root, "category"));
@@ -1047,9 +1118,9 @@ public sealed class ScanService : IScanService
             dto.Notes = ReadFieldValue(root, "notes");
 
             // ---- Rent check fields ----
-            dto.PayerName   = ReadFieldValue(root, "payer_name");
+            dto.PayerName = ReadFieldValue(root, "payer_name");
             dto.CheckNumber = ReadFieldValue(root, "check_number");
-            dto.BankName    = ReadFieldValue(root, "bank_name");
+            dto.BankName = ReadFieldValue(root, "bank_name");
 
             // ---- Line items ----
             // line_items is stored as {"value":"[...]","confidence":0.9} where value is a JSON array string.
@@ -1131,9 +1202,9 @@ public sealed class ScanService : IScanService
                     qEl.TryGetDecimal(out var q); // assignment handled below to avoid CS0165
 
                 // Re-parse each numeric property safely.
-                qty       = TryGetItemDecimal(item, "quantity");
+                qty = TryGetItemDecimal(item, "quantity");
                 unitPrice = TryGetItemDecimal(item, "unit_price");
-                amount    = TryGetItemDecimal(item, "amount");
+                amount = TryGetItemDecimal(item, "amount");
 
                 result.Add(new ReceiptLineItem(desc, qty, unitPrice, amount));
             }
@@ -1296,6 +1367,34 @@ public sealed class ScanService : IScanService
             fields.VendorId = ParseIntField(root, "vendor_id") ?? ParseIntField(root, "vendorId");
             fields.Title = ReadFieldValue(root, "title");
             fields.Description = ReadFieldValue(root, "description") ?? ReadFieldValue(root, "transcript");
+            fields.TechnicianAccessInstructions = ReadFieldValue(root, "technician_access_instructions")
+                ?? ReadFieldValue(root, "technicianAccessInstructions");
+            fields.RequesterName = ReadFieldValue(root, "requester_name")
+                ?? ReadFieldValue(root, "requesterName");
+            fields.RequesterPhone = ReadFieldValue(root, "requester_phone")
+                ?? ReadFieldValue(root, "requesterPhone");
+            fields.RequesterEmail = ReadFieldValue(root, "requester_email")
+                ?? ReadFieldValue(root, "requesterEmail");
+            fields.ResidentMustBePresent = ParseBoolField(root, "resident_must_be_present")
+                ?? ParseBoolField(root, "residentMustBePresent");
+            fields.CallBeforeEntry = ParseBoolField(root, "call_before_entry")
+                ?? ParseBoolField(root, "callBeforeEntry");
+            fields.CallIfNotHome = ParseBoolField(root, "call_if_not_home")
+                ?? ParseBoolField(root, "callIfNotHome");
+            fields.PermissionToEnter = ParseBoolField(root, "permission_to_enter")
+                ?? ParseBoolField(root, "permissionToEnter");
+            fields.EntryNotes = ReadFieldValue(root, "entry_notes")
+                ?? ReadFieldValue(root, "entryNotes")
+                ?? ReadFieldValue(root, "preferred_window")
+                ?? ReadFieldValue(root, "preferredWindow");
+            fields.PetWarnings = ReadFieldValue(root, "pet_warnings")
+                ?? ReadFieldValue(root, "petWarnings")
+                ?? ReadFieldValue(root, "pet_notes")
+                ?? ReadFieldValue(root, "petNotes");
+            fields.AccessWarnings = ReadFieldValue(root, "access_warnings")
+                ?? ReadFieldValue(root, "accessWarnings")
+                ?? ReadFieldValue(root, "access_notes")
+                ?? ReadFieldValue(root, "accessNotes");
             fields.Category = ReadFieldValue(root, "category");
             fields.EstimatedCost = ParseDecimalField(root, "estimated_cost") ?? ParseDecimalField(root, "estimatedCost");
 
@@ -1382,6 +1481,28 @@ public sealed class ScanService : IScanService
                 fields.Title = title;
             if (TryGetOverrideString(root, out var description, "description"))
                 fields.Description = description;
+            if (TryGetOverrideString(root, out var technicianAccessInstructions, "technicianAccessInstructions", "technician_access_instructions"))
+                fields.TechnicianAccessInstructions = technicianAccessInstructions;
+            if (TryGetOverrideString(root, out var requesterName, "requesterName", "requester_name"))
+                fields.RequesterName = requesterName;
+            if (TryGetOverrideString(root, out var requesterPhone, "requesterPhone", "requester_phone"))
+                fields.RequesterPhone = requesterPhone;
+            if (TryGetOverrideString(root, out var requesterEmail, "requesterEmail", "requester_email"))
+                fields.RequesterEmail = requesterEmail;
+            if (TryGetOverrideBool(root, out var residentMustBePresent, "residentMustBePresent", "resident_must_be_present"))
+                fields.ResidentMustBePresent = residentMustBePresent;
+            if (TryGetOverrideBool(root, out var callBeforeEntry, "callBeforeEntry", "call_before_entry"))
+                fields.CallBeforeEntry = callBeforeEntry;
+            if (TryGetOverrideBool(root, out var callIfNotHome, "callIfNotHome", "call_if_not_home"))
+                fields.CallIfNotHome = callIfNotHome;
+            if (TryGetOverrideBool(root, out var permissionToEnter, "permissionToEnter", "permission_to_enter"))
+                fields.PermissionToEnter = permissionToEnter;
+            if (TryGetOverrideString(root, out var entryNotes, "entryNotes", "entry_notes", "preferredWindow", "preferred_window"))
+                fields.EntryNotes = entryNotes;
+            if (TryGetOverrideString(root, out var petWarnings, "petWarnings", "pet_warnings", "petNotes", "pet_notes"))
+                fields.PetWarnings = petWarnings;
+            if (TryGetOverrideString(root, out var accessWarnings, "accessWarnings", "access_warnings", "accessNotes", "access_notes"))
+                fields.AccessWarnings = accessWarnings;
             if (TryGetOverrideString(root, out var category, "category"))
                 fields.Category = category;
             if (TryGetOverrideDecimal(root, out var estimatedCost, "estimatedCost", "estimated_cost"))
@@ -1701,8 +1822,208 @@ public sealed class ScanService : IScanService
     }
 
     // -------------------------------------------------------------------------
+    // Lease-ending notice extraction helpers
+    // -------------------------------------------------------------------------
+
+    private LeaseEndingNoticeDraftFields BuildLeaseEndingNoticeFields(string? extractedFieldsJson)
+    {
+        var fields = new LeaseEndingNoticeDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.LeaseManagementId = ParseIntField(root, "lease_management_id")
+                ?? ParseIntField(root, "leaseManagementId")
+                ?? 0;
+            fields.UnitId = ParseIntField(root, "unit_id")
+                ?? ParseIntField(root, "unitId")
+                ?? 0;
+            fields.NoticeGivenAtUtc = ParseDateField(root, "notice_given_date")
+                ?? ParseDateField(root, "noticeGivenAtUtc")
+                ?? ParseDateField(root, "notice_given_at_utc");
+            fields.PlannedMoveOutAtUtc = ParseDateField(root, "planned_move_out_date")
+                ?? ParseDateField(root, "plannedMoveOutAtUtc")
+                ?? ParseDateField(root, "planned_move_out_at_utc")
+                ?? ParseDateField(root, "effective_move_out_date")
+                ?? ParseDateField(root, "effectiveMoveOutDate");
+            fields.NoticeType = ReadFieldValue(root, "notice_type")
+                ?? ReadFieldValue(root, "noticeType")
+                ?? ReadFieldValue(root, "document_kind");
+            fields.Reason = ReadFieldValue(root, "reason")
+                ?? ReadFieldValue(root, "notes")
+                ?? ReadFieldValue(root, "classification_reason");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse lease-ending notice extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    private void ApplyLeaseEndingNoticeOverrides(
+        LeaseEndingNoticeDraftFields fields,
+        string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            if (TryGetOverrideNullableInt(root, out var leaseManagementId, "leaseManagementId", "lease_management_id"))
+                fields.LeaseManagementId = leaseManagementId.GetValueOrDefault();
+            if (TryGetOverrideNullableInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId.GetValueOrDefault();
+            if (TryGetOverrideDate(root, out var noticeGivenAt, "noticeGivenAtUtc", "notice_given_at_utc", "noticeGivenDate", "notice_given_date"))
+                fields.NoticeGivenAtUtc = noticeGivenAt;
+            if (TryGetOverrideDate(root, out var plannedMoveOutAt, "plannedMoveOutAtUtc", "planned_move_out_at_utc", "plannedMoveOutDate", "planned_move_out_date", "effectiveMoveOutDate", "effective_move_out_date"))
+                fields.PlannedMoveOutAtUtc = plannedMoveOutAt;
+            if (TryGetOverrideString(root, out var noticeType, "noticeType", "notice_type", "documentKind", "document_kind"))
+                fields.NoticeType = noticeType;
+            if (TryGetOverrideString(root, out var reason, "reason", "notes", "classificationReason", "classification_reason"))
+                fields.Reason = reason;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse lease-ending notice overridesJson; skipping overrides.");
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Loan extraction helpers (scan a mortgage statement / closing disclosure)
     // -------------------------------------------------------------------------
+
+    private PropertyAcquisitionDraftFields BuildPropertyAcquisitionFields(string? extractedFieldsJson)
+    {
+        var fields = new PropertyAcquisitionDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.PropertyId = ParseIntField(root, "property_id")
+                ?? ParseIntField(root, "propertyId")
+                ?? 0;
+            fields.AcquisitionDate = ParseDateField(root, "acquisition_date")
+                ?? ParseDateField(root, "acquisitionDate")
+                ?? ParseDateField(root, "purchase_date")
+                ?? ParseDateField(root, "purchaseDate");
+            fields.PurchasePrice = ParseDecimalField(root, "purchase_price")
+                ?? ParseDecimalField(root, "purchasePrice")
+                ?? ParseDecimalField(root, "basis")
+                ?? ParseDecimalField(root, "cost_basis")
+                ?? ParseDecimalField(root, "costBasis");
+            fields.LandValue = ParseDecimalField(root, "land_value")
+                ?? ParseDecimalField(root, "landValue");
+            fields.InServiceDate = ParseDateField(root, "in_service_date")
+                ?? ParseDateField(root, "inServiceDate");
+            fields.Notes = ReadFieldValue(root, "notes");
+            ReadPropertyAcquisitionOwners(root, fields.Ownerships);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse property acquisition extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    private void ApplyPropertyAcquisitionOverrides(
+        PropertyAcquisitionDraftFields fields,
+        string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            if (TryGetOverrideNullableInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId.GetValueOrDefault();
+            if (TryGetOverrideString(root, out var acquisitionDate, "acquisitionDate", "acquisition_date", "purchaseDate", "purchase_date") &&
+                DateTime.TryParse(acquisitionDate, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var parsedAcquisitionDate))
+            {
+                fields.AcquisitionDate = parsedAcquisitionDate;
+            }
+            if (TryGetOverrideDecimal(root, out var purchasePrice, "purchasePrice", "purchase_price", "basis", "costBasis", "cost_basis"))
+                fields.PurchasePrice = purchasePrice;
+            if (TryGetOverrideDecimal(root, out var landValue, "landValue", "land_value"))
+                fields.LandValue = landValue;
+            if (TryGetOverrideString(root, out var inServiceDate, "inServiceDate", "in_service_date") &&
+                DateTime.TryParse(inServiceDate, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var parsedInServiceDate))
+            {
+                fields.InServiceDate = parsedInServiceDate;
+            }
+            if (TryGetOverrideString(root, out var notes, "notes"))
+                fields.Notes = notes;
+            if (root.TryGetProperty("ownerships", out var ownerships)
+                || root.TryGetProperty("owners", out ownerships))
+            {
+                fields.Ownerships.Clear();
+                ReadPropertyAcquisitionOwners(ownerships, fields.Ownerships);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse property acquisition overridesJson; skipping overrides.");
+        }
+    }
+
+    private static void ReadPropertyAcquisitionOwners(
+        JsonElement root,
+        List<PropertyAcquisitionOwnerDraftFields> ownerships)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && !root.TryGetProperty("ownerships", out root)
+            && !root.TryGetProperty("owners", out root))
+        {
+            return;
+        }
+        if (root.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var item in root.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var ownerEntityId = ParseIntField(item, "owner_entity_id")
+                ?? ParseIntField(item, "ownerEntityId")
+                ?? 0;
+            var share = ParseDecimalField(item, "ownership_share_percent")
+                ?? ParseDecimalField(item, "ownershipSharePercent")
+                ?? ParseDecimalField(item, "share_percent")
+                ?? ParseDecimalField(item, "sharePercent")
+                ?? ParseDecimalField(item, "share");
+            ownerships.Add(new PropertyAcquisitionOwnerDraftFields
+            {
+                OwnerEntityId = ownerEntityId,
+                OwnershipSharePercent = share ?? 0m,
+                StatementRecipientName = ReadFieldValue(item, "statement_recipient_name")
+                    ?? ReadFieldValue(item, "statementRecipientName"),
+                StatementRecipientEmail = ReadFieldValue(item, "statement_recipient_email")
+                    ?? ReadFieldValue(item, "statementRecipientEmail"),
+                PayeeName = ReadFieldValue(item, "payee_name")
+                    ?? ReadFieldValue(item, "payeeName"),
+            });
+        }
+    }
 
     private LoanDraftFields BuildLoanFields(string? extractedFieldsJson)
     {
@@ -1878,6 +2199,25 @@ public sealed class ScanService : IScanService
         return false;
     }
 
+    private static bool TryGetOverrideDate(JsonElement root, out DateTime? value, params string[] keys)
+    {
+        if (TryGetOverrideString(root, out var text, keys)
+            && !string.IsNullOrWhiteSpace(text)
+            && DateTime.TryParse(
+                text,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal |
+                System.Globalization.DateTimeStyles.AssumeUniversal,
+                out var parsed))
+        {
+            value = parsed;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
     /// <summary>First present key wins. Accepts a JSON number or a numeric string.</summary>
     private static bool TryGetOverrideDecimal(JsonElement root, out decimal value, params string[] keys)
     {
@@ -1985,6 +2325,17 @@ public sealed class ScanService : IScanService
         public int? VendorId { get; set; }
         public string? Title { get; set; }
         public string? Description { get; set; }
+        public string? TechnicianAccessInstructions { get; set; }
+        public string? RequesterName { get; set; }
+        public string? RequesterPhone { get; set; }
+        public string? RequesterEmail { get; set; }
+        public bool? ResidentMustBePresent { get; set; }
+        public bool? CallBeforeEntry { get; set; }
+        public bool? CallIfNotHome { get; set; }
+        public bool? PermissionToEnter { get; set; }
+        public string? EntryNotes { get; set; }
+        public string? PetWarnings { get; set; }
+        public string? AccessWarnings { get; set; }
         public string? Category { get; set; }
         public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
         public decimal? EstimatedCost { get; set; }
@@ -2072,6 +2423,36 @@ public sealed class ScanService : IScanService
         public decimal? StatementEscrowAmount { get; set; }
         public decimal? StatementTotalAmount { get; set; }
         public DateTime? StatementEffectiveDate { get; set; }
+    }
+
+    private sealed class LeaseEndingNoticeDraftFields
+    {
+        public int LeaseManagementId { get; set; }
+        public int UnitId { get; set; }
+        public DateTime? NoticeGivenAtUtc { get; set; }
+        public DateTime? PlannedMoveOutAtUtc { get; set; }
+        public string? NoticeType { get; set; }
+        public string? Reason { get; set; }
+    }
+
+    private sealed class PropertyAcquisitionDraftFields
+    {
+        public int PropertyId { get; set; }
+        public DateTime? AcquisitionDate { get; set; }
+        public decimal? PurchasePrice { get; set; }
+        public decimal? LandValue { get; set; }
+        public DateTime? InServiceDate { get; set; }
+        public string? Notes { get; set; }
+        public List<PropertyAcquisitionOwnerDraftFields> Ownerships { get; } = [];
+    }
+
+    private sealed class PropertyAcquisitionOwnerDraftFields
+    {
+        public int OwnerEntityId { get; set; }
+        public decimal OwnershipSharePercent { get; set; }
+        public string? StatementRecipientName { get; set; }
+        public string? StatementRecipientEmail { get; set; }
+        public string? PayeeName { get; set; }
     }
 }
 

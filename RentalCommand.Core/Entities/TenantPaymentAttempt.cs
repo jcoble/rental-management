@@ -10,6 +10,12 @@ public class TenantPaymentAttempt : IAuditable, IPortfolioScoped
     public Guid PublicId { get; set; }
     public int PortfolioId { get; set; }
     public int TenantAccountId { get; set; }
+    /// <summary>
+    /// Immutable tenant-selected debit that a Charge attempt must settle before any remainder
+    /// can remain unapplied. Null for explicitly typed non-targeted receipt attempts, legacy
+    /// targetless attempts, refunds, and verifications.
+    /// </summary>
+    public long? ChargeLedgerEntryId { get; set; }
     public string Provider { get; set; } = string.Empty;
     public string? ProviderObjectId { get; set; }
     /// <summary>The settled provider Charge attempt whose receipt this Refund returns.</summary>
@@ -39,6 +45,7 @@ public class TenantPaymentAttempt : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public TenantAccount? TenantAccount { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }
+    public TenantLedgerEntry? ChargeLedgerEntry { get; set; }
     public TenantLedgerEntry? LedgerEntry { get; set; }
     public TenantPaymentAttempt? RefundsPaymentAttempt { get; set; }
     public List<TenantPaymentAttempt> RefundAttempts { get; set; } = [];

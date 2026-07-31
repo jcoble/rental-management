@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -25,6 +26,19 @@ public sealed class VendorServiceMutationClockTests : IDisposable
     public VendorServiceMutationClockTests()
     {
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceMutationClockTests));
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Vendor authorization property",
+            AddressLine1 = "1 Scope Test Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
         _sut = new VendorService(
             _ctx.Db,

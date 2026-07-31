@@ -104,6 +104,7 @@ public class UnitServiceListTests : IAsyncLifetime
         SeedUnit("C", "Harbor View Apartments", openWorkOrders: 0);
         SeedUnit("D", "Harbor View Apartments", openWorkOrders: 2);
 
+        await ActivateApiScopeAsync();
         _commands.Clear();
         var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
         {
@@ -142,6 +143,7 @@ public class UnitServiceListTests : IAsyncLifetime
         SeedUnitShell("4C", "Harbor View Apartments", now);
         _ctx.Db.SaveChanges();
 
+        await ActivateApiScopeAsync();
         _commands.Clear();
         var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
         {
@@ -184,6 +186,7 @@ public class UnitServiceListTests : IAsyncLifetime
         SeedRelationship(property, unit, tenant, now, now.AddDays(30), noticeGiven: true);
         _ctx.Db.SaveChanges();
 
+        await ActivateApiScopeAsync();
         var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery());
 
         var row = result.Items.Should().ContainSingle(u => u.Id == unit.Id).Subject;
@@ -264,6 +267,7 @@ public class UnitServiceListTests : IAsyncLifetime
         var directExpense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             Property = property,
             Unit = unit,
             Description = "Unit receipt",
@@ -275,7 +279,9 @@ public class UnitServiceListTests : IAsyncLifetime
         var workOrderExpense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.WorkOrder,
             Property = property,
+            Unit = unit,
             WorkOrder = workOrder,
             Description = "Repair receipt",
             Amount = 65m,
@@ -307,6 +313,7 @@ public class UnitServiceListTests : IAsyncLifetime
             StoredFile("Tenant", tenant.Id, "tenant-only.pdf", now));
         _ctx.Db.SaveChanges();
 
+        await ActivateApiScopeAsync();
         _commands.Clear();
         var list = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery());
         var listSql = _commands.ToList();

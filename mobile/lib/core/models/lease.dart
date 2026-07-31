@@ -466,6 +466,7 @@ class LeaseAgreementHistory {
     required this.status,
     required this.isGoverning,
     required this.hasLiveReissue,
+    required this.hasSourceScan,
     this.correctionReason,
     this.replacesAgreementId,
     this.renewsAgreementId,
@@ -498,6 +499,7 @@ class LeaseAgreementHistory {
   final int? reissuesAgreementId;
   final String? reissueReason;
   final bool hasLiveReissue;
+  final bool hasSourceScan;
   final LegalArtifactSummary? issuedArtifact;
   final LegalArtifactSummary? executedArtifact;
   final DateTime? issuedAt;
@@ -534,6 +536,7 @@ class LeaseAgreementHistory {
       reissuesAgreementId: (json['reissuesAgreementId'] as num?)?.toInt(),
       reissueReason: json['reissueReason'] as String?,
       hasLiveReissue: json['hasLiveReissue'] as bool,
+      hasSourceScan: json['hasSourceScan'] as bool? ?? false,
       issuedArtifact: artifact('issuedArtifact'),
       executedArtifact: artifact('executedArtifact'),
       issuedAt: _optionalDate(json['issuedAtUtc']),
@@ -934,6 +937,9 @@ class LeaseAgreementDraftDetail {
     this.termEndOn,
     this.documentTemplateId,
     this.documentTemplateVersion,
+    this.sourceStoredFileId,
+    this.sourceFileName,
+    this.sourceContentType,
   });
 
   final int leaseManagementId;
@@ -959,6 +965,9 @@ class LeaseAgreementDraftDetail {
   final int documentSourceVersionId;
   final int? documentTemplateId;
   final int? documentTemplateVersion;
+  final int? sourceStoredFileId;
+  final String? sourceFileName;
+  final String? sourceContentType;
   final List<LeaseAgreementDraftSigner> signers;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -1001,6 +1010,9 @@ class LeaseAgreementDraftDetail {
         documentTemplateId: (json['documentTemplateId'] as num?)?.toInt(),
         documentTemplateVersion: (json['documentTemplateVersion'] as num?)
             ?.toInt(),
+        sourceStoredFileId: (json['sourceStoredFileId'] as num?)?.toInt(),
+        sourceFileName: json['sourceFileName'] as String?,
+        sourceContentType: json['sourceContentType'] as String?,
         signers:
             (json['signers'] as List? ?? const [])
                 .whereType<Map<String, dynamic>>()

@@ -5,21 +5,24 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Authorization;
 
 public sealed class SelectWorkspaceExperienceHandler
-    : IAtomicCommandHandler<SelectWorkspaceExperienceCommand, SelectWorkspaceExperienceResult>,
-      IAtomicReplayAuthorizer<SelectWorkspaceExperienceCommand>
+    : IAtomicCommandHandler<SelectWorkspaceExperienceCommand, SelectWorkspaceExperienceResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SelectWorkspaceExperienceHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<SelectWorkspaceExperienceResult> HandleAsync(
         SelectWorkspaceExperienceCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
 
-        var updated = await attempt.WorkspaceExperiences.SelectAsync(
-            new WorkspaceReadScope(
+        var updated = await AtomicWorkspaceExperiencePersistence.SelectAsync(_db,
+            context, new WorkspaceReadScope(
                 command.PortfolioId,
                 command.ActorUserId,
                 command.AuthSessionId,
@@ -37,12 +40,11 @@ public sealed class SelectWorkspaceExperienceHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        SelectWorkspaceExperienceCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        SelectWorkspaceExperienceCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var authorized = await persistence.IsWorkspaceExperienceAvailableAsync(
+        var authorized = await AtomicWorkspaceExperiencePersistence.IsAvailableAsync(_db,
+            context,
             new WorkspaceReadScope(
                 command.PortfolioId,
                 command.ActorUserId,

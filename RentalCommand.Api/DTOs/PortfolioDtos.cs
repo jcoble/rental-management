@@ -83,7 +83,7 @@ public class GettingStartedSignalsResponse
 }
 
 /// <summary>
-/// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (seed the demo portfolio) or
+/// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (use Sandbox mode) or
 /// "live" (keep an empty real portfolio). Any other value is rejected with 400.
 /// </summary>
 public class OnboardingChoiceRequest

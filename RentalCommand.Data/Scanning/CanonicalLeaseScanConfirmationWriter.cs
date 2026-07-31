@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Scanning;
 
@@ -25,34 +26,35 @@ internal static class CanonicalLeaseScanConfirmationWriter
     internal static async Task<ScanConfirmationTargetWriteResult> WriteAsync(
         ConfirmScanDraftCommand command,
         ScanLeaseTargetData target,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command, target);
         var documentSourceKind = SelectDocumentSource(target);
         // Different lease scans for the same empty portfolio must not create duplicate physical
         // inventory. This transaction-scoped lock serializes matching/creation before Unit locking.
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(db, command.PortfolioId, ct);
         var now = times.WallClockUtc;
         var rentTrackingStartOn = RentTrackingStartPolicy.Resolve(
             DateOnly.FromDateTime(target.StartDate!.Value),
             target.RentTrackingStartMode,
             target.RentTrackingStartOn,
             times.BusinessDate);
-        var home = await ResolveHomeAsync(command, target, attempt, now, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, home.UnitId, ct);
+        var home = await ResolveHomeAsync(command, target, db, context, now, ct);
+        await context.AcquireLockAsync("Unit", home.UnitId, ct);
         if (target.LeaseManagementId is > 0)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.LeaseManagement, target.LeaseManagementId.Value, ct);
+            await context.AcquireLockAsync(
+                "LeaseManagement", target.LeaseManagementId.Value, ct);
         }
 
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
         {
             var existing = await (
-                from artifact in attempt.Persistence.Query<LegalDocumentArtifact>()
-                join existingAgreement in attempt.Persistence.Query<LeaseAgreement>()
+                from artifact in db.Set<LegalDocumentArtifact>()
+                join existingAgreement in db.Set<LeaseAgreement>()
                     on new { ArtifactId = artifact.Id, artifact.PortfolioId }
                     equals new { ArtifactId = existingAgreement.ExecutedArtifactId!.Value, existingAgreement.PortfolioId }
                 where artifact.PortfolioId == command.PortfolioId
@@ -72,7 +74,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
         var templateIsValid = documentSourceKind != CanonicalLeaseScanDocumentSourceKind.AuthoredTemplateSnapshot
             || (target.DocumentTemplateId is > 0
-                && await attempt.Persistence.Query<DocumentTemplate>().AnyAsync(template =>
+                && await db.Set<DocumentTemplate>().AnyAsync(template =>
                     template.Id == target.DocumentTemplateId
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
@@ -85,14 +87,14 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 "An active lease template is required when the uploaded agreement still needs signatures.");
         }
 
-        var tenant = await ResolveTenantAsync(command, target, attempt, now, ct);
-        var relationship = await ResolveRelationshipAsync(command, target, home, attempt, now, ct);
+        var tenant = await ResolveTenantAsync(command, target, db, context, now, ct);
+        var relationship = await ResolveRelationshipAsync(command, target, home, db, context, now, ct);
         var account = await ResolveAccountAsync(
-            command, target, relationship, home.Currency, rentTrackingStartOn, attempt, now, ct);
+            command, target, relationship, home.Currency, rentTrackingStartOn, db, context, now, ct);
 
         if (target.LeaseAgreementId is > 0)
         {
-            var agreementContextIsValid = await attempt.Persistence.Query<LeaseAgreement>()
+            var agreementContextIsValid = await db.Set<LeaseAgreement>()
                 .AnyAsync(agreement => agreement.Id == target.LeaseAgreementId.Value
                     && agreement.PortfolioId == command.PortfolioId
                     && agreement.LeaseManagementId == relationship.Id, ct);
@@ -103,7 +105,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             }
         }
 
-        var existingAgreementCount = await attempt.Persistence.Query<LeaseAgreement>()
+        var existingAgreementCount = await db.Set<LeaseAgreement>()
             .CountAsync(agreement => agreement.PortfolioId == command.PortfolioId
                 && agreement.LeaseManagementId == relationship.Id, ct);
         if (existingAgreementCount != 0)
@@ -112,7 +114,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 "This rental relationship already has an agreement. Use the correction, restatement, or renewal flow instead of importing another initial lease.");
         }
 
-        var party = await attempt.Persistence.Query<LeaseManagementParty>()
+        var party = await db.Set<LeaseManagementParty>()
             .SingleOrDefaultAsync(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && candidate.LeaseManagementId == relationship.Id
@@ -131,10 +133,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 CreatedAtUtc = now,
                 CreatedByUserId = command.ConfirmedByUserId,
             };
-            attempt.Persistence.Add(party);
-            attempt.BindSemanticAudit(party, Created(command, nameof(LeaseManagementParty),
+            db.Add(party);
+            context.BindSemanticAudit(party, Created(command, nameof(LeaseManagementParty),
                 "Added the primary tenant from reviewed lease scan."));
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
 
         var fixedTerm = target.EndDate.HasValue;
@@ -142,7 +144,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         AtomicLegalDocumentSourceVersionResult sourceVersion;
         if (documentSourceKind == CanonicalLeaseScanDocumentSourceKind.ImportedExternalDocument)
         {
-            var source = await attempt.Persistence.Query<StoredFile>()
+            var source = await db.Set<StoredFile>()
                 .SingleOrDefaultAsync(file => file.Id == command.SourceStoredFileId
                     && file.PortfolioId == command.PortfolioId && file.DeletedAt == null, ct)
                 ?? throw new ScanConfirmationValidationException(
@@ -160,24 +162,24 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 CreatedAtUtc = now,
                 CreatedByUserId = command.ConfirmedByUserId,
             };
-            attempt.Persistence.Add(importedArtifact);
-            attempt.BindSemanticAudit(importedArtifact, Created(command, nameof(LegalDocumentArtifact),
+            db.Add(importedArtifact);
+            context.BindSemanticAudit(importedArtifact, Created(command, nameof(LegalDocumentArtifact),
                 $"Preserved exact externally executed Agreement bytes and SHA-256{SourceSuffix(command.SourceLabel)}."));
-            await attempt.FlushBusinessAsync(ct);
-            sourceVersion = await attempt.Leasing.ResolveImportedDocumentSourceVersionAsync(
-                command.PortfolioId, source.Id, importedArtifact.Id, command.SourceContentSha256!,
+            await context.FlushBusinessAsync(ct);
+            sourceVersion = await AtomicLeaseMutationPersistence.ResolveImportedDocumentSourceVersionAsync(db,
+                context, command.PortfolioId, source.Id, importedArtifact.Id, command.SourceContentSha256!,
                 command.SourceLabel, command.ConfirmedByUserId, now, ct);
         }
         else if (documentSourceKind == CanonicalLeaseScanDocumentSourceKind.AuthoredTemplateSnapshot)
         {
-            sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-                command.PortfolioId, home.PropertyId, relationship.Id, target.DocumentTemplateId!.Value,
+            sourceVersion = await AtomicLeaseMutationPersistence.ResolveAuthoredDocumentSourceVersionAsync(db,
+                context, command.PortfolioId, home.PropertyId, relationship.Id, target.DocumentTemplateId!.Value,
                 command.ConfirmedByUserId, now, ct);
         }
         else
         {
-            sourceVersion = await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
-                command.PortfolioId, command.ConfirmedByUserId, now, ct);
+            sourceVersion = await AtomicLeaseMutationPersistence.ResolveBuiltInDocumentSourceVersionAsync(db,
+                context, command.PortfolioId, command.ConfirmedByUserId, now, ct);
         }
         if (!sourceVersion.Resolved)
         {
@@ -212,12 +214,12 @@ internal static class CanonicalLeaseScanConfirmationWriter
             UpdatedAtUtc = now,
             DraftRevision = 1,
         };
-        attempt.Persistence.Add(agreement);
-        attempt.BindSemanticAudit(agreement, Created(command, nameof(LeaseAgreement),
+        db.Add(agreement);
+        context.BindSemanticAudit(agreement, Created(command, nameof(LeaseAgreement),
             target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
                 ? $"Created Agreement for externally executed scan import{SourceSuffix(command.SourceLabel)}."
                 : "Created Agreement draft from reviewed scan."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         if (string.IsNullOrWhiteSpace(tenant.Email)
             && target.ReviewDisposition == LeaseScanReviewDisposition.NeedsSignatures)
@@ -241,8 +243,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
             SigningOrder = 1,
             IsRequired = true,
         };
-        attempt.Persistence.Add(signer);
-        attempt.BindSemanticAudit(signer, Created(command, nameof(LeaseAgreementSigner),
+        db.Add(signer);
+        context.BindSemanticAudit(signer, Created(command, nameof(LeaseAgreementSigner),
             "Captured primary signer identity from reviewed lease scan."));
 
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
@@ -254,7 +256,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             agreement.ExecutedArtifactId = importedArtifact.Id;
             agreement.FullyExecutedAtUtc = now;
             agreement.UpdatedAtUtc = now;
-            attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(
+            context.BindSemanticAudit(agreement, new AtomicSemanticAudit(
                 command.PortfolioId, nameof(LeaseAgreement), agreement.Id,
                 AuditLogOperation.Updated, UserId: command.ConfirmedByUserId,
                 NewValues: JsonSerializer.Serialize(new
@@ -266,7 +268,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 }),
                 ChangeReason: $"Marked imported external Agreement fully executed{SourceSuffix(command.SourceLabel)}."));
         }
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         return new ScanConfirmationTargetWriteResult(
             agreement.Id, home.UnitId, nameof(LeaseAgreement), null, relationship.Id);
@@ -274,20 +276,20 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
     internal static async Task AuthorizeAsync(
         ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (command.Target.LeaseAgreement is not { } target)
             throw new UnauthorizedAccessException("Lease import has no authorized rental scope.");
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var authorized = target.PropertyId > 0 && target.UnitId is > 0
             ? await AuthorizedHomes(
-                    command, target.PropertyId, target.UnitId.Value, persistence, now)
+                    command, target.PropertyId, target.UnitId.Value, db, now)
                 .AnyAsync(ct)
             : target.PropertyId > 0
-                ? await AuthorizedProperties(command, target.PropertyId, persistence, now)
+                ? await AuthorizedProperties(command, target.PropertyId, db, now)
                     .AnyAsync(ct)
-            : await CanBootstrapHome(command, persistence, now).AnyAsync(ct);
+            : await CanBootstrapHome(command, db, now).AnyAsync(ct);
         if (!authorized)
             throw new UnauthorizedAccessException("Lease import is outside the caller's current access scope.");
     }
@@ -299,30 +301,30 @@ internal static class CanonicalLeaseScanConfirmationWriter
         ConfirmScanDraftCommand command,
         int propertyId,
         int unitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        return persistence.Query<Unit>().Where(unit =>
+        return db.Set<Unit>().Where(unit =>
             unit.Id == unitId && unit.PropertyId == propertyId
             && unit.PortfolioId == command.PortfolioId
             && unit.Property != null && unit.Property.PortfolioId == command.PortfolioId
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ConfirmedByUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -345,27 +347,27 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
     private static IQueryable<WorkspaceMembership> CanBootstrapHome(
         ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        return persistence.Query<WorkspaceMembership>().Where(membership =>
+        return db.Set<WorkspaceMembership>().Where(membership =>
             membership.AccessContextId == command.AccessContextId
             && membership.PortfolioId == command.PortfolioId
             && membership.Status == WorkspaceMembershipStatus.Active
             && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
             && membership.EffectiveFromUtc <= now
             && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ConfirmedByUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
@@ -382,29 +384,29 @@ internal static class CanonicalLeaseScanConfirmationWriter
     private static IQueryable<Property> AuthorizedProperties(
         ConfirmScanDraftCommand command,
         int propertyId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        return persistence.Query<Property>().Where(property =>
+        return db.Set<Property>().Where(property =>
             property.Id == propertyId && property.PortfolioId == command.PortfolioId
             && property.DeletedAt == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ConfirmedByUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -426,7 +428,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
     private static async Task<HomeFacts> ResolveHomeAsync(
         ConfirmScanDraftCommand command,
         ScanLeaseTargetData target,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now,
         CancellationToken ct)
     {
@@ -436,7 +439,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 throw new ScanConfirmationValidationException(
                     "A selected Unit must include its Property.");
             return await AuthorizedHomes(
-                    command, target.PropertyId, target.UnitId.Value, attempt.Persistence, now)
+                    command, target.PropertyId, target.UnitId.Value, db, now)
                 .Select(unit => new HomeFacts(
                     unit.Id,
                     unit.PropertyId,
@@ -453,14 +456,14 @@ internal static class CanonicalLeaseScanConfirmationWriter
         if (target.PropertyId > 0)
         {
             property = await AuthorizedProperties(
-                    command, target.PropertyId, attempt.Persistence, now)
+                    command, target.PropertyId, db, now)
                 .SingleOrDefaultAsync(ct)
                 ?? throw new UnauthorizedAccessException(
                     "Creating a Unit from this lease scan is outside the caller's Property scope.");
         }
         else
         {
-            if (!await CanBootstrapHome(command, attempt.Persistence, now).AnyAsync(ct))
+            if (!await CanBootstrapHome(command, db, now).AnyAsync(ct))
                 throw new UnauthorizedAccessException(
                     "Creating a Property and Unit from a lease scan requires all-property rental-management authority.");
 
@@ -472,7 +475,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             var cityKey = city.ToLowerInvariant();
             var stateKey = state.ToLowerInvariant();
             var postalKey = postalCode.ToLowerInvariant();
-            var propertyMatch = await attempt.Persistence.Query<Property>()
+            var propertyMatch = await db.Set<Property>()
                 .Where(candidate => candidate.PortfolioId == command.PortfolioId
                     && candidate.DeletedAt == null
                     && candidate.AddressLine1.Trim().ToLower() == addressKey
@@ -487,7 +490,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                     "More than one Property matches the reviewed address. Select the intended Property explicitly.");
             if (propertyMatch is not null)
             {
-                property = await attempt.Persistence.Query<Property>()
+                property = await db.Set<Property>()
                     .SingleAsync(candidate => candidate.Id == propertyMatch.Id
                         && candidate.PortfolioId == command.PortfolioId, ct);
             }
@@ -512,10 +515,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
                     CreatedAt = now,
                     UpdatedAt = now,
                 };
-                attempt.Persistence.Add(property);
-                attempt.BindSemanticAudit(property, Created(command, nameof(Property),
+                db.Add(property);
+                context.BindSemanticAudit(property, Created(command, nameof(Property),
                     "Created physical Property from reviewed lease scan."));
-                await attempt.FlushBusinessAsync(ct);
+                await context.FlushBusinessAsync(ct);
             }
         }
 
@@ -523,7 +526,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             ? "Property"
             : target.UnitNumber.Trim();
         var unitKey = unitNumber.ToLowerInvariant();
-        var unitMatch = await attempt.Persistence.Query<Unit>()
+        var unitMatch = await db.Set<Unit>()
             .Where(unit => unit.PortfolioId == command.PortfolioId
                 && unit.PropertyId == property.Id && unit.DeletedAt == null
                 && unit.UnitNumber.Trim().ToLower() == unitKey)
@@ -537,7 +540,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         Unit unit;
         if (unitMatch is not null)
         {
-            unit = await attempt.Persistence.Query<Unit>()
+            unit = await db.Set<Unit>()
                 .SingleAsync(candidate => candidate.Id == unitMatch.Id
                     && candidate.PortfolioId == command.PortfolioId
                     && candidate.PropertyId == property.Id, ct);
@@ -556,22 +559,22 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 CreatedAt = now,
                 UpdatedAt = now,
             };
-            attempt.Persistence.Add(unit);
-            await attempt.FlushBusinessAsync(ct);
+            db.Add(unit);
+            await context.FlushBusinessAsync(ct);
             // Unit is portfolio-scoped but intentionally does not implement IAuditable, so it has
             // no tracked mutation for BindSemanticAudit to enrich. Record the exact generated Unit
             // identity as a semantic event after the insert flush instead of leaving an orphan bind.
-            attempt.StageSemanticEvent(
+            context.StageSemanticEvent(
                 Created(command, nameof(Unit), "Created physical Unit from reviewed lease scan.")
                     with { EntityId = unit.Id },
                 now);
         }
 
-        var currency = await attempt.Persistence.Query<Portfolio>()
+        var currency = await db.Set<Portfolio>()
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(portfolio => portfolio.Currency)
             .SingleAsync(ct);
-        var hasOpenRelationship = await attempt.Persistence.Query<LeaseManagement>()
+        var hasOpenRelationship = await db.Set<LeaseManagement>()
             .AnyAsync(relationship => relationship.PortfolioId == command.PortfolioId
                 && relationship.UnitId == unit.Id
                 && relationship.CanceledAtUtc == null
@@ -600,20 +603,21 @@ internal static class CanonicalLeaseScanConfirmationWriter
     private static async Task<Tenant> ResolveTenantAsync(
         ConfirmScanDraftCommand command,
         ScanLeaseTargetData target,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now,
         CancellationToken ct)
     {
         Tenant? tenant = null;
         if (target.TenantId is > 0)
         {
-            tenant = await attempt.Persistence.Query<Tenant>().SingleOrDefaultAsync(candidate =>
+            tenant = await db.Set<Tenant>().SingleOrDefaultAsync(candidate =>
                 candidate.Id == target.TenantId && candidate.PortfolioId == command.PortfolioId, ct);
         }
         else if (!string.IsNullOrWhiteSpace(target.TenantEmail))
         {
             var email = target.TenantEmail.Trim().ToLower();
-            tenant = await attempt.Persistence.Query<Tenant>()
+            tenant = await db.Set<Tenant>()
                 .OrderBy(candidate => candidate.Id)
                 .FirstOrDefaultAsync(candidate => candidate.PortfolioId == command.PortfolioId
                     && candidate.Email != null && candidate.Email.Trim().ToLower() == email, ct);
@@ -635,10 +639,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
             CreatedAt = now,
             UpdatedAt = now,
         };
-        attempt.Persistence.Add(tenant);
-        attempt.BindSemanticAudit(tenant, Created(command, nameof(Tenant),
+        db.Add(tenant);
+        context.BindSemanticAudit(tenant, Created(command, nameof(Tenant),
             "Created primary tenant from reviewed lease scan."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         return tenant;
     }
 
@@ -646,13 +650,14 @@ internal static class CanonicalLeaseScanConfirmationWriter
         ConfirmScanDraftCommand command,
         ScanLeaseTargetData target,
         HomeFacts home,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now,
         CancellationToken ct)
     {
         if (target.LeaseManagementId is > 0)
         {
-            return await attempt.Persistence.Query<LeaseManagement>().SingleOrDefaultAsync(relationship =>
+            return await db.Set<LeaseManagement>().SingleOrDefaultAsync(relationship =>
                 relationship.Id == target.LeaseManagementId
                 && relationship.PortfolioId == command.PortfolioId
                 && relationship.PropertyId == home.PropertyId
@@ -677,10 +682,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
             UpdatedAtUtc = now,
             RowVersion = Guid.NewGuid(),
         };
-        attempt.Persistence.Add(relationship);
-        attempt.BindSemanticAudit(relationship, Created(command, nameof(LeaseManagement),
+        db.Add(relationship);
+        context.BindSemanticAudit(relationship, Created(command, nameof(LeaseManagement),
             "Created canonical rental relationship from reviewed lease scan."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         return relationship;
     }
 
@@ -690,11 +695,12 @@ internal static class CanonicalLeaseScanConfirmationWriter
         LeaseManagement relationship,
         string currency,
         DateOnly? rentTrackingStartOn,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now,
         CancellationToken ct)
     {
-        var account = await attempt.Persistence.Query<TenantAccount>()
+        var account = await db.Set<TenantAccount>()
             .SingleOrDefaultAsync(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && candidate.LeaseManagementId == relationship.Id, ct);
@@ -706,7 +712,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             if (account.RentTrackingStartOn != rentTrackingStartOn)
             {
                 account.RentTrackingStartOn = rentTrackingStartOn;
-                attempt.BindSemanticAudit(account, new AtomicSemanticAudit(
+                context.BindSemanticAudit(account, new AtomicSemanticAudit(
                     command.PortfolioId,
                     nameof(TenantAccount),
                     account.Id,
@@ -731,10 +737,10 @@ internal static class CanonicalLeaseScanConfirmationWriter
             CreatedAtUtc = now,
             CreatedByUserId = command.ConfirmedByUserId,
         };
-        attempt.Persistence.Add(account);
-        attempt.BindSemanticAudit(account, Created(command, nameof(TenantAccount),
+        db.Add(account);
+        context.BindSemanticAudit(account, Created(command, nameof(TenantAccount),
             "Opened canonical tenant account from reviewed lease scan."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         return account;
     }
 

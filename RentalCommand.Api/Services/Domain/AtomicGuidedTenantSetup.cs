@@ -7,44 +7,53 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public sealed record AtomicGuidedTenantSetupCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicGuidedTenantSetupResult(
-    string TenantsJson) : IAtomicResultData;
+    string TenantsJson);
 
 /// <summary>
 /// Owns the complete tenant step in Guided Setup. The reviewed request, every Tenant row, every
 /// semantic audit, every realtime update, and the command receipt share one kernel transaction.
 /// </summary>
 public sealed class AtomicGuidedTenantSetupHandler
-    : IAtomicCommandHandler<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>,
-      IAtomicReplayAuthorizer<AtomicGuidedTenantSetupCommand>
+    : IAtomicCommandHandler<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicGuidedTenantSetupHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaximumBatchSize = 25;
 
     public async Task<AtomicGuidedTenantSetupResult> HandleAsync(
         AtomicGuidedTenantSetupCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         ValidateCommand(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, attempt.Persistence, now, ct))
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or no longer permits tenant onboarding. Refresh and try again.");
@@ -66,7 +75,7 @@ public sealed class AtomicGuidedTenantSetupHandler
         }).ToArray();
 
         attempt.UseDatabaseWallClockForAudit(now);
-        attempt.Persistence.AddRange(tenants);
+        _db.AddRange(tenants);
         foreach (var tenant in tenants)
         {
             attempt.BindSemanticAudit(tenant, new AtomicSemanticAudit(
@@ -106,24 +115,24 @@ public sealed class AtomicGuidedTenantSetupHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicGuidedTenantSetupCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ValidateCommand(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or no longer permits tenant onboarding. Refresh and try again.");
         }
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         AtomicGuidedTenantSetupCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null
@@ -138,7 +147,7 @@ public sealed class AtomicGuidedTenantSetupHandler
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -146,7 +155,7 @@ public sealed class AtomicGuidedTenantSetupHandler
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId
                 && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
@@ -158,7 +167,7 @@ public sealed class AtomicGuidedTenantSetupHandler
                 && grant.CapabilityDefinition.AuthorizationTargetKind ==
                     CapabilityAuthorizationTargetKind.Workspace), ct);
 
-    private static IReadOnlyList<CreateTenantRequest> ReadAndValidateRequests(
+    private IReadOnlyList<CreateTenantRequest> ReadAndValidateRequests(
         AtomicGuidedTenantSetupCommand command)
     {
         var envelope = JsonSerializer.Deserialize<GuidedTenantSetupRequest>(command.RequestJson)
@@ -199,7 +208,7 @@ public sealed class AtomicGuidedTenantSetupHandler
         return normalized;
     }
 
-    private static void ValidateCommand(AtomicGuidedTenantSetupCommand command)
+    private void ValidateCommand(AtomicGuidedTenantSetupCommand command)
     {
         if (command.PortfolioId <= 0
             || command.ActorUserId <= 0
@@ -215,10 +224,10 @@ public sealed class AtomicGuidedTenantSetupHandler
         }
     }
 
-    private static string? Normalize(string? value) =>
+    private string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static DateTime? Utc(DateTime? value) => value is null
+    private DateTime? Utc(DateTime? value) => value is null
         ? null
         : value.Value.Kind == DateTimeKind.Utc
             ? value

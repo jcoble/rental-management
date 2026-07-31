@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Api.Services;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,50 +17,59 @@ public enum AtomicCoreCrudMutationOperation { Create, Update, Delete, Setup }
 public sealed record AtomicCoreCrudMutationCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicCoreCrudMutationDomain Domain,
     AtomicCoreCrudMutationOperation Operation,
     int EntityId,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey,
+    [property: AtomicFingerprintIgnore]
     DateTime? CreatedAtUtc = null,
+    [property: AtomicFingerprintIgnore]
     DateTime? ChangedAtUtc = null) : IAtomicCommandData;
 
 public sealed record AtomicCoreCrudMutationResult(
     bool Found,
     bool Applied,
     int EntityId,
-    string? ResponseJson = null) : IAtomicResultData;
+    string? ResponseJson = null);
 
 public sealed class AtomicCoreCrudMutationHandler
-    : IAtomicCommandHandler<AtomicCoreCrudMutationCommand, AtomicCoreCrudMutationResult>,
-      IAtomicReplayAuthorizer<AtomicCoreCrudMutationCommand>
+    : IAtomicCommandHandler<AtomicCoreCrudMutationCommand, AtomicCoreCrudMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicCoreCrudMutationHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicCoreCrudMutationResult> HandleAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         if (command.EntityId > 0)
         {
             var resource = command.Domain switch
             {
-                AtomicCoreCrudMutationDomain.Property => AtomicLockResource.Property,
-                AtomicCoreCrudMutationDomain.OwnerEntity => AtomicLockResource.OwnerEntity,
-                AtomicCoreCrudMutationDomain.Tenant => AtomicLockResource.Tenant,
-                AtomicCoreCrudMutationDomain.Vendor => AtomicLockResource.Vendor,
+                AtomicCoreCrudMutationDomain.Property => "Property",
+                AtomicCoreCrudMutationDomain.OwnerEntity => "OwnerEntity",
+                AtomicCoreCrudMutationDomain.Tenant => "Tenant",
+                AtomicCoreCrudMutationDomain.Vendor => "Vendor",
                 _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
             };
-            await attempt.Locking.AcquireAsync(resource, command.EntityId, ct);
+            await attempt.AcquireLockAsync(resource, command.EntityId, ct);
         }
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         return command.Domain switch
         {
             AtomicCoreCrudMutationDomain.Property => await MutatePropertyAsync(command, attempt, now, ct),
@@ -72,61 +82,61 @@ public sealed class AtomicCoreCrudMutationHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         var authorized = command.Domain switch
         {
             AtomicCoreCrudMutationDomain.Property when command.Operation == AtomicCoreCrudMutationOperation.Create ||
                 (command.Operation == AtomicCoreCrudMutationOperation.Setup && command.EntityId == 0) =>
-                await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct),
+                await AuthorizeAllPropertiesAsync(command, _db, now, CapabilityKeys.RentalsManage, ct),
             AtomicCoreCrudMutationDomain.Property =>
-                await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct),
+                await AuthorizePropertyEntityAsync(command, _db, now, CapabilityKeys.RentalsManage, ct),
             AtomicCoreCrudMutationDomain.OwnerEntity when command.Operation == AtomicCoreCrudMutationOperation.Create =>
-                await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct),
+                await AuthorizeAllPropertiesAsync(command, _db, now, CapabilityKeys.RentalsManage, ct),
             AtomicCoreCrudMutationDomain.OwnerEntity =>
-                await AuthorizeOwnerEntityAsync(command, persistence, now, ct),
+                await AuthorizeOwnerEntityAsync(command, _db, now, ct),
             AtomicCoreCrudMutationDomain.Tenant when command.Operation == AtomicCoreCrudMutationOperation.Create =>
-                await AuthorizeAllPropertiesEitherAsync(command, persistence, now,
+                await AuthorizeAllPropertiesEitherAsync(command, _db, now,
                     CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage, ct),
             AtomicCoreCrudMutationDomain.Tenant =>
-                await AuthorizeTenantAsync(command, persistence, now, ct),
+                await AuthorizeTenantAsync(command, _db, now, ct),
             AtomicCoreCrudMutationDomain.Vendor when command.Operation == AtomicCoreCrudMutationOperation.Create =>
-                await AuthorizeAnyPropertyAsync(command, persistence, now, CapabilityKeys.WorkManage, ct),
+                await AuthorizeAnyPropertyAsync(command, _db, now, CapabilityKeys.WorkManage, ct),
             AtomicCoreCrudMutationDomain.Vendor =>
-                await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct),
+                await AuthorizeAllPropertiesAsync(command, _db, now, CapabilityKeys.WorkManage, ct),
             _ => false,
         };
         if (!authorized)
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
     }
 
-    private static async Task<AtomicCoreCrudMutationResult> MutatePropertyAsync(
+    private async Task<AtomicCoreCrudMutationResult> MutatePropertyAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
         const string entityType = nameof(Property);
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicCoreCrudMutationOperation.Setup)
             return await SetupPropertyAsync(command, attempt, now, ct);
 
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
             throw Conflict("Properties must be created with the atomic Property setup command so their Units are committed together.");
 
-        var property = await persistence.Query<Property>().SingleOrDefaultAsync(entity =>
+        var property = await db.Set<Property>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
             && entity.DeletedAt == null, ct);
         if (property is null) return Missing();
-        if (!await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
+        if (!await AuthorizePropertyEntityAsync(command, db, now, CapabilityKeys.RentalsManage, ct))
             throw Denied();
 
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var unitState = await persistence.Query<Unit>().AsNoTracking()
+            var unitState = await db.Set<Unit>().AsNoTracking()
                 .Where(unit => unit.PortfolioId == command.PortfolioId
                     && unit.PropertyId == property.Id && unit.DeletedAt == null)
                 .GroupBy(_ => 1)
@@ -141,7 +151,7 @@ public sealed class AtomicCoreCrudMutationHandler
                 var noun = unitState.Count == 1 ? "unit" : "units";
                 throw Conflict($"This property still has {unitState.Count} {noun}. Remove the {noun} before deleting this property.");
             }
-            await EnsurePropertyHasNoHistoryAsync(command.PortfolioId, property.Id, persistence, ct);
+            await EnsurePropertyHasNoHistoryAsync(command.PortfolioId, property.Id, db, ct);
             property.DeletedAt = now;
             property.UpdatedAt = now;
             attempt.BindSemanticAudit(property, Audit(command, entityType,
@@ -156,25 +166,25 @@ public sealed class AtomicCoreCrudMutationHandler
         var mutationNow = command.ChangedAtUtc ?? now;
         var update = Read<UpdatePropertyRequest>(command);
         await EnsurePropertyYearBuiltIsNotFutureAsync(
-            update.YearBuilt, command.PortfolioId, persistence, ct);
+            update.YearBuilt, command.PortfolioId, db, ct);
         OwnershipLifecycleChange? ownershipChange = null;
         var ownershipRequests = RequestedOwnerships(
             update.Ownerships, update.ClearOwnership);
         if (ownershipRequests is not null)
         {
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, ownershipRequests, mutationNow, persistence, ct);
+                command.PortfolioId, property.Id, ownershipRequests, mutationNow, db, ct);
             ownershipChange = await ReplaceCurrentOwnershipsAsync(
                 command, property.Id, ownerships, mutationNow, attempt, ct);
         }
         if (update.Status == PropertyStatus.Inactive && property.Status != PropertyStatus.Inactive)
-            await EnsurePropertyHasNoCurrentOccupancyAsync(command.PortfolioId, property.Id, persistence, ct);
+            await EnsurePropertyHasNoCurrentOccupancyAsync(command.PortfolioId, property.Id, db, ct);
 
         if (update.Name is not null) property.Name = update.Name;
         if (update.PropertyType.HasValue) property.PropertyType = update.PropertyType.Value;
         if (update.Status.HasValue) property.Status = update.Status.Value;
         if (update.AddressLine1 is not null) property.AddressLine1 = update.AddressLine1;
-        if (update.AddressLine2 is not null) property.AddressLine2 = update.AddressLine2;
+        if (update.AddressLine2 is not null) property.AddressLine2 = NormalizeOptionalText(update.AddressLine2);
         if (update.City is not null) property.City = update.City;
         if (update.State is not null) property.State = update.State;
         if (update.PostalCode is not null) property.PostalCode = update.PostalCode;
@@ -185,23 +195,28 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.LandValue.HasValue) property.LandValue = update.LandValue;
         if (update.InServiceDate.HasValue) property.InServiceDate = Utc(update.InServiceDate);
         if (update.ManualAnnualDepreciation.HasValue) property.ManualAnnualDepreciation = update.ManualAnnualDepreciation;
-        property.UpdatedAt = mutationNow;
-        attempt.BindSemanticAudit(property, Audit(command, entityType,
-            AuditLogOperation.Updated, $"Property {property.Name} updated"));
+        db.ChangeTracker.DetectChanges();
+        if (db.Entry(property).State == EntityState.Modified)
+        {
+            property.UpdatedAt = mutationNow;
+            db.ChangeTracker.DetectChanges();
+            attempt.BindSemanticAudit(property, Audit(command, entityType,
+                AuditLogOperation.Updated, $"Property {property.Name} updated"));
+        }
 
         await attempt.FlushBusinessAsync(ct);
         StageOwnershipLifecycleAudits(attempt, command, property.Id, ownershipChange, mutationNow);
         StageDataUpdate(attempt, command, entityType, property.Id, mutationNow, "property");
-        return Applied(property.Id, await SnapshotPropertyAsync(property, persistence, ct, mutationNow));
+        return Applied(property.Id, await SnapshotPropertyAsync(property, db, ct, mutationNow));
     }
 
-    private static async Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
+    private async Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         var setup = Read<SetupPropertyRequest>(command);
         ValidateSetup(setup, command.EntityId);
 
@@ -211,23 +226,23 @@ public sealed class AtomicCoreCrudMutationHandler
             : command.CreatedAtUtc ?? now;
         if (updated)
         {
-            if (!await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
+            if (!await AuthorizePropertyEntityAsync(command, db, now, CapabilityKeys.RentalsManage, ct))
                 throw Denied();
         }
         else if (!await AuthorizeAllPropertiesAsync(
-                     command, persistence, now, CapabilityKeys.RentalsManage, ct))
+                     command, db, now, CapabilityKeys.RentalsManage, ct))
         {
             throw Denied();
         }
 
         var request = setup.Property;
         await EnsurePropertyYearBuiltIsNotFutureAsync(
-            request.YearBuilt, command.PortfolioId, persistence, ct);
+            request.YearBuilt, command.PortfolioId, db, ct);
         var requestedOwnerships = RequestedOwnerships(
             request.Ownerships, request.ClearOwnership) ?? [];
         if (requestedOwnerships.Count == 0 && !request.ClearOwnership)
         {
-            var primaryOwnerId = await persistence.Query<OwnerEntity>().AsNoTracking()
+            var primaryOwnerId = await db.Set<OwnerEntity>().AsNoTracking()
                 .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
                     && owner.DeletedAt == null)
                 .Select(owner => (int?)owner.Id)
@@ -244,14 +259,14 @@ public sealed class AtomicCoreCrudMutationHandler
         var existingUnitCount = 0;
         if (updated)
         {
-            property = await persistence.Query<Property>().SingleOrDefaultAsync(entity =>
+            property = await db.Set<Property>().SingleOrDefaultAsync(entity =>
                 entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
                 && entity.DeletedAt == null, ct) ?? throw Conflict("Property not found.");
 
-            existingUnitCount = await persistence.Query<Unit>().AsNoTracking().CountAsync(unit =>
+            existingUnitCount = await db.Set<Unit>().AsNoTracking().CountAsync(unit =>
                 unit.PortfolioId == command.PortfolioId && unit.PropertyId == property.Id
                 && unit.DeletedAt == null, ct);
-            if (requestedUnitNumbers.Length > 0 && await persistence.Query<Unit>().AsNoTracking().AnyAsync(unit =>
+            if (requestedUnitNumbers.Length > 0 && await db.Set<Unit>().AsNoTracking().AnyAsync(unit =>
                     unit.PortfolioId == command.PortfolioId && unit.PropertyId == property.Id
                     && unit.DeletedAt == null
                     && requestedUnitNumbers.Contains(unit.UnitNumber.ToLower()), ct))
@@ -260,7 +275,7 @@ public sealed class AtomicCoreCrudMutationHandler
             if (property.RentalStructure == RentalStructure.MultiRental
                 && request.RentalStructure == RentalStructure.SingleRental)
             {
-                var historicalUnitCount = await persistence.Query<Unit>().IgnoreQueryFilters().AsNoTracking()
+                var historicalUnitCount = await db.Set<Unit>().IgnoreQueryFilters().AsNoTracking()
                     .CountAsync(unit => unit.PortfolioId == command.PortfolioId
                         && unit.PropertyId == property.Id, ct);
                 if (historicalUnitCount != existingUnitCount
@@ -270,7 +285,7 @@ public sealed class AtomicCoreCrudMutationHandler
 
             ApplyPropertySetup(property, request, mutationNow);
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, persistence, ct);
+                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, db, ct);
             var ownershipChange = await ReplaceCurrentOwnershipsAsync(
                 command, property.Id, ownerships, mutationNow, attempt, ct);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
@@ -286,7 +301,7 @@ public sealed class AtomicCoreCrudMutationHandler
                 CreatedAt = mutationNow,
             };
             ApplyPropertySetup(property, request, mutationNow);
-            persistence.Add(property);
+            db.Add(property);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
                 AuditLogOperation.Created, $"Property {property.Name} created during Guided Setup", entityId: 0));
         }
@@ -303,9 +318,9 @@ public sealed class AtomicCoreCrudMutationHandler
         if (!updated && requestedOwnerships.Count > 0)
         {
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, persistence, ct);
+                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, db, ct);
             foreach (var ownership in ownerships)
-                persistence.Add(ownership);
+                db.Add(ownership);
             await attempt.FlushBusinessAsync(ct);
         }
 
@@ -327,7 +342,7 @@ public sealed class AtomicCoreCrudMutationHandler
 
         foreach (var unit in units)
         {
-            persistence.Add(unit);
+            db.Add(unit);
             attempt.BindSemanticAudit(unit, Audit(command, nameof(Unit),
                 AuditLogOperation.Created, $"Unit {unit.UnitNumber} created during Guided Setup", entityId: 0));
         }
@@ -337,14 +352,14 @@ public sealed class AtomicCoreCrudMutationHandler
         for (var index = 0; index < units.Count; index++)
             StageDataUpdate(attempt, command, nameof(Unit), units[index].Id, mutationNow, $"unit-{index + 1}");
 
-        var currentUnits = await persistence.Query<Unit>().AsNoTracking()
+        var currentUnits = await db.Set<Unit>().AsNoTracking()
             .Where(unit => unit.PortfolioId == command.PortfolioId
                 && unit.PropertyId == property.Id && unit.DeletedAt == null)
             .OrderBy(unit => unit.UnitNumber)
             .ThenBy(unit => unit.Id)
             .ToListAsync(ct);
         var propertySnapshot = JsonSerializer.Deserialize<PropertyResponse>(
-            await SnapshotPropertyAsync(property, persistence, ct, mutationNow))
+            await SnapshotPropertyAsync(property, db, ct, mutationNow))
             ?? throw new AtomicReceiptInvariantException("Property setup response could not be created.");
         var response = new PropertySetupResponse
         {
@@ -355,7 +370,7 @@ public sealed class AtomicCoreCrudMutationHandler
         return Applied(property.Id, JsonSerializer.Serialize(response));
     }
 
-    private static void ValidateSetup(SetupPropertyRequest setup, int commandPropertyId)
+    private void ValidateSetup(SetupPropertyRequest setup, int commandPropertyId)
     {
         if (setup.PropertyId.GetValueOrDefault() != commandPropertyId)
             throw new ArgumentException("The setup Property id does not match the command target.");
@@ -374,7 +389,7 @@ public sealed class AtomicCoreCrudMutationHandler
             throw Conflict("Unit numbers must be unique within the Property.");
     }
 
-    private static void ApplyPropertySetup(Property property, CreatePropertyRequest request, DateTime now)
+    private void ApplyPropertySetup(Property property, CreatePropertyRequest request, DateTime now)
     {
         property.Name = request.Name.Trim();
         property.PropertyType = request.PropertyType;
@@ -395,20 +410,20 @@ public sealed class AtomicCoreCrudMutationHandler
         property.UpdatedAt = now;
     }
 
-    private static async Task EnsurePropertyYearBuiltIsNotFutureAsync(
+    private async Task EnsurePropertyYearBuiltIsNotFutureAsync(
         int? yearBuilt,
         int portfolioId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (yearBuilt is not { } requestedYear) return;
-        var times = await persistence.ReadCommandTimesAsync(portfolioId, ct);
+        var times = await AtomicCommandDbClock.ReadCommandTimesAsync(db, portfolioId, ct);
         var businessYear = times.BusinessDate.Year;
         if (requestedYear > businessYear)
             throw Conflict($"Year built cannot be later than the portfolio business year ({businessYear}).");
     }
 
-    private static IReadOnlyList<PropertyOwnershipRequest>? RequestedOwnerships(
+    private IReadOnlyList<PropertyOwnershipRequest>? RequestedOwnerships(
         IReadOnlyList<PropertyOwnershipRequest>? ownerships,
         bool clearOwnership)
     {
@@ -418,12 +433,12 @@ public sealed class AtomicCoreCrudMutationHandler
         return clearOwnership ? [] : null;
     }
 
-    private static async Task<List<PropertyOwnership>> BuildOwnershipsAsync(
+    private async Task<List<PropertyOwnership>> BuildOwnershipsAsync(
         int portfolioId,
         int propertyId,
         IReadOnlyList<PropertyOwnershipRequest> requests,
         DateTime now,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (requests.Count == 0) return [];
@@ -433,7 +448,7 @@ public sealed class AtomicCoreCrudMutationHandler
         if (requests.Sum(request => request.OwnershipSharePercent) != 100m)
             throw new ArgumentException("Current Property ownership shares must total exactly 100 percent.");
 
-        var owners = await persistence.Query<OwnerEntity>().AsNoTracking()
+        var owners = await db.Set<OwnerEntity>().AsNoTracking()
             .Where(owner => owner.PortfolioId == portfolioId
                 && ownerIds.Contains(owner.Id)
                 && owner.DeletedAt == null)
@@ -474,16 +489,16 @@ public sealed class AtomicCoreCrudMutationHandler
         return result;
     }
 
-    private static async Task<OwnershipLifecycleChange> ReplaceCurrentOwnershipsAsync(
+    private async Task<OwnershipLifecycleChange> ReplaceCurrentOwnershipsAsync(
         AtomicCoreCrudMutationCommand command,
         int propertyId,
         IReadOnlyList<PropertyOwnership> replacements,
         DateTime now,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
-        var current = await persistence.Query<PropertyOwnership>()
+        var db = _db;
+        var current = await db.Set<PropertyOwnership>()
             .Where(ownership => ownership.PortfolioId == command.PortfolioId
                 && ownership.PropertyId == propertyId
                 && ownership.EffectiveFromUtc <= now
@@ -519,7 +534,7 @@ public sealed class AtomicCoreCrudMutationHandler
         }
 
         foreach (var ownership in remainingReplacements.Values)
-            persistence.Add(ownership);
+            db.Add(ownership);
 
         return new OwnershipLifecycleChange(
             ended,
@@ -528,8 +543,8 @@ public sealed class AtomicCoreCrudMutationHandler
             remainingReplacements.Values.ToList());
     }
 
-    private static void StageOwnershipLifecycleAudits(
-        IAtomicWriteAttempt attempt,
+    private void StageOwnershipLifecycleAudits(
+        IAtomicCommandContext attempt,
         AtomicCoreCrudMutationCommand command,
         int propertyId,
         OwnershipLifecycleChange? change,
@@ -564,7 +579,7 @@ public sealed class AtomicCoreCrudMutationHandler
         IReadOnlyList<PropertyOwnership> Updated,
         IReadOnlyList<PropertyOwnership> Created);
 
-    private static UnitResponse ToUnitResponse(Unit unit) => new()
+    private UnitResponse ToUnitResponse(Unit unit) => new()
     {
         Id = unit.Id,
         PropertyId = unit.PropertyId,
@@ -580,13 +595,13 @@ public sealed class AtomicCoreCrudMutationHandler
         UpdatedAt = unit.UpdatedAt,
     };
 
-    private static async Task<AtomicCoreCrudMutationResult> MutateOwnerEntityAsync(
-        AtomicCoreCrudMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
+    private async Task<AtomicCoreCrudMutationResult> MutateOwnerEntityAsync(
+        AtomicCoreCrudMutationCommand command, IAtomicCommandContext attempt, DateTime now, CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
         {
-            if (!await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
+            if (!await AuthorizeAllPropertiesAsync(command, db, now, CapabilityKeys.RentalsManage, ct))
                 throw Denied();
             var request = Read<CreateOwnerEntityRequest>(command);
             var entity = new OwnerEntity
@@ -597,34 +612,48 @@ public sealed class AtomicCoreCrudMutationHandler
                 PostalCode = request.PostalCode,
                 Phone = request.Phone, Email = request.Email, CreatedAt = now, UpdatedAt = now,
             };
-            persistence.Add(entity);
+            db.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerEntity), AuditLogOperation.Created,
                 $"Owner {entity.Name} created", entityId: 0));
             await attempt.FlushBusinessAsync(ct);
             StageDataUpdate(attempt, command, nameof(OwnerEntity), entity.Id, now);
-            return Applied(entity.Id, await SnapshotOwnerAsync(entity, persistence, ct));
+            return Applied(entity.Id, await SnapshotOwnerAsync(entity, db, ct));
         }
-        var owner = await persistence.Query<OwnerEntity>().SingleOrDefaultAsync(entity =>
+        var owner = await db.Set<OwnerEntity>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
             && entity.DeletedAt == null, ct);
         if (owner is null) return Missing();
-        if (!await AuthorizeOwnerEntityAsync(command, persistence, now, ct)) throw Denied();
+        if (!await AuthorizeOwnerEntityAsync(command, db, now, ct)) throw Denied();
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var propertyCount = await persistence.Query<PropertyOwnership>().AsNoTracking()
-                .Where(ownership =>
-                    ownership.PortfolioId == command.PortfolioId
-                    && ownership.OwnerEntityId == owner.Id
-                    && ownership.EffectiveFromUtc <= now
-                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
-                    && ownership.Property != null
-                    && ownership.Property.DeletedAt == null)
-                .Select(ownership => ownership.PropertyId)
-                .Distinct()
-                .CountAsync(ct);
-            if (propertyCount > 0)
-                throw Conflict($"This owner is assigned to {propertyCount} {(propertyCount == 1 ? "property" : "properties")}. Reassign or clear those properties before deleting this owner.");
-            var distributions = await persistence.Query<OwnerDistribution>().AsNoTracking().CountAsync(row =>
+            var deleteGuard = await db.Set<OwnerEntity>()
+                .AsNoTracking()
+                .Where(candidate =>
+                    candidate.PortfolioId == command.PortfolioId &&
+                    candidate.Id == owner.Id)
+                .Select(candidate => new
+                {
+                    PropertyCount = db.Set<PropertyOwnership>()
+                        .Where(ownership =>
+                            ownership.PortfolioId == command.PortfolioId &&
+                            ownership.OwnerEntityId == candidate.Id &&
+                            (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now) &&
+                            ownership.Property != null &&
+                            ownership.Property.DeletedAt == null)
+                        .Select(ownership => ownership.PropertyId)
+                        .Distinct()
+                        .Count(),
+                    PortalAccessCount = db.Set<OwnerUserAccess>().Count(access =>
+                        access.PortfolioId == command.PortfolioId &&
+                        access.OwnerEntityId == candidate.Id &&
+                        access.RevokedAtUtc == null),
+                })
+                .SingleAsync(ct);
+            if (deleteGuard.PropertyCount > 0)
+                throw Conflict($"This owner is assigned to {deleteGuard.PropertyCount} {(deleteGuard.PropertyCount == 1 ? "property" : "properties")}. Reassign or clear those properties before deleting this owner.");
+            if (deleteGuard.PortalAccessCount > 0)
+                throw Conflict("Revoke this owner's portal access before deleting the owner.");
+            var distributions = await db.Set<OwnerDistribution>().AsNoTracking().CountAsync(row =>
                 row.PortfolioId == command.PortfolioId && row.OwnerEntityId == owner.Id, ct);
             if (distributions > 0)
                 throw Conflict($"This owner has {distributions} recorded {(distributions == 1 ? "distribution" : "distributions")}. Delete or reassign them first.");
@@ -654,50 +683,52 @@ public sealed class AtomicCoreCrudMutationHandler
             $"Owner {owner.Name} updated"));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(OwnerEntity), owner.Id, now);
-        return Applied(owner.Id, await SnapshotOwnerAsync(owner, persistence, ct));
+        return Applied(owner.Id, await SnapshotOwnerAsync(owner, db, ct));
     }
 
-    private static async Task<AtomicCoreCrudMutationResult> MutateTenantAsync(
-        AtomicCoreCrudMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
+    private async Task<AtomicCoreCrudMutationResult> MutateTenantAsync(
+        AtomicCoreCrudMutationCommand command, IAtomicCommandContext attempt, DateTime now, CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
         {
-            if (!await AuthorizeAllPropertiesEitherAsync(command, persistence, now,
+            if (!await AuthorizeAllPropertiesEitherAsync(command, db, now,
                     CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage, ct)) throw Denied();
+            var createdAtUtc = command.CreatedAtUtc ?? now;
             var request = Read<CreateTenantRequest>(command);
             var entity = new Tenant
             {
                 PortfolioId = command.PortfolioId, FirstName = request.FirstName,
                 LastName = request.LastName, Email = request.Email, Phone = request.Phone,
                 EmergencyContact = request.EmergencyContact, DateOfBirth = Utc(request.DateOfBirth),
-                Notes = request.Notes, CreatedAt = now, UpdatedAt = now,
+                Notes = request.Notes, CreatedAt = createdAtUtc, UpdatedAt = createdAtUtc,
             };
-            persistence.Add(entity);
+            db.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Tenant), AuditLogOperation.Created,
                 $"Tenant {entity.FirstName} {entity.LastName} created", entityId: 0));
             await attempt.FlushBusinessAsync(ct);
-            StageDataUpdate(attempt, command, nameof(Tenant), entity.Id, now);
+            StageDataUpdate(attempt, command, nameof(Tenant), entity.Id, createdAtUtc);
             return Applied(entity.Id, SnapshotTenant(entity, 0, 0));
         }
-        var tenant = await persistence.Query<Tenant>().SingleOrDefaultAsync(entity =>
+        var tenant = await db.Set<Tenant>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
             && entity.DeletedAt == null, ct);
         if (tenant is null) return Missing();
-        if (!await AuthorizeTenantAsync(command, persistence, now, ct)) throw Denied();
+        if (!await AuthorizeTenantAsync(command, db, now, ct)) throw Denied();
+        var mutationNow = command.ChangedAtUtc ?? now;
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var state = await persistence.Query<LeaseManagementParty>().AsNoTracking()
+            var state = await db.Set<LeaseManagementParty>().AsNoTracking()
                 .Where(party => party.PortfolioId == command.PortfolioId && party.TenantId == tenant.Id)
                 .GroupBy(_ => 1)
                 .Select(group => new
                 {
                     HasHistory = group.Any(),
                     IsCurrentResident = group.Any(party => party.Role != LeaseManagementPartyRole.Guarantor
-                        && persistence.Query<UnitOccupancyProjection>().Any(occupancy =>
+                        && db.Set<UnitOccupancyProjection>().Any(occupancy =>
                             occupancy.PortfolioId == command.PortfolioId
                             && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                        && db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
                             lifecycle.PortfolioId == command.PortfolioId
                             && lifecycle.LeaseManagementId == party.LeaseManagementId
                             && party.EffectiveFrom <= lifecycle.BusinessDate
@@ -707,12 +738,12 @@ public sealed class AtomicCoreCrudMutationHandler
                 throw Conflict("This tenant is a current resident in an occupied rental; return possession or change the household first.");
             if (state?.HasHistory == true)
                 throw Conflict("This tenant has rental relationship history; keep the tenant record to preserve agreements and account history.");
-            tenant.DeletedAt = now;
-            tenant.UpdatedAt = now;
+            tenant.DeletedAt = mutationNow;
+            tenant.UpdatedAt = mutationNow;
             attempt.BindSemanticAudit(tenant, Audit(command, nameof(Tenant), AuditLogOperation.Deleted,
                 $"Tenant {tenant.FirstName} {tenant.LastName} deleted"));
             await attempt.FlushBusinessAsync(ct);
-            StageDataUpdate(attempt, command, nameof(Tenant), tenant.Id, now, deleted: true);
+            StageDataUpdate(attempt, command, nameof(Tenant), tenant.Id, mutationNow, deleted: true);
             return Applied(tenant.Id);
         }
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
@@ -725,21 +756,21 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.EmergencyContact is not null) tenant.EmergencyContact = update.EmergencyContact;
         if (update.DateOfBirth.HasValue) tenant.DateOfBirth = Utc(update.DateOfBirth);
         if (update.Notes is not null) tenant.Notes = update.Notes;
-        tenant.UpdatedAt = now;
+        tenant.UpdatedAt = mutationNow;
         attempt.BindSemanticAudit(tenant, Audit(command, nameof(Tenant), AuditLogOperation.Updated,
             $"Tenant {tenant.FirstName} {tenant.LastName} updated"));
         await attempt.FlushBusinessAsync(ct);
-        StageDataUpdate(attempt, command, nameof(Tenant), tenant.Id, now);
-        return Applied(tenant.Id, await SnapshotTenantAsync(tenant, persistence, ct));
+        StageDataUpdate(attempt, command, nameof(Tenant), tenant.Id, mutationNow);
+        return Applied(tenant.Id, await SnapshotTenantAsync(tenant, db, ct));
     }
 
-    private static async Task<AtomicCoreCrudMutationResult> MutateVendorAsync(
-        AtomicCoreCrudMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
+    private async Task<AtomicCoreCrudMutationResult> MutateVendorAsync(
+        AtomicCoreCrudMutationCommand command, IAtomicCommandContext attempt, DateTime now, CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         var authorized = command.Operation == AtomicCoreCrudMutationOperation.Create
-            ? await AuthorizeAnyPropertyAsync(command, persistence, now, CapabilityKeys.WorkManage, ct)
-            : await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.WorkManage, ct);
+            ? await AuthorizeAnyPropertyAsync(command, db, now, CapabilityKeys.WorkManage, ct)
+            : await AuthorizeAllPropertiesAsync(command, db, now, CapabilityKeys.WorkManage, ct);
         if (!authorized) throw Denied();
         var mutationNow = command.Operation == AtomicCoreCrudMutationOperation.Create
             ? command.CreatedAtUtc ?? now
@@ -756,20 +787,20 @@ public sealed class AtomicCoreCrudMutationHandler
                 W9OnFile = request.W9OnFile, Preferred = request.Preferred, Notes = request.Notes,
                 CreatedAt = mutationNow, UpdatedAt = mutationNow,
             };
-            persistence.Add(entity);
+            db.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Vendor), AuditLogOperation.Created,
                 $"Vendor {entity.Name} created", entityId: 0));
             await attempt.FlushBusinessAsync(ct);
             StageDataUpdate(attempt, command, nameof(Vendor), entity.Id, mutationNow);
             return Applied(entity.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(entity)));
         }
-        var vendor = await persistence.Query<Vendor>().SingleOrDefaultAsync(entity =>
+        var vendor = await db.Set<Vendor>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
             && entity.DeletedAt == null, ct);
         if (vendor is null) return Missing();
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var open = await persistence.Query<WorkOrder>().AsNoTracking().CountAsync(work =>
+            var open = await db.Set<WorkOrder>().AsNoTracking().CountAsync(work =>
                 work.PortfolioId == command.PortfolioId && work.VendorId == vendor.Id
                 && work.Status != WorkOrderStatus.Completed && work.Status != WorkOrderStatus.Cancelled
                 && work.Status != WorkOrderStatus.Archived, ct);
@@ -807,65 +838,65 @@ public sealed class AtomicCoreCrudMutationHandler
         return Applied(vendor.Id, JsonSerializer.Serialize(VendorResponse.FromEntity(vendor)));
     }
 
-    private static Task<bool> AuthorizeAllPropertiesAsync(
+    private Task<bool> AuthorizeAllPropertiesAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string capability,
         CancellationToken ct) =>
-        AuthorizeAllPropertiesEitherAsync(command, persistence, now, capability, capability, ct);
+        AuthorizeAllPropertiesEitherAsync(command, db, now, capability, capability, ct);
 
-    private static Task<bool> AuthorizeAnyPropertyAsync(
+    private Task<bool> AuthorizeAnyPropertyAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string capability,
         CancellationToken ct) =>
-        AuthorizedProperties(command, persistence, now, capability, capability)
+        AuthorizedProperties(command, db, now, capability, capability)
             .AnyAsync(ct);
 
-    private static Task<bool> AuthorizeAllPropertiesEitherAsync(
+    private Task<bool> AuthorizeAllPropertiesEitherAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
         string secondCapability,
         CancellationToken ct) =>
-        AuthorizedAssignments(command, persistence, now, firstCapability, secondCapability)
+        AuthorizedAssignments(command, db, now, firstCapability, secondCapability)
             .AnyAsync(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct);
 
-    private static Task<bool> AuthorizePropertyEntityAsync(
+    private Task<bool> AuthorizePropertyEntityAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string capability,
         CancellationToken ct) =>
-        AuthorizedProperties(command, persistence, now, capability, capability)
+        AuthorizedProperties(command, db, now, capability, capability)
             .AnyAsync(property => property.Id == command.EntityId, ct);
 
-    private static async Task<bool> AuthorizeOwnerEntityAsync(
+    private async Task<bool> AuthorizeOwnerEntityAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        var assignments = AuthorizedAssignments(command, persistence, now,
+        var assignments = AuthorizedAssignments(command, db, now,
             CapabilityKeys.RentalsManage, CapabilityKeys.RentalsManage);
         if (await assignments.AnyAsync(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct))
             return true;
-        var authorized = AuthorizedProperties(command, persistence, now,
+        var authorized = AuthorizedProperties(command, db, now,
             CapabilityKeys.RentalsManage, CapabilityKeys.RentalsManage);
-        return await persistence.Query<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
+        return await db.Set<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
             owner.Id == command.EntityId && owner.PortfolioId == command.PortfolioId
-            && persistence.Query<PropertyOwnership>().Any(ownership =>
+            && db.Set<PropertyOwnership>().Any(ownership =>
                 ownership.PortfolioId == command.PortfolioId
                 && ownership.OwnerEntityId == owner.Id
                 && ownership.EffectiveFromUtc <= now
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
                 && ownership.Property != null
                 && ownership.Property.DeletedAt == null)
-            && !persistence.Query<PropertyOwnership>().Any(ownership =>
+            && !db.Set<PropertyOwnership>().Any(ownership =>
                 ownership.PortfolioId == command.PortfolioId
                 && ownership.OwnerEntityId == owner.Id
                 && ownership.EffectiveFromUtc <= now
@@ -875,31 +906,31 @@ public sealed class AtomicCoreCrudMutationHandler
                 && !authorized.Any(allowed => allowed.Id == ownership.PropertyId)), ct);
     }
 
-    private static async Task<bool> AuthorizeTenantAsync(
+    private async Task<bool> AuthorizeTenantAsync(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        if (await AuthorizeAllPropertiesEitherAsync(command, persistence, now,
+        if (await AuthorizeAllPropertiesEitherAsync(command, db, now,
                 CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage, ct))
             return true;
-        var authorized = AuthorizedProperties(command, persistence, now,
+        var authorized = AuthorizedProperties(command, db, now,
             CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage);
-        return await persistence.Query<Tenant>().AsNoTracking().AnyAsync(tenant =>
+        return await db.Set<Tenant>().AsNoTracking().AnyAsync(tenant =>
             tenant.Id == command.EntityId && tenant.PortfolioId == command.PortfolioId
             && tenant.LeaseManagementParties.Any(party =>
                 party.PortfolioId == command.PortfolioId && party.LeaseManagement != null
                 && authorized.Any(property => property.Id == party.LeaseManagement.PropertyId)), ct);
     }
 
-    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+    private IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
         string secondCapability) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -913,13 +944,13 @@ public sealed class AtomicCoreCrudMutationHandler
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -930,15 +961,15 @@ public sealed class AtomicCoreCrudMutationHandler
                 && grant.CapabilityDefinition.AuthorizationTargetKind ==
                     CapabilityAuthorizationTargetKind.Property));
 
-    private static IQueryable<Property> AuthorizedProperties(
+    private IQueryable<Property> AuthorizedProperties(
         AtomicCoreCrudMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string firstCapability,
         string secondCapability)
     {
-        var assignments = AuthorizedAssignments(command, persistence, now, firstCapability, secondCapability);
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        var assignments = AuthorizedAssignments(command, db, now, firstCapability, secondCapability);
+        return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
             && assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
@@ -948,16 +979,16 @@ public sealed class AtomicCoreCrudMutationHandler
                         && selected.PropertyId == property.Id))));
     }
 
-    private static async Task EnsurePropertyHasNoCurrentOccupancyAsync(
-        int portfolioId, int propertyId, IAtomicPersistenceSession persistence, CancellationToken ct)
+    private async Task EnsurePropertyHasNoCurrentOccupancyAsync(
+        int portfolioId, int propertyId, RentalCommandDbContext db, CancellationToken ct)
     {
-        var guard = await persistence.Query<Property>().AsNoTracking()
+        var guard = await db.Set<Property>().AsNoTracking()
             .Where(property => property.PortfolioId == portfolioId && property.Id == propertyId)
             .Select(property => new
             {
-                Occupied = persistence.Query<UnitOccupancyProjection>().Any(row =>
+                Occupied = db.Set<UnitOccupancyProjection>().Any(row =>
                     row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.IsOccupied),
-                Current = persistence.Query<LeaseManagementLifecycleProjection>().Any(row =>
+                Current = db.Set<LeaseManagementLifecycleProjection>().Any(row =>
                     row.PortfolioId == portfolioId && row.PropertyId == property.Id
                     && row.Lifecycle != "Canceled" && row.Lifecycle != "Closed"
                     && row.Lifecycle != "AccountingCloseout"),
@@ -966,24 +997,24 @@ public sealed class AtomicCoreCrudMutationHandler
         if (guard.Current) throw Conflict("This property has a planned or current rental relationship. Cancel or complete it before marking it inactive.");
     }
 
-    private static async Task EnsurePropertyHasNoHistoryAsync(
-        int portfolioId, int propertyId, IAtomicPersistenceSession persistence, CancellationToken ct)
+    private async Task EnsurePropertyHasNoHistoryAsync(
+        int portfolioId, int propertyId, RentalCommandDbContext db, CancellationToken ct)
     {
-        var guard = await persistence.Query<Property>().IgnoreQueryFilters().AsNoTracking()
+        var guard = await db.Set<Property>().IgnoreQueryFilters().AsNoTracking()
             .Where(property => property.PortfolioId == portfolioId && property.Id == propertyId)
             .Select(property => new
             {
-                Occupied = persistence.Query<UnitOccupancyProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.IsOccupied),
-                Current = persistence.Query<LeaseManagementLifecycleProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.Lifecycle != "Canceled" && row.Lifecycle != "Closed" && row.Lifecycle != "AccountingCloseout"),
-                Lease = persistence.Query<LeaseManagement>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Work = persistence.Query<WorkOrder>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Appointment = persistence.Query<Appointment>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Inspection = persistence.Query<Inspection>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Expense = persistence.Query<Expense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Application = persistence.Query<RentalApplication>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Recurring = persistence.Query<RecurringExpense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Loan = persistence.Query<Loan>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
-                Document = persistence.Query<StoredFile>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.EntityType == nameof(Property) && row.EntityId == property.Id),
+                Occupied = db.Set<UnitOccupancyProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.IsOccupied),
+                Current = db.Set<LeaseManagementLifecycleProjection>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id && row.Lifecycle != "Canceled" && row.Lifecycle != "Closed" && row.Lifecycle != "AccountingCloseout"),
+                Lease = db.Set<LeaseManagement>().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Work = db.Set<WorkOrder>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Appointment = db.Set<Appointment>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Inspection = db.Set<Inspection>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Expense = db.Set<Expense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Application = db.Set<RentalApplication>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Recurring = db.Set<RecurringExpense>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Loan = db.Set<Loan>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.PropertyId == property.Id),
+                Document = db.Set<StoredFile>().IgnoreQueryFilters().Any(row => row.PortfolioId == portfolioId && row.EntityType == nameof(Property) && row.EntityId == property.Id),
             }).SingleAsync(ct);
         if (guard.Occupied) throw Conflict("This property has an occupied unit. Return possession before deleting the property.");
         if (guard.Current) throw Conflict("This property has a planned or current rental relationship. Cancel or complete it before deleting the property.");
@@ -998,37 +1029,37 @@ public sealed class AtomicCoreCrudMutationHandler
         if (guard.Document) throw Conflict("This property has document history. Archive it instead of deleting the property.");
     }
 
-    private static async Task EnsureUnitHasNoHistoryAsync(
+    private async Task EnsureUnitHasNoHistoryAsync(
         int portfolioId,
         int unitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var guard = await persistence.Query<Unit>().IgnoreQueryFilters().AsNoTracking()
+        var guard = await db.Set<Unit>().IgnoreQueryFilters().AsNoTracking()
             .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
             .Select(unit => new
             {
-                IsOccupied = persistence.Query<UnitOccupancyProjection>().Any(occupancy =>
+                IsOccupied = db.Set<UnitOccupancyProjection>().Any(occupancy =>
                     occupancy.PortfolioId == portfolioId && occupancy.UnitId == unit.Id && occupancy.IsOccupied),
-                HasCurrent = persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                HasCurrent = db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
                     lifecycle.PortfolioId == portfolioId && lifecycle.UnitId == unit.Id
                     && lifecycle.Lifecycle != "Canceled" && lifecycle.Lifecycle != "Closed"
                     && lifecycle.Lifecycle != "AccountingCloseout"),
-                HasLease = persistence.Query<LeaseManagement>().Any(row =>
+                HasLease = db.Set<LeaseManagement>().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasWork = persistence.Query<WorkOrder>().IgnoreQueryFilters().Any(row =>
+                HasWork = db.Set<WorkOrder>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasAppointment = persistence.Query<Appointment>().IgnoreQueryFilters().Any(row =>
+                HasAppointment = db.Set<Appointment>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasInspection = persistence.Query<Inspection>().IgnoreQueryFilters().Any(row =>
+                HasInspection = db.Set<Inspection>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasExpense = persistence.Query<Expense>().IgnoreQueryFilters().Any(row =>
+                HasExpense = db.Set<Expense>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasApplication = persistence.Query<RentalApplication>().IgnoreQueryFilters().Any(row =>
+                HasApplication = db.Set<RentalApplication>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasRecurringExpense = persistence.Query<RecurringExpense>().IgnoreQueryFilters().Any(row =>
+                HasRecurringExpense = db.Set<RecurringExpense>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.UnitId == unit.Id),
-                HasDocument = persistence.Query<StoredFile>().IgnoreQueryFilters().Any(row =>
+                HasDocument = db.Set<StoredFile>().IgnoreQueryFilters().Any(row =>
                     row.PortfolioId == portfolioId && row.EntityType == nameof(Unit) && row.EntityId == unit.Id),
             })
             .SingleAsync(ct);
@@ -1045,14 +1076,14 @@ public sealed class AtomicCoreCrudMutationHandler
     }
 
 
-    private static async Task<string> SnapshotPropertyAsync(
+    private async Task<string> SnapshotPropertyAsync(
         Property entity,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct,
         DateTime? effectiveNowUtc = null)
     {
-        var now = effectiveNowUtc ?? await persistence.ReadDatabaseClockUtcAsync(ct);
-        var facts = await persistence.Query<Property>().AsNoTracking()
+        var now = effectiveNowUtc ?? await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(db, ct);
+        var facts = await db.Set<Property>().AsNoTracking()
             .Where(property => property.PortfolioId == entity.PortfolioId && property.Id == entity.Id)
             .Select(property => new
             {
@@ -1073,7 +1104,7 @@ public sealed class AtomicCoreCrudMutationHandler
                         PayeeName = ownership.PayeeName,
                     }).ToList(),
                 UnitCount = property.Units.Count,
-                OccupiedUnits = persistence.Query<UnitOccupancyProjection>().Count(occupancy =>
+                OccupiedUnits = db.Set<UnitOccupancyProjection>().Count(occupancy =>
                     occupancy.PortfolioId == entity.PortfolioId
                     && occupancy.PropertyId == property.Id && occupancy.IsOccupied),
             }).SingleAsync(ct);
@@ -1082,13 +1113,13 @@ public sealed class AtomicCoreCrudMutationHandler
         return JsonSerializer.Serialize(response);
     }
 
-    private static async Task<string> SnapshotOwnerAsync(
+    private async Task<string> SnapshotOwnerAsync(
         OwnerEntity entity,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var assigned = await persistence.Query<PropertyOwnership>().AsNoTracking()
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(db, ct);
+        var assigned = await db.Set<PropertyOwnership>().AsNoTracking()
             .Where(ownership =>
                 ownership.PortfolioId == entity.PortfolioId
                 && ownership.OwnerEntityId == entity.Id
@@ -1102,36 +1133,36 @@ public sealed class AtomicCoreCrudMutationHandler
         return JsonSerializer.Serialize(OwnerEntityResponse.FromEntity(entity, assigned));
     }
 
-    private static async Task<string> SnapshotTenantAsync(
+    private async Task<string> SnapshotTenantAsync(
         Tenant entity,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var counts = await persistence.Query<Tenant>().AsNoTracking()
+        var counts = await db.Set<Tenant>().AsNoTracking()
             .Where(tenant => tenant.PortfolioId == entity.PortfolioId && tenant.Id == entity.Id)
             .Select(tenant => new
             {
-                Active = persistence.Query<LeaseManagementParty>()
+                Active = db.Set<LeaseManagementParty>()
                     .Where(party => party.PortfolioId == entity.PortfolioId
                         && party.TenantId == tenant.Id
                         && party.Role != LeaseManagementPartyRole.Guarantor
-                        && persistence.Query<UnitOccupancyProjection>().Any(occupancy =>
+                        && db.Set<UnitOccupancyProjection>().Any(occupancy =>
                             occupancy.PortfolioId == entity.PortfolioId
                             && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                        && db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
                             lifecycle.PortfolioId == entity.PortfolioId
                             && lifecycle.LeaseManagementId == party.LeaseManagementId
                             && party.EffectiveFrom <= lifecycle.BusinessDate
                             && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
                     .Select(party => party.LeaseManagementId).Distinct().Count(),
-                History = persistence.Query<LeaseManagementParty>()
+                History = db.Set<LeaseManagementParty>()
                     .Where(party => party.PortfolioId == entity.PortfolioId && party.TenantId == tenant.Id)
                     .Select(party => party.LeaseManagementId).Distinct().Count(),
             }).SingleAsync(ct);
         return SnapshotTenant(entity, counts.Active, counts.History);
     }
 
-    private static string SnapshotTenant(Tenant entity, int active, int history)
+    private string SnapshotTenant(Tenant entity, int active, int history)
     {
         var response = TenantResponse.FromEntity(entity);
         response.ActiveLeaseCount = active;
@@ -1145,8 +1176,8 @@ public sealed class AtomicCoreCrudMutationHandler
         return JsonSerializer.Serialize(response);
     }
 
-    private static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+    private void StageDataUpdate(
+        IAtomicCommandContext attempt,
         AtomicCoreCrudMutationCommand command,
         string entityType,
         int entityId,
@@ -1169,7 +1200,7 @@ public sealed class AtomicCoreCrudMutationHandler
             NextAttemptAtUtc = now,
         });
 
-    private static AtomicSemanticAudit Audit(
+    private AtomicSemanticAudit Audit(
         AtomicCoreCrudMutationCommand command,
         string entityType,
         AuditLogOperation operation,
@@ -1178,11 +1209,17 @@ public sealed class AtomicCoreCrudMutationHandler
             command.PortfolioId, entityType, entityId ?? command.EntityId, operation,
             UserId: command.ActorUserId, ChangeReason: reason);
 
-    private static T Read<T>(AtomicCoreCrudMutationCommand command) where T : class =>
+    private T Read<T>(AtomicCoreCrudMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Core CRUD mutation request payload is invalid.");
 
-    private static void Validate(AtomicCoreCrudMutationCommand command)
+    private string? NormalizeOptionalText(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    private void Validate(AtomicCoreCrudMutationCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
@@ -1195,14 +1232,14 @@ public sealed class AtomicCoreCrudMutationHandler
             throw new ArgumentException("Portfolio, actor, access revision, operation, and delivery identifiers are required.");
     }
 
-    private static DateTime? Utc(DateTime? value) => value is null ? null
+    private DateTime? Utc(DateTime? value) => value is null ? null
         : value.Value.Kind == DateTimeKind.Utc ? value : value.Value.ToUniversalTime();
-    private static AtomicCoreCrudMutationResult Missing() => new(false, false, 0);
-    private static AtomicCoreCrudMutationResult Applied(int id, string? responseJson = null) =>
+    private AtomicCoreCrudMutationResult Missing() => new(false, false, 0);
+    private AtomicCoreCrudMutationResult Applied(int id, string? responseJson = null) =>
         new(true, true, id, responseJson);
-    private static UnauthorizedAccessException Denied() => new(
+    private UnauthorizedAccessException Denied() => new(
         "The record is not authorized in the current workspace scope.");
-    private static DomainValidationException Conflict(string message) => new(message, 409);
+    private DomainValidationException Conflict(string message) => new(message, 409);
 }
 
 public static class AtomicCoreCrudMutation

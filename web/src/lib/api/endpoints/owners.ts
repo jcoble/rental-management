@@ -23,6 +23,18 @@ export interface ActivateOwnerPortalAccessResponse {
 	message: string;
 }
 
+export interface RevokeOwnerPortalAccessResponse {
+	outcome: 'Revoked' | 'AlreadyRevoked' | 'NotFound';
+	ownerEntityId: number;
+	ownerEmail?: string | null;
+	revokedRelationshipCount: number;
+	targetAccessContextId?: number | null;
+	ownerUserAccessId?: number | null;
+	accessRevision?: number | null;
+	replayed: boolean;
+	message: string;
+}
+
 export const owners = {
 	list: (portfolioId: number, params?: ListParams) =>
 		api.get<Owner[]>(`/owner-entities${buildListQuery(params, { portfolioId })}`),
@@ -46,6 +58,12 @@ export const owners = {
 	activatePortalAccess: (id: number) =>
 		idempotentMutation(`owners:portal-access:activate:${id}`, (key) =>
 			api.post<ActivateOwnerPortalAccessResponse>(`/owner-entities/${id}/portal-access/activate`, {}, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	revokePortalAccess: (id: number) =>
+		idempotentMutation(`owners:portal-access:revoke:${id}`, (key) =>
+			api.post<RevokeOwnerPortalAccessResponse>(`/owner-entities/${id}/portal-access/revoke`, {}, {
 				headers: { 'Idempotency-Key': key }
 			})
 		),

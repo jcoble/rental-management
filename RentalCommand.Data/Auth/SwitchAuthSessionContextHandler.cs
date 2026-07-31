@@ -11,9 +11,13 @@ namespace RentalCommand.Data.Auth;
 public sealed class SwitchAuthSessionContextHandler
     : IAtomicCommandHandler<SwitchAuthSessionContextCommand, SwitchAuthSessionContextResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SwitchAuthSessionContextHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<SwitchAuthSessionContextResult> HandleAsync(
         SwitchAuthSessionContextCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.AuthSessionId == Guid.Empty || command.UserId <= 0 ||
@@ -23,8 +27,8 @@ public sealed class SwitchAuthSessionContextHandler
             throw new ArgumentOutOfRangeException(nameof(command));
         }
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        var session = await attempt.Persistence.Query<AuthSession>()
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        var session = await _db.Set<AuthSession>()
             .SingleOrDefaultAsync(item =>
                 item.Id == command.AuthSessionId &&
                 item.UserId == command.UserId &&
@@ -35,7 +39,7 @@ public sealed class SwitchAuthSessionContextHandler
                 ct)
             ?? throw new UnauthorizedAccessException("The current authentication session is unavailable.");
 
-        var currentRevision = await attempt.Persistence.Query<WorkspaceAccessContext>()
+        var currentRevision = await _db.Set<WorkspaceAccessContext>()
             .WhereEffective()
             .Where(item => item.Id == command.CurrentAccessContextId && item.UserId == command.UserId)
             .Select(item => (long?)item.AccessRevision)
@@ -45,7 +49,7 @@ public sealed class SwitchAuthSessionContextHandler
             throw new UnauthorizedAccessException("The current access envelope is stale.");
         }
 
-        var selected = await attempt.Persistence.Query<WorkspaceAccessContext>()
+        var selected = await _db.Set<WorkspaceAccessContext>()
             .Where(item => item.Id == command.SelectedAccessContextId &&
                 item.UserId == command.UserId &&
                 AccessAuthorityDbFunctions.IsEffective(
@@ -58,7 +62,7 @@ public sealed class SwitchAuthSessionContextHandler
 
         session.ActiveAccessContextId = selected.Id;
         session.LastSeenAtUtc = command.ChangedAtUtc;
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             selected.PortfolioId,
             nameof(AuthSession),
             selected.Id,
@@ -81,5 +85,43 @@ public sealed class SwitchAuthSessionContextHandler
             selected.Id,
             selected.PortfolioId,
             selected.AccessRevision);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        SwitchAuthSessionContextCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.AuthSessionId == Guid.Empty || command.UserId <= 0 ||
+            command.CurrentAccessContextId <= 0 || command.CurrentAccessRevision <= 0 ||
+            command.SelectedAccessContextId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        var authorized = await _db.Set<AuthSession>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.UserId &&
+                (session.ActiveAccessContextId == command.CurrentAccessContextId ||
+                 session.ActiveAccessContextId == command.SelectedAccessContextId) &&
+                _db.Set<WorkspaceAccessContext>()
+                    .IgnoreQueryFilters()
+                    .Any(current =>
+                        current.Id == command.CurrentAccessContextId &&
+                        current.UserId == command.UserId &&
+                        current.AccessRevision == command.CurrentAccessRevision) &&
+                _db.Set<WorkspaceAccessContext>()
+                    .IgnoreQueryFilters()
+                    .Any(selected =>
+                        selected.Id == command.SelectedAccessContextId &&
+                        selected.UserId == command.UserId),
+                ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException("The original context-switch ownership is unavailable.");
+        }
     }
 }

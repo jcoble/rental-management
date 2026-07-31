@@ -4,5 +4,5 @@ namespace RentalCommand.Core.Enums;
 public enum WorkOrderResponsibilityKind
 {
     Primary = 0,
-    Collaborator = 1,
+    Supporting = 1,
 }

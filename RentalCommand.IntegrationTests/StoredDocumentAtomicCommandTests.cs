@@ -4,7 +4,6 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -24,11 +23,12 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
 {
     private const int ActorUserId = 73;
     private const string ContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private static readonly DateTime SecurityAtUtc =
-        new(2026, 7, 27, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly AtomicJsonResultCodec<CreateStoredDocumentResult> CreateCodec =
+        new("stored-document.create.result.v1");
+    private static readonly AtomicJsonResultCodec<DeleteStoredDocumentResult> DeleteCodec =
+        new("stored-document.delete.result.v1");
     private static readonly DateTime BusinessAtUtc =
         new(2027, 1, 14, 5, 0, 0, DateTimeKind.Utc);
-    private readonly FixedAuthSecurityClock _securityClock = new(SecurityAtUtc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
@@ -80,7 +80,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         services.AddLogging();
         services.AddSingleton<TimeProvider>(
             new FixedTimeProvider(new DateTimeOffset(BusinessAtUtc)));
-        services.AddSingleton<IAuthSecurityClock>(_securityClock);
         services.AddSingleton<CommandProbe>();
         services.AddSingleton<AuditFailureInterceptor>();
         services.AddSingleton<CapturingFileStorage>();
@@ -95,7 +94,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             DeleteStoredDocumentCommand,
             DeleteStoredDocumentResult,
             DeleteStoredDocumentHandler>();
-        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -145,10 +144,44 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             .ToListAsync();
         audits.Should().Contain(audit => audit.EntityType == nameof(StoredFile) && audit.EntityId == first.Id);
         audits.Should().Contain(audit => audit.EntityType == nameof(Unit) && audit.EntityId == _unitId);
+        typeof(CreateStoredDocumentHandler).Should()
+            .Implement<IAtomicCommandHandler<CreateStoredDocumentCommand, CreateStoredDocumentResult>>();
     }
 
     [SkippableFact]
-    public async Task Create_separates_business_authority_time_from_real_session_expiry()
+    public async Task Create_replay_reauthorizes_and_denies_expired_assignment_before_returning_receipt()
+    {
+        SkipIfNoDocker();
+        var businessAtUtc = DateTime.UtcNow.AddMinutes(-30);
+        await SetManagementAccessWindowAsync(businessAtUtc.AddMinutes(-1), effectiveToUtc: null);
+
+        Storage.Add("blob-create-expired-replay");
+        var first = await ExecuteCreateCommandAsync(
+            "upload-create-expired-replay",
+            "blob-create-expired-replay",
+            businessAtUtc);
+        first.Value.Outcome.Should().Be(StoredDocumentMutationOutcome.Created);
+
+        await SetManagementAccessWindowAsync(
+            businessAtUtc.AddMinutes(-1),
+            businessAtUtc.AddMinutes(1));
+
+        await FluentActions.Invoking(() =>
+                ExecuteCreateCommandAsync(
+                    "upload-create-expired-replay",
+                    "blob-create-expired-replay",
+                    businessAtUtc))
+            .Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*document upload*");
+
+        await using var verify = NewContext();
+        (await verify.StoredFiles.CountAsync(file => file.Id == first.Value.StoredFileId)).Should().Be(1);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "stored-document.create")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Create_keeps_business_upload_time_separate_from_live_security_time()
     {
         SkipIfNoDocker();
         Storage.Add("blob-clock-separation");
@@ -161,15 +194,8 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         var membership = await db.WorkspaceMemberships.SingleAsync(
             candidate => candidate.AccessContextId == _accessContextId);
         var session = await db.AuthSessions.SingleAsync(candidate => candidate.Id == _sessionId);
-        membership.EffectiveFromUtc.Should().BeAfter(SecurityAtUtc);
+        membership.EffectiveFromUtc.Should().BeBefore(DateTime.UtcNow);
         session.ExpiresAtUtc.Should().BeBefore(BusinessAtUtc);
-
-        Storage.Add("blob-expired-security-session");
-        _securityClock.UtcNowValue = session.ExpiresAtUtc;
-        var expiredSession = await CreateAsync(
-            "upload-expired-security-session",
-            "blob-expired-security-session");
-        expiredSession.Should().BeNull();
         (await db.StoredFiles.CountAsync(file =>
             file.PortfolioId == _portfolioId && file.EntityId == _unitId)).Should().Be(1);
     }
@@ -295,7 +321,169 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Authorization_queries_are_server_translated_and_handlers_have_no_storage_dependency()
+    public async Task Delete_replay_reauthorizes_and_denies_expired_assignment_before_returning_receipt()
+    {
+        SkipIfNoDocker();
+        var businessAtUtc = DateTime.UtcNow.AddMinutes(-30);
+        await SetManagementAccessWindowAsync(businessAtUtc.AddMinutes(-1), effectiveToUtc: null);
+
+        Storage.Add("blob-delete-expired-replay");
+        var created = await ExecuteCreateCommandAsync(
+            "upload-delete-expired-replay",
+            "blob-delete-expired-replay",
+            businessAtUtc);
+        created.Value.Outcome.Should().Be(StoredDocumentMutationOutcome.Created);
+        var first = await ExecuteDeleteCommandAsync(
+            created.Value.StoredFileId,
+            "delete-expired-replay",
+            businessAtUtc);
+        first.Value.Outcome.Should().Be(StoredDocumentMutationOutcome.Deleted);
+
+        await SetManagementAccessWindowAsync(
+            businessAtUtc.AddMinutes(-1),
+            businessAtUtc.AddMinutes(1));
+
+        await FluentActions.Invoking(() => ExecuteDeleteCommandAsync(
+                created.Value.StoredFileId,
+                "delete-expired-replay",
+                businessAtUtc))
+            .Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*remove this document*");
+
+        await using var db = NewContext();
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == $"stored-file-delete:{created.Value.StoredFileId}")).Should().Be(1);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "stored-document.delete")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Tenant_delete_replay_authorizes_against_ignored_filter_work_order_target()
+    {
+        SkipIfNoDocker();
+        int storedFileId;
+        int tenantId;
+        await using (var seed = NewContext())
+        {
+            var propertyId = await seed.Units
+                .Where(unit => unit.Id == _unitId)
+                .Select(unit => unit.PropertyId)
+                .SingleAsync();
+            var tenant = new Tenant
+            {
+                PortfolioId = _portfolioId,
+                FirstName = "Tenant",
+                LastName = "Replay",
+                CreatedAt = BusinessAtUtc,
+                UpdatedAt = BusinessAtUtc,
+            };
+            seed.Tenants.Add(tenant);
+            await seed.SaveChangesAsync();
+
+            var workOrder = new WorkOrder
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = propertyId,
+                UnitId = _unitId,
+                TenantId = tenant.Id,
+                Title = "Tenant upload target",
+                Description = "Tenant upload target",
+                RequestedAt = BusinessAtUtc,
+                UpdatedAt = BusinessAtUtc,
+            };
+            seed.WorkOrders.Add(workOrder);
+            await seed.SaveChangesAsync();
+
+            var storedFile = new StoredFile
+            {
+                PortfolioId = _portfolioId,
+                EntityType = nameof(StoredDocumentTarget.WorkOrder),
+                EntityId = workOrder.Id,
+                FileName = "tenant-work-order.pdf",
+                FilePath = "blob-tenant-delete-replay",
+                ContentType = "application/pdf",
+                FileSize = 42,
+                ContentSha256 = ContentHash,
+                UploadedAt = BusinessAtUtc,
+            };
+            seed.StoredFiles.Add(storedFile);
+            await seed.SaveChangesAsync();
+            storedFileId = storedFile.Id;
+            tenantId = tenant.Id;
+        }
+
+        await using var scope = _services!.CreateAsyncScope();
+        var documents = scope.ServiceProvider.GetRequiredService<IDocumentService>();
+        var first = await documents.DeleteAsync(
+            portfolioId: _portfolioId,
+            id: storedFileId,
+            userId: ActorUserId,
+            tenantId: tenantId,
+            isStaff: false,
+            staffScope: null,
+            clientOperationId: "tenant-delete-replay");
+        var replay = await documents.DeleteAsync(
+            portfolioId: _portfolioId,
+            id: storedFileId,
+            userId: ActorUserId,
+            tenantId: tenantId,
+            isStaff: false,
+            staffScope: null,
+            clientOperationId: "tenant-delete-replay");
+
+        first.Should().BeTrue();
+        replay.Should().BeTrue();
+        await using var db = NewContext();
+        (await db.StoredFiles.IgnoreQueryFilters().CountAsync(file =>
+            file.Id == storedFileId && file.DeletedAt != null)).Should().Be(1);
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == $"stored-file-delete:{storedFileId}")).Should().Be(1);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "stored-document.delete")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Different_delete_operation_against_deleted_document_returns_not_found_without_side_effects()
+    {
+        SkipIfNoDocker();
+        Storage.Add("blob-delete-different-key");
+        var created = await CreateAsync("upload-for-delete-different-key", "blob-delete-different-key");
+        created.Should().NotBeNull();
+
+        await using var scope = _services!.CreateAsyncScope();
+        var documents = scope.ServiceProvider.GetRequiredService<IDocumentService>();
+        var deleted = await documents.DeleteAsync(
+            portfolioId: _portfolioId,
+            id: created!.Id,
+            userId: ActorUserId,
+            tenantId: null,
+            isStaff: true,
+            staffScope: ManagementScope(),
+            clientOperationId: "delete-original-key");
+        var differentKey = await documents.DeleteAsync(
+            portfolioId: _portfolioId,
+            id: created.Id,
+            userId: ActorUserId,
+            tenantId: null,
+            isStaff: true,
+            staffScope: ManagementScope(),
+            clientOperationId: "delete-different-key");
+
+        deleted.Should().BeTrue();
+        differentKey.Should().BeFalse();
+        await using var db = NewContext();
+        (await db.StoredFiles.IgnoreQueryFilters().CountAsync(file =>
+            file.Id == created.Id && file.DeletedAt != null)).Should().Be(1);
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == $"stored-file-delete:{created.Id}")).Should().Be(1);
+        (await db.AtomicAuditLogs.CountAsync(audit => audit.CommandType == "stored-document.delete"))
+            .Should().Be(2, "the second key records a canonical NotFound receipt without mutating or staging cleanup");
+        (await db.AtomicCommandReceipts.CountAsync(receipt => receipt.CommandType == "stored-document.delete"))
+            .Should().Be(2, "the deliberate second key records its own NotFound result");
+    }
+
+    [SkippableFact]
+    public async Task Authorization_queries_are_server_translated_and_handlers_only_depend_on_scoped_db_context()
     {
         SkipIfNoDocker();
         Probe.Clear();
@@ -310,8 +498,12 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             && sql.Contains("\"PortfolioId\"", StringComparison.Ordinal)
             && sql.Contains("@", StringComparison.Ordinal))
             .Should().Be(1, "target eligibility is one parameterized DB-side statement even when EF wraps filtered tables");
-        typeof(CreateStoredDocumentHandler).GetConstructors().Single().GetParameters().Should().BeEmpty();
-        typeof(DeleteStoredDocumentHandler).GetConstructors().Single().GetParameters().Should().BeEmpty();
+        typeof(CreateStoredDocumentHandler).GetConstructors().Single().GetParameters()
+            .Select(parameter => parameter.ParameterType)
+            .Should().Equal(typeof(RentalCommandDbContext));
+        typeof(DeleteStoredDocumentHandler).GetConstructors().Single().GetParameters()
+            .Select(parameter => parameter.ParameterType)
+            .Should().Equal(typeof(RentalCommandDbContext));
     }
 
     private CapturingFileStorage Storage => _services!.GetRequiredService<CapturingFileStorage>();
@@ -323,43 +515,8 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         string storagePath,
         int? entityId = null)
     {
-        var pendingUploadId = Guid.NewGuid();
         var fingerprint = ContentHash;
-        await using (var db = NewContext())
-        {
-            var operationHash = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(operationId))).ToLowerInvariant();
-            var existing = await db.PendingFileUploads.AsNoTracking()
-                .SingleOrDefaultAsync(upload => upload.PortfolioId == _portfolioId
-                    && upload.ActorScopeId == 73
-                    && upload.Purpose == "stored-document"
-                    && upload.OperationKeyHash == operationHash);
-            if (existing is not null)
-            {
-                pendingUploadId = existing.Id;
-            }
-            else
-            {
-                db.PendingFileUploads.Add(new PendingFileUpload
-                {
-                    Id = pendingUploadId,
-                    PortfolioId = _portfolioId,
-                    ActorScopeId = 73,
-                    Purpose = "stored-document",
-                    OperationKeyHash = operationHash,
-                    RequestFingerprint = fingerprint,
-                    StoragePath = storagePath,
-                    FileName = "lease.pdf",
-                    ContentType = "application/pdf",
-                    SizeBytes = 42,
-                    State = PendingFileUploadState.Prepared,
-                    CreatedAtUtc = DateTime.UtcNow,
-                    UpdatedAtUtc = DateTime.UtcNow,
-                });
-                await db.SaveChangesAsync();
-            }
-        }
+        var pendingUploadId = await PreparePendingUploadAsync(operationId, storagePath, fingerprint);
         await using var scope = _services!.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IDocumentService>().CreateAsync(
             pendingUploadId: pendingUploadId,
@@ -379,12 +536,138 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             storagePath: storagePath);
     }
 
+    private async Task<AtomicCommandOutcome<CreateStoredDocumentResult>> ExecuteCreateCommandAsync(
+        string operationId,
+        string storagePath,
+        DateTime uploadedAtUtc)
+    {
+        var fingerprint = ContentHash;
+        var pendingUploadId = await PreparePendingUploadAsync(operationId, storagePath, fingerprint);
+        return await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "stored-document.create",
+                $"{_portfolioId}:{ActorUserId}:{Digest(operationId)}"),
+            new CreateStoredDocumentCommand(
+                pendingUploadId,
+                _portfolioId,
+                StoredDocumentTarget.Unit,
+                _unitId,
+                ActorUserId,
+                null,
+                true,
+                operationId,
+                fingerprint,
+                ContentHash,
+                "lease.pdf",
+                storagePath,
+                "application/pdf",
+                42,
+                uploadedAtUtc,
+                ManagementAccess()),
+            CreateCodec);
+    }
+
+    private Task<AtomicCommandOutcome<DeleteStoredDocumentResult>> ExecuteDeleteCommandAsync(
+        int storedFileId,
+        string operationId,
+        DateTime deletedAtUtc) =>
+        ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "stored-document.delete",
+                $"{_portfolioId}:{storedFileId}:{Digest(operationId)}"),
+            new DeleteStoredDocumentCommand(
+                _portfolioId,
+                storedFileId,
+                ActorUserId,
+                null,
+                true,
+                operationId,
+                deletedAtUtc,
+                ManagementAccess()),
+            DeleteCodec);
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
+
+    private async Task<Guid> PreparePendingUploadAsync(
+        string operationId,
+        string storagePath,
+        string fingerprint)
+    {
+        var pendingUploadId = Guid.NewGuid();
+        await using var db = NewContext();
+        var operationHash = Digest(operationId);
+        var existing = await db.PendingFileUploads.AsNoTracking()
+            .SingleOrDefaultAsync(upload => upload.PortfolioId == _portfolioId
+                && upload.ActorScopeId == ActorUserId
+                && upload.Purpose == "stored-document"
+                && upload.OperationKeyHash == operationHash);
+        if (existing is not null)
+        {
+            return existing.Id;
+        }
+
+        db.PendingFileUploads.Add(new PendingFileUpload
+        {
+            Id = pendingUploadId,
+            PortfolioId = _portfolioId,
+            ActorScopeId = ActorUserId,
+            Purpose = "stored-document",
+            OperationKeyHash = operationHash,
+            RequestFingerprint = fingerprint,
+            StoragePath = storagePath,
+            FileName = "lease.pdf",
+            ContentType = "application/pdf",
+            SizeBytes = 42,
+            State = PendingFileUploadState.Prepared,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return pendingUploadId;
+    }
+
+    private async Task SetManagementAccessWindowAsync(DateTime effectiveFromUtc, DateTime? effectiveToUtc)
+    {
+        await using var db = NewContext();
+        var membership = await db.WorkspaceMemberships.SingleAsync(row =>
+            row.AccessContextId == _accessContextId);
+        var assignment = await db.MembershipRoleAssignments.SingleAsync(row =>
+            row.WorkspaceMembership != null &&
+            row.WorkspaceMembership.AccessContextId == _accessContextId);
+        membership.EffectiveFromUtc = effectiveFromUtc;
+        membership.EffectiveToUtc = effectiveToUtc;
+        assignment.EffectiveFromUtc = effectiveFromUtc;
+        assignment.EffectiveToUtc = effectiveToUtc;
+        await db.SaveChangesAsync();
+    }
+
     private WorkspaceReadScope ManagementScope() => new(
         PortfolioId: _portfolioId,
         UserId: ActorUserId,
         SessionId: _sessionId,
         AccessContextId: _accessContextId,
         AccessRevision: _accessRevision);
+
+    private StoredDocumentManagementAccess ManagementAccess() => new(
+        _sessionId,
+        ActorUserId,
+        _accessContextId,
+        _accessRevision);
+
+    private static string Digest(string value) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -430,7 +713,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
     private async Task<(Guid SessionId, int AccessContextId, long AccessRevision)>
         SeedManagementAccessAsync(RentalCommandDbContext db)
     {
-        var now = SecurityAtUtc;
+        var now = DateTime.UtcNow;
         var user = new ApplicationUser
         {
             Id = ActorUserId,
@@ -458,7 +741,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = BusinessAtUtc.AddMinutes(-1),
+            EffectiveFromUtc = now.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -470,7 +753,7 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = BusinessAtUtc.AddMinutes(-1),
+            EffectiveFromUtc = now.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -498,12 +781,6 @@ public sealed class StoredDocumentAtomicCommandTests : IAsyncLifetime
         public int? UserId => ActorUserId;
         public string? ActorLabel => null;
         public string? IpAddress => "127.0.0.1";
-    }
-
-    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
-    {
-        public DateTime UtcNowValue { get; set; } = utcNow;
-        public DateTime UtcNow() => UtcNowValue;
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider

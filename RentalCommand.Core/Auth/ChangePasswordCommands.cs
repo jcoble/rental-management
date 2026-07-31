@@ -3,12 +3,12 @@ using RentalCommand.Core.Atomic;
 namespace RentalCommand.Core.Auth;
 
 public sealed record ChangePasswordCommand(
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     int UserId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string CurrentPassword,
-    string NewPassword,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string CurrentPassword,
+    [property: AtomicFingerprintIgnore] string NewPassword,
     string PasswordIntentHash) : IAtomicCommandData;
 
 public enum ChangePasswordOutcome
@@ -23,4 +23,4 @@ public enum ChangePasswordOutcome
 public sealed record ChangePasswordResult(
     ChangePasswordOutcome Outcome,
     int UserId,
-    int AccessContextId) : IAtomicResultData;
+    int AccessContextId);

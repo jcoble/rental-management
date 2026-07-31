@@ -223,12 +223,17 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         await using (var db = NewContext())
         {
             await using var transaction = await db.Database.BeginTransactionAsync();
-            var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
+            var auditScope = new AtomicAuditScope(TimeProvider.System);
+            var attemptId = Guid.NewGuid();
+            var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+            commandContext.BeginAttempt(attemptId);
             using var attempt = auditScope.BeginAttempt(
                 new AtomicCommandIdentity("test.transition.rollback", Guid.NewGuid().ToString("N")),
-                Guid.NewGuid());
-            var persistence = new AtomicLeaseMutationPersistence(db, auditScope);
-            (await persistence.ExecuteLegalArtifactTransitionAsync(
+                attemptId,
+                db);
+            (await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
+                db,
+                commandContext,
                 rollback.PortfolioId,
                 rollback.LeaseManagementId,
                 rollback.LeaseAgreementId,
@@ -236,6 +241,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
                 rollback.ExecutedArtifactId,
                 FrozenBusinessNow)).Outcome.Should().Be(AtomicLegalExecutionTransitionOutcome.Applied);
             await transaction.RollbackAsync();
+            commandContext.EndAttempt();
         }
 
         var conflict = await SeedScenarioAsync("conflict", 800m, voided: true);
@@ -282,12 +288,17 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     {
         await using var db = NewContext();
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        commandContext.BeginAttempt(attemptId);
         using var attempt = auditScope.BeginAttempt(
             new AtomicCommandIdentity("test.native-esign.transition", Guid.NewGuid().ToString("N")),
-            Guid.NewGuid());
-        var persistence = new AtomicLeaseMutationPersistence(db, auditScope);
-        var result = await persistence.ExecuteLegalArtifactTransitionAsync(
+            attemptId,
+            db);
+        var result = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
+            db,
+            commandContext,
             scenario.PortfolioId,
             scenario.LeaseManagementId,
             scenario.LeaseAgreementId,
@@ -295,6 +306,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             scenario.ExecutedArtifactId,
             FrozenBusinessNow);
         await transaction.CommitAsync();
+        commandContext.EndAttempt();
         return result;
     }
 

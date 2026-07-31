@@ -25,10 +25,7 @@ void main() {
       expect(parsed, isNotNull);
       expect(parsed!.destination, MobileNavigationDestination.message);
       expect(
-        parsed.resolveFor(
-          _authority(),
-          nowUtc: DateTime.utc(2026, 7, 23, 12),
-        ),
+        parsed.resolveFor(_authority(), nowUtc: DateTime.utc(2026, 7, 23, 12)),
         '/messages/19',
       );
       expect(
@@ -50,10 +47,17 @@ void main() {
       }
 
       expect(routes.length, MobileNavigationDestination.values.length);
-      expect(routes[MobileNavigationDestination.unitMoney], '/units/7?tab=money');
+      expect(
+        routes[MobileNavigationDestination.unitMoney],
+        '/units/7?tab=money',
+      );
       expect(
         routes[MobileNavigationDestination.tenantLedgerEntry],
         '/tenant-accounts/3/entries/8',
+      );
+      expect(
+        routes[MobileNavigationDestination.tenantAccount],
+        '/portal/tenant-accounts/3',
       );
       expect(
         routes[MobileNavigationDestination.technicianWork],
@@ -63,7 +67,24 @@ void main() {
 
     test('malformed and unknown payloads fail closed', () {
       expect(MobileNavigationIntent.tryParse(null), isNull);
-      expect(MobileNavigationIntent.tryParse({'destination': 'Message'}), isNull);
+      expect(
+        MobileNavigationIntent.tryParse({'destination': 'Message'}),
+        isNull,
+      );
+      expect(
+        MobileNavigationIntent.tryParse({
+          ..._payload(),
+          'experience': null,
+        }),
+        isNull,
+      );
+      expect(
+        MobileNavigationIntent.tryParse({
+          ..._payload(),
+          'experience': 'FutureUnknownExperience',
+        }),
+        isNull,
+      );
       expect(
         MobileNavigationIntent.tryParse(
           _payload(destination: 'FutureUnknownDestination'),
@@ -89,52 +110,72 @@ void main() {
         isNull,
       );
       expect(
-        MobileNavigationIntent.tryParse(
-          _payload(fallbackDestination: 'Money'),
-        ),
+        MobileNavigationIntent.tryParse(_payload(fallbackDestination: 'Money')),
         isNull,
       );
     });
 
-    test('expired, revoked, cross-context and cross-experience intents fall back', () {
-      final valid = MobileNavigationIntent.tryParse(
-        _payload(
-          destination: 'Message',
-          resource: const {'kind': 'Conversation', 'id': 19},
-        ),
-      )!;
+    test(
+      'expired, revoked, cross-context and cross-experience intents fall back',
+      () {
+        final valid = MobileNavigationIntent.tryParse(
+          _payload(
+            destination: 'Message',
+            resource: const {'kind': 'Conversation', 'id': 19},
+          ),
+        )!;
 
-      expect(
-        valid.resolveFor(
-          _authority(),
-          nowUtc: DateTime.utc(2099, 1, 1),
-        ),
-        '/',
-        reason: 'expiry is exclusive',
-      );
-      expect(
-        valid.resolveFor(
-          _authority(accessRevision: 5),
-          nowUtc: DateTime.utc(2026, 7, 23, 12),
-        ),
-        '/',
-        reason: 'a revised/revoked authority invalidates the intent',
-      );
-      expect(
-        valid.resolveFor(
-          _authority(accessContextId: 99),
-          nowUtc: DateTime.utc(2026, 7, 23, 12),
-        ),
-        '/',
-      );
-      expect(
-        valid.resolveFor(
-          _authority(experience: WorkspaceExperience.tenant),
-          nowUtc: DateTime.utc(2026, 7, 23, 12),
-        ),
-        '/',
-      );
-    });
+        expect(
+          valid.resolveFor(_authority(), nowUtc: DateTime.utc(2099, 1, 1)),
+          '/',
+          reason: 'expiry is exclusive',
+        );
+        expect(
+          valid.resolveFor(
+            _authority(accessRevision: 5),
+            nowUtc: DateTime.utc(2026, 7, 23, 12),
+          ),
+          '/',
+          reason: 'a revised/revoked authority invalidates the intent',
+        );
+        expect(
+          valid.resolveFor(
+            _authority(accessContextId: 99),
+            nowUtc: DateTime.utc(2026, 7, 23, 12),
+          ),
+          '/',
+        );
+        expect(
+          valid.resolveFor(
+            _authority(experience: WorkspaceExperience.tenant),
+            nowUtc: DateTime.utc(2026, 7, 23, 12),
+          ),
+          '/',
+        );
+      },
+    );
+
+    test(
+      'tenant ledger entry intents use the tenant portal route for tenants',
+      () {
+        final intent = MobileNavigationIntent.tryParse(
+          _payload(
+            experience: 'Tenant',
+            destination: 'TenantLedgerEntry',
+            resource: const {'kind': 'TenantLedgerEntry', 'id': 8},
+            parentResource: const {'kind': 'TenantAccount', 'id': 3},
+          ),
+        )!;
+
+        expect(
+          intent.resolveFor(
+            _authority(experience: WorkspaceExperience.tenant),
+            nowUtc: DateTime.utc(2026, 7, 23, 12),
+          ),
+          '/portal/tenant-accounts/3/entries/8',
+        );
+      },
+    );
 
     test('resource kind mismatch cannot synthesize a route', () {
       final intent = MobileNavigationIntent.tryParse(
@@ -146,10 +187,7 @@ void main() {
 
       expect(resolveNavigationIntentRoute(intent), isNull);
       expect(
-        intent.resolveFor(
-          _authority(),
-          nowUtc: DateTime.utc(2026, 7, 23, 12),
-        ),
+        intent.resolveFor(_authority(), nowUtc: DateTime.utc(2026, 7, 23, 12)),
         '/',
       );
     });
@@ -234,9 +272,86 @@ void main() {
     expect(find.byType(NotificationsInboxScreen), findsOneWidget);
     expect(find.text('Rent posted'), findsOneWidget);
   });
+
+  testWidgets('tenant inbox ledger taps push to tenant portal account history', (
+    tester,
+  ) async {
+    final repo = _FakeNotificationsRepository([
+      AppNotification(
+        id: 1,
+        type: 'Payment',
+        title: 'Rent posted',
+        message: 'Payment received',
+        severity: 'Info',
+        navigationIntent: MobileNavigationIntent.tryParse(
+          _payload(
+            experience: 'Tenant',
+            destination: 'TenantLedgerEntry',
+            resource: const {'kind': 'TenantLedgerEntry', 'id': 8},
+            parentResource: const {'kind': 'TenantAccount', 'id': 42},
+          ),
+        ),
+        isRead: false,
+        createdAt: DateTime(2026),
+      ),
+    ]);
+    final shellRoutes = <String>[];
+
+    final router = GoRouter(
+      initialLocation: '/notifications',
+      routes: [
+        GoRoute(
+          path: '/notifications',
+          builder: (context, state) => MobileShellNavigation(
+            controller: MobileShellNavigator(
+              openTab: (_, {destination, detailBuilder}) {},
+              openRoute: (route) {
+                shellRoutes.add(route);
+                return true;
+              },
+            ),
+            child: const NotificationsInboxScreen(),
+          ),
+        ),
+        GoRoute(
+          path:
+              '/portal/tenant-accounts/:tenantAccountId/entries/:tenantLedgerEntryId',
+          builder: (context, state) => Scaffold(
+            body: Text(
+              'Portal account ${state.pathParameters['tenantAccountId']}',
+            ),
+          ),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          notificationsRepositoryProvider.overrideWithValue(repo),
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(
+              _authority(experience: WorkspaceExperience.tenant),
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.text('Rent posted'));
+    await tester.pumpAndSettle();
+
+    expect(shellRoutes, isEmpty);
+    expect(repo.markedReadIds, [1]);
+    expect(find.text('Portal account 42'), findsOneWidget);
+  });
 }
 
 Map<String, dynamic> _payload({
+  String experience = 'Management',
   String destination = 'Home',
   String fallbackDestination = 'Home',
   Object? resource,
@@ -244,7 +359,7 @@ Map<String, dynamic> _payload({
   Object? childResource,
   String expiresAtUtc = '2099-01-01T00:00:00Z',
 }) => {
-  'experience': 'Management',
+  'experience': experience,
   'destination': destination,
   'accessContextId': 12,
   'accessRevision': 4,
@@ -299,6 +414,10 @@ MobileNavigationIntent _intentFor(MobileNavigationDestination destination) {
       const MobileNavigationResource(kind: 'LeaseManagement', id: 7),
       null,
     ),
+    MobileNavigationDestination.tenantAccount => (
+      const MobileNavigationResource(kind: 'TenantAccount', id: 3),
+      null,
+    ),
     MobileNavigationDestination.home ||
     MobileNavigationDestination.notifications ||
     MobileNavigationDestination.rentals ||
@@ -308,7 +427,9 @@ MobileNavigationIntent _intentFor(MobileNavigationDestination destination) {
     MobileNavigationDestination.inbox => (null, null),
   };
   return MobileNavigationIntent(
-    experience: WorkspaceExperience.management,
+    experience: destination == MobileNavigationDestination.tenantAccount
+        ? WorkspaceExperience.tenant
+        : WorkspaceExperience.management,
     destination: destination,
     accessContextId: 12,
     accessRevision: 4,

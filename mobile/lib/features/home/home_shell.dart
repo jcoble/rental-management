@@ -2516,7 +2516,7 @@ class _MessageCard extends StatelessWidget {
         onTap: () {
           Widget detailBuilder(BuildContext _) => MessageDetailScreen(
             conversationId: conversation.id,
-            title: conversation.tenantName,
+            title: conversation.displayName,
             subtitle: conversation.subject,
           );
           final shellNavigator = mobileShellNavigatorOf(context);
@@ -2547,7 +2547,7 @@ class _MessageCard extends StatelessWidget {
           ),
         ),
         title: Text(
-          conversation.tenantName,
+          conversation.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium?.copyWith(

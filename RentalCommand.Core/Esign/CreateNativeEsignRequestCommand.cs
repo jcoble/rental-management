@@ -33,7 +33,7 @@ public sealed record IssueLeaseAgreementResult(
     int LeaseManagementId,
     int LeaseAgreementId,
     int SignatureRequestId,
-    int IssuedArtifactId) : IAtomicResultData;
+    int IssuedArtifactId);
 
 /// <summary>Freezes a draft Addendum, its PDF, and one native signing packet atomically.</summary>
 public sealed record IssueLeaseAddendumCommand(
@@ -62,4 +62,4 @@ public sealed record IssueLeaseAddendumResult(
     int LeaseManagementId,
     int LeaseAddendumId,
     int SignatureRequestId,
-    int IssuedArtifactId) : IAtomicResultData;
+    int IssuedArtifactId);

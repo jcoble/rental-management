@@ -38,8 +38,9 @@ public sealed class RefreshCredentialTokenFactoryTests
     {
         var factory = new RefreshCredentialTokenFactory(SigningKey);
         var bearer = factory.CreateBearer(Guid.NewGuid());
-        var replacement = bearer[^1] == 'A' ? 'B' : 'A';
-        var tampered = bearer[..^1] + replacement;
+        var signatureStart = bearer.LastIndexOf('.') + 1;
+        var replacement = bearer[signatureStart] == 'A' ? 'B' : 'A';
+        var tampered = bearer[..signatureStart] + replacement + bearer[(signatureStart + 1)..];
 
         factory.TryValidateAndReadCredentialId(tampered, out _).Should().BeFalse();
     }

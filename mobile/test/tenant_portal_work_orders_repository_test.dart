@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/features/maintenance/work_orders_repository.dart';
 import 'package:rental_command/features/portal/tenant_portal_repository.dart';
 
 void main() {
@@ -40,6 +41,44 @@ void main() {
         'from': '2026-07-01',
         'to': '2026-07-31',
       });
+    },
+  );
+
+  test(
+    'getWorkOrderDetail parses tenant-safe role-aware capabilities',
+    () async {
+      final adapter = _RecordingAdapter(
+        response: {
+          'id': 31,
+          'portfolioId': 1,
+          'propertyId': 9,
+          'title': 'Heat is out',
+          'description': 'No heat upstairs.',
+          'category': 'HVAC',
+          'priority': 'Emergency',
+          'status': 'Scheduled',
+          'requestedAt': '2026-07-01T00:00:00.000Z',
+          'updatedAt': '2026-07-01T01:00:00.000Z',
+          'capabilities': {
+            'canUploadPhoto': true,
+            'canViewCosts': false,
+            'canDispatchVendor': false,
+          },
+          'timeline': [],
+        },
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = TenantPortalRepository(dio);
+
+      final detail = await repo.getWorkOrderDetail(31);
+      final roleAware = detail as RoleAwareWorkOrderDetail;
+
+      expect(adapter.method, 'GET');
+      expect(adapter.path, '/portal/work-orders/31');
+      expect(roleAware.capabilities.canUploadPhoto, isTrue);
+      expect(roleAware.capabilities.canViewCosts, isFalse);
+      expect(roleAware.capabilities.canDispatchVendor, isFalse);
     },
   );
 }

@@ -49,6 +49,7 @@ void main() {
       'effectiveOn': '2026-07-15',
       'dueOn': null,
       'description': 'Online payment',
+      'reversesEntryId': 9000000001,
     });
 
     expect(account.tenantAccountId, 41);
@@ -61,6 +62,7 @@ void main() {
     expect(entry.tenantAccountId, 41);
     expect(entry.leaseManagementId, 17);
     expect(entry.tenantLedgerEntryId, 9000000002);
+    expect(entry.reversesEntryId, 9000000001);
   });
 
   test('portal money sources use canonical routes and explicit selection', () {
@@ -75,14 +77,86 @@ void main() {
     expect(repository, contains('/portal/tenant-accounts/page'));
     expect(repository, contains('/charges/page'));
     expect(repository, contains('/entries/page'));
+    expect(repository, contains('/history'));
     expect(repository, contains('/deposit'));
     expect(repository, isNot(contains("'/portal/balance'")));
     expect(repository, isNot(contains("'/portal/payments'")));
     expect(home, contains('Choose an account'));
     expect(history, contains('Choose an account'));
+    expect(history, contains('tenantPortalAccountsPageProvider'));
+    expect(history, contains('tenantPortalAccountHistoryProvider'));
+    expect(history, isNot(contains('tenantPortalSnapshotProvider')));
+    expect(history, contains("sort: 'propertyName'"));
+    expect(history, contains('skip: _accountSkip'));
+    expect(history, contains('take: _accountPageSize'));
+    expect(history, contains("key: const Key('account-history-current-due')"));
+    expect(history, contains("key: const Key('account-history-period')"));
+    expect(
+      history,
+      contains("key: const Key('account-history-beginning-balance')"),
+    );
+    expect(
+      history,
+      contains("key: const Key('account-history-closing-balance')"),
+    );
+    expect(history, contains('_period = TenantAccountHistoryPeriod.all'));
+    expect(history, contains('Scrollable.ensureVisible'));
+    expect(history, contains('const Divider(height: 1)'));
+    expect(history, isNot(contains('Card(')));
+    expect(history, isNot(contains('ListTile(')));
     expect(home, isNot(contains('.sort(')));
     expect(history, isNot(contains('.sort(')));
+    expect(history, isNot(contains('.where(')));
+    expect(history, isNot(contains('.sublist(')));
   });
+
+  test(
+    'unified account history parses signed, running, focus and reversal facts',
+    () {
+      final history = PortalTenantAccountHistory.fromJson({
+        'tenantAccountId': 41,
+        'leaseManagementId': 17,
+        'currency': 'USD',
+        'businessDate': '2027-01-29',
+        'period': 'currentMonth',
+        'periodFrom': '2027-01-01',
+        'periodTo': '2027-01-29',
+        'currentDue': -25,
+        'beginningBalance': 100,
+        'closingBalance': -25,
+        'totalCount': 1,
+        'skip': 0,
+        'take': 20,
+        'items': [
+          {
+            'tenantLedgerEntryId': 9000000002,
+            'entryType': 'PaymentReceipt',
+            'direction': 'Credit',
+            'displayType': 'Payment',
+            'description': 'Online payment',
+            'effectiveOn': '2027-01-05',
+            'postedAtUtc': '2027-01-05T12:00:00Z',
+            'signedAmount': -125,
+            'runningBalance': -25,
+            'openAmount': 0,
+            'payable': false,
+            'reversesEntryId': null,
+            'reversedByEntryId': 9000000003,
+            'isFocused': true,
+          },
+        ],
+      });
+
+      expect(history.currentDue, -25);
+      expect(history.beginningBalance, 100);
+      expect(history.closingBalance, -25);
+      expect(history.items.single.signedAmount, -125);
+      expect(history.items.single.runningBalance, -25);
+      expect(history.items.single.displayType, 'Payment');
+      expect(history.items.single.reversedByEntryId, 9000000003);
+      expect(history.items.single.isFocused, isTrue);
+    },
+  );
 
   test('portal lease agreement parses document availability metadata', () {
     final agreement = PortalLeaseAgreement.fromJson({

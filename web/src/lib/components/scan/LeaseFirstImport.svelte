@@ -32,13 +32,22 @@
 		initialDraftId?: number | null;
 		/** Keep the standalone scan page reloadable/bookmarkable while avoiding URL churn in embedded onboarding. */
 		syncDraftToUrl?: boolean;
+		/** Allows the property step to create a property from the lease. Fail closed unless the route grants all-properties authority. */
+		canCreateProperty?: boolean;
 		/** Called on a SUCCESSFUL scan.confirm. The parent decides where to navigate. */
 		oncomplete: (result: { leaseManagementId?: number | null; agreementId?: number | null; propertyId?: number | null; unitId?: number | null; tenantId?: number | null }) => void;
 		/** Called when an embedded parent wants to close the capture flow without saving. */
 		oncancel?: () => void;
 	}
 
-	let { portfolioId, initialDraftId = null, syncDraftToUrl = false, oncomplete, oncancel }: Props = $props();
+	let {
+		portfolioId,
+		initialDraftId = null,
+		syncDraftToUrl = false,
+		canCreateProperty = false,
+		oncomplete,
+		oncancel
+	}: Props = $props();
 
 	// ----- phase: capture -> processing -> steps -> review -> done -----
 	// `initialDraftId` is an initial seed only (resume an in-progress draft); later prop
@@ -322,6 +331,10 @@
 	function validateStep(i: number): boolean {
 		if (i === 0) {
 			if (isCreatingProperty) {
+				if (!canCreateProperty) {
+					propertyErrors = { propertyId: 'Choose an existing property.' };
+					return false;
+				}
 				const r = parseForm(propertySchema, propertyForm);
 				propertyErrors = r.errors ?? {};
 				return !r.errors;
@@ -523,8 +536,8 @@
 					label="Is this one of your existing properties?"
 					value={propertyChoice === CREATE ? '' : propertyChoice}
 					selectedLabel={selectedExistingPropertyLabel}
-					placeholder="Create new from the lease"
-					clearLabel="Create new from the lease"
+					placeholder={canCreateProperty ? 'Create new from the lease' : 'Select an existing property'}
+					clearLabel={canCreateProperty ? 'Create new from the lease' : undefined}
 					searchPlaceholder="Search properties…"
 					testid="new-rental-property-choice"
 					loadPage={loadPropertyOptions}
@@ -535,11 +548,14 @@
 						selectedUnitLabel = '';
 					}}
 				/>
+				{#if propertyErrors.propertyId}
+					<p class="mt-1 text-xs text-destructive" data-testid="new-rental-property-choice-error">{propertyErrors.propertyId}</p>
+				{/if}
 				{#if (propertiesQuery.data?.totalCount ?? 0) > 0 && isCreatingProperty}
 					<p class="mt-1 text-xs text-[var(--warning)]" data-testid="new-rental-dupe-hint">If this lease is for a property you already have, pick it above to avoid a duplicate.</p>
 				{/if}
 			</div>
-			{#if isCreatingProperty}
+			{#if canCreateProperty && isCreatingProperty}
 				<PropertyFields bind:form={propertyForm} errors={propertyErrors} {autoFilled} {confidence} testidPrefix="new-rental-property" />
 			{/if}
 		</div>

@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace RentalCommand.Api.Services.Domain;
 
-public interface IPlaidBankingProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface IPlaidBankingProvider
 {
     Task<PlaidLinkTokenResult> CreateLinkTokenAsync(PlaidRuntimeSettings settings, int portfolioId, int userId, CancellationToken ct = default);
     Task<PlaidExchangeResult> ExchangePublicTokenAsync(PlaidRuntimeSettings settings, string publicToken, CancellationToken ct = default);

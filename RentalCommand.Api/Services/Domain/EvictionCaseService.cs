@@ -96,7 +96,7 @@ public class EvictionCaseService : IEvictionCaseService
             scope.PortfolioId, Actor(scope), request.LeaseManagementId, request.LeaseAgreementId,
             request.RespondentLeaseManagementPartyIds.ToArray(), request.Status,
             request.FiledOnDate?.ToUtc(), request.HearingDate?.ToUtc(), request.CourtName,
-            request.CaseNumber, request.Notes, idempotencyKey);
+            request.CaseNumber, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("eviction-case.create", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -109,7 +109,7 @@ public class EvictionCaseService : IEvictionCaseService
         var command = new UpdateEvictionCaseCommand(
             scope.PortfolioId, Actor(scope), id, request.Status, request.FiledOnDate?.ToUtc(),
             request.HearingDate?.ToUtc(), request.ResolvedOnDate?.ToUtc(), request.CourtName,
-            request.CaseNumber, request.Resolution, request.Notes, idempotencyKey);
+            request.CaseNumber, request.Resolution, request.Notes, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("eviction-case.update", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -121,7 +121,7 @@ public class EvictionCaseService : IEvictionCaseService
     {
         var command = new AddEvictionCaseEventCommand(
             scope.PortfolioId, Actor(scope), id, request.EventType, request.EventDate.ToUtc(),
-            request.Notes, idempotencyKey);
+            request.Notes, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("eviction-case.event.create", idempotencyKey), command, MutationCodec, ct);
         return Response(outcome.Value);
@@ -130,7 +130,8 @@ public class EvictionCaseService : IEvictionCaseService
     public async Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var command = new DeleteEvictionCaseCommand(scope.PortfolioId, Actor(scope), id, idempotencyKey);
+        var command = new DeleteEvictionCaseCommand(
+            scope.PortfolioId, Actor(scope), id, _timeProvider.UtcNow(), idempotencyKey);
         var outcome = await Atomic.ExecuteAsync(
             Identity("eviction-case.delete", idempotencyKey), command, MutationCodec, ct);
         return outcome.Value.Outcome == OperationMutationOutcome.Applied;

@@ -11,26 +11,29 @@ using RentalCommand.Core.Screening;
 namespace RentalCommand.Data.Screening;
 
 public sealed class PrepareAdverseActionNoticeHandler
-    : IAtomicCommandHandler<PrepareAdverseActionNoticeCommand, PrepareAdverseActionNoticeResult>,
-      IAtomicReplayAuthorizer<PrepareAdverseActionNoticeCommand>
+    : IAtomicCommandHandler<PrepareAdverseActionNoticeCommand, PrepareAdverseActionNoticeResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PrepareAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<PrepareAdverseActionNoticeResult> HandleAsync(
         PrepareAdverseActionNoticeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
             command.ExpectedAccessRevision);
         ScreeningCommandSupport.RequireKey(command.OperationKey);
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
 
         var prepared = await ScreeningCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                attempt.Persistence, now, tracking: false)
+                _db, now, tracking: false)
             .Select(application => new
             {
                 application.Id,
@@ -45,7 +48,7 @@ public sealed class PrepareAdverseActionNoticeHandler
                 PropertyCity = application.Property != null ? application.Property.City : null,
                 PropertyState = application.Property != null ? application.Property.State : null,
                 PropertyPostalCode = application.Property != null ? application.Property.PostalCode : null,
-                Screening = attempt.Persistence.Query<ApplicantScreening>().AsNoTracking()
+                Screening = _db.Set<ApplicantScreening>().AsNoTracking()
                     .Where(screening => screening.PortfolioId == command.PortfolioId
                         && screening.ApplicationId == command.ApplicationId
                         && screening.Status == ApplicantScreeningStatus.Completed)
@@ -115,22 +118,23 @@ public sealed class PrepareAdverseActionNoticeHandler
     }
 
     public Task AuthorizeReplayAsync(
-        PrepareAdverseActionNoticeCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        PrepareAdverseActionNoticeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 /// <summary>Pure database finalizer for an adverse-action notice package.</summary>
 public sealed class CreateAdverseActionNoticeHandler
-    : IAtomicCommandHandler<CreateAdverseActionNoticeCommand, CreateAdverseActionNoticeResult>,
-      IAtomicReplayAuthorizer<CreateAdverseActionNoticeCommand>
+    : IAtomicCommandHandler<CreateAdverseActionNoticeCommand, CreateAdverseActionNoticeResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateAdverseActionNoticeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CreateAdverseActionNoticeResult> HandleAsync(
         CreateAdverseActionNoticeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
@@ -143,14 +147,14 @@ public sealed class CreateAdverseActionNoticeHandler
         if (command.FileSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(command.FileSize));
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         var applicant = await ScreeningCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                attempt.Persistence, now, tracking: false)
+                _db, now, tracking: false)
             .Select(application => new { application.Email })
             .SingleOrDefaultAsync(ct);
         if (applicant is null)
@@ -182,18 +186,18 @@ public sealed class CreateAdverseActionNoticeHandler
             CreatedAt = command.GeneratedAtUtc,
             UpdatedAt = now,
         };
-        attempt.Persistence.Add(notice);
-        attempt.BindSemanticAudit(storedFile, ScreeningCommandSupport.Audit(
+        _db.Add(notice);
+        context.BindSemanticAudit(storedFile, ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(StoredFile), 0,
             AuditLogOperation.Created, "Adverse-action PDF stored."));
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(ScreeningCommandSupport.Audit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(AdverseActionNotice), notice.Id,
             AuditLogOperation.Created, "FCRA adverse-action notice generated."), now);
 
         if (sentAtUtc.HasValue)
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "email",
@@ -216,7 +220,7 @@ public sealed class CreateAdverseActionNoticeHandler
             });
         }
 
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -241,10 +245,8 @@ public sealed class CreateAdverseActionNoticeHandler
     }
 
     public Task AuthorizeReplayAsync(
-        CreateAdverseActionNoticeCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        CreateAdverseActionNoticeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }

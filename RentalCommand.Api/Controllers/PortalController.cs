@@ -48,6 +48,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             active.AccessRevision);
     }
 
+    [HttpGet("access-state")]
+    [ProducesResponseType(typeof(PortalAccessStateResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PortalAccessStateResponse>> AccessState(CancellationToken ct) =>
+        Ok(new PortalAccessStateResponse
+        {
+            HasActiveTenantAccess = await GetTenantIdAsync(ct) is not null,
+        });
+
     [HttpGet("leases")]
     [ProducesResponseType(typeof(IReadOnlyList<PortalLeaseRelationshipResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -130,6 +138,21 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return page is null
             ? NotFound(new { error = "Tenant account not found" })
             : Ok(page);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/history")]
+    [ProducesResponseType(typeof(PortalTenantAccountHistoryResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantAccountHistoryResponse>> TenantAccountHistory(
+        int id,
+        [FromQuery] PortalTenantAccountHistoryQuery query,
+        CancellationToken ct)
+    {
+        var history = await _service.GetTenantAccountHistoryAsync(
+            GetTenantReadScope(), id, query, ct);
+        return history is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(history);
     }
 
     [HttpGet("tenant-accounts/{id:int}/charges/page")]
@@ -381,6 +404,69 @@ public class PortalController : AuthenticatedPortfolioControllerBase
 
         var item = await _service.GetWorkOrderDetailAsync(
             GetTenantReadScope(), tenantId.Value, id, ct);
+        return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
+    }
+
+    [HttpPost("work-orders/{id:int}/comments")]
+    [ProducesResponseType(typeof(WorkOrderMutationReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderMutationReceipt>> CommentWorkOrder(
+        int id,
+        [FromBody] WorkOrderCommentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null) return Forbid();
+        var item = await _service.CommentTenantWorkOrderAsync(
+            GetActiveAccessContext(), tenantId.Value, id, request, operationKey, ct);
+        return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
+    }
+
+    [HttpPatch("work-orders/{id:int}")]
+    [ProducesResponseType(typeof(WorkOrderMutationReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderMutationReceipt>> UpdateWorkOrder(
+        int id,
+        [FromBody] TenantWorkOrderUpdateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null) return Forbid();
+        var item = await _service.UpdateTenantWorkOrderAsync(
+            GetActiveAccessContext(), tenantId.Value, id, request, operationKey, ct);
+        return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
+    }
+
+    [HttpPost("work-orders/{id:int}/cancel")]
+    [ProducesResponseType(typeof(WorkOrderMutationReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderMutationReceipt>> CancelWorkOrder(
+        int id,
+        [FromBody] TenantWorkOrderCancelRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null) return Forbid();
+        var item = await _service.CancelTenantWorkOrderAsync(
+            GetActiveAccessContext(), tenantId.Value, id, request, operationKey, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
     }
 

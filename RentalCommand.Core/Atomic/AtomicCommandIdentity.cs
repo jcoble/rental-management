@@ -2,7 +2,7 @@ namespace RentalCommand.Core.Atomic;
 
 /// <summary>
 /// Stable identity supplied by a command caller. The pair is persisted under a unique constraint,
-/// so replay after a timeout or unknown commit can return the original result without executing the
+/// so an exact caller retry can return the original committed result without executing the
 /// mutation again.
 /// </summary>
 public sealed record AtomicCommandIdentity : IAtomicCommandData

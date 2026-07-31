@@ -1,12 +1,21 @@
+using Microsoft.AspNetCore.Http;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Controllers;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
-using RentalCommand.TestCommon;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Simulation;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -59,28 +68,29 @@ public sealed class DevClockControllerTests : IAsyncLifetime
     {
         Skip.IfNot(_dockerAvailable, "Docker is not available; DevClockController Postgres round-trip skipped.");
 
-        var services = new ServiceCollection();
-        services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
-        await using var provider = services.BuildServiceProvider();
+        await using var provider = CreateAtomicProvider();
+        var access = await SeedAdministratorAccessAsync(provider);
 
         var clockState = new ClockStateProvider(provider.GetRequiredService<IServiceScopeFactory>());
         var timeProvider = new SimulationTimeProvider(clockState);
         await clockState.RefreshAsync();
         clockState.Current.Mode.Should().Be(ClockMode.Real); // seeded state
 
-        using var scope = provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await using var requestScope = provider.CreateAsyncScope();
         var controller = new DevClockController(
-            db,
             timeProvider,
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
-            new TestAtomicInfrastructureUnitOfWork(db));
+            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        InstallAccessContext(controller, access);
 
         var jan1 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         // set (frozen) → the clock reports exactly that instant
-        var set = Body(await controller.Set(new SetClockRequest(jan1, null, "America/New_York", "frozen"), default));
+        var set = Body(await controller.Set(
+            new SetClockRequest(jan1, null, "America/New_York", "frozen"),
+            "clock-set-jan1",
+            default));
         set.Mode.Should().Be("Frozen");
         set.SimNowUtc.Should().Be(jan1);
         set.TimeZoneId.Should().Be("America/New_York");
@@ -91,12 +101,15 @@ public sealed class DevClockControllerTests : IAsyncLifetime
         got.Mode.Should().Be("Frozen");
 
         // advance 35 days → Jan 1 + 35d = Feb 5, still frozen
-        var advanced = Body(await controller.Advance(new AdvanceClockRequest(35, 0, 0, 0), default));
+        var advanced = Body(await controller.Advance(
+            new AdvanceClockRequest(35, 0, 0, 0),
+            "clock-advance-35",
+            default));
         advanced.SimNowUtc.Should().Be(new DateTime(2025, 2, 5, 0, 0, 0, DateTimeKind.Utc));
         advanced.Mode.Should().Be("Frozen");
 
         // reset → real time again, timezone override cleared
-        var reset = Body(await controller.Reset(default));
+        var reset = Body(await controller.Reset("clock-reset", default));
         reset.Mode.Should().Be("Real");
         reset.TimeZoneId.Should().BeNull();
         reset.SimNowUtc.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(10));
@@ -107,28 +120,70 @@ public sealed class DevClockControllerTests : IAsyncLifetime
     {
         Skip.IfNot(_dockerAvailable, "Docker is not available; DevClockController Postgres round-trip skipped.");
 
-        var services = new ServiceCollection();
-        services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
-        await using var provider = services.BuildServiceProvider();
+        await using var provider = CreateAtomicProvider();
+        var access = await SeedAdministratorAccessAsync(provider);
 
         var clockState = new ClockStateProvider(provider.GetRequiredService<IServiceScopeFactory>());
         var timeProvider = new SimulationTimeProvider(clockState);
         await clockState.RefreshAsync();
 
-        using var scope = provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await using var requestScope = provider.CreateAsyncScope();
         var controller = new DevClockController(
-            db,
             timeProvider,
             clockState,
             new FixedTimeZoneProvider("America/New_York"),
-            new TestAtomicInfrastructureUnitOfWork(db));
+            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        InstallAccessContext(controller, access);
 
         var set = Body(await controller.Set(
             new SetClockRequest(null, "2027-01-03", null, "frozen"),
+            "clock-set-business-date",
             default));
 
         set.SimNowUtc.Should().Be(new DateTime(2027, 1, 3, 5, 0, 0, DateTimeKind.Utc));
+    }
+
+    [SkippableFact]
+    public async Task Set_ReplaysExactReceiptResult_AndDoesNotCreateSecondAudit()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is not available; DevClockController Postgres round-trip skipped.");
+
+        await using var provider = CreateAtomicProvider();
+        var access = await SeedAdministratorAccessAsync(provider);
+        var clockState = new ClockStateProvider(provider.GetRequiredService<IServiceScopeFactory>());
+        var timeProvider = new SimulationTimeProvider(clockState);
+        await clockState.RefreshAsync();
+
+        await using var requestScope = provider.CreateAsyncScope();
+        var controller = new DevClockController(
+            timeProvider,
+            clockState,
+            new FixedTimeZoneProvider("America/New_York"),
+            requestScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        InstallAccessContext(controller, access);
+
+        var instant = new DateTime(2027, 1, 29, 5, 0, 0, DateTimeKind.Utc);
+        var first = Body(await controller.Set(
+            new SetClockRequest(instant, null, "America/New_York", "frozen"),
+            "clock-replay-proof",
+            default));
+        var replay = Body(await controller.Set(
+            new SetClockRequest(instant, null, "America/New_York", "frozen"),
+            "clock-replay-proof",
+            default));
+
+        replay.Should().BeEquivalentTo(first);
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var commandKey = $"{access.PortfolioId}:{access.UserId}:clock-replay-proof";
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "simulation.clock.set"
+            && receipt.IdempotencyKey == commandKey)).Should().Be(1);
+        (await db.AtomicAuditLogs.CountAsync(log =>
+            log.CommandType == "simulation.clock.set"
+            && log.CommandIdempotencyKey == commandKey
+            && log.EntityType == nameof(SimulationClock)
+            && log.EntityId == 1)).Should().BeGreaterThanOrEqualTo(1);
     }
 
     private static ClockStateResponse Body(ActionResult<ClockStateResponse> result)
@@ -140,6 +195,132 @@ public sealed class DevClockControllerTests : IAsyncLifetime
 
     private static RentalCommandDbContext NewContext(string connString) =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+
+    private ServiceProvider CreateAtomicProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        AddSimulationHandlers(services);
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_conn)
+                .UseAtomicPersistenceKernel(provider));
+        return services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
+    private static void AddSimulationHandlers(IServiceCollection services)
+    {
+        services.AddAtomicCommandHandler<
+            SetSimulationClockCommand,
+            SimulationClockMutationResult,
+            SetSimulationClockHandler>();
+        services.AddAtomicCommandHandler<
+            AdvanceSimulationClockCommand,
+            SimulationClockMutationResult,
+            AdvanceSimulationClockHandler>();
+        services.AddAtomicCommandHandler<
+            FreezeSimulationClockCommand,
+            SimulationClockMutationResult,
+            FreezeSimulationClockHandler>();
+        services.AddAtomicCommandHandler<
+            UnfreezeSimulationClockCommand,
+            SimulationClockMutationResult,
+            UnfreezeSimulationClockHandler>();
+        services.AddAtomicCommandHandler<
+            ResetSimulationClockCommand,
+            SimulationClockMutationResult,
+            ResetSimulationClockHandler>();
+        services.AddAtomicCommandHandler<
+            EnqueueSimulationWorkerCommand,
+            EnqueueSimulationWorkerResult,
+            EnqueueSimulationWorkerCommandHandler>();
+    }
+
+    private static async Task<ActiveAccessContext> SeedAdministratorAccessAsync(ServiceProvider provider)
+    {
+        var now = DateTime.UtcNow;
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var portfolio = new Portfolio
+        {
+            Name = $"Dev clock {Guid.NewGuid():N}",
+            ManagementCompanyName = "Dev Clock Co",
+            TimeZone = "America/New_York",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var user = new ApplicationUser
+        {
+            UserName = $"dev-clock-{Guid.NewGuid():N}@example.test",
+            Email = $"dev-clock-{Guid.NewGuid():N}@example.test",
+            DisplayName = "Dev Clock Admin",
+            CreatedAt = now,
+        };
+        db.Portfolios.Add(portfolio);
+        await db.SaveChangesAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(user, accessContext, membership, assignment, session);
+        await db.SaveChangesAsync();
+
+        return new ActiveAccessContext(
+            session.Id,
+            user.Id,
+            accessContext.Id,
+            portfolio.Id,
+            accessContext.AccessRevision,
+            accessContext.LastAuthorizedExperience,
+            membership.Id,
+            membership.DefaultExperience);
+    }
+
+    private static void InstallAccessContext(ControllerBase controller, ActiveAccessContext access)
+    {
+        var http = new DefaultHttpContext();
+        http.Items[CanonicalAccessContextHttpItem.Key] = access;
+        controller.ControllerContext = new ControllerContext { HttpContext = http };
+    }
 
     private sealed class FixedTimeZoneProvider(string id) : IAppTimeZoneProvider
     {

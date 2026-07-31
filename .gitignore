@@ -20,9 +20,9 @@ node_modules/
 mcp/build/
 output/playwright/
 output/qa/
+output/phone/
+output/pdf/
 output/remote-verification/
-output/pdf/tsk-749-year-simulation-scan-corpus*
-output/pdf/tsk-754-year-simulation-corrections*
 web/output/playwright/
 .playwright-cli/
 tmp/pdfs/

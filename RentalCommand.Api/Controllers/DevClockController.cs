@@ -1,14 +1,11 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Api.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -27,26 +24,26 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/dev/clock")]
 [SimulationOnly]
 [Produces("application/json")]
-public sealed class DevClockController : ControllerBase
+public sealed class DevClockController : AuthenticatedPortfolioControllerBase
 {
-    private readonly RentalCommandDbContext _db;
+    private static readonly AtomicJsonResultCodec<SimulationClockMutationResult> ClockMutationCodec =
+        new("simulation.clock.mutation.v1");
+
     private readonly TimeProvider _timeProvider;
     private readonly IClockStateProvider _clockState;
     private readonly IAppTimeZoneProvider _timeZoneProvider;
-    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public DevClockController(
-        RentalCommandDbContext db,
         TimeProvider timeProvider,
         IClockStateProvider clockState,
         IAppTimeZoneProvider timeZoneProvider,
-        IAtomicInfrastructureUnitOfWork infrastructure)
+        IAtomicUnitOfWork atomic)
     {
-        _db = db;
         _timeProvider = timeProvider;
         _clockState = clockState;
         _timeZoneProvider = timeZoneProvider;
-        _infrastructure = infrastructure;
+        _atomic = atomic;
     }
 
     /// <summary>Current simulated clock — in-memory only, so it works anonymously and pre-login.</summary>
@@ -58,7 +55,10 @@ public sealed class DevClockController : ControllerBase
     /// <summary>Set the clock to a specific instant in <c>offset</c> (default) or <c>frozen</c> mode.</summary>
     [HttpPost("set")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
-    public async Task<ActionResult<ClockStateResponse>> Set([FromBody] SetClockRequest request, CancellationToken ct)
+    public async Task<ActionResult<ClockStateResponse>> Set(
+        [FromBody] SetClockRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         DateTime instant;
         if (request.InstantUtc is { } instantUtc)
@@ -73,9 +73,18 @@ public sealed class DevClockController : ControllerBase
                      DateTimeStyles.None,
                      out var businessDate))
         {
-            var timeZone = string.IsNullOrWhiteSpace(request.TimeZoneId)
-                ? _timeZoneProvider.BusinessTimeZone
-                : TimeZoneInfo.FindSystemTimeZoneById(request.TimeZoneId);
+            TimeZoneInfo timeZone;
+            try
+            {
+                timeZone = string.IsNullOrWhiteSpace(request.TimeZoneId)
+                    ? _timeZoneProvider.BusinessTimeZone
+                    : TimeZoneInfo.FindSystemTimeZoneById(request.TimeZoneId);
+            }
+            catch (Exception exception) when (
+                exception is TimeZoneNotFoundException or InvalidTimeZoneException)
+            {
+                return BadRequest(new { error = $"Unknown or invalid timezone '{request.TimeZoneId}'." });
+            }
             var localMidnight = DateTime.SpecifyKind(
                 businessDate.ToDateTime(TimeOnly.MinValue),
                 DateTimeKind.Unspecified);
@@ -92,122 +101,150 @@ public sealed class DevClockController : ControllerBase
             return BadRequest(new { error = "Provide 'instantUtc' or a parseable 'date' (e.g. \"2025-01-01\")." });
         }
 
-        var frozen = string.Equals(request.Mode, "frozen", StringComparison.OrdinalIgnoreCase);
-        var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
+        if (!TryBuildCommandContext(idempotencyKey, out var access, out var deliveryKey, out var failure))
+            return failure;
 
-        return await MutateRefreshAndRespondAsync(row =>
-        {
-            row.Mode = frozen ? ClockMode.Frozen : ClockMode.Offset;
-            row.SimAnchorUtc = instant;
-            // Offset ticks forward from (RealAnchor now → SimAnchor instant); Frozen never ticks.
-            row.RealAnchorUtc = frozen ? instant : realNow;
-            if (request.TimeZoneId is not null)
-                row.TimeZoneId = string.IsNullOrWhiteSpace(request.TimeZoneId) ? null : request.TimeZoneId;
-            row.UpdatedAtRealUtc = realNow;
-        }, ct);
+        var frozen = string.Equals(request.Mode, "frozen", StringComparison.OrdinalIgnoreCase);
+        var command = new SetSimulationClockCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            instant,
+            frozen ? ClockMode.Frozen : ClockMode.Offset,
+            request.TimeZoneId is not null,
+            request.TimeZoneId);
+        return await ExecuteClockCommandAsync("simulation.clock.set", access, deliveryKey, command, ct);
     }
 
     /// <summary>Shift the simulated clock forward (or back, with negatives) by a delta.</summary>
     [HttpPost("advance")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
-    public async Task<ActionResult<ClockStateResponse>> Advance([FromBody] AdvanceClockRequest request, CancellationToken ct)
+    public async Task<ActionResult<ClockStateResponse>> Advance(
+        [FromBody] AdvanceClockRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var delta = new TimeSpan(request.Days, request.Hours, request.Minutes, request.Seconds);
-        var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
+        if (!TryBuildCommandContext(idempotencyKey, out var access, out var deliveryKey, out var failure))
+            return failure;
 
-        return await MutateRefreshAndRespondAsync(row =>
-        {
-            if (row.Mode == ClockMode.Real)
-            {
-                // Advancing from real time re-anchors to Offset at "now" so the shift has a visible effect.
-                row.Mode = ClockMode.Offset;
-                row.RealAnchorUtc = realNow;
-                row.SimAnchorUtc = realNow;
-            }
-
-            // Shifting the anchor advances sim-now by delta in both Frozen and Offset modes.
-            row.SimAnchorUtc = row.SimAnchorUtc.Add(delta);
-            row.UpdatedAtRealUtc = realNow;
-        }, ct);
+        var command = new AdvanceSimulationClockCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            request.Days,
+            request.Hours,
+            request.Minutes,
+            request.Seconds);
+        return await ExecuteClockCommandAsync("simulation.clock.advance", access, deliveryKey, command, ct);
     }
 
     /// <summary>Freeze the clock at the current simulated instant.</summary>
     [HttpPost("freeze")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
-    public async Task<ActionResult<ClockStateResponse>> Freeze(CancellationToken ct)
+    public async Task<ActionResult<ClockStateResponse>> Freeze(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var simNow = _timeProvider.GetUtcNow().UtcDateTime;
-        return await MutateRefreshAndRespondAsync(row =>
-        {
-            row.Mode = ClockMode.Frozen;
-            row.SimAnchorUtc = simNow;
-            row.RealAnchorUtc = simNow;
-            row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
-        }, ct);
+        if (!TryBuildCommandContext(idempotencyKey, out var access, out var deliveryKey, out var failure))
+            return failure;
+
+        var command = new FreezeSimulationClockCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision);
+        return await ExecuteClockCommandAsync("simulation.clock.freeze", access, deliveryKey, command, ct);
     }
 
     /// <summary>Resume ticking from the currently-frozen instant (re-anchored Offset).</summary>
     [HttpPost("unfreeze")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
-    public async Task<ActionResult<ClockStateResponse>> Unfreeze(CancellationToken ct)
+    public async Task<ActionResult<ClockStateResponse>> Unfreeze(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var simNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
-        return await MutateRefreshAndRespondAsync(row =>
-        {
-            row.Mode = ClockMode.Offset;
-            row.SimAnchorUtc = simNow;
-            row.RealAnchorUtc = realNow;
-            row.UpdatedAtRealUtc = realNow;
-        }, ct);
+        if (!TryBuildCommandContext(idempotencyKey, out var access, out var deliveryKey, out var failure))
+            return failure;
+
+        var command = new UnfreezeSimulationClockCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision);
+        return await ExecuteClockCommandAsync("simulation.clock.unfreeze", access, deliveryKey, command, ct);
     }
 
     /// <summary>Return to real time (clears any timezone override).</summary>
     [HttpPost("reset")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
-    public async Task<ActionResult<ClockStateResponse>> Reset(CancellationToken ct)
-    {
-        return await MutateRefreshAndRespondAsync(row =>
-        {
-            row.Mode = ClockMode.Real;
-            row.TimeZoneId = null;
-            row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
-        }, ct);
-    }
-
-    private async Task<SimulationClock> LoadRowAsync(CancellationToken ct)
-    {
-        var row = await _db.SimulationClocks
-            .FromSql($$"""
-                SELECT clock.*
-                FROM "SimulationClocks" AS clock
-                WHERE clock."Id" = 1
-                FOR UPDATE
-                """)
-            .SingleOrDefaultAsync(ct);
-        if (row is null)
-        {
-            // Defensive: the migration seeds row 1, but never NRE if it is somehow absent.
-            row = new SimulationClock { Id = 1, Mode = ClockMode.Real };
-            _db.SimulationClocks.Add(row);
-        }
-        return row;
-    }
-
-    private async Task<ActionResult<ClockStateResponse>> MutateRefreshAndRespondAsync(
-        Action<SimulationClock> mutation,
+    public async Task<ActionResult<ClockStateResponse>> Reset(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        await _infrastructure.ExecuteAsync(
-            AtomicInfrastructureOperation.SimulationClock,
-            async innerCt =>
-            {
-                var row = await LoadRowAsync(innerCt);
-                mutation(row);
-            },
-            ct);
-        await _clockState.RefreshAsync(ct);
-        return Ok(BuildResponse());
+        if (!TryBuildCommandContext(idempotencyKey, out var access, out var deliveryKey, out var failure))
+            return failure;
+
+        var command = new ResetSimulationClockCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision);
+        return await ExecuteClockCommandAsync("simulation.clock.reset", access, deliveryKey, command, ct);
+    }
+
+    private async Task<ActionResult<ClockStateResponse>> ExecuteClockCommandAsync<TCommand>(
+        string commandType,
+        ActiveAccessContext access,
+        string deliveryKey,
+        TCommand command,
+        CancellationToken ct)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(commandType, BuildIdentityKey(access, deliveryKey)),
+                command,
+                ClockMutationCodec,
+                ct);
+            await _clockState.RefreshAsync(ct);
+            return Ok(ToResponse(outcome.Value));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    private bool TryBuildCommandContext(
+        string? idempotencyKey,
+        out ActiveAccessContext access,
+        out string deliveryKey,
+        out ActionResult<ClockStateResponse> failure)
+    {
+        access = null!;
+        deliveryKey = string.Empty;
+        failure = null!;
+        if (!TryValidateIdempotencyKey(idempotencyKey, out deliveryKey))
+        {
+            failure = BadRequest(new { error = "Idempotency-Key header is required and must be 128 characters or fewer." });
+            return false;
+        }
+
+        if (!TryGetActiveAccessContext(out access))
+        {
+            failure = Forbid();
+            return false;
+        }
+
+        return true;
     }
 
     private ClockStateResponse BuildResponse()
@@ -218,6 +255,12 @@ public sealed class DevClockController : ControllerBase
         var offsetSeconds = Math.Round((simNowUtc - realNowUtc).TotalSeconds, 3);
         return new ClockStateResponse(simNowUtc, state.Mode.ToString(), state.TimeZoneId, offsetSeconds);
     }
+
+    private static ClockStateResponse ToResponse(SimulationClockMutationResult result) =>
+        new(result.SimNowUtc, result.Mode, result.TimeZoneId, result.OffsetSeconds);
+
+    private static string BuildIdentityKey(ActiveAccessContext access, string idempotencyKey) =>
+        $"{access.PortfolioId}:{access.UserId}:{idempotencyKey}";
 }
 
 /// <summary>Current simulated clock. <c>Mode</c> is "Real" | "Frozen" | "Offset".</summary>

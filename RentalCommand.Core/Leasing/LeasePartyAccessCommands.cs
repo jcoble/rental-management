@@ -26,10 +26,10 @@ public sealed record AddEffectivePartyCommand(
     int? LegalBasisAgreementId,
     int? LegalBasisAddendumId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
 
 public sealed record EndEffectivePartyCommand(
     int PortfolioId,
@@ -43,10 +43,10 @@ public sealed record EndEffectivePartyCommand(
     int? LegalBasisAddendumId,
     string ChangeReason,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
 
 public sealed record ChangeEffectivePartyRoleCommand(
     int PortfolioId,
@@ -64,10 +64,10 @@ public sealed record ChangeEffectivePartyRoleCommand(
     int? LegalBasisAddendumId,
     string ChangeReason,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
 
 public sealed record GrantTenantUserAccessCommand(
     int PortfolioId,
@@ -76,10 +76,10 @@ public sealed record GrantTenantUserAccessCommand(
     string Reason,
     string WebBaseUrl,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
 
 public sealed record RevokeTenantUserAccessCommand(
     int PortfolioId,
@@ -88,10 +88,10 @@ public sealed record RevokeTenantUserAccessCommand(
     int TenantUserAccessId,
     string Reason,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeasePartyAccessCommand;
 
 public enum LeasePartyMutationOutcome
 {
@@ -112,4 +112,4 @@ public sealed record LeasePartyMutationResult(
     int? ReplacementPartyId,
     int? CompanionReplacementPartyId,
     IReadOnlyList<int> TenantUserAccessIds,
-    string? Error) : IAtomicResultData;
+    string? Error);

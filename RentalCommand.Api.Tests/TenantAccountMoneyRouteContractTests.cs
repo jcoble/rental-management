@@ -83,32 +83,38 @@ public sealed class TenantAccountMoneyRouteContractTests
     public void Every_money_handler_reauthorizes_atomic_replay()
     {
         typeof(RecordTenantReceiptHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<RecordTenantReceiptCommand>>();
+            .Implement<IAtomicCommandHandler<RecordTenantReceiptCommand, RecordTenantReceiptResult>>();
         typeof(PostTenantChargeHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<PostTenantChargeCommand>>();
+            .Implement<IAtomicCommandHandler<PostTenantChargeCommand, TenantChargeMutationResult>>();
         typeof(ReverseTenantChargeHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<ReverseTenantChargeCommand>>();
+            .Implement<IAtomicCommandHandler<ReverseTenantChargeCommand, TenantChargeMutationResult>>();
         typeof(PostTenantCreditHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<PostTenantCreditCommand>>();
+            .Implement<IAtomicCommandHandler<PostTenantCreditCommand, TenantLedgerMutationResult>>();
         typeof(PostTenantAdjustmentHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<PostTenantAdjustmentCommand>>();
+            .Implement<IAtomicCommandHandler<PostTenantAdjustmentCommand, TenantLedgerMutationResult>>();
         typeof(ReverseTenantLedgerEntryHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<ReverseTenantLedgerEntryCommand>>();
+            .Implement<IAtomicCommandHandler<ReverseTenantLedgerEntryCommand, TenantLedgerMutationResult>>();
         typeof(RefundTenantPaymentHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<RefundTenantPaymentCommand>>();
+            .Implement<IAtomicCommandHandler<RefundTenantPaymentCommand, TenantPaymentRefundResult>>();
         typeof(FundSecurityDepositHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<FundSecurityDepositCommand>>();
+            .Implement<IAtomicCommandHandler<FundSecurityDepositCommand, SecurityDepositMutationResult>>();
         typeof(DeductSecurityDepositHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<DeductSecurityDepositCommand>>();
+            .Implement<IAtomicCommandHandler<DeductSecurityDepositCommand, SecurityDepositMutationResult>>();
         typeof(RefundSecurityDepositHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<RefundSecurityDepositCommand>>();
+            .Implement<IAtomicCommandHandler<RefundSecurityDepositCommand, SecurityDepositMutationResult>>();
         typeof(ReverseSecurityDepositEntryHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<ReverseSecurityDepositEntryCommand>>();
+            .Implement<IAtomicCommandHandler<ReverseSecurityDepositEntryCommand, SecurityDepositMutationResult>>();
     }
 
     [Fact]
     public void Canonical_credit_adjustment_and_reversal_contracts_are_typed()
     {
+        typeof(RecordTenantReceiptCommand).GetProperty("AllocateOldestCharges").Should().BeNull();
+        typeof(RecordTenantReceiptCommand).GetProperty(nameof(RecordTenantReceiptCommand.TargetChargeEntryId))
+            .Should().NotBeNull();
+        typeof(RecordTenantReceiptRequest).GetProperty("AllocateOldestCharges").Should().BeNull();
+        typeof(RecordTenantReceiptRequest).GetProperty(nameof(RecordTenantReceiptRequest.TargetChargeEntryId))
+            .Should().NotBeNull();
         typeof(PostTenantCreditCommand).GetProperty(nameof(PostTenantCreditCommand.AllocateOldestCharges))
             .Should().NotBeNull();
         typeof(PostTenantAdjustmentCommand).GetProperty(nameof(PostTenantAdjustmentCommand.Direction))
@@ -148,7 +154,7 @@ public sealed class TenantAccountMoneyRouteContractTests
         typeof(RefundTenantPaymentCommand).GetProperty(
             nameof(RefundTenantPaymentCommand.RequiredCapability)).Should().NotBeNull();
         typeof(RefundTenantPaymentHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<RefundTenantPaymentCommand>>();
+            .Implement<IAtomicCommandHandler<RefundTenantPaymentCommand, TenantPaymentRefundResult>>();
         typeof(TenantPaymentRefundResult).GetProperty(
             nameof(TenantPaymentRefundResult.RefundEntryId)).Should().NotBeNull();
         typeof(TenantPaymentRefundResult).GetProperty(

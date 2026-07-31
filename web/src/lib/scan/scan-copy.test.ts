@@ -7,7 +7,7 @@ describe('scan document-type copy', () => {
 	it('uses application-specific upload and processing copy', () => {
 		assert.deepEqual(scanUploadCopy('Application'), {
 			title: 'Drop a rental application here',
-			helperText: 'or click to browse — one PDF or multiple photos accepted'
+			helperText: 'or click to browse — one PDF or multiple photos accepted',
 		});
 
 		assert.equal(
@@ -17,16 +17,39 @@ describe('scan document-type copy', () => {
 	});
 
 	it('keeps payment and maintenance copy out of the receipt default', () => {
-		assert.equal(scanUploadCopy('Payment').title, 'Drop a rent check or payment receipt here');
-		assert.equal(scanUploadCopy('WorkOrder').title, 'Drop a maintenance request, estimate, or repair photo here');
-		assert.equal(scanUploadCopy('Expense').title, 'Drop a receipt or invoice here');
+		assert.equal(
+			scanUploadCopy('Payment').title,
+			'Drop a rent check or payment receipt here'
+		);
+		assert.equal(
+			scanUploadCopy('WorkOrder').title,
+			'Drop a maintenance request, estimate, or repair photo here'
+		);
+		assert.equal(
+			scanUploadCopy('Expense').title,
+			'Drop a receipt or invoice here'
+		);
 	});
 
 	it('uses mortgage-specific upload and processing copy for loans', () => {
-		assert.equal(scanUploadCopy('Loan').title, 'Drop a mortgage statement or closing disclosure here');
+		assert.equal(
+			scanUploadCopy('Loan').title,
+			'Drop a mortgage statement or closing disclosure here'
+		);
 		assert.equal(
 			scanProcessingCopy('Loan').body,
 			'The computer is pulling out lender, balance, rate, and payment details for you. This usually takes just a few seconds.'
+		);
+	});
+
+	it('uses move-out-specific upload and processing copy for lease-ending notices', () => {
+		assert.equal(
+			scanUploadCopy('LeaseEndingNotice').title,
+			'Drop a move-out or non-renewal notice here'
+		);
+		assert.equal(
+			scanProcessingCopy('LeaseEndingNotice').body,
+			'The computer is pulling out the relationship, notice date, planned move-out date, and reason for you. This usually takes just a few seconds.'
 		);
 	});
 });

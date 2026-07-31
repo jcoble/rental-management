@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/auth/auth_interceptor.dart';
+import 'package:rental_command/core/auth/token_store.dart';
 
 /// Regression coverage for audit finding H-5: on a 401 the interceptor retries
 /// the original request, but a multipart `FormData` body is single-use. Once it
@@ -159,6 +160,68 @@ void main() {
       );
     });
   });
+
+  group('refresh failure classification', () {
+    test(
+      'an unavailable refresh endpoint preserves tokens and does not signal logout',
+      () async {
+        final tokenStore = _MemoryTokenStore();
+        var logoutCalls = 0;
+        final refreshDio = Dio()
+          ..httpClientAdapter = _RefreshAdapter.transientFailure();
+        final requestDio = Dio()
+          ..httpClientAdapter = _AlwaysUnauthorizedAdapter();
+        requestDio.interceptors.add(
+          AuthInterceptor(
+            tokenStore: tokenStore,
+            dio: refreshDio,
+            onLogout: () => logoutCalls++,
+            onAccessChanged: (_) {},
+          ),
+        );
+
+        await expectLater(
+          requestDio.get<dynamic>('/protected'),
+          throwsA(
+            isA<DioException>().having(
+              (error) => error.type,
+              'type',
+              DioExceptionType.connectionError,
+            ),
+          ),
+        );
+        expect(tokenStore.clearTokensCalls, 0);
+        expect(logoutCalls, 0);
+      },
+    );
+
+    test(
+      'a confirmed 401 refresh rejection clears tokens and logs out',
+      () async {
+        final tokenStore = _MemoryTokenStore();
+        var logoutCalls = 0;
+        final refreshDio = Dio()
+          ..httpClientAdapter = _RefreshAdapter.unauthorized();
+        final requestDio = Dio()
+          ..httpClientAdapter = _AlwaysUnauthorizedAdapter();
+        requestDio.interceptors.add(
+          AuthInterceptor(
+            tokenStore: tokenStore,
+            dio: refreshDio,
+            onLogout: () => logoutCalls++,
+            onAccessChanged: (_) {},
+          ),
+        );
+
+        await expectLater(
+          requestDio.get<dynamic>('/protected'),
+          throwsA(isA<DioException>()),
+        );
+        expect(tokenStore.clearTokensCalls, 1);
+        expect(logoutCalls, 1);
+      },
+    );
+  });
 }
 
 Map<String, dynamic> _accessEnvelope({
@@ -175,3 +238,81 @@ Map<String, dynamic> _accessEnvelope({
     'activeExperience': activeExperience,
   },
 };
+
+class _MemoryTokenStore implements TokenStore {
+  int clearTokensCalls = 0;
+
+  @override
+  Future<void> clearTokens() async {
+    clearTokensCalls++;
+  }
+
+  @override
+  Future<String?> getAccessToken() async => 'expired-access-token';
+
+  @override
+  Future<Map<String, dynamic>?> getAccessEnvelope() async => _accessEnvelope();
+
+  @override
+  Future<String?> getRefreshToken() async => 'stored-refresh-token';
+
+  @override
+  Future<void> saveAccessEnvelope(Map<String, dynamic> access) async {}
+
+  @override
+  Future<void> saveTokens({
+    required String accessToken,
+    required String refreshToken,
+  }) async {}
+}
+
+class _AlwaysUnauthorizedAdapter implements HttpClientAdapter {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async => ResponseBody.fromString(
+    '{"error":"Session expired"}',
+    401,
+    headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType],
+    },
+  );
+}
+
+class _RefreshAdapter implements HttpClientAdapter {
+  _RefreshAdapter._(this._unauthorized);
+
+  factory _RefreshAdapter.transientFailure() => _RefreshAdapter._(false);
+  factory _RefreshAdapter.unauthorized() => _RefreshAdapter._(true);
+
+  final bool _unauthorized;
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (_unauthorized) {
+      return ResponseBody.fromString(
+        '{"error":"Invalid or expired refresh token"}',
+        401,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    }
+    throw DioException.connectionError(
+      requestOptions: options,
+      reason: 'preview API unavailable',
+    );
+  }
+}

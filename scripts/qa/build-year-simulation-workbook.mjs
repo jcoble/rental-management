@@ -209,7 +209,7 @@ styleDataSheet(
   [
     "Property ID", "Property Name", "Structure", "Address", "City", "State", "ZIP",
     "Owner ID", "Owner", "Ownership %", "Acquired", "Original Cost", "Land", "Building Basis",
-    "Loan ID", "Opening Loan", "Monthly Principal", "Monthly Interest",
+    "Loan ID", "Opening Loan", "Monthly Principal", "Monthly Interest", "Monthly Escrow",
   ],
   portfolio.map((row) => [
     row.property_id, row.property_name, row.rental_structure, row.address, row.city, row.state,
@@ -217,12 +217,13 @@ styleDataSheet(
     toDate(row.acquisition_date), Number(row.original_cost_cents) / 100, Number(row.land_value_cents) / 100,
     Number(row.building_basis_cents) / 100, row.loan_id, Number(row.opening_loan_balance_cents) / 100,
     Number(row.monthly_principal_cents) / 100, Number(row.monthly_interest_cents) / 100,
+    Number(row.monthly_escrow_cents || 0) / 100,
   ]),
   {
     tableName: "PortfolioTable",
     dateColumns: [10],
-    currencyColumns: [11, 12, 13, 15, 16, 17],
-    widths: { 0: 12, 1: 24, 2: 15, 3: 26, 4: 14, 6: 10, 8: 30, 10: 13, 11: 16, 15: 16 },
+    currencyColumns: [11, 12, 13, 15, 16, 17, 18],
+    widths: { 0: 12, 1: 24, 2: 15, 3: 26, 4: 14, 6: 10, 8: 30, 10: 13, 11: 16, 15: 16, 16: 18, 17: 18, 18: 16 },
   },
 );
 portfolioSheet.getRange(`J4:J${portfolio.length + 3}`).format.numberFormat = "0.0%";

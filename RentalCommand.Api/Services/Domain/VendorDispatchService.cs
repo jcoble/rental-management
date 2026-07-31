@@ -21,6 +21,10 @@ public class VendorDispatchService : IVendorDispatchService
 {
     private static readonly AtomicJsonResultCodec<VendorRatingMutationResult> RatingMutationCodec =
         new("vendor-rating.create.v1");
+    private static readonly AtomicJsonResultCodec<CancelVendorDispatchResult> CancelDispatchCodec =
+        new("vendor-dispatch.cancel.v1");
+    private static readonly AtomicJsonResultCodec<RecoverVendorDispatchChronologyResult>
+        ChronologyRecoveryCodec = new("vendor-dispatch.chronology-recovery.v1");
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
 
@@ -169,6 +173,107 @@ public class VendorDispatchService : IVendorDispatchService
         return DispatchResult.Ok(response);
     }
 
+    public async Task<CancelDispatchResult> CancelAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        int dispatchId,
+        CancelVendorDispatchRequest request,
+        int? changedByUserId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.IdempotencyKey);
+        var operationKey = $"{scope.PortfolioId}:{workOrderId}:{dispatchId}:{request.IdempotencyKey.Trim()}";
+        var now = _timeProvider.UtcNow();
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("vendor-dispatch.cancel", operationKey),
+            new CancelVendorDispatchCommand(
+                scope.PortfolioId,
+                workOrderId,
+                dispatchId,
+                changedByUserId,
+                request.Reason ?? "Vendor dispatch cancelled.",
+                now,
+                operationKey,
+                new DispatchManagementAccess(
+                    scope.SessionId,
+                    scope.UserId,
+                    scope.AccessContextId,
+                    scope.AccessRevision)),
+            CancelDispatchCodec,
+            ct);
+
+        if (outcome.Value.Outcome == CancelVendorDispatchOutcome.NotFound)
+        {
+            return CancelDispatchResult.NotFound();
+        }
+
+        var response = new CancelVendorDispatchResponse
+        {
+            Id = outcome.Value.DispatchId,
+            PortfolioId = outcome.Value.PortfolioId,
+            WorkOrderId = outcome.Value.WorkOrderId,
+            VendorId = outcome.Value.VendorId,
+            Status = outcome.Value.Status,
+            CancelledAtUtc = outcome.Value.CancelledAtUtc,
+            Reason = outcome.Value.Reason,
+            Replayed = outcome.Disposition == AtomicCommandDisposition.Replayed,
+        };
+        await SafeAsync("dispatch cancellation broadcast", () => _dataUpdate.BroadcastEntityUpdateAsync(
+            scope.PortfolioId, DispatchEntityType, response.Id, response, ct));
+        return outcome.Value.Outcome == CancelVendorDispatchOutcome.AlreadyClosed
+            ? CancelDispatchResult.AlreadyClosed(response)
+            : CancelDispatchResult.Ok(response);
+    }
+
+    public async Task<RecoverVendorDispatchChronologyResponse> RecoverChronologyAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        int dispatchId,
+        RecoverVendorDispatchChronologyRequest request,
+        int actorUserId,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var digest = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey.Trim())))
+            .ToLowerInvariant();
+        var deliveryKey =
+            $"vendor-dispatch-chronology:{scope.PortfolioId}:{workOrderId}:{dispatchId}:{digest}";
+        var command = new RecoverVendorDispatchChronologyCommand(
+            scope.PortfolioId,
+            workOrderId,
+            dispatchId,
+            request.ExpectedContaminatedDispatchedAtUtc,
+            request.ExpectedStatusEventId,
+            request.ExpectedOutboxId,
+            request.ExpectedOutboxIdempotencyKey.Trim(),
+            request.OriginalCommandIdempotencyKey.Trim(),
+            request.CorrectDispatchedAtUtc,
+            actorUserId,
+            new DispatchManagementAccess(
+                scope.SessionId,
+                scope.UserId,
+                scope.AccessContextId,
+                scope.AccessRevision),
+            deliveryKey);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("vendor-dispatch.recover-chronology", deliveryKey),
+            command,
+            ChronologyRecoveryCodec,
+            ct);
+        return new RecoverVendorDispatchChronologyResponse
+        {
+            WorkOrderId = outcome.Value.WorkOrderId,
+            DispatchId = outcome.Value.DispatchId,
+            StatusEventId = outcome.Value.StatusEventId,
+            OutboxId = outcome.Value.OutboxId,
+            DispatchedAtUtc = outcome.Value.DispatchedAtUtc,
+            WorkOrderUpdatedAtRepaired = outcome.Value.WorkOrderUpdatedAtRepaired,
+            Replayed = outcome.Disposition == AtomicCommandDisposition.Replayed,
+        };
+    }
+
     public async Task<VendorRatingResponse?> RateAsync(
         WorkspaceReadScope scope,
         int vendorId,
@@ -188,6 +293,7 @@ public class VendorDispatchService : IVendorDispatchService
             request.WorkOrderId,
             request.Stars,
             request.Comment,
+            _timeProvider.UtcNow(),
             idempotencyKey);
         var outcome = await _atomic.ExecuteAsync(
             Identity("vendor-rating.create", idempotencyKey),

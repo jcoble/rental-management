@@ -26,7 +26,7 @@ public sealed record ExtractionSchema(
 /// to "Reviewing", and notifies the web via IDataUpdateService so the review page refreshes.
 /// On failure the draft is marked "Failed" so the UI can offer manual entry.
 /// </summary>
-public class ScanProcessingWorker : EngineWorkerBase
+public class ScanProcessingWorker : EngineWorkerBase, IScanProcessingCycleService
 {
     // Extraction is remote and sequential. Claim one row so a cycle timeout cannot strand later
     // rows from a pre-claimed batch; the next cycle claims the next oldest row.
@@ -76,11 +76,13 @@ public class ScanProcessingWorker : EngineWorkerBase
                     ? new ExtractionSchema(ApplicationExtractionSchema.Instructions, ApplicationExtractionSchema.Fields)
                     : IsLoanTarget(targetEntityType)
                         ? new ExtractionSchema(LoanExtractionSchema.Instructions, LoanExtractionSchema.Fields)
-                        : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
+                        : IsLeaseEndingNoticeTarget(targetEntityType)
+                            ? new ExtractionSchema(LeaseEndingNoticeExtractionSchema.Instructions, LeaseEndingNoticeExtractionSchema.Fields)
+                            : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
     private static readonly HashSet<string> SupportedTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan",
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan", "LeaseEndingNotice",
     };
 
     /// <summary>
@@ -105,7 +107,13 @@ public class ScanProcessingWorker : EngineWorkerBase
     private static bool IsLoanTarget(string? targetEntityType) =>
         string.Equals(targetEntityType, "Loan", StringComparison.OrdinalIgnoreCase);
 
-    protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
+    private static bool IsLeaseEndingNoticeTarget(string? targetEntityType) =>
+        string.Equals(targetEntityType, "LeaseEndingNotice", StringComparison.OrdinalIgnoreCase);
+
+    protected override Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
+        => RunOneCycleAsync(scoped, ct);
+
+    public async Task<int> RunOneCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
         var db = scoped.GetRequiredService<RentalCommandDbContext>();
         var credentialResolver = scoped.GetRequiredService<IWorkspaceLlmCredentialResolver>();
@@ -187,17 +195,26 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // (e.g. match "Apex Plumbing" to the vendor row). Bounded per list to keep the
                 // prompt small/cheap on large portfolios.
                 var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
+                var usageInvocationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
                 Task<ExtractedFields> InvokeExtractionAsync(
                     ExtractionSchema extractionSchema,
                     string feature,
-                    CancellationToken token) =>
-                    useDevelopmentSubscriptionProvider
+                    CancellationToken token)
+                {
+                    var invocation = usageInvocationCounts.TryGetValue(feature, out var prior)
+                        ? prior + 1
+                        : 1;
+                    usageInvocationCounts[feature] = invocation;
+                    var usageEventIdentity =
+                        $"scan:{draft.Id}:claim:{draft.ClaimToken:N}:{feature}:{invocation}";
+                    return useDevelopmentSubscriptionProvider
                         ? InvokeDevelopmentSubscriptionExtractionAsync(
                             developmentSubscriptionProvider!,
                             usageRecorder,
                             draft.PortfolioId,
                             feature,
+                            usageEventIdentity,
                             bytes,
                             contentType,
                             extractionSchema,
@@ -209,11 +226,13 @@ public class ScanProcessingWorker : EngineWorkerBase
                             usageRecorder,
                             draft.PortfolioId,
                             feature,
+                            usageEventIdentity,
                             bytes,
                             contentType,
                             extractionSchema,
                             groundingContext,
                             token);
+                }
 
                 var resolvedTargetEntityType = draft.TargetEntityType;
                 ExtractedFields? classification = null;
@@ -826,6 +845,7 @@ public class ScanProcessingWorker : EngineWorkerBase
         ILlmUsageEvidenceRecorder usageRecorder,
         int portfolioId,
         string feature,
+        string usageEventIdentity,
         byte[] bytes,
         string contentType,
         ExtractionSchema schema,
@@ -863,7 +883,8 @@ public class ScanProcessingWorker : EngineWorkerBase
                 Math.Max(0, result?.InputTokens ?? 0),
                 Math.Max(0, result?.OutputTokens ?? 0),
                 0m,
-                ct.IsCancellationRequested ? CancellationToken.None : ct);
+                ct.IsCancellationRequested ? CancellationToken.None : ct,
+                usageEventIdentity);
         }
     }
 
@@ -873,6 +894,7 @@ public class ScanProcessingWorker : EngineWorkerBase
         ILlmUsageEvidenceRecorder usageRecorder,
         int portfolioId,
         string feature,
+        string usageEventIdentity,
         byte[] bytes,
         string contentType,
         ExtractionSchema schema,
@@ -913,7 +935,8 @@ public class ScanProcessingWorker : EngineWorkerBase
                 inputUnits,
                 outputUnits,
                 EstimateCost(modelId, inputUnits, outputUnits),
-                ct.IsCancellationRequested ? CancellationToken.None : ct);
+                ct.IsCancellationRequested ? CancellationToken.None : ct,
+                usageEventIdentity);
         }
     }
 
@@ -934,15 +957,15 @@ public class ScanProcessingWorker : EngineWorkerBase
         var id = modelId ?? string.Empty;
         decimal inRate, outRate;
         if (id.Contains("gpt-4o-mini", StringComparison.OrdinalIgnoreCase))
-            { inRate = 0.15m; outRate = 0.60m; }
+        { inRate = 0.15m; outRate = 0.60m; }
         else if (id.Contains("gpt-4o", StringComparison.OrdinalIgnoreCase))
-            { inRate = 2.50m; outRate = 10.00m; }
+        { inRate = 2.50m; outRate = 10.00m; }
         else if (id.Contains("claude", StringComparison.OrdinalIgnoreCase))
-            { inRate = 3.00m; outRate = 15.00m; }
+        { inRate = 3.00m; outRate = 15.00m; }
         else if (id.Equals("noop", StringComparison.OrdinalIgnoreCase))
             return 0m;
         else
-            { inRate = 1.00m; outRate = 3.00m; }
+        { inRate = 1.00m; outRate = 3.00m; }
         return Math.Round(inputTokens / 1_000_000m * inRate + outputTokens / 1_000_000m * outRate, 6);
     }
 }

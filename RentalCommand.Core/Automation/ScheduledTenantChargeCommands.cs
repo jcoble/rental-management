@@ -3,20 +3,22 @@ using RentalCommand.Core.Atomic;
 namespace RentalCommand.Core.Automation;
 
 /// <summary>
-/// One retry-safe scheduled-billing sweep. The run token identifies the physical sweep while
+/// Retry-safe scheduled rent sweep. The run token identifies the physical sweep while
 /// deterministic ledger business keys make separate/concurrent sweeps converge on one posting.
 /// </summary>
-public sealed record ApplyScheduledTenantChargeBatchCommand(
+public sealed record ApplyScheduledRentChargeBatchCommand(
     Guid RunToken,
-    DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    int BatchSize) : IAtomicCommandData;
+
+public sealed record ApplyScheduledRentChargeBatchResult(
+    int RentChargeCount);
+
+public sealed record ApplyScheduledLateFeeChargeBatchCommand(
+    Guid RunToken,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     int BatchSize,
-    bool IncludeRentCharges,
-    bool IncludeLateFeeCharges,
     string StateLateFeeCapsJson) : IAtomicCommandData;
 
-public sealed record ApplyScheduledTenantChargeBatchResult(
-    int RentChargeCount,
-    int LateFeeChargeCount) : IAtomicResultData
-{
-    public int TotalCount => RentChargeCount + LateFeeChargeCount;
-}
+public sealed record ApplyScheduledLateFeeChargeBatchResult(
+    int LateFeeChargeCount);

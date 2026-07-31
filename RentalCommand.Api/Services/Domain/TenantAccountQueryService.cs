@@ -890,6 +890,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 }
                 equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
             where account.Id == tenantAccountId
+                && balance.OpenAmount > 0m
             select new TenantChargeResponse
             {
                 TenantAccountId = account.Id,

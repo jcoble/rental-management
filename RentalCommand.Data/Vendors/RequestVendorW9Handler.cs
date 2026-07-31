@@ -12,53 +12,23 @@ namespace RentalCommand.Data.Vendors;
 public sealed class RequestVendorW9Handler
     : IAtomicCommandHandler<RequestVendorW9Command, RequestVendorW9Result>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RequestVendorW9Handler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RequestVendorW9Result> HandleAsync(
         RequestVendorW9Command command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var authorizedAssignments = attempt.Persistence.Query<MembershipRoleAssignment>().Where(assignment =>
-            assignment.PortfolioId == command.PortfolioId &&
-            assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
-            assignment.Status == MembershipRoleAssignmentStatus.Active &&
-            assignment.SuspendedAtUtc == null &&
-            assignment.RevokedAtUtc == null &&
-            assignment.EffectiveFromUtc <= command.RequestedAtUtc &&
-            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > command.RequestedAtUtc) &&
-            assignment.WorkspaceMembership != null &&
-            assignment.WorkspaceMembership.AccessContextId == command.AccessContextId &&
-            assignment.WorkspaceMembership.PortfolioId == command.PortfolioId &&
-            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.RevokedAtUtc == null &&
-            assignment.WorkspaceMembership.EffectiveFromUtc <= command.RequestedAtUtc &&
-            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-             assignment.WorkspaceMembership.EffectiveToUtc > command.RequestedAtUtc) &&
-            assignment.WorkspaceMembership.AccessContext != null &&
-            assignment.WorkspaceMembership.AccessContext.UserId == command.ActorUserId &&
-            assignment.WorkspaceMembership.AccessContext.AccessRevision == command.AccessRevision &&
-            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-            attempt.Persistence.Query<AuthSession>().Any(session =>
-                session.Id == command.AuthSessionId &&
-                session.UserId == command.ActorUserId &&
-                session.ActiveAccessContextId == command.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > command.RequestedAtUtc) &&
-            assignment.RoleProfile != null &&
-            assignment.RoleProfile.Capabilities.Any(profileCapability =>
-                profileCapability.CapabilityDefinition != null &&
-                profileCapability.CapabilityDefinition.Key == CapabilityKeys.WorkManage &&
-                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                    CapabilityAuthorizationTargetKind.Property));
+        var securityAtUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var authorizedAssignments = AuthorizedAssignments(command, _db, securityAtUtc);
 
         // Vendor scope, portfolio existence, destination eligibility, and the message labels are
         // resolved by one translated SQL statement. No load-then-filter or follow-up query.
         var target = await (
-            from vendor in attempt.Persistence.Query<Vendor>()
-            join portfolio in attempt.Persistence.Query<Portfolio>()
+            from vendor in _db.Set<Vendor>()
+            join portfolio in _db.Set<Portfolio>()
                 on vendor.PortfolioId equals portfolio.Id
             where vendor.Id == command.VendorId
                 && vendor.PortfolioId == command.PortfolioId
@@ -84,7 +54,7 @@ public sealed class RequestVendorW9Handler
         }
 
         var message = BuildW9RequestSms(target.Name, target.ManagementCompanyName);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(Vendor),
             target.Id,
@@ -98,7 +68,7 @@ public sealed class RequestVendorW9Handler
                 command.ClientOperationId,
             }),
             ChangeReason: $"Texted a W-9 request to vendor {target.Name} for 1099 tax reporting."));
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "sms",
@@ -121,6 +91,65 @@ public sealed class RequestVendorW9Handler
 
         return new RequestVendorW9Result(RequestVendorW9Outcome.Queued, target.NormalizedPhone);
     }
+
+    public async Task AuthorizeReplayAsync(
+        RequestVendorW9Command command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        var securityAtUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var authorized = await _db.Set<Vendor>()
+            .AsNoTracking()
+            .Where(vendor => vendor.Id == command.VendorId
+                && vendor.PortfolioId == command.PortfolioId
+                && AuthorizedAssignments(command, _db, securityAtUtc).Any())
+            .TagWith("vendor-w9.replay-authorization")
+            .AnyAsync(ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The active assignment cannot replay this vendor W-9 request.");
+        }
+    }
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+        RequestVendorW9Command command,
+        RentalCommandDbContext db,
+        DateTime securityAtUtc) =>
+        db.Set<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId &&
+            assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
+            assignment.Status == MembershipRoleAssignmentStatus.Active &&
+            assignment.SuspendedAtUtc == null &&
+            assignment.RevokedAtUtc == null &&
+            assignment.EffectiveFromUtc <= securityAtUtc &&
+            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityAtUtc) &&
+            assignment.WorkspaceMembership != null &&
+            assignment.WorkspaceMembership.AccessContextId == command.AccessContextId &&
+            assignment.WorkspaceMembership.PortfolioId == command.PortfolioId &&
+            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.RevokedAtUtc == null &&
+            assignment.WorkspaceMembership.EffectiveFromUtc <= securityAtUtc &&
+            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+             assignment.WorkspaceMembership.EffectiveToUtc > securityAtUtc) &&
+            assignment.WorkspaceMembership.AccessContext != null &&
+            assignment.WorkspaceMembership.AccessContext.UserId == command.ActorUserId &&
+            assignment.WorkspaceMembership.AccessContext.AccessRevision == command.AccessRevision &&
+            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
+            db.Set<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.ActorUserId &&
+                session.ActiveAccessContextId == command.AccessContextId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > securityAtUtc) &&
+            assignment.RoleProfile != null &&
+            assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition != null &&
+                profileCapability.CapabilityDefinition.Key == CapabilityKeys.WorkManage &&
+                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
 
     private static string BuildW9RequestSms(string vendorName, string? companyName)
     {

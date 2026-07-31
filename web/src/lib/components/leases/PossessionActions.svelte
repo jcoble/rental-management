@@ -14,7 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
-	import { KeyRound, Loader2, Undo2 } from '@lucide/svelte';
+	import { CalendarCheck, KeyRound, Loader2, Undo2 } from '@lucide/svelte';
 
 	let {
 		summary,
@@ -28,6 +28,10 @@
 
 	let giveOpen = $state(false);
 	let giveOperationKey = $state('');
+	let historicalOpen = $state(false);
+	let historicalPossessionDate = $state('');
+	let historicalValidationError = $state('');
+	let historicalOperation = $state<{ fingerprint: string; key: string } | null>(null);
 	let returnOpen = $state(false);
 	let returnContext = $state<LeaseManagementCurrentPartiesContext | null>(null);
 	let returnContextLoading = $state(false);
@@ -39,7 +43,16 @@
 	let returnOperation = $state<{ fingerprint: string; key: string } | null>(null);
 
 	const canGivePossession = $derived(
-		!summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc
+		!summary.hasGoverningAgreementWithoutPossession &&
+			!summary.possessionGivenAtUtc &&
+			!summary.possessionReturnedAtUtc &&
+			!summary.canceledAtUtc
+	);
+	const canReconcileHistoricalPossession = $derived(
+		summary.hasGoverningAgreementWithoutPossession &&
+			!summary.possessionGivenAtUtc &&
+			!summary.possessionReturnedAtUtc &&
+			!summary.canceledAtUtc
 	);
 	const canReturnPossession = $derived(
 		Boolean(summary.possessionGivenAtUtc) && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc
@@ -49,6 +62,21 @@
 		if (giveMutation.isPending) return;
 		giveOpen = false;
 		giveOperationKey = '';
+	}
+
+	function openHistorical() {
+		historicalPossessionDate =
+			summary.termStartOn ?? summary.plannedPossessionAtUtc?.slice(0, 10) ?? summary.businessDate;
+		historicalValidationError = '';
+		historicalOperation = null;
+		historicalOpen = true;
+	}
+
+	function closeHistorical() {
+		if (historicalMutation.isPending) return;
+		historicalOpen = false;
+		historicalValidationError = '';
+		historicalOperation = null;
 	}
 
 	const giveMutation = createMutation(() => ({
@@ -68,6 +96,40 @@
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'Could not give possession.'))
 	}));
+
+	function historicalOperationKey() {
+		const fingerprint = `${summary.unitId}:${historicalPossessionDate}`;
+		if (!historicalOperation || historicalOperation.fingerprint !== fingerprint) {
+			historicalOperation = { fingerprint, key: crypto.randomUUID() };
+		}
+		return historicalOperation.key;
+	}
+
+	const historicalMutation = createMutation(() => ({
+		mutationFn: () =>
+			leaseManagements.reconcileHistoricalPossession(
+				summary.leaseManagementId,
+				{ unitId: summary.unitId, possessionGivenOn: historicalPossessionDate },
+				historicalOperationKey()
+			),
+		onSuccess: async () => {
+			showSuccess('Historical possession reconciled.');
+			historicalOpen = false;
+			historicalValidationError = '';
+			historicalOperation = null;
+			await onchanged();
+		},
+		onError: (error) => showError(apiErrorMessage(error, 'Could not reconcile possession.'))
+	}));
+
+	function submitHistorical() {
+		historicalValidationError = '';
+		if (!historicalPossessionDate) {
+			historicalValidationError = 'Possession date is required.';
+			return;
+		}
+		historicalMutation.mutate();
+	}
 
 	async function openReturn() {
 		returnOpen = true;
@@ -172,6 +234,15 @@
 		const request = buildReturnRequest();
 		if (request) returnMutation.mutate(request);
 	}
+
+	function formatBusinessDate(value: string) {
+		const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+		if (!match) return value;
+		const [, year, month, day] = match;
+		return new Intl.DateTimeFormat(undefined, { timeZone: 'UTC' }).format(
+			new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+		);
+	}
 </script>
 
 <Card data-testid="lease-possession-actions">
@@ -188,7 +259,7 @@
 				<p class="text-muted-foreground">{new Date(summary.possessionReturnedAtUtc).toLocaleString()}</p>
 			{:else if summary.possessionGivenAtUtc}
 				<p class="font-medium">Tenant has possession</p>
-				<p class="text-muted-foreground">Given {new Date(summary.possessionGivenAtUtc).toLocaleString()}</p>
+				<p class="text-muted-foreground">Given {formatBusinessDate(summary.possessionGivenAtUtc)}</p>
 			{:else if summary.canceledAtUtc}
 				<p class="font-medium">Relationship canceled</p>
 				<p class="text-muted-foreground">Possession actions are no longer available.</p>
@@ -201,6 +272,11 @@
 			{#if canManage && canGivePossession}
 				<Button onclick={() => (giveOpen = true)} data-testid="lease-give-possession">
 					<KeyRound class="mr-2 h-4 w-4" /> Give possession
+				</Button>
+			{/if}
+			{#if canManage && canReconcileHistoricalPossession}
+				<Button variant="outline" onclick={openHistorical} data-testid="lease-reconcile-historical-possession">
+					<CalendarCheck class="mr-2 h-4 w-4" /> Reconcile possession
 				</Button>
 			{/if}
 			{#if canManage && canReturnPossession}
@@ -223,6 +299,35 @@
 			<Button onclick={() => giveMutation.mutate()} disabled={giveMutation.isPending}>
 				{#if giveMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
 				Give possession
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={historicalOpen} onOpenChange={(open) => { if (!open) closeHistorical(); }}>
+	<Dialog.Content class="max-w-md" data-testid="lease-reconcile-historical-possession-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Reconcile possession</Dialog.Title>
+			<Dialog.Description>Record the actual historical date the tenant received possession for unit {summary.unitNumber}.</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-2">
+			<label for="historical-possession-date" class="text-sm font-medium">Possession date</label>
+			<Input
+				id="historical-possession-date"
+				type="date"
+				bind:value={historicalPossessionDate}
+				max={summary.businessDate}
+				data-testid="historical-possession-date"
+				oninput={() => (historicalValidationError = '')}
+			/>
+			<p class="text-xs text-muted-foreground">The date must be inside the executed agreement term.</p>
+		</div>
+		{#if historicalValidationError}<p class="text-sm text-destructive">{historicalValidationError}</p>{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeHistorical} disabled={historicalMutation.isPending}>Cancel</Button>
+			<Button onclick={submitHistorical} disabled={historicalMutation.isPending} data-testid="historical-possession-submit">
+				{#if historicalMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
+				Reconcile possession
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

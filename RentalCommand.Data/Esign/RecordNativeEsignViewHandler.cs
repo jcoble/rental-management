@@ -7,16 +7,20 @@ using RentalCommand.Core.Esign;
 
 namespace RentalCommand.Data.Esign;
 
-/// <summary>Atomically records at most one first-view fact for a native signing session.</summary>
+/// <summary>Atomically records at most one first-view fact for a native signing db.</summary>
 public sealed class RecordNativeEsignViewHandler
     : IAtomicCommandHandler<RecordNativeEsignViewCommand, RecordNativeEsignViewResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordNativeEsignViewHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RecordNativeEsignViewResult> HandleAsync(
         RecordNativeEsignViewCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var target = await attempt.Persistence.Query<SignatureSigner>()
+        var target = await _db.Set<SignatureSigner>()
             .Where(signer => signer.TokenHash == command.TokenHash)
             .Select(signer => new { signer.Id, signer.SignatureRequestId })
             .SingleOrDefaultAsync(ct);
@@ -28,20 +32,20 @@ public sealed class RecordNativeEsignViewHandler
                 0);
         }
 
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.SignatureRequest,
+        await context.AcquireLockAsync(
+            "SignatureRequest",
             target.SignatureRequestId,
             ct);
 
         // Re-read after obtaining the aggregate lock so a concurrent sign/decline decides first.
-        var signer = await attempt.Persistence.Query<SignatureSigner>()
+        var signer = await _db.Set<SignatureSigner>()
             .Include(candidate => candidate.SignatureRequest!)
             .SingleAsync(
                 candidate => candidate.Id == target.Id
                     && candidate.SignatureRequestId == target.SignatureRequestId,
                 ct);
         var request = signer.SignatureRequest!;
-        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, request.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
         var occurredAtUtc = times.EffectiveNowUtc;
 
@@ -77,7 +81,7 @@ public sealed class RecordNativeEsignViewHandler
             request.Status = SignatureRequestStatus.Viewed;
         }
 
-        attempt.Persistence.Add(new SignatureAuditEvent
+        _db.Add(new SignatureAuditEvent
         {
             SignatureRequestId = request.Id,
             SignatureSignerId = signer.Id,
@@ -89,7 +93,7 @@ public sealed class RecordNativeEsignViewHandler
             Detail = $"{signer.NameSnapshot} opened the signing page.",
         });
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             request.PortfolioId,
             nameof(SignatureSigner),
             signer.Id,
@@ -108,7 +112,7 @@ public sealed class RecordNativeEsignViewHandler
         // interceptor, which cannot infer the signer's portfolio and would reject the binding.
         // Keeping the pair unconditional also gives every genuine first view one stable two-row
         // command audit, even when another signer already advanced the request beyond Sent.
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             request.PortfolioId,
             nameof(SignatureRequest),
             request.Id,
@@ -124,5 +128,27 @@ public sealed class RecordNativeEsignViewHandler
             NativeEsignViewOutcome.Available,
             null,
             request.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        RecordNativeEsignViewCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        RecordNativeSignatureHandler.ValidateToken(command.TokenHash);
+
+        var signerStillOwned = await _db.Set<SignatureSigner>()
+            .AsNoTracking()
+            .AnyAsync(signer =>
+                signer.TokenHash == command.TokenHash &&
+                signer.SignatureRequest != null &&
+                (signer.ViewedAtUtc != null ||
+                 signer.Status != SignatureSignerStatus.Pending ||
+                 signer.TokenExpiresAtUtc <= command.OccurredAtUtc),
+                ct);
+        if (!signerStillOwned)
+        {
+            throw new UnauthorizedAccessException("The original native e-sign view token is unavailable.");
+        }
     }
 }
