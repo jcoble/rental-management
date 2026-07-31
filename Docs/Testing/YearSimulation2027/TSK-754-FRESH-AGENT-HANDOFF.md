@@ -1,7 +1,108 @@
 # TSK-754 Fresh-Agent Handoff
 
-Prepared 2026-07-27 and last updated 2026-07-30 for continuation of the 2027
+Prepared 2026-07-27 and last updated 2026-07-31 for continuation of the 2027
 full-company simulation.
+
+## Authoritative pause checkpoint — 2026-07-31, February 15 after RUN-05
+
+The user paused TSK-754 at a clean Git checkpoint so the accounting backbone and explainable Money
+ledgers can be implemented before the simulation creates more financial history. Do not resume the
+February schedule yet. Follow
+`Docs/superpowers/plans/2026-07-31-tsk-803-accounting-backend-and-money-ui-contract.md` for the
+`TSK-803` backend, `TSK-800` Money surfaces, Fable handoff, and resume gates. `TSK-801` remains the
+later additive rent-roll report.
+
+Implementation checkpoint commit: `5c7a1c60` (`Checkpoint TSK-754 through February 15`). It
+captures the accumulated Atomic cutover, migrations, authorization repairs, source changes, tests,
+simulation documents, and fixtures through this stop. Transient `output/qa`, `output/playwright`,
+`output/phone`, and `output/pdf` evidence remains preserved locally and ignored rather than bloating
+Git. The documentation commit immediately after `5c7a1c60` adds this pause and the accounting plan.
+
+This section supersedes every older continuation checkpoint below it.
+
+### Exact chronology
+
+- Schedule rows: 1,981.
+- Execution-ledger rows: 259.
+- Unique ledger run IDs: 241.
+- Completed schedule runs: 228.
+- Remaining schedule runs: 1,753.
+- Preserved historical duplicate groups: 13; blocking duplicate groups: zero.
+- Last completed run: `RUN-20270215-05`.
+- First untouched run: `RUN-20270215-06`.
+- Frozen clock: `2027-02-15T05:00:14.867058Z`, `America/New_York`.
+
+The read-only checkpoint helper proves those counts:
+
+```bash
+python3 scripts/qa/tsk754_checkpoint.py summary
+python3 scripts/qa/tsk754_checkpoint.py remaining --date 2027-02-15 --only-remaining
+```
+
+### Completed work after the older February 12 checkpoint
+
+- `RUN-20270212-07` through `RUN-20270212-09` are complete. CRUD-003 required five bounded Owner
+  repairs (`YS-299` through `YS-303`), all independently reverified with database, receipt, audit,
+  outbox, authorization, web, and physical-Samsung evidence.
+- `RUN-20270215-01` is complete after append-only vendor dispatch cancellation/reassignment repair
+  `YS-307`, independently verified and live proven on the physical Samsung.
+- `RUN-20270215-02` through `RUN-20270215-05` are complete with exact paid property-expense,
+  attachment, line-item, allocation, due-date, audit, outbox, web, and phone proof.
+- `YS-308` is fixed and independently real-PostgreSQL verified. Paid scan confirmation now preserves
+  the reviewed `DueDate` independently of `Paid` and `PaidAt`, including full rollback injection.
+- `YS-309` was reproduced before `RUN-20270215-06`: the mobile manual expense form could not select
+  a Property when no Work Order was chosen. No financial mutation occurred. The bounded source fix
+  now requires/selects the property, locks work-order scope correctly, and sends the complete
+  property-only expense payload. Focused Flutter analysis and four widget tests pass independently.
+  It is not live complete: rebuild/install from checkpoint source and prove the exact physical-phone
+  flow before appending `RUN-20270215-06`.
+
+### Accounting boundary
+
+The existing Atomic kernel is finished and remains the only write path. TSK-803 must add balanced
+journal postings inside the same scoped `RentalCommandDbContext` transaction; it must not introduce
+a new host, compatibility bridge, factory, versioned Atomic runtime, message broker, or second unit
+of work. Business rows, journal rows, receipt, required audits, and required outbox rows commit or
+roll back together.
+
+`YS-295` remains Critical and open. Preserve LoanPayments 67 and 68 and their original audits as
+historical facts. The accounting implementation must not hide the discrepancy: Loans 3 and 10 have
+the wrong recurring due day, Loan 3 lacks the statement escrow component, and the preserved February
+occurrences total 2,450.00 versus 2,752.00 expected. Reconcile through the supported append-only
+correction plan before the February 20 loan run and prove balanced journal effects.
+
+### Runtime and device at pause
+
+- Worktree:
+  `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution`
+- Branch: `tsk-754-year-simulation-execution`.
+- PostgreSQL: `rentalcommand-tsk754-db`, database `rentalcommand_tsk754`, port 5754, running.
+- API and web health return HTTP 200.
+- tmux sessions: `tsk754-crud003-api`, `tsk754-crud003-web`, and
+  `tsk754-run02-engine`. The Engine is intentionally in command-bridge-only operation; do not enable
+  autonomous due-work processing while the clock is frozen.
+- Physical Samsung: `100.73.198.93:34825`, model `SM_S906U`, connected by wireless ADB.
+- `adb reverse tcp:5666 tcp:5666` is not currently present. Restore and verify it before installing
+  or launching the local-API APK.
+- The last known installed clean dev-profile APK used for February 15 proof has SHA-256
+  `73979815ddbc8a90ac5cef221fa1b64d74758d13960fbee814110dc781c2850e`.
+- The read-only doctor passes API, web, clock, scan corpus, ledger/evidence access, and ADB device
+  checks; it fails only the missing ADB reverse check.
+
+### Safe next actions
+
+1. Hand the accounting plan to Fable. Create `tsk-800-803-accounting-ledgers` from `5c7a1c60` in a
+   separate worktree under `/Users/blackcolours/dev/work/worktrees/rental-management/`.
+2. Implement and verify the backend/DTO contract before Fable completes the web/mobile redesign.
+3. Reconcile the preserved frozen database to the seeded COA and balanced journals; do not reset or
+   replace the database.
+4. Merge the accounting work, migrate this preserved stack, rebuild the physical-phone APK, restore
+   ADB reverse, and live verify YS-309.
+5. Complete exactly `RUN-20270215-06`, then continue `RUN-20270215-07` in schedule order only after
+   the new ledger/journal/database/UI acceptance gates agree.
+
+Do not close `TSK-754`; it remains Doing and paused, not abandoned. Do not mark `TSK-800` or
+`TSK-803` Done until backend, database conversion, web, and physical-phone evidence all pass.
 
 ## Authoritative continuation checkpoint — 2026-07-30, February 12 after RUN-06
 
