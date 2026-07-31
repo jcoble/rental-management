@@ -91,8 +91,10 @@ correction plan before the February 20 loan run and prove balanced journal effec
 
 ### Safe next actions
 
-1. Hand the accounting plan to Fable. Create `tsk-800-803-accounting-ledgers` from `5c7a1c60` in a
-   separate worktree under `/Users/blackcolours/dev/work/worktrees/rental-management/`.
+1. Hand the accounting plan to Fable. Create `tsk-800-803-accounting-ledgers` from the current
+   `tsk-754-year-simulation-execution` HEAD containing this handoff, in a separate worktree under
+   `/Users/blackcolours/dev/work/worktrees/rental-management/`. `5c7a1c60` is the preserved
+   implementation checkpoint immediately before the handoff documentation.
 2. Implement and verify the backend/DTO contract before Fable completes the web/mobile redesign.
 3. Reconcile the preserved frozen database to the seeded COA and balanced journals; do not reset or
    replace the database.

@@ -375,7 +375,10 @@ Never run more than two heavy builds/tests concurrently; serialize real-PostgreS
 Fable then owns web and mobile work against the frozen DTOs. Backend agents should not style or
 restructure frontend screens beyond minimal contract fixtures.
 
-Create the implementation branch/worktree from checkpoint commit `5c7a1c60` under:
+Create the implementation branch/worktree from the current
+`tsk-754-year-simulation-execution` HEAD that contains this handoff. Commit `5c7a1c60` is the
+immutable implementation checkpoint immediately before the documentation handoff, not the branch
+point to use by itself. Create the worktree under:
 
 ```text
 /Users/blackcolours/dev/work/worktrees/rental-management/tsk-800-803-accounting-ledgers
