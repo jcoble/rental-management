@@ -525,6 +525,8 @@ public class ScheduleEServiceTests : IAsyncLifetime
         _commands.Should().ContainSingle(
             "Schedule E must return its already-grouped flat property/category rows with one translated SQL statement");
         var scheduleESql = _commands.Single();
+        scheduleESql.Should().Contain("LoanPaymentCorrections",
+            "modeled mortgage interest must select the latest correction in the same SQL statement");
         scheduleESql.Should().Contain("LEFT JOIN",
             "income-only properties must survive the flat join without a synthetic client-side category");
         scheduleESql.Should().Contain("GROUP BY",

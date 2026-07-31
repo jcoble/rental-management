@@ -49,6 +49,9 @@
 
 	function itemKey(item: unknown): string {
 		const record = item as Record<string, unknown>;
+		if (kind === 'pipeline' && record.kind != null && record.recordId != null) {
+			return `${record.kind}-${record.recordId}`;
+		}
 		return String(record.unitId ?? record.id ?? `${record.kind}-${record.recordId}`);
 	}
 

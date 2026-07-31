@@ -4,6 +4,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;

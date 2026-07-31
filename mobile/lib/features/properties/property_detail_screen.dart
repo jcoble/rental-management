@@ -196,12 +196,30 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     await Future.wait(refreshes);
   }
 
-  void _showAddUnitSheet(BuildContext context) {
-    showUnitFormSheet(
-      context,
-      propertyId: _property.id,
-      onSaved: (_) => ref.read(unitsProvider(_property.id).notifier).refresh(),
+  Future<void> _showAddUnitSheet(BuildContext context) async {
+    final saved = await showUnitFormSheet(context, propertyId: _property.id);
+    if (saved != null && mounted) await _refreshAfterUnitCreate();
+  }
+
+  Future<void> _refreshAfterUnitCreate() async {
+    final propertyId = _property.id;
+    ref.invalidate(propertyDetailProvider(propertyId));
+    ref.invalidate(propertiesPageProvider);
+
+    final unitsFuture = ref.refresh(
+      propertyWorkspaceUnitsPageProvider(
+        PropertyWorkspacePageQuery(
+          propertyId: propertyId,
+          skip: _rentalsSkip,
+          take: _pageSize,
+        ),
+      ).future,
     );
+    final detail = await ref.refresh(
+      propertyWorkspaceDetailProvider(propertyId).future,
+    );
+    await unitsFuture;
+    if (mounted) setState(() => _property = detail.property);
   }
 
   Future<void> _showEditPropertySheet(BuildContext context) async {
@@ -676,11 +694,9 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
-        canUseMobileCapabilityAction(
-          experience: auth.activeExperience,
-          capabilities: auth.capabilities,
-          capability: 'rentals.manage',
-          experiences: const {WorkspaceExperience.management},
+        hasAllPropertiesRentalsManageAuthority(
+          access: auth.access,
+          activeExperience: auth.activeExperience,
         );
     final canManageMoneyExpenses =
         auth is AuthStateAuthenticated &&

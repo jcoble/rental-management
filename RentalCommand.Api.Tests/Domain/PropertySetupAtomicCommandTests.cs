@@ -9,13 +9,18 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
+[Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class PropertySetupAtomicCommandTests : IDisposable
 {
     private const int PortfolioId = 1;
+    private readonly MigratedPostgreSqlFixture _postgres;
     private readonly SqliteTestContext _ctx = new();
     private readonly MutableTimeProvider _timeProvider = new(
         new DateTimeOffset(2027, 1, 5, 5, 0, 0, TimeSpan.Zero));
@@ -24,8 +29,9 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
     private readonly IAtomicUnitOfWork _atomic;
     private readonly WorkspaceReadScope _scope;
 
-    public PropertySetupAtomicCommandTests()
+    public PropertySetupAtomicCommandTests(MigratedPostgreSqlFixture postgres)
     {
+        _postgres = postgres;
         _ctx.Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(PropertySetupAtomicCommandTests));
         _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString, _timeProvider);
@@ -247,8 +253,42 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
     [Fact]
     public async Task Ordinary_patch_persists_supported_property_financial_and_operations_fields_atomically()
     {
-        var created = await _sut.SetupAsync(
-            _scope, SingleRentalRequest(), "patch-financial-fields-create");
+        await using var context = await _postgres.CreateContextAsync();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<TimeProvider>(_timeProvider);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            AtomicCoreCrudMutationCommand,
+            AtomicCoreCrudMutationResult,
+            AtomicCoreCrudMutationHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(context.ConnectionString)
+                .UseAtomicPersistenceKernel(provider));
+        await using var serviceProvider = services.BuildServiceProvider();
+        await using var serviceScope = serviceProvider.CreateAsyncScope();
+        var db = serviceScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var scope = db.SeedAdministratorScope(
+            PortfolioId,
+            nameof(Ordinary_patch_persists_supported_property_financial_and_operations_fields_atomically));
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {scope.PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {scope.AccessRevision.ToString()}, false);
+            """);
+        var sut = new PropertyService(
+            db,
+            Mock.Of<IDataUpdateService>(),
+            _timeProvider,
+            serviceScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+
+        var created = await sut.SetupAsync(
+            scope, SingleRentalRequest(), "patch-financial-fields-create");
         var update = new UpdatePropertyRequest
         {
             Name = "Arbor House",
@@ -261,8 +301,8 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             ManualAnnualDepreciation = 10_909m,
         };
 
-        var saved = await _sut.UpdateAsync(
-            _scope,
+        var saved = await sut.UpdateAsync(
+            scope,
             created!.Property.Id,
             update,
             "patch-financial-fields");
@@ -278,7 +318,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         DateOnly.FromDateTime(saved.InServiceDate!.Value).Should().Be(new DateOnly(2024, 1, 15));
         saved.ManualAnnualDepreciation.Should().Be(10_909m);
 
-        var persisted = await _ctx.Db.Properties.AsNoTracking()
+        var persisted = await db.Properties.AsNoTracking()
             .SingleAsync(property => property.Id == created.Property.Id);
         persisted.YearBuilt.Should().Be(1998);
         persisted.ManagementFeePercent.Should().Be(8.5m);
@@ -288,7 +328,7 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         persisted.InServiceDate.Should().NotBeNull();
         DateOnly.FromDateTime(persisted.InServiceDate!.Value).Should().Be(new DateOnly(2024, 1, 15));
         persisted.ManualAnnualDepreciation.Should().Be(10_909m);
-        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "rental.property.update")).Should().Be(1);
     }
 

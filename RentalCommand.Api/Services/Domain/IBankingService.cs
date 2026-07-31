@@ -8,7 +8,10 @@ public interface IBankingService
     Task<BankingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default);
     Task<PlaidSettingsResponse> GetPlaidSettingsAsync(int portfolioId, CancellationToken ct = default);
     Task<PlaidLinkTokenResponse> CreatePlaidLinkTokenAsync(int portfolioId, int userId, string? platform, CancellationToken ct = default);
-    Task<BankConnectionResponse> ExchangePlaidPublicTokenAsync(int portfolioId, ExchangePlaidPublicTokenRequest request, CancellationToken ct = default);
+    Task<BankConnectionResponse> ExchangePlaidPublicTokenAsync(
+        WorkspaceReadScope scope,
+        ExchangePlaidPublicTokenRequest request,
+        CancellationToken ct = default);
     Task<SyncBankConnectionResponse?> SyncPlaidConnectionAsync(int portfolioId, int connectionId, CancellationToken ct = default);
     Task<IReadOnlyList<BankConnectionResponse>> ListConnectionsAsync(int portfolioId, CancellationToken ct = default);
     Task<BankTransactionListResponse> ListTransactionsAsync(int portfolioId, string? status, int skip = 0, int take = ListQuery.DefaultTake, CancellationToken ct = default);

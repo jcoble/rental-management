@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Notifications;
 
@@ -42,14 +43,14 @@ public sealed class ClaimedTenantNoticeWorkItem
 public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicInfrastructureWriteGate _writeGate;
+    private readonly IInternalSetBasedWriteScope _writeScope;
 
-    public TenantNoticeWorkClaimStore(
+    internal TenantNoticeWorkClaimStore(
         RentalCommandDbContext db,
-        IAtomicInfrastructureWriteGate writeGate)
+        IInternalSetBasedWriteScope writeScope)
     {
         _db = db;
-        _writeGate = writeGate;
+        _writeScope = writeScope;
     }
 
     public async Task<IReadOnlyList<ClaimedTenantNoticeWorkItem>> ClaimReadyAsync(
@@ -62,7 +63,7 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
         }
 
         var boundedBatch = Math.Clamp(batchSize, 1, 100);
-        using var lease = _writeGate.BeginTenantNoticeWorkItemClaim();
+        using var lease = _writeScope.BeginWrite("TenantNoticeWorkItems", InternalWriteOperation.Update);
         return await _db.Database.SqlQuery<ClaimedTenantNoticeWorkItem>($"""
             WITH candidates AS (
                 SELECT work."Id"
@@ -123,7 +124,7 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
     public async Task<bool> CompleteAsync(long id, Guid token, CancellationToken ct)
     {
         ValidateFence(id, token);
-        using var lease = _writeGate.BeginTenantNoticeWorkItemCompletion();
+        using var lease = _writeScope.BeginWrite("TenantNoticeWorkItems", InternalWriteOperation.Update);
         return await _db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE "TenantNoticeWorkItems"
                SET "Status" = 'Completed',
@@ -139,7 +140,7 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
     public async Task<bool> ReleaseAsync(long id, Guid token, DateTime retryAtUtc, CancellationToken ct)
     {
         ValidateFence(id, token);
-        using var lease = _writeGate.BeginTenantNoticeWorkItemRelease();
+        using var lease = _writeScope.BeginWrite("TenantNoticeWorkItems", InternalWriteOperation.Update);
         return await _db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE "TenantNoticeWorkItems"
                SET "Status" = 'Pending',
@@ -156,7 +157,7 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
     public async Task<bool> BlockAsync(long id, Guid token, CancellationToken ct)
     {
         ValidateFence(id, token);
-        using var lease = _writeGate.BeginTenantNoticeWorkItemBlock();
+        using var lease = _writeScope.BeginWrite("TenantNoticeWorkItems", InternalWriteOperation.Update);
         return await _db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE "TenantNoticeWorkItems"
                SET "Status" = 'Blocked',

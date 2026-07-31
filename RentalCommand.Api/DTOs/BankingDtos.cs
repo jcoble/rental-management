@@ -75,6 +75,9 @@ public class BankTransactionResponse
     public int? MatchedTenantAccountId { get; set; }
     public long? MatchedTenantLedgerEntryId { get; set; }
     public int? MatchedExpenseId { get; set; }
+    public int? MatchedLoanPaymentId { get; set; }
+    public int? MatchedOwnerDistributionId { get; set; }
+    public int? MatchedBankTransactionId { get; set; }
     public string MatchStatus { get; set; } = "Unmatched";
     public decimal? MatchConfidence { get; set; }
     public string? Notes { get; set; }
@@ -137,7 +140,30 @@ public class ImportBankTransactionsRequest
     public string? AccountMask { get; set; }
     public string? AccountType { get; set; }
     public string? AccountSubtype { get; set; }
+    public ImportBankStatementControl? Statement { get; set; }
     public IReadOnlyList<ImportBankTransactionItem> Transactions { get; set; } = [];
+}
+
+public class ImportBankStatementControl
+{
+    public DateOnly PeriodStart { get; set; }
+    public DateOnly PeriodEnd { get; set; }
+    public decimal OpeningBalance { get; set; }
+    public decimal ClosingBalance { get; set; }
+    public string IsoCurrencyCode { get; set; } = "USD";
+}
+
+public class BankStatementResponse
+{
+    public int Id { get; set; }
+    public int BankConnectionId { get; set; }
+    public DateOnly PeriodStart { get; set; }
+    public DateOnly PeriodEnd { get; set; }
+    public decimal OpeningBalance { get; set; }
+    public decimal ClosingBalance { get; set; }
+    public decimal StatementMovement { get; set; }
+    public string IsoCurrencyCode { get; set; } = "USD";
+    public DateTime ImportedAtUtc { get; set; }
 }
 
 public class ImportBankTransactionItem
@@ -156,6 +182,7 @@ public class ImportBankTransactionItem
 public class ImportBankTransactionsResponse
 {
     public BankConnectionResponse Connection { get; set; } = new();
+    public BankStatementResponse? Statement { get; set; }
     public int ImportedCount { get; set; }
     public int SkippedCount { get; set; }
     public IReadOnlyList<BankTransactionResponse> Transactions { get; set; } = [];
@@ -176,6 +203,10 @@ public class MatchBankTransactionRequest
     public int? TenantAccountId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int? ExpenseId { get; set; }
+    public int? LoanPaymentId { get; set; }
+    public int? OwnerDistributionId { get; set; }
+    public int? TransferBankTransactionId { get; set; }
+    public DateTime? ExpectedTransferUpdatedAtUtc { get; set; }
 }
 
 public class RouteBankTransactionRequest
@@ -186,9 +217,11 @@ public class RouteBankTransactionRequest
 }
 
 /// <summary>
-/// Confirm a suggested match. Supply either a canonical tenant receipt identity
-/// (<see cref="TenantAccountId"/> plus <see cref="TenantLedgerEntryId"/>) or an
-/// <see cref="ExpenseId"/>; when all are omitted the current suggestion is used.
+/// Confirm a suggested match. Supply exactly one canonical target identity. Tenant ledger
+/// cash requires both <see cref="TenantAccountId"/> and <see cref="TenantLedgerEntryId"/>.
+/// Internal transfers also require <see cref="ExpectedTransferUpdatedAtUtc"/> so both statement
+/// lines are protected by optimistic concurrency. When all targets are omitted, the current
+/// DB-ranked suggestion is used.
 /// </summary>
 public class ConfirmBankMatchRequest
 {
@@ -197,6 +230,10 @@ public class ConfirmBankMatchRequest
     public int? TenantAccountId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int? ExpenseId { get; set; }
+    public int? LoanPaymentId { get; set; }
+    public int? OwnerDistributionId { get; set; }
+    public int? TransferBankTransactionId { get; set; }
+    public DateTime? ExpectedTransferUpdatedAtUtc { get; set; }
 }
 
 public class BankTransactionMutationRequest

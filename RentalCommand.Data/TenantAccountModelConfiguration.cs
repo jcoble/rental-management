@@ -123,7 +123,7 @@ internal static class TenantAccountModelConfiguration
             entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ProviderObjectId).HasMaxLength(200);
             entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.AttemptType).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.AttemptType).HasConversion<string>().HasMaxLength(30);
             entity.Property(e => e.State).HasConversion<string>().HasMaxLength(30);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);
@@ -151,6 +151,13 @@ internal static class TenantAccountModelConfiguration
                 .IsUnique()
                 .HasFilter("\"RefundsPaymentAttemptId\" IS NOT NULL");
             entity.HasIndex(e => new
+                {
+                    e.ChargeLedgerEntryId,
+                    e.TenantAccountId,
+                    e.PortfolioId,
+                })
+                .HasFilter("\"ChargeLedgerEntryId\" IS NOT NULL");
+            entity.HasIndex(e => new
             {
                 e.PortfolioId,
                 e.State,
@@ -163,14 +170,15 @@ internal static class TenantAccountModelConfiguration
             {
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_Type",
-                    "\"AttemptType\" IN ('Charge', 'Refund', 'Verification')");
+                    "\"AttemptType\" IN ('Charge', 'UnappliedReceipt', 'DepositReceipt', " +
+                    "'ImportedReceipt', 'LegacyTargetlessCharge', 'Refund', 'Verification')");
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_State",
                     "\"State\" IN ('Prepared', 'Submitted', 'Succeeded', 'Failed', 'Canceled', 'Unknown')");
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_Amount",
                     "(\"AttemptType\" = 'Verification' AND \"Amount\" = 0) OR " +
-                    "(\"AttemptType\" IN ('Charge','Refund') AND \"Amount\" > 0)");
+                    "(\"AttemptType\" <> 'Verification' AND \"Amount\" > 0)");
                 table.HasCheckConstraint(
                     "CK_TenantPaymentAttempt_RefundProvenance",
                     "(\"AttemptType\" = 'Refund') = (\"RefundsPaymentAttemptId\" IS NOT NULL)");
@@ -182,6 +190,10 @@ internal static class TenantAccountModelConfiguration
                     "\"AttemptType\" <> 'Refund' OR (\"Provider\" = 'manual' " +
                     "AND NULLIF(btrim(\"ProviderObjectId\"), '') IS NOT NULL " +
                     "AND NULLIF(btrim(\"PaymentMethodSummary\"), '') IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_TenantPaymentAttempt_ChargeTarget",
+                    "(\"AttemptType\" = 'Charge' AND \"ChargeLedgerEntryId\" IS NOT NULL) OR " +
+                    "(\"AttemptType\" <> 'Charge' AND \"ChargeLedgerEntryId\" IS NULL)");
                 table.HasCheckConstraint("CK_TenantPaymentAttempt_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
                 table.HasCheckConstraint("CK_TenantPaymentAttempt_AttemptCount", "\"AttemptCount\" >= 0");
                 table.HasCheckConstraint(
@@ -216,6 +228,16 @@ internal static class TenantAccountModelConfiguration
                 .HasForeignKey(e => new
                 {
                     e.RefundsPaymentAttemptId,
+                    e.TenantAccountId,
+                    e.PortfolioId,
+                })
+                .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.ChargeLedgerEntry)
+                .WithMany()
+                .HasForeignKey(e => new
+                {
+                    e.ChargeLedgerEntryId,
                     e.TenantAccountId,
                     e.PortfolioId,
                 })

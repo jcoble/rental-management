@@ -13,16 +13,29 @@ namespace RentalCommand.Data.Banking;
 public sealed class PreparePlaidTokenExchangeHandler
     : IAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PreparePlaidTokenExchangeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<PreparePlaidTokenExchangeResult> HandleAsync(
         PreparePlaidTokenExchangeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.BankConnection,
+        BankingAuthorizationSupport.Validate(command);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync(
+            "BankConnection",
             ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "plaid-exchange", command.ClientOperationId),
             ct);
-        var existing = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+        var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, authorizationNow, ct))
+            throw new UnauthorizedAccessException();
+        var existing = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
                 && row.ClientOperationId == command.ClientOperationId, ct);
         if (existing is not null)
@@ -51,21 +64,37 @@ public sealed class PreparePlaidTokenExchangeHandler
             Status = "Prepared",
             PreparedAtUtc = command.PreparedAtUtc,
         };
-        attempt.Persistence.Add(exchange);
+        _db.Add(exchange);
         return new PreparePlaidTokenExchangeResult(PreparePlaidTokenExchangeOutcome.Prepared, exchange.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        PreparePlaidTokenExchangeCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        BankingAuthorizationSupport.Validate(command);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, now, ct))
+            throw new UnauthorizedAccessException();
     }
 }
 
 public sealed class AdmitPlaidTokenExchangeHandler
     : IAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AdmitPlaidTokenExchangeHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AdmitPlaidTokenExchangeResult> HandleAsync(
         AdmitPlaidTokenExchangeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
-        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
+        var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (exchange is null) return Result(AdmitPlaidTokenExchangeOutcome.NotFound, command);
@@ -79,21 +108,52 @@ public sealed class AdmitPlaidTokenExchangeHandler
         return Result(AdmitPlaidTokenExchangeOutcome.Admitted, command);
     }
 
+    public async Task AuthorizeReplayAsync(
+        AdmitPlaidTokenExchangeCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ValidateExchange(command.PortfolioId, command.ExchangeAttemptId);
+
+        var exchangeExists = await _db.Set<PlaidTokenExchangeAttempt>()
+            .AsNoTracking()
+            .AnyAsync(exchange =>
+                exchange.Id == command.ExchangeAttemptId &&
+                exchange.PortfolioId == command.PortfolioId,
+                ct);
+        if (!exchangeExists)
+        {
+            throw new UnauthorizedAccessException("The Plaid token exchange attempt is unavailable.");
+        }
+    }
+
     private static AdmitPlaidTokenExchangeResult Result(
         AdmitPlaidTokenExchangeOutcome outcome,
         AdmitPlaidTokenExchangeCommand command) => new(outcome, command.ExchangeAttemptId);
+
+    internal static void ValidateExchange(int portfolioId, Guid exchangeAttemptId)
+    {
+        if (portfolioId <= 0 || exchangeAttemptId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(exchangeAttemptId));
+        }
+    }
 }
 
 public sealed class RecordPlaidTokenExchangeReceiptHandler
     : IAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordPlaidTokenExchangeReceiptHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RecordPlaidTokenExchangeReceiptResult> HandleAsync(
         RecordPlaidTokenExchangeReceiptCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
-        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
+        var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (exchange is null) return Result(RecordPlaidTokenExchangeReceiptOutcome.NotFound, command);
@@ -105,7 +165,7 @@ public sealed class RecordPlaidTokenExchangeReceiptHandler
                 || exchange.ExternalItemIdHash != command.ExternalItemIdHash)
             {
                 throw new AtomicReceiptInvariantException(
-                    $"Plaid exchange attempt {exchange.Id} is already bound to a different provider receipt.");
+                    $"Plaid exchange context {exchange.Id} is already bound to a different provider receipt.");
             }
             return Result(RecordPlaidTokenExchangeReceiptOutcome.AlreadyRecorded, command);
         }
@@ -118,6 +178,29 @@ public sealed class RecordPlaidTokenExchangeReceiptHandler
         return Result(RecordPlaidTokenExchangeReceiptOutcome.Recorded, command);
     }
 
+    public async Task AuthorizeReplayAsync(
+        RecordPlaidTokenExchangeReceiptCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        AdmitPlaidTokenExchangeHandler.ValidateExchange(command.PortfolioId, command.ExchangeAttemptId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderRequestIdentity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ExternalItemIdHash);
+
+        var exchangeExists = await _db.Set<PlaidTokenExchangeAttempt>()
+            .AsNoTracking()
+            .AnyAsync(exchange =>
+                exchange.Id == command.ExchangeAttemptId &&
+                exchange.PortfolioId == command.PortfolioId &&
+                (exchange.RemoteReceiptRecordedAtUtc != null ||
+                 exchange.RemoteAdmittedAtUtc != null),
+                ct);
+        if (!exchangeExists)
+        {
+            throw new UnauthorizedAccessException("The Plaid receipt exchange attempt is unavailable.");
+        }
+    }
+
     private static RecordPlaidTokenExchangeReceiptResult Result(
         RecordPlaidTokenExchangeReceiptOutcome outcome,
         RecordPlaidTokenExchangeReceiptCommand command) => new(outcome, command.ExchangeAttemptId);
@@ -126,17 +209,21 @@ public sealed class RecordPlaidTokenExchangeReceiptHandler
 public sealed class ApplyPlaidConnectionHandler
     : IAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyPlaidConnectionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ApplyPlaidConnectionResult> HandleAsync(
         ApplyPlaidConnectionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ExchangeAttemptId, ct);
-        var exchange = await attempt.Persistence.Query<PlaidTokenExchangeAttempt>()
+        await context.AcquireLockAsync("BankConnection", command.ExchangeAttemptId, ct);
+        var exchange = await _db.Set<PlaidTokenExchangeAttempt>()
             .SingleOrDefaultAsync(row => row.Id == command.ExchangeAttemptId
                 && row.PortfolioId == command.PortfolioId, ct)
             ?? throw new AtomicReceiptInvariantException(
-                $"Plaid exchange attempt {command.ExchangeAttemptId} was not found.");
+                $"Plaid exchange context {command.ExchangeAttemptId} was not found.");
         if (exchange.RemoteReceiptRecordedAtUtc is null
             || exchange.ExternalItemIdCipherText is null
             || exchange.ExternalItemIdHash is null
@@ -144,16 +231,16 @@ public sealed class ApplyPlaidConnectionHandler
             || exchange.ProviderRequestIdentity is null)
         {
             throw new AtomicReceiptInvariantException(
-                $"Plaid exchange attempt {exchange.Id} has no durable remote receipt.");
+                $"Plaid exchange context {exchange.Id} has no durable remote receipt.");
         }
         if (exchange.CompletedAtUtc is not null && exchange.BankConnectionId is int completedConnectionId)
             return new ApplyPlaidConnectionResult(completedConnectionId, false);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.BankConnection,
+        await context.AcquireLockAsync(
+            "BankConnection",
             StableGuid(command.PortfolioId, "Plaid", exchange.ExternalItemIdHash, exchange.ExternalAccountIdHash),
             ct);
 
-        var connection = await attempt.Persistence.Query<BankConnection>()
+        var connection = await _db.Set<BankConnection>()
             .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
                 && row.Provider == "Plaid"
                 && row.ExternalItemIdHash == exchange.ExternalItemIdHash
@@ -166,7 +253,7 @@ public sealed class ApplyPlaidConnectionHandler
             Provider = "Plaid",
             CreatedAt = command.AppliedAtUtc,
         };
-        if (created) attempt.Persistence.Add(connection);
+        if (created) _db.Add(connection);
 
         connection.InstitutionName = exchange.InstitutionName;
         connection.AccountName = exchange.AccountName;
@@ -181,11 +268,11 @@ public sealed class ApplyPlaidConnectionHandler
         connection.Status = "Active";
         connection.UpdatedAt = command.AppliedAtUtc;
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         exchange.BankConnectionId = connection.Id;
         exchange.CompletedAtUtc = command.AppliedAtUtc;
         exchange.Status = "Completed";
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(BankConnection),
             connection.Id,
@@ -196,6 +283,27 @@ public sealed class ApplyPlaidConnectionHandler
                 ? $"Bank connection created from Plaid request {exchange.ProviderRequestIdentity}."
                 : $"Bank connection relinked from Plaid request {exchange.ProviderRequestIdentity}."));
         return new ApplyPlaidConnectionResult(connection.Id, created);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyPlaidConnectionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        AdmitPlaidTokenExchangeHandler.ValidateExchange(command.PortfolioId, command.ExchangeAttemptId);
+
+        var completedExchangeExists = await _db.Set<PlaidTokenExchangeAttempt>()
+            .AsNoTracking()
+            .AnyAsync(exchange =>
+                exchange.Id == command.ExchangeAttemptId &&
+                exchange.PortfolioId == command.PortfolioId &&
+                exchange.CompletedAtUtc != null &&
+                exchange.BankConnectionId != null,
+                ct);
+        if (!completedExchangeExists)
+        {
+            throw new UnauthorizedAccessException("The applied Plaid connection exchange is unavailable.");
+        }
     }
 
     internal static Guid StableGuid(params object?[] values)
@@ -220,11 +328,15 @@ public sealed class ApplyPlaidConnectionHandler
 public sealed class ApplyPlaidSyncHandler
     : IAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyPlaidSyncHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaxBatch = 500;
 
     public async Task<ApplyPlaidSyncResult> HandleAsync(
         ApplyPlaidSyncCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.AddedInputCount < command.Added.Count
@@ -238,8 +350,8 @@ public sealed class ApplyPlaidSyncHandler
             throw new InvalidOperationException($"A Plaid sync result cannot exceed {MaxBatch} rows per change set.");
         }
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankConnection, command.ConnectionId, ct);
-        var connection = await attempt.Persistence.Query<BankConnection>()
+        await context.AcquireLockAsync("BankConnection", command.ConnectionId, ct);
+        var connection = await _db.Set<BankConnection>()
             .SingleOrDefaultAsync(row => row.Id == command.ConnectionId
                 && row.PortfolioId == command.PortfolioId
                 && row.Provider == "Plaid", ct);
@@ -253,8 +365,8 @@ public sealed class ApplyPlaidSyncHandler
         }
 
         var beforeConnection = ApplyPlaidConnectionHandler.Snapshot(connection);
-        var merge = await attempt.Banking.ApplyPlaidSyncAsync(
-            command.PortfolioId,
+        var merge = await AtomicBankingPersistence.ApplyPlaidSyncAsync(_db,
+            context, command.PortfolioId,
             connection.Id,
             command.Added,
             command.AddedInputCount,
@@ -267,13 +379,13 @@ public sealed class ApplyPlaidSyncHandler
         connection.SyncCursorCipherText = command.NextCursorCipherText;
         connection.LastSyncedAt = command.AppliedAtUtc;
         connection.UpdatedAt = command.AppliedAtUtc;
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         foreach (var mutation in merge.Mutations)
         {
-            attempt.StageSemanticEvent(TransactionAudit(command.PortfolioId, mutation));
+            context.StageSemanticEvent(TransactionAudit(command.PortfolioId, mutation));
         }
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(BankConnection),
             connection.Id,
@@ -281,7 +393,7 @@ public sealed class ApplyPlaidSyncHandler
             OldValues: beforeConnection,
             NewValues: ApplyPlaidConnectionHandler.Snapshot(connection),
             ChangeReason: $"Plaid sync {command.ProviderRequestIdentity} committed: {merge.ImportedCount} imported, {merge.ModifiedCount} modified, {merge.RemovedCount} removed."));
-        StageNotification(attempt, command.PortfolioId, connection.Id, merge.ImportedCount, merge.ChangedEventCount, command.AppliedAtUtc);
+        StageNotification(_db, context, command.PortfolioId, connection.Id, merge.ImportedCount, merge.ChangedEventCount, command.AppliedAtUtc);
 
         return new ApplyPlaidSyncResult(
             ApplyPlaidSyncOutcome.Applied,
@@ -289,6 +401,26 @@ public sealed class ApplyPlaidSyncHandler
             merge.ImportedCount,
             merge.SkippedCount,
             merge.AffectedTransactionIds);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyPlaidSyncCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+
+        var connectionExists = await _db.Set<BankConnection>()
+            .AsNoTracking()
+            .AnyAsync(connection =>
+                connection.Id == command.ConnectionId &&
+                connection.PortfolioId == command.PortfolioId &&
+                connection.Provider == "Plaid",
+                ct);
+        if (!connectionExists)
+        {
+            throw new UnauthorizedAccessException("The Plaid sync connection is unavailable.");
+        }
     }
 
     private static ApplyPlaidSyncResult Empty(ApplyPlaidSyncOutcome outcome, int connectionId) =>
@@ -308,6 +440,9 @@ public sealed class ApplyPlaidSyncHandler
         matchedTenantAccountId = row.MatchedTenantAccountId,
         matchedTenantLedgerEntryId = row.MatchedTenantLedgerEntryId,
         matchedExpenseId = row.MatchedExpenseId,
+        matchedLoanPaymentId = row.MatchedLoanPaymentId,
+        matchedOwnerDistributionId = row.MatchedOwnerDistributionId,
+        matchedBankTransactionId = row.MatchedBankTransactionId,
         matchStatus = row.MatchStatus,
         matchConfidence = row.MatchConfidence,
         notes = row.Notes,
@@ -339,7 +474,8 @@ public sealed class ApplyPlaidSyncHandler
             ChangeReason: mutation.Reason);
 
     private static void StageNotification(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int connectionId,
         int imported,
@@ -347,7 +483,7 @@ public sealed class ApplyPlaidSyncHandler
         DateTime now)
     {
         if (imported == 0 && changed == 0) return;
-        attempt.Persistence.Add(new Notification
+        db.Add(new Notification
         {
             PortfolioId = portfolioId,
             Type = "BankSyncCompleted",
@@ -359,32 +495,72 @@ public sealed class ApplyPlaidSyncHandler
             CreatedAt = now,
         });
     }
+
+    private static void Validate(ApplyPlaidSyncCommand command)
+    {
+        if (command.PortfolioId <= 0 ||
+            command.ConnectionId <= 0 ||
+            string.IsNullOrWhiteSpace(command.ProviderRequestIdentity) ||
+            command.AddedInputCount < command.Added.Count ||
+            command.ModifiedInputCount < command.Modified.Count ||
+            command.AddedInputCount > MaxBatch ||
+            command.ModifiedInputCount > MaxBatch ||
+            command.Added.Count > MaxBatch ||
+            command.Modified.Count > MaxBatch ||
+            command.RemovedProviderTransactionIds.Count > MaxBatch)
+        {
+            throw new InvalidOperationException($"A Plaid sync result cannot exceed {MaxBatch} rows per change set.");
+        }
+    }
 }
 
 public sealed class ImportBankTransactionsHandler
     : IAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ImportBankTransactionsHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaxBatch = 500;
 
     public async Task<ImportBankTransactionsResult> HandleAsync(
         ImportBankTransactionsCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        if (command.InputCount <= 0
+        if (command.InputCount < 0
+            || (command.InputCount == 0 && command.Statement is null)
             || command.InputCount > MaxBatch
             || command.InputCount < command.Transactions.Count
             || command.Transactions.Count > MaxBatch)
         {
-            throw new InvalidOperationException($"A bank import must contain between 1 and {MaxBatch} rows.");
+            throw new InvalidOperationException(
+                $"A bank import must contain a statement or between 1 and {MaxBatch} rows.");
         }
+        ValidateStatement(command.Statement);
 
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.BankConnection,
+        await context.AcquireLockAsync(
+            "BankConnection",
             ApplyPlaidConnectionHandler.StableGuid(
                 command.PortfolioId, command.Provider, command.InstitutionName, command.AccountName, command.AccountMask),
             ct);
-        var connection = await attempt.Persistence.Query<BankConnection>()
+        var existingStatement = command.Statement is null
+            ? null
+            : await _db.Set<BankStatement>()
+                .SingleOrDefaultAsync(row =>
+                    row.PortfolioId == command.PortfolioId
+                    && row.BankConnection!.Provider == command.Provider
+                    && row.BankConnection.InstitutionName == command.InstitutionName
+                    && row.BankConnection.AccountName == command.AccountName
+                    && row.BankConnection.AccountMask == command.AccountMask
+                    && row.PeriodStart == command.Statement.PeriodStart
+                    && row.PeriodEnd == command.Statement.PeriodEnd, ct);
+        if (existingStatement is not null && !StatementMatches(existingStatement, command.Statement!))
+        {
+            throw new InvalidOperationException(
+                "A different bank statement already controls this account and period.");
+        }
+        var connection = await _db.Set<BankConnection>()
             .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider
                 && row.InstitutionName == command.InstitutionName
@@ -404,14 +580,34 @@ public sealed class ImportBankTransactionsHandler
             Status = "Active",
             CreatedAt = command.ImportedAtUtc,
         };
-        if (createdConnection) attempt.Persistence.Add(connection);
+        if (createdConnection) _db.Add(connection);
 
         if (createdConnection)
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
-        var merge = await attempt.Banking.ImportAsync(
-            command.PortfolioId,
+        var createdStatement = false;
+        if (command.Statement is not null && existingStatement is null)
+        {
+            existingStatement = new BankStatement
+            {
+                PortfolioId = command.PortfolioId,
+                BankConnectionId = connection.Id,
+                PeriodStart = command.Statement.PeriodStart,
+                PeriodEnd = command.Statement.PeriodEnd,
+                OpeningBalance = command.Statement.OpeningBalance,
+                ClosingBalance = command.Statement.ClosingBalance,
+                StatementMovement = command.Statement.StatementMovement,
+                IsoCurrencyCode = command.Statement.IsoCurrencyCode,
+                ImportedAtUtc = command.ImportedAtUtc,
+                CreatedAt = command.ImportedAtUtc,
+                UpdatedAt = command.ImportedAtUtc,
+            };
+            _db.Add(existingStatement);
+            createdStatement = true;
+        }
+        var merge = await AtomicBankingPersistence.ImportAsync(_db,
+            context, command.PortfolioId,
             connection.Id,
             command.Transactions,
             command.InputCount,
@@ -419,9 +615,9 @@ public sealed class ImportBankTransactionsHandler
             ct);
         connection.LastSyncedAt = command.ImportedAtUtc;
         connection.UpdatedAt = command.ImportedAtUtc;
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(BankConnection),
             connection.Id,
@@ -429,18 +625,31 @@ public sealed class ImportBankTransactionsHandler
             OldValues: connectionBefore,
             NewValues: ApplyPlaidConnectionHandler.Snapshot(connection),
             ChangeReason: $"Bank import {command.RequestIdentity} committed."));
+        if (createdStatement)
+        {
+            context.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(BankStatement),
+                existingStatement!.Id,
+                AuditLogOperation.Created,
+                OldValues: null,
+                NewValues: StatementSnapshot(existingStatement),
+                ChangeReason: $"Bank statement import {command.RequestIdentity} committed."));
+        }
         foreach (var mutation in merge.Mutations)
         {
-            attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(command.PortfolioId, mutation));
+            context.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(command.PortfolioId, mutation));
         }
-        if (merge.ImportedCount > 0)
+        if (merge.ImportedCount > 0 || createdStatement)
         {
-            attempt.Persistence.Add(new Notification
+            _db.Add(new Notification
             {
                 PortfolioId = command.PortfolioId,
                 Type = "BankImportCompleted",
-                Title = "Bank transactions imported",
-                Message = $"{merge.ImportedCount} bank transactions are ready for review.",
+                Title = createdStatement ? "Bank statement imported" : "Bank transactions imported",
+                Message = createdStatement
+                    ? $"{command.InstitutionName} statement controls were imported with {merge.ImportedCount} new transactions."
+                    : $"{merge.ImportedCount} bank transactions are ready for review.",
                 Severity = "Info",
                 RelatedEntityType = nameof(BankConnection),
                 RelatedEntityId = connection.Id,
@@ -451,34 +660,130 @@ public sealed class ImportBankTransactionsHandler
             connection.Id,
             merge.ImportedCount,
             merge.SkippedCount,
-            merge.AffectedTransactionIds);
+            merge.AffectedTransactionIds,
+            existingStatement?.Id,
+            existingStatement?.PeriodStart,
+            existingStatement?.PeriodEnd,
+            existingStatement?.OpeningBalance,
+            existingStatement?.ClosingBalance,
+            existingStatement?.StatementMovement,
+            existingStatement?.IsoCurrencyCode);
     }
+
+    public async Task AuthorizeReplayAsync(
+        ImportBankTransactionsCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ValidateImport(command);
+        ValidateStatement(command.Statement);
+
+        var connectionExists = await _db.Set<BankConnection>()
+            .AsNoTracking()
+            .AnyAsync(connection =>
+                connection.PortfolioId == command.PortfolioId &&
+                connection.Provider == command.Provider &&
+                connection.InstitutionName == command.InstitutionName &&
+                connection.AccountName == command.AccountName &&
+                connection.AccountMask == command.AccountMask,
+                ct);
+        if (!connectionExists)
+        {
+            throw new UnauthorizedAccessException("The bank import connection is unavailable.");
+        }
+    }
+
+    private static void ValidateImport(ImportBankTransactionsCommand command)
+    {
+        if (command.PortfolioId <= 0 ||
+            string.IsNullOrWhiteSpace(command.Provider) ||
+            string.IsNullOrWhiteSpace(command.InstitutionName) ||
+            string.IsNullOrWhiteSpace(command.AccountName) ||
+            string.IsNullOrWhiteSpace(command.RequestIdentity) ||
+            command.InputCount < 0 ||
+            (command.InputCount == 0 && command.Statement is null) ||
+            command.InputCount > MaxBatch ||
+            command.InputCount < command.Transactions.Count ||
+            command.Transactions.Count > MaxBatch)
+        {
+            throw new InvalidOperationException(
+                $"A bank import must contain a statement or between 1 and {MaxBatch} rows.");
+        }
+    }
+
+    private static void ValidateStatement(BankStatementInput? statement)
+    {
+        if (statement is null) return;
+        if (statement.PeriodStart == default
+            || statement.PeriodEnd == default
+            || statement.PeriodStart > statement.PeriodEnd)
+        {
+            throw new InvalidOperationException("A bank statement requires a valid period.");
+        }
+        if (statement.StatementMovement != statement.ClosingBalance - statement.OpeningBalance)
+            throw new InvalidOperationException("Bank statement movement must equal closing balance minus opening balance.");
+        if (string.IsNullOrWhiteSpace(statement.IsoCurrencyCode) || statement.IsoCurrencyCode.Length > 8)
+            throw new InvalidOperationException("A bank statement requires a valid currency code.");
+    }
+
+    private static bool StatementMatches(BankStatement row, BankStatementInput input) =>
+        row.OpeningBalance == input.OpeningBalance
+        && row.ClosingBalance == input.ClosingBalance
+        && row.StatementMovement == input.StatementMovement
+        && row.IsoCurrencyCode == input.IsoCurrencyCode;
+
+    private static string StatementSnapshot(BankStatement row) => JsonSerializer.Serialize(new
+    {
+        row.BankConnectionId,
+        row.PeriodStart,
+        row.PeriodEnd,
+        row.OpeningBalance,
+        row.ClosingBalance,
+        row.StatementMovement,
+        row.IsoCurrencyCode,
+        row.ImportedAtUtc,
+    });
 }
 
 public sealed class ReconcileBankTransactionHandler
-    : IAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>,
-      IAtomicReplayAuthorizer<ReconcileBankTransactionCommand>
+    : IAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ReconcileBankTransactionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ReconcileBankTransactionResult> HandleAsync(
         ReconcileBankTransactionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var transaction = await attempt.Persistence.Query<BankTransaction>()
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        var discoveredClearTargets = command.Action == BankReconciliationAction.Clear
+            ? await _db.Set<BankTransaction>()
+                .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
+                .Select(row => new
+                {
+                    row.MatchedBankTransactionId,
+                    row.MatchedExpenseId,
+                })
+                .SingleOrDefaultAsync(ct)
+            : null;
+        await AcquireTargetClaimLockAsync(command, discoveredClearTargets?.MatchedExpenseId, context, ct);
+        var discoveredClearTransferId = discoveredClearTargets?.MatchedBankTransactionId;
+        var effectiveTransferId = command.TransferBankTransactionId ?? discoveredClearTransferId;
+        var transactionLockIds = effectiveTransferId is { } transferId
+            ? new[] { command.TransactionId, transferId }.Distinct().Order().ToArray()
+            : [command.TransactionId];
+        foreach (var transactionLockId in transactionLockIds)
+            await context.AcquireLockAsync("BankTransaction", transactionLockId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var transaction = await _db.Set<BankTransaction>()
             .SingleOrDefaultAsync(row => row.Id == command.TransactionId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (transaction is null) return Result(ReconcileBankTransactionOutcome.TransactionNotFound, command.TransactionId);
-        if (transaction.PropertyId is null)
-            return Result(ReconcileBankTransactionOutcome.RouteRequired, transaction.Id);
-        if (!await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
-                command.PortfolioId, transaction.PropertyId.Value, command.ActorUserId,
-                command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                command.RequiredCapability, attempt.Persistence, now, ct))
+        if (!await AuthorizeAsync(command, transaction, _db, now, ct))
         {
             throw new UnauthorizedAccessException();
         }
@@ -486,81 +791,229 @@ public sealed class ReconcileBankTransactionHandler
         {
             return Result(ReconcileBankTransactionOutcome.StaleVersion, transaction.Id);
         }
+        if (command.Action == BankReconciliationAction.Clear
+            && (transaction.MatchedBankTransactionId != discoveredClearTransferId
+                || transaction.MatchedExpenseId != discoveredClearTargets?.MatchedExpenseId))
+        {
+            return Result(ReconcileBankTransactionOutcome.StaleVersion, transaction.Id);
+        }
 
-        if (!await TargetExistsAsync(command, transaction.PropertyId.Value, attempt, ct))
+        var expenseTarget = command.Action switch
+        {
+            BankReconciliationAction.MatchExpense =>
+                await LoadEligibleExpenseTargetAsync(command, transaction, _db, ct),
+            BankReconciliationAction.Clear when transaction.MatchedExpenseId is not null =>
+                await LoadRestorableExpenseTargetAsync(transaction, _db, ct),
+            _ => null,
+        };
+        if (!await TargetExistsAsync(command, transaction, expenseTarget, context, ct))
         {
             return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
-        if (IsAlreadyApplied(command, transaction))
+        if (IsAlreadyApplied(command, transaction, expenseTarget))
         {
-            return Result(ReconcileBankTransactionOutcome.AlreadyApplied, transaction.Id);
+            return Result(
+                ReconcileBankTransactionOutcome.AlreadyApplied,
+                transaction.Id,
+                await SnapshotAsync(command.PortfolioId, transaction.Id, _db, ct));
+        }
+        if (command.Action == BankReconciliationAction.MatchExpense
+            && transaction.MatchedExpenseId == command.ExpenseId)
+        {
+            return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
+        }
+        if (await TargetIsAlreadyMatchedAsync(command, transaction, _db, ct))
+        {
+            return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
         var before = ApplyPlaidSyncHandler.Snapshot(transaction);
-        Apply(command, transaction);
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
+        BankTransaction? transferTarget = null;
+        string? transferBefore = null;
+        if (effectiveTransferId is { } matchedBankTransactionId)
+        {
+            transferTarget = await _db.Set<BankTransaction>()
+                .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
+                    && row.Id == matchedBankTransactionId, ct);
+            if (transferTarget is null)
+                return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
+            if (command.Action == BankReconciliationAction.Clear
+                && (transferTarget.MatchStatus != "Matched"
+                    || transferTarget.MatchedBankTransactionId != transaction.Id))
+            {
+                return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
+            }
+            transferBefore = ApplyPlaidSyncHandler.Snapshot(transferTarget);
+        }
+        Apply(command, transaction, transferTarget, expenseTarget);
+        if (expenseTarget is not null)
+        {
+            context.BindSemanticAudit(expenseTarget, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(Expense),
+                expenseTarget.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ActorUserId,
+                ChangeReason: command.Action == BankReconciliationAction.Clear
+                    ? $"Expense {expenseTarget.Id} lifecycle restored after clearing bank transaction {transaction.Id}."
+                    : $"Expense {expenseTarget.Id} marked paid from bank transaction {transaction.Id}."));
+        }
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
             command.PortfolioId,
             transaction,
             AuditLogOperation.Updated,
             before,
             Reason(command)));
-        return Result(ReconcileBankTransactionOutcome.Applied, transaction.Id);
+        if (transferTarget is not null)
+        {
+            context.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
+                command.PortfolioId,
+                transferTarget,
+                AuditLogOperation.Updated,
+                transferBefore,
+                Reason(command)));
+        }
+        return Result(
+            ReconcileBankTransactionOutcome.Applied,
+            transaction.Id,
+            await SnapshotAsync(command.PortfolioId, transaction.Id, _db, ct));
     }
 
     public async Task AuthorizeReplayAsync(
-        ReconcileBankTransactionCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ReconcileBankTransactionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var propertyId = await persistence.Query<BankTransaction>()
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var transaction = await _db.Set<BankTransaction>()
             .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
-            .Select(row => row.PropertyId)
+            .Select(row => new BankReplayAuthorizationRow
+            {
+                Id = row.Id,
+                PropertyId = row.PropertyId,
+                MatchedBankTransactionId = row.MatchedBankTransactionId,
+            })
             .SingleOrDefaultAsync(ct);
-        if (propertyId is null || !await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
-                command.PortfolioId, propertyId.Value, command.ActorUserId,
-                command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                command.RequiredCapability, persistence, now, ct))
+        if (transaction is null || !await AuthorizeReplayAsync(command, transaction, _db, now, ct))
             throw new UnauthorizedAccessException();
     }
 
-    private static async Task<bool> TargetExistsAsync(
+    private async Task<bool> TargetExistsAsync(
         ReconcileBankTransactionCommand command,
-        int propertyId,
-        IAtomicWriteAttempt attempt,
-        CancellationToken ct) => command.Action switch
+        BankTransaction transaction,
+        Expense? expenseTarget,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var expectedTransferUpdatedAtUtc =
+            command.ExpectedTransferUpdatedAtUtc ?? command.ResolvedSuggestionTransferUpdatedAtUtc;
+        return command.Action switch
         {
             BankReconciliationAction.MatchReceipt
                 when command.TenantAccountId is { } accountId
                     && command.TenantLedgerEntryId is { } ledgerEntryId
                     && command.ExpenseId is null =>
-                await attempt.Persistence.Query<TenantLedgerEntry>().AnyAsync(row =>
+                await _db.Set<TenantLedgerEntry>().AnyAsync(row =>
                     row.Id == ledgerEntryId
                     && row.TenantAccountId == accountId
                     && row.PortfolioId == command.PortfolioId
-                    && row.EntryType == TenantLedgerEntryType.PaymentReceipt
-                    && row.Direction == TenantLedgerDirection.Credit
-                    && row.TenantAccount!.LeaseManagement!.PropertyId == propertyId, ct),
+                    && ((row.EntryType == TenantLedgerEntryType.PaymentReceipt
+                            && row.Direction == TenantLedgerDirection.Credit
+                            && transaction.Amount > 0m)
+                        || (row.EntryType == TenantLedgerEntryType.TransferIn
+                            || row.EntryType == TenantLedgerEntryType.TransferOut)
+                           && ((row.Direction == TenantLedgerDirection.Credit && transaction.Amount > 0m)
+                               || (row.Direction == TenantLedgerDirection.Debit && transaction.Amount < 0m)))
+                    && row.Amount >= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) - 0.01m
+                    && row.Amount <= (transaction.Amount < 0m ? -transaction.Amount : transaction.Amount) + 0.01m
+                    && row.EffectiveOn >= DateOnly.FromDateTime(transaction.PostedAt.AddDays(-14))
+                    && row.EffectiveOn <= DateOnly.FromDateTime(transaction.PostedAt.AddDays(14))
+                    && transaction.PropertyId != null
+                    && row.TenantAccount!.LeaseManagement!.PropertyId == transaction.PropertyId, ct),
             BankReconciliationAction.MatchExpense
                 when command.ExpenseId is { } expenseId
                     && command.TenantAccountId is null
                     && command.TenantLedgerEntryId is null =>
-                await attempt.Persistence.Query<Expense>().AnyAsync(row => row.Id == expenseId
-                    && row.PortfolioId == command.PortfolioId
-                    && row.DeletedAt == null
-                    && (row.PropertyId == propertyId
-                        || (row.PropertyId == null && row.Unit!.PropertyId == propertyId)
-                        || (row.PropertyId == null && row.UnitId == null
-                            && row.WorkOrder!.PropertyId == propertyId)), ct),
-            BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense => false,
+                expenseTarget is not null && expenseTarget.Id == expenseId,
+            BankReconciliationAction.MatchLoanPayment
+                when command.LoanPaymentId is { } loanPaymentId =>
+                await _db.Set<LoanPayment>().AnyAsync(payment =>
+                    payment.Id == loanPaymentId
+                    && payment.PortfolioId == command.PortfolioId
+                    && payment.Status == LoanPaymentStatus.Paid
+                    && transaction.Amount < 0m
+                    && payment.TotalAmount >= -transaction.Amount - 0.01m
+                    && payment.TotalAmount <= -transaction.Amount + 0.01m
+                    && (payment.PaidDate ?? payment.DueDate) >= transaction.PostedAt.AddDays(-14)
+                    && (payment.PaidDate ?? payment.DueDate) <= transaction.PostedAt.AddDays(14)
+                    && transaction.PropertyId != null
+                    && payment.Loan!.PropertyId == transaction.PropertyId, ct),
+            BankReconciliationAction.MatchOwnerDistribution
+                when command.OwnerDistributionId is { } ownerDistributionId =>
+                await _db.Set<OwnerDistribution>().AnyAsync(distribution =>
+                    distribution.Id == ownerDistributionId
+                    && distribution.PortfolioId == command.PortfolioId
+                    && distribution.Status == OwnerDistributionStatus.Approved
+                    && transaction.Amount < 0m
+                    && distribution.Amount >= -transaction.Amount - 0.01m
+                    && distribution.Amount <= -transaction.Amount + 0.01m
+                    && distribution.Date >= transaction.PostedAt.AddDays(-14)
+                    && distribution.Date <= transaction.PostedAt.AddDays(14)
+                    && (distribution.PropertyId == transaction.PropertyId
+                        || (distribution.PropertyId == null && transaction.PropertyId == null)), ct),
+            BankReconciliationAction.MatchTransfer
+                when command.TransferBankTransactionId is { } transferId
+                    && expectedTransferUpdatedAtUtc is { } =>
+                await _db.Set<BankTransaction>().AnyAsync(other =>
+                    other.Id == transferId
+                    && other.Id != transaction.Id
+                    && other.PortfolioId == command.PortfolioId
+                    && other.BankConnectionId != transaction.BankConnectionId
+                    && other.MatchStatus == "Unmatched"
+                    && other.UpdatedAt == expectedTransferUpdatedAtUtc
+                    && other.Amount >= -transaction.Amount - 0.01m
+                    && other.Amount <= -transaction.Amount + 0.01m
+                    && other.PostedAt >= transaction.PostedAt.AddDays(-3)
+                    && other.PostedAt <= transaction.PostedAt.AddDays(3), ct),
+            BankReconciliationAction.Clear when transaction.MatchedExpenseId is not null =>
+                expenseTarget is not null,
+            BankReconciliationAction.MatchReceipt
+                or BankReconciliationAction.MatchExpense
+                or BankReconciliationAction.MatchLoanPayment
+                or BankReconciliationAction.MatchOwnerDistribution
+                or BankReconciliationAction.MatchTransfer => false,
             _ => command.TenantAccountId is null
                 && command.TenantLedgerEntryId is null
-                && command.ExpenseId is null,
+                && command.ExpenseId is null
+                && command.LoanPaymentId is null
+                && command.OwnerDistributionId is null,
         };
+    }
 
-    private static void Apply(ReconcileBankTransactionCommand command, BankTransaction row)
+    private static void Apply(
+        ReconcileBankTransactionCommand command,
+        BankTransaction row,
+        BankTransaction? transferTarget,
+        Expense? expenseTarget)
     {
+        if (command.Action == BankReconciliationAction.MatchExpense && expenseTarget is not null)
+        {
+            row.ExpenseMatchAppliedAt = command.AppliedAtUtc;
+            row.ExpenseMatchPreviousStatus = expenseTarget.Status;
+            row.ExpenseMatchPreviousPaidAt = expenseTarget.PaidAt;
+            row.ExpenseMatchPreviousUpdatedAt = expenseTarget.UpdatedAt;
+        }
+        else if (command.Action == BankReconciliationAction.Clear
+            && row.MatchedExpenseId is not null
+            && expenseTarget is not null)
+        {
+            expenseTarget.Status = row.ExpenseMatchPreviousStatus!.Value;
+            expenseTarget.PaidAt = row.ExpenseMatchPreviousPaidAt;
+            expenseTarget.UpdatedAt = row.ExpenseMatchPreviousUpdatedAt!.Value;
+            row.ExpenseMatchAppliedAt = null;
+            row.ExpenseMatchPreviousStatus = null;
+            row.ExpenseMatchPreviousPaidAt = null;
+            row.ExpenseMatchPreviousUpdatedAt = null;
+        }
         row.MatchedTenantAccountId = command.Action == BankReconciliationAction.MatchReceipt
             ? command.TenantAccountId
             : null;
@@ -568,15 +1021,32 @@ public sealed class ReconcileBankTransactionHandler
             ? command.TenantLedgerEntryId
             : null;
         row.MatchedExpenseId = command.Action == BankReconciliationAction.MatchExpense ? command.ExpenseId : null;
+        row.MatchedLoanPaymentId = command.Action == BankReconciliationAction.MatchLoanPayment
+            ? command.LoanPaymentId
+            : null;
+        row.MatchedOwnerDistributionId = command.Action == BankReconciliationAction.MatchOwnerDistribution
+            ? command.OwnerDistributionId
+            : null;
+        row.MatchedBankTransactionId = command.Action == BankReconciliationAction.MatchTransfer
+            ? command.TransferBankTransactionId
+            : null;
         row.MatchStatus = command.Action switch
         {
-            BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense => "Matched",
+            BankReconciliationAction.MatchReceipt
+                or BankReconciliationAction.MatchExpense
+                or BankReconciliationAction.MatchLoanPayment
+                or BankReconciliationAction.MatchOwnerDistribution
+                or BankReconciliationAction.MatchTransfer => "Matched",
             BankReconciliationAction.Clear => "Unmatched",
             BankReconciliationAction.Dismiss => "Dismissed",
             BankReconciliationAction.Ignore => "Removed",
             _ => throw new ArgumentOutOfRangeException(nameof(command.Action)),
         };
-        row.MatchConfidence = command.Action is BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense
+        row.MatchConfidence = command.Action is BankReconciliationAction.MatchReceipt
+            or BankReconciliationAction.MatchExpense
+            or BankReconciliationAction.MatchLoanPayment
+            or BankReconciliationAction.MatchOwnerDistribution
+            or BankReconciliationAction.MatchTransfer
             ? 1m
             : null;
         if (command.Action == BankReconciliationAction.Ignore)
@@ -584,72 +1054,346 @@ public sealed class ReconcileBankTransactionHandler
             row.Notes = "Marked personal / ignored by the landlord.";
         }
         row.UpdatedAt = command.AppliedAtUtc;
+        if (command.Action == BankReconciliationAction.MatchExpense && expenseTarget is not null)
+        {
+            expenseTarget.Status = ExpenseStatus.Paid;
+            expenseTarget.PaidAt = row.PostedAt;
+            expenseTarget.UpdatedAt = command.AppliedAtUtc;
+        }
+        if (command.Action == BankReconciliationAction.MatchTransfer && transferTarget is not null)
+        {
+            transferTarget.MatchedTenantAccountId = null;
+            transferTarget.MatchedTenantLedgerEntryId = null;
+            transferTarget.MatchedExpenseId = null;
+            transferTarget.MatchedLoanPaymentId = null;
+            transferTarget.MatchedOwnerDistributionId = null;
+            transferTarget.MatchedBankTransactionId = row.Id;
+            transferTarget.MatchStatus = "Matched";
+            transferTarget.MatchConfidence = 1m;
+            transferTarget.UpdatedAt = command.AppliedAtUtc;
+        }
+        else if (command.Action == BankReconciliationAction.Clear && transferTarget is not null)
+        {
+            transferTarget.MatchedTenantAccountId = null;
+            transferTarget.MatchedTenantLedgerEntryId = null;
+            transferTarget.MatchedExpenseId = null;
+            transferTarget.MatchedLoanPaymentId = null;
+            transferTarget.MatchedOwnerDistributionId = null;
+            transferTarget.MatchedBankTransactionId = null;
+            transferTarget.MatchStatus = "Unmatched";
+            transferTarget.MatchConfidence = null;
+            transferTarget.UpdatedAt = command.AppliedAtUtc;
+        }
     }
 
-    private static bool IsAlreadyApplied(ReconcileBankTransactionCommand command, BankTransaction row) =>
+    private static bool IsAlreadyApplied(
+        ReconcileBankTransactionCommand command,
+        BankTransaction row,
+        Expense? expenseTarget) =>
         command.Action switch
         {
             BankReconciliationAction.MatchReceipt =>
                 row.MatchStatus == "Matched"
                 && row.MatchedTenantAccountId == command.TenantAccountId
                 && row.MatchedTenantLedgerEntryId == command.TenantLedgerEntryId
-                && row.MatchedExpenseId is null,
+                && OtherTargetsAreNull(row, exceptTenantLedger: true),
             BankReconciliationAction.MatchExpense =>
                 row.MatchStatus == "Matched"
                 && row.MatchedExpenseId == command.ExpenseId
-                && row.MatchedTenantAccountId is null
-                && row.MatchedTenantLedgerEntryId is null,
+                && row.ExpenseMatchAppliedAt is not null
+                && row.ExpenseMatchPreviousStatus is not null
+                && row.ExpenseMatchPreviousUpdatedAt is not null
+                && expenseTarget is not null
+                && expenseTarget.Status == ExpenseStatus.Paid
+                && expenseTarget.PaidAt == row.PostedAt
+                && expenseTarget.UpdatedAt == row.ExpenseMatchAppliedAt
+                && OtherTargetsAreNull(row, exceptExpense: true),
+            BankReconciliationAction.MatchLoanPayment =>
+                row.MatchStatus == "Matched"
+                && row.MatchedLoanPaymentId == command.LoanPaymentId
+                && OtherTargetsAreNull(row, exceptLoanPayment: true),
+            BankReconciliationAction.MatchOwnerDistribution =>
+                row.MatchStatus == "Matched"
+                && row.MatchedOwnerDistributionId == command.OwnerDistributionId
+                && OtherTargetsAreNull(row, exceptOwnerDistribution: true),
+            BankReconciliationAction.MatchTransfer =>
+                row.MatchStatus == "Matched"
+                && row.MatchedBankTransactionId == command.TransferBankTransactionId
+                && OtherTargetsAreNull(row, exceptBankTransaction: true),
             BankReconciliationAction.Clear =>
                 row.MatchStatus == "Unmatched"
-                && row.MatchedTenantAccountId is null
-                && row.MatchedTenantLedgerEntryId is null
-                && row.MatchedExpenseId is null,
+                && OtherTargetsAreNull(row)
+                && ExpenseMatchProvenanceIsNull(row),
             BankReconciliationAction.Dismiss =>
                 row.MatchStatus == "Dismissed"
-                && row.MatchedTenantAccountId is null
-                && row.MatchedTenantLedgerEntryId is null
-                && row.MatchedExpenseId is null,
+                && OtherTargetsAreNull(row),
             BankReconciliationAction.Ignore =>
                 row.MatchStatus == "Removed"
-                && row.MatchedTenantAccountId is null
-                && row.MatchedTenantLedgerEntryId is null
-                && row.MatchedExpenseId is null,
+                && OtherTargetsAreNull(row),
             _ => false,
         };
+
+    private static Task<Expense?> LoadEligibleExpenseTargetAsync(
+        ReconcileBankTransactionCommand command,
+        BankTransaction transaction,
+        RentalCommandDbContext db,
+        CancellationToken ct) =>
+        command.ExpenseId is not { } expenseId
+            ? Task.FromResult<Expense?>(null)
+            : db.Set<Expense>().SingleOrDefaultAsync(row =>
+                row.Id == expenseId
+                && row.PortfolioId == command.PortfolioId
+                && row.DeletedAt == null
+                && (row.Status == ExpenseStatus.Pending
+                    || row.Status == ExpenseStatus.Approved
+                    || row.Status == ExpenseStatus.Paid)
+                && transaction.Amount < 0m
+                && row.Amount >= -transaction.Amount - 0.01m
+                && row.Amount <= -transaction.Amount + 0.01m
+                && (row.PaidAt ?? row.IncurredAt) >= transaction.PostedAt.AddDays(-14)
+                && (row.PaidAt ?? row.IncurredAt) <= transaction.PostedAt.AddDays(14)
+                && (row.PropertyId == transaction.PropertyId
+                    || (row.PropertyId == null && row.Unit!.PropertyId == transaction.PropertyId)
+                    || (row.PropertyId == null && row.UnitId == null
+                        && row.WorkOrder!.PropertyId == transaction.PropertyId)
+                    || (transaction.PropertyId == null && row.PropertyId == null
+                        && row.UnitId == null && row.WorkOrderId == null)), ct);
+
+    private static Task<Expense?> LoadRestorableExpenseTargetAsync(
+        BankTransaction transaction,
+        RentalCommandDbContext db,
+        CancellationToken ct) =>
+        transaction.MatchedExpenseId is not { } expenseId
+            || transaction.ExpenseMatchAppliedAt is null
+            || transaction.ExpenseMatchPreviousStatus is null
+            || transaction.ExpenseMatchPreviousUpdatedAt is null
+            ? Task.FromResult<Expense?>(null)
+            : db.Set<Expense>().SingleOrDefaultAsync(row =>
+                row.Id == expenseId
+                && row.PortfolioId == transaction.PortfolioId
+                && row.DeletedAt == null
+                && row.Status == ExpenseStatus.Paid
+                && row.PaidAt == transaction.PostedAt
+                && row.UpdatedAt == transaction.ExpenseMatchAppliedAt, ct);
 
     private static string Reason(ReconcileBankTransactionCommand command) => command.Action switch
     {
         BankReconciliationAction.MatchReceipt =>
-            $"Bank transaction matched to tenant account #{command.TenantAccountId} receipt #{command.TenantLedgerEntryId}.",
+            $"Bank transaction matched to tenant receipt #{command.TenantLedgerEntryId} on account #{command.TenantAccountId}.",
         BankReconciliationAction.MatchExpense => $"Bank transaction matched to Expense #{command.ExpenseId}.",
+        BankReconciliationAction.MatchLoanPayment =>
+            $"Bank transaction matched to LoanPayment #{command.LoanPaymentId}.",
+        BankReconciliationAction.MatchOwnerDistribution =>
+            $"Bank transaction matched to OwnerDistribution #{command.OwnerDistributionId}.",
+        BankReconciliationAction.MatchTransfer =>
+            $"Bank transaction matched to opposite BankTransaction #{command.TransferBankTransactionId}.",
         BankReconciliationAction.Clear => "Bank transaction match cleared.",
         BankReconciliationAction.Dismiss => "Bank suggested match dismissed.",
         BankReconciliationAction.Ignore => "Bank transaction ignored as personal / not business.",
         _ => throw new ArgumentOutOfRangeException(nameof(command.Action)),
     };
 
-    private static ReconcileBankTransactionResult Result(ReconcileBankTransactionOutcome outcome, int id) =>
-        new(outcome, id);
+    private static async Task<bool> TargetIsAlreadyMatchedAsync(
+        ReconcileBankTransactionCommand command,
+        BankTransaction transaction,
+        RentalCommandDbContext db,
+        CancellationToken ct) =>
+        command.Action switch
+        {
+            BankReconciliationAction.MatchReceipt
+                when command.TenantLedgerEntryId is { } ledgerEntryId =>
+                await db.Set<BankTransaction>().AnyAsync(row =>
+                    row.Id != transaction.Id
+                    && row.PortfolioId == command.PortfolioId
+                    && row.MatchedTenantLedgerEntryId == ledgerEntryId, ct),
+            BankReconciliationAction.MatchExpense
+                when command.ExpenseId is { } expenseId =>
+                await db.Set<BankTransaction>().AnyAsync(row =>
+                    row.Id != transaction.Id
+                    && row.PortfolioId == command.PortfolioId
+                    && row.MatchedExpenseId == expenseId, ct),
+            BankReconciliationAction.MatchLoanPayment
+                when command.LoanPaymentId is { } loanPaymentId =>
+                await db.Set<BankTransaction>().AnyAsync(row =>
+                    row.Id != transaction.Id
+                    && row.PortfolioId == command.PortfolioId
+                    && row.MatchedLoanPaymentId == loanPaymentId, ct),
+            BankReconciliationAction.MatchOwnerDistribution
+                when command.OwnerDistributionId is { } ownerDistributionId =>
+                await db.Set<BankTransaction>().AnyAsync(row =>
+                    row.Id != transaction.Id
+                    && row.PortfolioId == command.PortfolioId
+                    && row.MatchedOwnerDistributionId == ownerDistributionId, ct),
+            _ => false,
+        };
+
+    private static async Task AcquireTargetClaimLockAsync(
+        ReconcileBankTransactionCommand command,
+        int? discoveredClearExpenseId,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var lockId = command.Action switch
+        {
+            BankReconciliationAction.MatchReceipt
+                when command.TenantLedgerEntryId is { } ledgerEntryId =>
+                ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "bank-reconcile-receipt", ledgerEntryId),
+            BankReconciliationAction.MatchExpense
+                when command.ExpenseId is { } expenseId =>
+                ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "bank-reconcile-expense", expenseId),
+            BankReconciliationAction.Clear
+                when discoveredClearExpenseId is { } expenseId =>
+                ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "bank-reconcile-expense", expenseId),
+            BankReconciliationAction.MatchLoanPayment
+                when command.LoanPaymentId is { } loanPaymentId =>
+                ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "bank-reconcile-loan-payment", loanPaymentId),
+            BankReconciliationAction.MatchOwnerDistribution
+                when command.OwnerDistributionId is { } ownerDistributionId =>
+                ApplyPlaidConnectionHandler.StableGuid(command.PortfolioId, "bank-reconcile-owner-distribution", ownerDistributionId),
+            _ => (Guid?)null,
+        };
+        if (lockId is { } id)
+            await context.AcquireLockAsync("BankTransaction", id, ct);
+    }
+
+    private static async Task<ReconciledBankTransactionSnapshot?> SnapshotAsync(
+        int portfolioId,
+        int transactionId,
+        RentalCommandDbContext db,
+        CancellationToken ct) =>
+        await db.Set<BankTransaction>()
+            .Where(row => row.Id == transactionId && row.PortfolioId == portfolioId)
+            .Select(row => new ReconciledBankTransactionSnapshot(
+                row.Id,
+                row.PropertyId,
+                row.Property == null ? null : row.Property.Name,
+                row.BankConnectionId,
+                row.BankConnection == null ? string.Empty : row.BankConnection.InstitutionName,
+                row.BankConnection == null ? string.Empty : row.BankConnection.AccountName,
+                row.ProviderTransactionId,
+                row.PostedAt,
+                row.AuthorizedAt,
+                row.Description,
+                row.MerchantName,
+                row.Amount,
+                row.IsoCurrencyCode,
+                row.Category,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+                row.MatchedExpenseId,
+                row.MatchedLoanPaymentId,
+                row.MatchedOwnerDistributionId,
+                row.MatchedBankTransactionId,
+                row.MatchStatus,
+                row.MatchConfidence,
+                row.Notes,
+                row.UpdatedAt))
+            .SingleOrDefaultAsync(ct);
+
+    private static ReconcileBankTransactionResult Result(
+        ReconcileBankTransactionOutcome outcome,
+        int id,
+        ReconciledBankTransactionSnapshot? transaction = null) =>
+        new(outcome, id, transaction);
+
+    private static bool OtherTargetsAreNull(
+        BankTransaction row,
+        bool exceptTenantLedger = false,
+        bool exceptExpense = false,
+        bool exceptLoanPayment = false,
+        bool exceptOwnerDistribution = false,
+        bool exceptBankTransaction = false) =>
+        (exceptTenantLedger || (row.MatchedTenantAccountId is null && row.MatchedTenantLedgerEntryId is null))
+        && (exceptExpense || row.MatchedExpenseId is null)
+        && (exceptLoanPayment || row.MatchedLoanPaymentId is null)
+        && (exceptOwnerDistribution || row.MatchedOwnerDistributionId is null)
+        && (exceptBankTransaction || row.MatchedBankTransactionId is null);
+
+    private static bool ExpenseMatchProvenanceIsNull(BankTransaction row) =>
+        row.ExpenseMatchAppliedAt is null
+        && row.ExpenseMatchPreviousStatus is null
+        && row.ExpenseMatchPreviousPaidAt is null
+        && row.ExpenseMatchPreviousUpdatedAt is null;
+
+    private static async Task<bool> AuthorizeAsync(
+        ReconcileBankTransactionCommand command,
+        BankTransaction transaction,
+        RentalCommandDbContext db,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (command.Action == BankReconciliationAction.MatchTransfer
+            || transaction.PropertyId is null)
+        {
+            return await BankingAuthorizationSupport.HasAllPropertiesAuthorityAsync(
+                command.PortfolioId,
+                command.ActorUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision,
+                command.RequiredCapability,
+                db,
+                now,
+                ct);
+        }
+        return await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
+            command.PortfolioId,
+            transaction.PropertyId.Value,
+            command.ActorUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            command.RequiredCapability,
+            db,
+            now,
+            ct);
+    }
+
+    private static Task<bool> AuthorizeReplayAsync(
+        ReconcileBankTransactionCommand command,
+        BankReplayAuthorizationRow transaction,
+        RentalCommandDbContext db,
+        DateTime now,
+        CancellationToken ct) =>
+        command.Action == BankReconciliationAction.MatchTransfer || transaction.PropertyId is null
+            ? BankingAuthorizationSupport.HasAllPropertiesAuthorityAsync(
+                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision, command.RequiredCapability,
+                db, now, ct)
+            : BankingAuthorizationSupport.HasPropertyAuthorityAsync(
+                command.PortfolioId, transaction.PropertyId.Value, command.ActorUserId,
+                command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, db, now, ct);
+
+    private sealed class BankReplayAuthorizationRow
+    {
+        public int Id { get; set; }
+        public int? PropertyId { get; set; }
+        public int? MatchedBankTransactionId { get; set; }
+    }
 }
 
 public sealed class RouteBankTransactionHandler
-    : IAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult>,
-      IAtomicReplayAuthorizer<RouteBankTransactionCommand>
+    : IAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RouteBankTransactionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RouteBankTransactionResult> HandleAsync(
-        RouteBankTransactionCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        RouteBankTransactionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync("BankTransaction", command.TransactionId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
 
-        var transaction = await attempt.Persistence.Query<BankTransaction>()
+        var transaction = await _db.Set<BankTransaction>()
             .SingleOrDefaultAsync(row => row.Id == command.TransactionId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (transaction is null) return Result(RouteBankTransactionOutcome.TransactionNotFound, command.TransactionId);
-        await AuthorizeAsync(command, transaction.PropertyId, attempt.Persistence, now, ct);
+        await AuthorizeAsync(command, transaction.PropertyId, _db, now, ct);
         if (transaction.UpdatedAt != command.ExpectedUpdatedAtUtc)
             return Result(RouteBankTransactionOutcome.StaleVersion, transaction.Id);
         if (transaction.PropertyId == command.PropertyId)
@@ -658,8 +1402,8 @@ public sealed class RouteBankTransactionHandler
         var before = ApplyPlaidSyncHandler.Snapshot(transaction);
         transaction.PropertyId = command.PropertyId;
         transaction.UpdatedAt = command.AppliedAtUtc;
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
             command.PortfolioId, transaction, AuditLogOperation.Updated, before,
             command.PropertyId is null
                 ? "Bank transaction operational route removed."
@@ -668,22 +1412,22 @@ public sealed class RouteBankTransactionHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        RouteBankTransactionCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
+        RouteBankTransactionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         BankingAuthorizationSupport.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var current = await persistence.Query<BankTransaction>()
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var current = await _db.Set<BankTransaction>()
             .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
             .Select(row => new { row.PropertyId })
             .SingleOrDefaultAsync(ct);
         if (current is null) throw new UnauthorizedAccessException();
-        await AuthorizeAsync(command, current.PropertyId, persistence, now, ct);
+        await AuthorizeAsync(command, current.PropertyId, _db, now, ct);
     }
 
     private static async Task AuthorizeAsync(
         RouteBankTransactionCommand command,
         int? currentPropertyId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
@@ -692,7 +1436,7 @@ public sealed class RouteBankTransactionHandler
             var canRemoveRoute = await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
                 command.PortfolioId, command.ActorUserId, command.AuthSessionId,
                 command.AccessContextId, command.ExpectedAccessRevision,
-                CapabilityKeys.MoneyReconciliationDestructive, persistence, now, ct);
+                CapabilityKeys.MoneyReconciliationDestructive, db, now, ct);
             if (!canRemoveRoute) throw new UnauthorizedAccessException();
             return;
         }
@@ -703,7 +1447,7 @@ public sealed class RouteBankTransactionHandler
         var canRoute = await BankingAuthorizationSupport.HasPropertyAuthoritiesAsync(
             command.PortfolioId, requiredPropertyIds, command.ActorUserId, command.AuthSessionId,
             command.AccessContextId, command.ExpectedAccessRevision,
-            CapabilityKeys.MoneyReconciliationOperate, persistence, now, ct);
+            CapabilityKeys.MoneyReconciliationOperate, db, now, ct);
         if (!canRoute) throw new UnauthorizedAccessException();
     }
 
@@ -712,6 +1456,15 @@ public sealed class RouteBankTransactionHandler
 
 internal static class BankingAuthorizationSupport
 {
+    internal static void Validate(PreparePlaidTokenExchangeCommand command)
+    {
+        if (command.PortfolioId <= 0 || command.ActorUserId <= 0
+            || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
+            || command.ExpectedAccessRevision <= 0
+            || command.RequiredCapability != CapabilityKeys.BankConnectionsManage)
+            throw new UnauthorizedAccessException("An active bank-connections workspace context is required.");
+    }
+
     internal static void Validate(ReconcileBankTransactionCommand command)
     {
         Validate(command.PortfolioId, command.TransactionId, command.ActorUserId, command.AuthSessionId,
@@ -740,23 +1493,23 @@ internal static class BankingAuthorizationSupport
 
     internal static Task<bool> HasPropertyAuthorityAsync(
         int portfolioId, int propertyId, int actorUserId, Guid authSessionId, int accessContextId,
-        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence,
+        long expectedAccessRevision, string capability, RentalCommandDbContext db,
         DateTime now, CancellationToken ct) => HasPropertyAuthoritiesAsync(
             portfolioId, [propertyId], actorUserId, authSessionId, accessContextId,
-            expectedAccessRevision, capability, persistence, now, ct);
+            expectedAccessRevision, capability, db, now, ct);
 
     internal static async Task<bool> HasPropertyAuthoritiesAsync(
         int portfolioId, IReadOnlyCollection<int> propertyIds, int actorUserId, Guid authSessionId,
         int accessContextId, long expectedAccessRevision, string capability,
-        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+        RentalCommandDbContext db, DateTime now, CancellationToken ct)
     {
         var requiredPropertyIds = propertyIds.Distinct().Order().ToArray();
         if (requiredPropertyIds.Length == 0) return false;
 
         var liveAssignments = LiveAssignments(
             portfolioId, actorUserId, authSessionId, accessContextId,
-            expectedAccessRevision, capability, persistence, now);
-        var authorizedPropertyCount = await persistence.Query<Property>()
+            expectedAccessRevision, capability, db, now);
+        var authorizedPropertyCount = await db.Set<Property>()
             .Where(property =>
                 property.PortfolioId == portfolioId &&
                 requiredPropertyIds.Contains(property.Id) &&
@@ -771,19 +1524,28 @@ internal static class BankingAuthorizationSupport
 
     internal static Task<bool> HasWorkspaceAuthorityAsync(
         int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,
-        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence,
+        long expectedAccessRevision, string capability, RentalCommandDbContext db,
         DateTime now, CancellationToken ct) =>
         LiveAssignments(portfolioId, actorUserId, authSessionId, accessContextId,
-                expectedAccessRevision, capability, persistence, now)
+                expectedAccessRevision, capability, db, now)
             .AnyAsync(assignment => assignment.RoleProfile!.Capabilities.Any(profileCapability =>
                 profileCapability.CapabilityDefinition!.Key == capability
                 && profileCapability.CapabilityDefinition.AuthorizationTargetKind
                     == CapabilityAuthorizationTargetKind.Workspace), ct);
 
+    internal static Task<bool> HasAllPropertiesAuthorityAsync(
+        int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,
+        long expectedAccessRevision, string capability, RentalCommandDbContext db,
+        DateTime now, CancellationToken ct) =>
+        LiveAssignments(portfolioId, actorUserId, authSessionId, accessContextId,
+                expectedAccessRevision, capability, db, now)
+            .AnyAsync(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct);
+
     private static IQueryable<MembershipRoleAssignment> LiveAssignments(
         int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,
-        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence, DateTime now) =>
-        persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        long expectedAccessRevision, string capability, RentalCommandDbContext db, DateTime now) =>
+        db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == portfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -803,7 +1565,7 @@ internal static class BankingAuthorizationSupport
             && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
             && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session => session.Id == authSessionId
+            && db.Set<AuthSession>().Any(session => session.Id == authSessionId
                 && session.UserId == actorUserId && session.ActiveAccessContextId == accessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)

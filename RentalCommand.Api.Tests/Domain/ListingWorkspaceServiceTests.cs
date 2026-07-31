@@ -26,7 +26,6 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     public ListingWorkspaceServiceTests()
         => _service = new ListingWorkspaceService(
             _context.Db,
-            new PermissiveInfrastructureWriteGate(),
             Mock.Of<IFileStorage>(),
             Mock.Of<IPendingFileUploadStore>(),
             new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
@@ -82,7 +81,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task IngestSignalAsync_DeduplicatesProviderMessageKeyInTheDatabase()
+    public async Task IngestSignalAsync_DelegatesProviderMessageKeyToTypedAtomicCommand()
     {
         var listing = SeedListing();
         var publicationId = listing.Publications.Single(item => item.Mode == ListingPublicationMode.Guided).Id;
@@ -92,13 +91,14 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             SuggestedExternalStatus = "Active",
         };
 
-        var first = await _service.IngestSignalAsync(
-            PortfolioId, listing.UnitId, publicationId, "message-1", request);
-        var replay = await _service.IngestSignalAsync(
-            PortfolioId, listing.UnitId, publicationId, "message-1", request);
+        await _service.IngestSignalAsync(
+            Scope(), listing.UnitId, publicationId, "message-1", request);
 
-        replay!.Id.Should().Be(first!.Id);
-        _context.Db.ExternalListingSignals.Should().ContainSingle();
+        _atomic.LastIdentity!.CommandType.Should().Be("listing-workspace.signal.ingest");
+        _atomic.LastCommand.Should().BeEquivalentTo(new IngestExternalListingSignalCommand(
+            PortfolioId, listing.UnitId, Scope().UserId, Scope().SessionId,
+            Scope().AccessContextId, Scope().AccessRevision, publicationId, "message-1",
+            "StatusChanged", null, null, "Active"));
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
@@ -221,7 +221,11 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             object result = typeof(TResult) == typeof(ListingWorkspaceMutationResult)
                 ? new ListingWorkspaceMutationResult(ListingWorkspaceMutationOutcome.Applied,
                     PortfolioId, ResolveUnitId(command), 1)
-                : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
+                : typeof(TResult) == typeof(IngestExternalListingSignalResult)
+                    ? new IngestExternalListingSignalResult(
+                        true, 7, "StatusChanged", null, null, "Active",
+                        ExternalListingSignalDisposition.Unconfirmed, DateTime.UtcNow)
+                    : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
         }
@@ -231,17 +235,5 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
             IListingWorkspaceAtomicCommand listing => listing.UnitId,
             _ => throw new NotSupportedException($"Unexpected command type {typeof(TCommand).Name}."),
         };
-    }
-
-    private sealed class PermissiveInfrastructureWriteGate : IAtomicInfrastructureWriteGate
-    {
-        public IDisposable BeginPendingFileUploadAdmission() => new Lease();
-        public IDisposable BeginExternalListingSignalAdmission() => new Lease();
-        public IDisposable BeginTenantNoticeCandidateGeneration() => new Lease();
-        public IDisposable BeginTenantNoticeWorkItemClaim() => new Lease();
-        public IDisposable BeginTenantNoticeWorkItemCompletion() => new Lease();
-        public IDisposable BeginTenantNoticeWorkItemRelease() => new Lease();
-        public IDisposable BeginTenantNoticeWorkItemBlock() => new Lease();
-        private sealed class Lease : IDisposable { public void Dispose() { } }
     }
 }

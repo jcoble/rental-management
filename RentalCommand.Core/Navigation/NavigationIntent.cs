@@ -57,6 +57,7 @@ public enum NavigationDestination
     LeasingAppointment = 21,
     LeasingConversation = 22,
     LeasingMoveIn = 23,
+    TenantAccount = 24,
 }
 
 public enum NavigationAction

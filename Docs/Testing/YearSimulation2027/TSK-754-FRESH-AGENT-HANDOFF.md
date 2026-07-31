@@ -1,6 +1,503 @@
 # TSK-754 Fresh-Agent Handoff
 
-Prepared 2026-07-27 for continuation of the 2027 full-company simulation.
+Prepared 2026-07-27 and last updated 2026-07-30 for continuation of the 2027
+full-company simulation.
+
+## Authoritative continuation checkpoint — 2026-07-30, February 12 after RUN-06
+
+Stop point: `RUN-20270212-06` is complete. Do not redo it. The first unstarted schedule row is
+`RUN-20270212-07`, the dedicated disposable Owner lifecycle certification. The simulation clock
+remains Frozen at `2027-02-12T05:00:00Z`, `America/New_York`.
+
+This section supersedes every older continuation checkpoint below it. Older sections are retained
+only as investigation history. In particular, do not follow any older versioned Atomic naming,
+dark-runtime, bridge, factory, category-registry, handler/session-abstraction, fallback, or retry
+proposal. The only supported write path is the already-cut-over thin Atomic runtime using the same
+scoped `RentalCommandDbContext`, explicit transaction, and shared SaveChanges boundary. Business
+mutation, receipt, required audits, and required outbox rows must commit together or roll back
+together.
+
+### Exact chronology
+
+- Schedule rows: 1,981.
+- Unique completed schedule runs: 220.
+- Execution-ledger rows: 251.
+- Remaining schedule runs: 1,761.
+- First remaining: `RUN-20270212-07`.
+- The raw ledger still contains 13 preserved historical duplicate run IDs. They predate this
+  checkpoint and were not silently deleted. Reconcile them only through evidence; do not remove
+  history just to make a counter green.
+
+February 12 completed here:
+
+- `RUN-20270212-04`: Workspace Administrator certified Expense 55 through normal Money
+  navigation, the exact direct URL, all safe action/validation/cancel paths, search, filter, sort,
+  paging, reload, stale-scope correction, tenant denial, and one-statement database readback.
+  Expense 55 remains 940.00 Paid, undeleted, with one line item, original audit 4978, and no
+  capital asset.
+- `RUN-20270212-05`: Property Manager independently certified scoped Expense 54. Morgan sees 111
+  scoped money rows and nine scoped expenses and cannot find the administrator-only Expense 55.
+  Expense 54 remains 690.25 Paid, undeleted, with original audit 4568 and no capital asset.
+- `RUN-20270212-06`: Leasing Agent certified Agreement 81 fields `FLD-0051` through `FLD-0053`.
+  Negative deposit and late fee and fractional grace days stayed unsaved. A boundary double-click
+  created exactly revision 5. An offline final submit showed no partial mutation; restoring
+  connectivity created exactly revision 6. A completely fresh browser session reloaded 1,375.25
+  deposit, 82.50 late fee, and six grace days. The agreement remains unissued and uncanceled.
+
+### Atomic proof at this stop
+
+Agreement revision 5 is receipt `97d62843-b621-487d-9a7c-dad719a0e70a`, audit 5090, and outbox
+1370. Revision 6 is receipt `9ff52800-8c80-48bb-be33-21b7ca14e586`, audit 5093, and outbox 1371.
+A single PostgreSQL idempotency join matched both receipt/outbox pairs to `LeaseAgreement` 81.
+
+`YS-298` is explicitly invalidated, not open: the first diagnostic query compared the frozen
+simulation timestamp to the outbox wall-clock timestamp and therefore excluded valid rows 1370
+and 1371. No Atomic code was changed. Preserve the invalidated ledger row so the investigation is
+auditable.
+
+`YS-297` is fixed and live web verified. The Unit Property-expense detail used stale shallow
+navigation state after Back. `ExpensesTab.svelte` now owns the mounted selection state, clears it
+before shallow navigation, and synchronizes browser Back/Forward through `popstate`. Both the
+Back-to-expenses button and browser Back immediately render the list without reload. The fix is
+uncommitted shared WIP and has live browser proof plus `git diff --check`; no heavy build was run
+after this UI-only repair.
+
+The earlier canonical target-first tenant-payment allocation and zero-open-balance charge-picker
+repairs remain in shared WIP. Their focused real-PostgreSQL/generated-SQL tests and live Azure
+proof passed before this checkpoint. Do not replace either repair with an alternate payment path.
+
+### Runtime and device state
+
+- Worktree:
+  `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution`
+- Branch: `tsk-754-year-simulation-execution`
+- HEAD: `8f0b3c5e1d0c0893161fccd85526133ec00f45a1`
+- Shared worktree is intentionally very dirty: 711 status entries at this checkpoint. Never reset,
+  stash, clean, switch, or remove it. Preserve all unrelated WIP.
+- PostgreSQL: `rentalcommand-tsk754-db`, database `rentalcommand_tsk754`, port 5754, running.
+- API tmux: `tsk754-api`, HTTPS 5666 / HTTP 5665, running.
+- Web tmux: `tsk754-web`, `https://localhost:5667`, running.
+- Azure API tunnel tmux: `tsk754-azure-api-tunnel`, running.
+- Engine: off. Start it only for an exact scheduled worker/scan extraction, wait for the expected
+  idempotent result, then stop it immediately.
+- Azure emulator: `emulator-5554`, available through the existing Tailscale-only verification
+  runner. It is signed in with the standard password as
+  `qa.tsk754.jan19.operator@example.local` and stopped on Leasing Rentals, Dogwood Duplex Unit B.
+- Installed Azure APK remains the locally built dev x64 APK with SHA-256
+  `47a33cacae6206c4f365859d425998e6c8474b6c6c8a0012dde5b4f0702a98fa`.
+- Physical phone is unavailable for interactive biometric/PIN proof. The user explicitly deferred
+  biometric work. Do not block on it or ask for thumb interaction; use passwords and the Azure
+  emulator.
+- All Playwright sessions opened by this checkpoint are closed. `playwright-cli list` reports no
+  browsers.
+- No new worktree was created by either bounded fixer.
+
+Stable credentials:
+
+- Administrator: `qa.tsk754.azure.mobile@example.local` / `Admin123!`
+- Property Manager: `qa.tsk754.property.manager@example.local` / `Admin123!`
+- Leasing Agent: `qa.tsk754.jan19.operator@example.local` / `Admin123!`
+- Tenant Yara Brooks: `tenant.008@example.local` / `Tenant123!`
+
+### Open issue that matters before later February automation
+
+`YS-295` remains Critical and open. The February 12 Engine start created premature LoanPayments 67
+and 68 because Loans 3 and 10 still use due day 12 even though the authoritative statements expect
+February 20; Loan 3 also lacks the statement escrow component. The preserved occurrences total
+2,450.00 versus 2,752.00 expected and reduced recorded principal eight days early. Do not delete or
+rewrite those rows. Reconcile the loan schedule and escrow source of truth before the February 20
+loan verification run, using append-only correction/reconciliation where required.
+
+The older bug backlog remains preserved in `output/qa/tsk-754-bug-ledger.csv`. A completed schedule
+row is not made incomplete merely because it exposed a separately recorded bug, but a bug that
+invalidates the row's acceptance evidence must be fixed and re-proved before advancing.
+
+### Evidence added at this checkpoint
+
+- `output/playwright/RUN-20270212-04-admin-expense55-detail.png`
+- `output/playwright/RUN-20270212-04-admin-expense55-validation.png`
+- `output/playwright/RUN-20270212-04-admin-expense55-direct-route.png`
+- `output/playwright/RUN-20270212-04-adjacent-tenant-denied.png`
+- `output/playwright/RUN-20270212-05-property-manager-expense54-direct.png`
+- `output/playwright/RUN-20270212-05-property-manager-expense54-validation.png`
+- `output/playwright/RUN-20270212-05-adjacent-tenant-denied.png`
+- `output/playwright/YS-297-property-manager-back-path-fixed.png`
+- `output/playwright/RUN-20270212-06-deposit-negative.png`
+- `output/playwright/RUN-20270212-06-late-fee-negative.png`
+- `output/playwright/RUN-20270212-06-grace-days-invalid.png`
+- `output/playwright/RUN-20270212-06-boundary-duplicate-submit.png`
+- `output/playwright/RUN-20270212-06-network-interruption.png`
+- `output/playwright/RUN-20270212-06-fresh-session-reloaded.png`
+- `output/qa/tsk754-evidence/RUN-20270212-06-mobile-dogwood-unit-b.png`
+
+### Exact next run
+
+Resume with `RUN-20270212-07`, `CRUD-003`: Workspace Administrator, Web + Mobile, dedicated
+disposable Owner record. Through normal navigation:
+
+1. Inventory every Owner field referenced by `field-inventory.csv`.
+2. Create the disposable Owner and prove exact persisted readback.
+3. Edit it, assign properties, issue the portal invite, revoke the invite/access, and perform the
+   supported deactivate-safe transition.
+4. Cancel the first destructive confirmation, then repeat and confirm.
+5. Retry one mutation with the same idempotency key and prove no duplicate transition or orphan.
+6. Verify web, Azure mobile, history/audits, notifications, authorized and adjacent unauthorized
+   roles, and one-statement database state.
+7. Append exactly `RUN-20270212-07` to the existing execution ledger. Do not invent a substitute
+   run ID or begin `RUN-20270212-08` until the Owner lifecycle is fully reconciled.
+
+Before acting:
+
+```bash
+cd /Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution
+git status --short
+docker ps --filter name=rentalcommand-tsk754-db
+tmux ls
+curl -sk https://localhost:5666/api/v1/dev/clock
+```
+
+Expected clock response starts with
+`{"simNowUtc":"2027-02-12T05:00:00Z","mode":"Frozen","timeZoneId":"America/New_York"}`.
+If any expectation differs, diagnose without resetting persistent state.
+
+## Authoritative continuation checkpoint — 2026-07-29, February 8 closeout
+
+The single-path Atomic cutover remains complete and is the only supported write runtime.
+Do not add a compatibility bridge, factory, category registry, retry layer, versioned
+Atomic name, or second handler/session abstraction. Every workflow continues through the
+same scoped `RentalCommandDbContext`, explicit transaction, and Atomic command context;
+every `SaveChanges` in a workflow participates in that transaction.
+
+The simulation clock is Frozen at `2027-02-08T05:00:00Z`,
+`America/New_York`. All five February 8 runs are complete:
+
+- `RUN-20270208-01`: corrected scanned check 000115 is fully allocated to rent and late fee;
+  the refunded-correction uniqueness defect is fixed and live web verified.
+- `RUN-20270208-02`: scanned money order SCN-0123 produced confirmed Draft 166, Payment 973,
+  and exact 1300.00 rent plus 50.00 late-fee allocations. The Scan History authorization
+  query, confirmed-result Navigator defect, and misleading terminal-result copy are fixed
+  and live Azure-emulator verified.
+- `RUN-20270208-03`: exact scan SCN-0356 produced Work Order 25 and Appointment 19 at
+  Property 3 / Unit 3 / Tenant 3 / LeaseManagement 3 / Vendor 22. The normal work-order UI
+  saved the February 9 09:00-10:00 service window and Scheduled status. The synchronized
+  appointment is Confirmed at the same window, and the tenant portal shows both records.
+  The flow exposed `YS-289`: the status-only Scheduled-to-Confirmed appointment promotion
+  emitted a byte-identical second tenant notification. The bounded repair now preserves
+  the appointment audit/outbox while suppressing that duplicate notification; focused real
+  PostgreSQL regression proof passes.
+- `RUN-20270208-04`: revoked Tenant access now automatically reaches `/portal/unlinked`
+  through normal password login without relationship metadata; an adjacent administrator is
+  denied the tenant route; supported Lease 35 access restoration returned the tenant to
+  `/portal`. `YS-287` is fixed and live browser verified.
+- `RUN-20270208-05`: the February 8 addendum field certification is complete.
+
+The chronology checkpoint reports 204 completed schedule runs, zero incomplete earlier
+runs, zero blocking duplicate-run groups, and `RUN-20270209-01` as the first remaining row.
+The normal gate still reports the preserved historical January bug backlog; that backlog
+does not make a completed schedule row incomplete and must not be concealed or deleted.
+
+Current live evidence includes:
+
+- `output/playwright/RUN-20270208-03-appointment19-linked-workorder25.png`
+- `output/playwright/RUN-20270208-03-tenant-appointment-notification.png`
+- `output/playwright/RUN-20270208-03-workorder25-scheduled-window.png`
+- `output/playwright/RUN-20270208-03-appointment19-workorder25-synchronized.png`
+- `output/playwright/RUN-20270208-03-tenant-confirmed-appointment-duplicate-notification.png`
+- `output/playwright/RUN-20270208-04-tenant-unlinked-auto-redirect-fixed.png`
+- `output/playwright/RUN-20270208-04-adjacent-staff-unlinked-denied.png`
+- `output/playwright/RUN-20270208-04-tenant-access-restored.png`
+- `output/qa/tsk754-evidence/RUN-20270208-02-scan-history-repaired-azure.png`
+- `output/qa/tsk754-evidence/RUN-20270208-02-scan-166-confirmed-readonly-azure.png`
+- `output/qa/tsk754-evidence/RUN-20270208-02-scan-166-confirmed-copy-fixed-azure.png`
+
+Runtime state:
+
+- preserved PostgreSQL container `rentalcommand-tsk754-db` is on port 5754;
+- API tmux session `tsk754-api` and web tmux session `tsk754-web` are running;
+- Engine is off unless an exact scheduled-worker run requires it;
+- the physical Samsung is unavailable for interactive fingerprint/PIN proof; do not block on
+  biometric authentication or ask the user to operate it;
+- use the existing Azure Android emulator for mobile checkpoints, with standard password
+  login, and use the canonical remote-verification handoff for any renewed tunnel/build work;
+- the primary browser session is `tsk754-feb05-web-receipts`; its opener owns closing the
+  exact daemon and Chrome helper tree when browser work finishes.
+
+Rebuild and restart the API with the `YS-289` repair before advancing the clock. Then advance
+the frozen clock through the normal simulation-clock UI to February 9 and begin
+`RUN-20270209-01`, scanned invoice SCN-0357 for 940.00 at Property 3 / Unit 3 / Work Order 25.
+February 9 continues in exact schedule order through the two `/` role certifications, the
+three AddendumDraft fields, and the mobile Property surface pass. The primary agent owns live
+UI/device proof and both ledgers while bounded fixers work independently.
+
+## Authoritative continuation checkpoint — 2026-07-29, February 3 post-cutover verification
+
+The single-path Atomic cutover is implemented and verified on the current dirty worktree. Do
+not reintroduce a compatibility bridge, handler factory, versioned Atomic path, or second
+runtime. Production scans found no reference to any of those rejected designs. The preserved
+historical inventory remains
+`output/qa/tsk781-atomic-cutover-manifest.csv`, SHA-256
+`9d6a15845a9011745f79945946038a59be86fc67793cad291b300c239b017ed6`.
+
+Current-source proof completed after the cutover:
+
+- whole solution build: 0 errors;
+- full API suite: 1,101/1,101;
+- formerly failing API cluster: 44/44;
+- dedicated security/permission slices: Data 63/63, Core 23/23, API 216/216,
+  real-PostgreSQL RLS/authorization 38/38, workspace authorization 43/43,
+  Atomic/session envelope 48/48, foundation baseline 41/41, Engine RLS/registration 3/3,
+  and migrated-PostgreSQL Portfolio QA 12/12;
+- focused mobile security/permission slices: 94/94 across access-envelope restoration,
+  authority-transition cache clearing, stale-capability denial, money-action visibility,
+  role-specific navigation, restricted-shell isolation, typed push routing, and
+  missing/unknown/expired/revoked/cross-context/cross-experience push rejection. Two stale
+  source-text assertions were corrected to match the already stricter production contract;
+  explicit missing and unknown experience rejection cases were added;
+- the branch had fallen behind the already-merged biometric work on `origin/main`
+  (`2f0fc228`, `2188959e`). Those exact biometric/auth files are integrated here and pass
+  43/43 focused controller, service, login, settings, and interceptor tests. Biometric success
+  now revalidates the one stored session path; transport/408/5xx failures preserve enrollment
+  and return to the locked retry state, while only a definitive 401 clears tokens and biometric
+  opt-in. The physical-device dev APK is compiled for
+  `https://localhost:5666/api/v1`, matching ADB reverse, rather than the emulator-only
+  `10.0.2.2` endpoint that caused the observed post-fingerprint 502/login loop. After
+  integration, the combined mobile biometric/session/access/capability/role/navigation/push
+  regression matrix passes 128/128 and targeted static analysis reports zero issues. The
+  Samsung-installed base APK and local repaired APK are byte-identical at SHA-256
+  `474bf15f87a6cba8889890ce5b4295870c8696ae87fa014a8137dc51927b27d0`;
+- serialized real-PostgreSQL transactional workflows: 169/169 across tenant money,
+  scheduled charges, provider payments, banking, stored documents, scan upload,
+  scan confirmation, scheduled finance, accounting mapping, payment CSV import, demo seed,
+  inbound messaging, and vendor W-9;
+- the restored deposit-funding path now proves exact deposit-charge allocation, injected
+  companion rollback, exact replay, and linked compensating allocation on reversal;
+- live rebuilt API proof: anonymous portfolio access 401; verified administrator login,
+  `/auth/me`, portfolio list, and accounting summary 200; cross-portfolio id 1 concealed as
+  404; tenant login and relationship-scoped lease read 200; tenant accounting access 403.
+
+The first attempt to run every PostgreSQL transactional class concurrently exhausted Docker
+Desktop's 8 GiB virtual disk (`No space left on device`). No product failure was inferred from
+that run. No container, volume, cache, user data, or worktree was deleted. Rerunning one
+fixture class at a time passed 169/169 and left the preserved database intact. Continue heavy
+PostgreSQL fixtures serially unless Docker's disk allocation is changed through an explicitly
+approved infrastructure action.
+
+The live stack is ready:
+
+- database `rentalcommand-tsk754-db` remains preserved on port 5754;
+- API `tsk754-api` was rebuilt/restarted and is healthy;
+- web `tsk754-web` remains healthy;
+- Engine remains off;
+- clock remains Frozen at `2027-02-03T05:00:00Z`, `America/New_York`;
+- Samsung `SM_S906U` is connected and `adb reverse tcp:5666 tcp:5666` is intact, but the
+  secure lockscreen is still showing. Do not guess or bypass its PIN.
+
+The execution ledger has 195 rows and 177 unique run IDs. Exactly eight February 3 schedule
+runs remain before the clock may advance: mobile receipt runs `RUN-20270203-01`, `-03`, `-04`,
+`-06`, `-08`, `-11`, and `-13`, plus the physical-phone readback for
+`RUN-20270203-18`. The chronology gate correctly blocks February 4. As soon as the phone is
+unlocked, complete those eight through the normal mobile UI, append/upsert their existing
+`run_id` rows with database and visual evidence, rerun the checkpoint gate, then continue
+February 4 in schedule order.
+
+## Previous authoritative continuation checkpoint — 2026-07-29, February 2 atomic stop
+
+**This section supersedes every older checkpoint in this file.** The 2027 simulation is
+complete and reconciled through the scheduled February 2 runs. The database clock is
+intentionally frozen at **2027-02-02 00:00 America/New_York**
+(`2027-02-02T05:00:00Z`). The single-path Atomic cutover and source verification are complete.
+The preserved database has now been snapshotted, migrated, and passed the live
+authorization/replay/financial smoke gate. The next action is the February 3 prerequisite
+check followed by `RUN-20270203-01`.
+
+The terminal goal is still the **whole 2027 year through December 31**, including every
+scheduled run, scan/manual alternation, role and field certification, monthly financial close,
+and year-end reconciliation. Atomic replacement is a prerequisite, not the final deliverable.
+
+### Exact repository, runtime, and evidence state
+
+| Item | State at handoff |
+| --- | --- |
+| Notion task | `TSK-754`; reopened to **Doing** and verified because the user explicitly resumed this active simulation/atomic prerequisite |
+| Worktree | `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution` |
+| Branch | `tsk-754-year-simulation-execution` |
+| HEAD | `8f0b3c5e1d0c0893161fccd85526133ec00f45a1` |
+| Worktree state | **Dirty shared WIP:** 640 status entries: 474 modified, 34 deleted, 132 untracked |
+| Database | `rentalcommand-tsk754-db`, preserved, migrated through `20260729017000_AddAtomicReadOnlyRuntimeRole`, running on local port `5754` |
+| Verified clock | `Frozen`, `2027-02-02T05:00:00Z`, `America/New_York` |
+| API / web / Engine | API `tsk754-api` and web `tsk754-web` running; Engine stopped and remains opt-in |
+| Phone | Samsung `SM-S906U` connected by wireless ADB; `tcp:5666` reverse installed |
+| Browser automation | No TSK-754-owned browser session. A long-lived generic `playwright-mcp` process exists; ownership is unclear, so do not stop it without identifying its session/process tree |
+| Subagents | None running; all cutover fixers completed and stopped |
+| Execution ledger | 183 rows, 165 unique run IDs, 18 historical duplicate IDs; last row `RUN-20270202-05` |
+| Schedule position | First 153 of 1,981 schedule rows reached; 1,828 remain; next run is `RUN-20270203-01` |
+| Bug ledger | 268 rows; do not infer open-work count from the raw `status` strings without normalizing them |
+
+Do not clean, reset, stash, switch branches, or remove this worktree. It contains the active
+year evidence plus overlapping implementation from earlier agents and sessions. Before editing
+an existing file, inspect its current diff and preserve unrelated work. No new worktree is
+needed.
+
+### Completed February 2 checkpoint
+
+The final five ledger rows are:
+
+1. `RUN-20270202-01`: Prime Pest Control expense `54` recorded once for P028/U036/
+   WO-2027-005, amount `$690.25`, with exact replay and DB-side financial proof.
+2. `RUN-20270202-02`: Yara Brooks tenant account history certified on desktop and phone
+   viewport with DB-computed periods and running balances.
+3. `RUN-20270202-03`: lease-term field certification created future LeaseManagement `81`,
+   Agreement `85`, TenantAccount `60`, and Unit `84`; exact replay created no duplicate and
+   **zero 2027 charges or back-payments**.
+4. `RUN-20270202-04`: Property `29` field edit, exact replay, and restoration were certified.
+5. `RUN-20270202-05`: Tenant `90` field certification completed through the supported
+   lease-first scan and exact replay.
+
+The UI findings raised during the run are already represented in the bug ledger:
+
+- `YS-228`: tenant mobile conversation cards now show the actual counterparty instead of the
+  signed-in tenant.
+- `YS-229`: web and mobile now share the canonical DB-computed tenant account-history contract.
+- `YS-230`, `YS-265`: role-aware maintenance detail/activity plus contact, resident-presence,
+  permission-to-enter, pet, access-warning, comment/photo, cancel/edit, and status capabilities
+  are implemented. The remaining acceptance item is role-by-role physical-phone proof.
+- Mobile top-tab restoration is owned by another session. Do not create a competing fix; verify
+  its resulting source/build before resuming phone certification.
+
+### Atomic cutover truth — single thin path complete and tested
+
+The rejected parallel runtime/compatibility design is gone. Production now has one supported
+Atomic command path; there is no second host, versioned lane, handler factory, service locator,
+compatibility bridge, or feature flag.
+
+The supported shape is deliberately small:
+
+- the scoped `RentalCommandDbContext` is the persistence boundary;
+- an ordinary one-off save uses that scoped context directly;
+- a composite action uses the same scoped context inside one explicit EF execution-strategy
+  transaction, so every `SaveChangesAsync` participates in that physical transaction;
+- RLS/session activation and Atomic audit enforcement remain separate interceptors;
+- domain handlers inject the scoped context directly and own authorization, invariants,
+  DB-side queries, mutations, semantic audit content, and outbox content;
+- the thin transaction runner owns only identity/fingerprint, exact committed-result replay,
+  advisory locks, transaction coordination, receipt, audit, and outbox finalization;
+- audit, receipt, inbox, outbox, and business rows roll back together;
+- external calls occur only outside the database transaction.
+
+Repository scans on 2026-07-29 found zero production or test references to the removed
+`AtomicHost`, versioned Atomic, parallel runtime, or handler-factory designs. The remaining
+scripts named `atomic_runtime` are stale QA generators only and are not compiled or executed by
+the product.
+
+### Cutover verification evidence
+
+The final whole solution build passed with **0 errors**. Known package-advisory and existing
+nullability/obsolete-API warnings remain warnings; they were not introduced by the cutover.
+
+Security, permission, authorization, RLS, role, and session verification passed **445 tests**:
+
+- Atomic kernel architecture: 5/5
+- Data-focused Atomic/security: 20/20
+- Core authorization/security: 16/16
+- API authentication/session/RLS: 153/153
+- API domain authorization/Atomic contracts: 70/70
+- PostgreSQL RLS, runtime roles, ownership, and household access: 36/36
+- Workspace authorization kernel: 43/43
+- Atomic transaction runner: 13/13
+- Auth-session command envelope: 21/21
+- Session refresh: 12/12
+- Canonical auth PostgreSQL: 2/2
+- Foundation baseline: 41/41
+- Engine RLS: 1/1
+- Portfolio QA on migrated PostgreSQL: 12/12
+
+The exact transactional workflow gate passed **152/152** across tenant charges, scheduled
+charges, provider payments, banking, stored documents, scan upload, scan confirmation,
+scheduled finance, accounting mapping, payment CSV import, demo seed, inbound messaging, and
+vendor W-9 processing. Two additional real-PostgreSQL import tests passed for unit and core
+CSV authorization/query execution.
+
+The focused runs proved success, exact replay, changed-payload conflict, unauthorized replay,
+session revocation, audit/receipt/outbox companion rollback, storage/finalization rollback,
+deterministic retry, cleanup-claim concurrency, database-clock behavior, and DB-side
+authorization query shape.
+
+The gate found and fixed three real dormant SQL defects:
+
+1. scan-upload admission composed a data-modifying CTE below the top query level;
+2. payment, unit, and core CSV imports used a mismatched `AuthSessions` alias;
+3. unit/core imports used the reserved word `authorization` as an unquoted CTE name.
+
+### Historical cutover ledger — preserve, do not regenerate
+
+`output/qa/tsk781-atomic-cutover-manifest.csv` is the preserved historical inventory of what
+had been wired into the old Atomic layer and where each item was classified to go. It has
+**2,736 data rows / 2,737 lines** and SHA-256:
+
+`9d6a15845a9011745f79945946038a59be86fc67793cad291b300c239b017ed6`
+
+The old generator expects the deleted registration/handler model and now fails against the
+single-path source. It was hardened so a failed scan cannot overwrite the preserved CSV or its
+summary. Do not use a new post-cutover scan as a replacement for this historical ledger.
+
+### Preserved-database migration and live smoke proof
+
+Before touching the preserved database, an exact stopped-container snapshot was written to:
+
+`output/qa/tsk754-db-snapshots/rentalcommand-tsk754-db-frozen-20270202-pre-atomic-migration-20260729T1213EDT.tar.gz`
+
+Its SHA-256 is:
+
+`0242c40867993023961ce8d7d7cf13d32e1546fa6e56fa6be44f662ceeb93b97`
+
+A disposable restored copy migrated successfully first and was removed immediately afterward.
+The preserved database then migrated successfully. Before and after migration, the frozen
+clock and principal financial counts were unchanged: 2,251 Atomic receipts, 924 tenant-ledger
+entries, and 53 expenses. The runtime roles are `NOINHERIT`; the Atomic read-only role is
+`NOLOGIN`.
+
+The live API smoke used two real identities:
+
+- property manager user 10 received HTTP 404 when attempting to replay tenant user 6's
+  notification command;
+- tenant user 6 replayed its own committed command twice and received HTTP 204 both times.
+
+Across the authorized replay, the exact receipt count, tenant-ledger entries, expenses,
+payment attempts, allocations, and Atomic audit rows were identical before and after:
+
+`1 | 924 | 53 | 42 | 209 | 4607`
+
+This proves exact committed-result replay without duplicate business, financial, receipt, or
+audit writes under the correct authorization boundary.
+
+### Exact continuation sequence
+
+1. Resume at `RUN-20270203-01`, not at January. Run the daily prerequisite check, stage the
+   exact February 3 scan assets, and follow schedule order with execution-ledger `run_id`
+   idempotency.
+2. Continue through December 31. Reconcile run IDs, scans, CRUD rows, notifications, audits,
+   and financial entries daily. Reconcile cash, AR, deposit trust/liability, loans, income,
+   expenses, and net result at each month end before advancing.
+
+### Resume commands and cleanup truth
+
+```bash
+cd /Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution
+git status --short
+git rev-parse HEAD
+docker ps -a --filter name=rentalcommand-tsk754-db
+adb devices -l
+shasum -a 256 output/qa/tsk781-atomic-cutover-manifest.csv
+```
+
+- Database runtime: container running; persistent database retained and migrated.
+- API/web/Engine runtime: API and web running; Engine stopped.
+- Browser cleanup: no TSK-754-owned browser session remains. The generic `playwright-mcp`
+  process was preserved because ownership is not established.
+- Build cleanup: no known build/test batch is running.
+- Subagent cleanup: no subagent is running.
+- Worktree cleanup: **not removed** — active dirty WIP on
+  `tsk-754-year-simulation-execution`; the next agent owns preservation and continuation.
 
 ## Authoritative continuation checkpoint — 2026-07-28, January 29 stop
 
@@ -648,6 +1145,119 @@ instead of reporting escrow as a variance.
     regression reason.
 13. Continue the remaining year in date order, alternating web/mobile and scan/manual paths,
     recording every bug and all financial effects.
+
+## Atomic-layer replacement contract
+
+The whole-layer reliability replacement retains the `TSK-781` identity, but the user explicitly
+made its wholesale completion a blocking prerequisite for continuing `TSK-754`. It is being
+performed in this worktree and session against the year simulation's characterization baseline;
+do not resume the calendar on the retired Atomic implementation and do not turn the replacement
+into an incremental or dual-path migration.
+
+Current closed-world checkpoint on 2026-07-29:
+
+- `scripts/qa/generate_tsk781_atomic_cutover_manifest.py` completes with zero failures and zero
+  registration-contract attention rows.
+- The live manifest has 2,726 classified rows: 202 API/Engine registrations, 342 caller rows,
+  304 command/result rows, 170 replay-policy rows, 146 receipt-codec rows, 830 database-contract
+  rows, 191 persistence-context escape rows, 439 fingerprint rows, and 84 test-fixture rows.
+- Thirty-eight registrations currently have a static caller count of zero. They remain explicitly
+  classified as registrations to retain until the coordinated cutover, but each must be resolved to
+  one real caller or deletion before the final V1 removal sweep; a zero count is not cutover proof.
+- Consecutive V2 metadata generation runs are byte-stable:
+  - `AtomicRuntimeGeneratedCommandManifest.g.cs`:
+    `93f538043358d1a9e13e4a0a26251039483ea57ace42aa3835793a77aaa434ae`
+  - `AtomicRuntimeGeneratedAdmissionDependencyManifest.g.cs`:
+    `e509ee2afb24fcd5554b51cc57f7e2723c6cb5ee0fee00e68fa6e83efab71862`
+  - `AtomicRuntimeGeneratedSimulationRegistry.g.cs`:
+    `d249197ed633a0ca130a27dc9e5667be2db71740d3b34164f82dc941330908c8`
+- Four unreachable commands and their handlers, registrations, and test references were deleted:
+  `ChangeWorkspaceAssignmentScopeCommand`, `ChangeWorkspaceAssignmentEndCommand`,
+  `GrantOwnerUserAccessCommand`, and `RevokeOwnerUserAccessCommand`.
+- The former combined scheduled rent/late-fee command was split into exact rent and late-fee
+  commands, results, handlers, registrations, and receipt contracts; the combined symbols have
+  zero repository references.
+- SOL medium independently passed the new live replay-authorization policies for accounting
+  mapping confirmation/continuation and Plaid token-exchange preparation.
+- The thin V2 foundation is still dark and unregistered. Its non-generated Core/Data runtime is
+  987 logical lines and has no domain namespace dependency, command switch, service lookup, nested
+  execution path, or second runtime registration.
+- `RentalCommand.AtomicHost` is a separate compile-time provenance boundary: API issues an immutable
+  access proof only from middleware-resolved `ActiveAccessContext`, Engine issues only its runtime
+  proof, and Data can consume but cannot mint either proof.
+- Validation now completes under the read-only database role before the receipt claim. Only after
+  successful validation does the runner restore the exact writer role/RLS coordinates and insert the
+  transaction-coupled receipt. Replay re-enters read-only, authorizes before reading the stored result,
+  then restores the exact writer before commit.
+- The focused Atomic runtime suite passes 62/62, including real PostgreSQL proof for validation-before-
+  claim, rollback, exact replay/conflict, unauthorized replay denial, fresh retry attempts, restored
+  role/RLS state, audit/outbox/receipt rollback, authoritative audit time, ACL/function surface, and
+  commit-unknown proof. The Engine project also builds successfully with the host boundary.
+- GPT-5.5 passed the corrected Simulation V2 slice. SOL medium found and fixed the original
+  claim-before-validation ordering defect, then the same 62/62 PostgreSQL/static suite passed.
+- Auth/authorization and operations/maintenance are now being ported by separate GPT-5.5 lanes;
+  money/payments is being ported by a SOL-medium lane. These additions remain dark. Root owns the
+  final registry, host cutover, repository-wide zero-reference proof, and immediate deletion of every
+  V1 contract/registration/interceptor/grant/test path in the same coordinated change.
+
+- Preserve the proven transaction kernel during the simulation: one explicit transaction,
+  DB-side set operations, one stable command identity, exact committed-result replay,
+  rollback-coupled audit/outbox, database authorization/session context, and no remote calls
+  inside the transaction.
+- Insert the durable outbox intent inside that same transaction. Only delivery or another
+  external effect occurs after commit.
+- Every distant service or repository save/raw SQL call must use the exact runner-owned
+  `DbContext`, connection, database transaction, runtime role, and RLS/access coordinates.
+  Interceptors must fail closed on any mismatch; a separately resolved context must never
+  silently become a second transaction.
+- The replacement must be wholesale. Write and prove the complete new command runner,
+  execution context, narrow persistence ports, typed identities/time, audit writer, and
+  capability manifest before cutover.
+- Switch every consumer in one coordinated change and immediately delete the retired
+  contracts, adapters, handlers, registrations, grants, tests, feature flags, fallbacks, and
+  compatibility paths.
+- There must never be two supported ways to perform the same command. Do not leave the old
+  path temporarily for another domain slice to use.
+- Diagnose later issues against the commit that removed the old implementation and git
+  history. Do not keep dead runtime code or compatibility comments as documentation.
+- Repository-wide reference and registration sweeps are required proof that the retired
+  surface is gone.
+- Keep the replacement kernel thin: it may own transaction execution, stable command identity
+  and exact replay, database session/authorization context, required locks, and
+  rollback-coupled audit/outbox coordination only.
+- Domain scheduling, recovery decisions, notification construction, business validation, DTO
+  mapping, provider calls, and domain authorization queries are prohibited from the kernel.
+- Define measurable public-surface and dependency budgets plus automated architecture checks
+  that reject domain dependencies, service-locator capabilities, alternate execution paths,
+  and unbounded interface growth.
+- Add no speculative extension point. Every abstraction must either remove demonstrated
+  duplication or enforce a tested invariant, and completion evidence must show that the new
+  surface is materially smaller than the one removed.
+- Generate a cutover manifest before implementation that maps every command, caller, handler,
+  API/Engine registration, receipt/result contract, replay authorizer, database grant/policy,
+  and test fixture to exactly one replacement or deletion. The cutover cannot start with an
+  unclassified manifest row.
+- Preserve the existing `AtomicCommandReceipts` and `AtomicAuditLogs` schemas and historical
+  rows as durable data contracts. The new generic runner becomes their only writer/reader;
+  old handlers and runtime paths do not survive. Prove replay parity for every stored result
+  contract before cutover.
+- Treat these as hard kernel ceilings, enforced by CI architecture tests: at most four public
+  kernel interfaces, at most twenty public members across them, exactly one public command
+  execution method, zero domain persistence properties on the execution context, zero domain
+  namespace/project dependencies, zero command-type switches, and no service lookup API.
+  Non-generated production kernel code must remain below 1,000 logical lines.
+- A temporary architecture exception requires one exact symbol, a named owner, a tracked
+  removal task, and an expiration date in the CI allowlist. Wildcards and permanent exceptions
+  are forbidden, and an exception cannot create a second execution path.
+- Cutover proof must include exact-result replay parity, changed-payload conflict, unauthorized
+  replay denial, audit/outbox failure rollback, commit-unknown replay, generated-SQL DB-side
+  assertions, API/Engine registration parity, database grant/policy/function diff, and
+  repository-wide zero references to every retired symbol.
+- Database rollback support may restore the previous deployment as one versioned rollback
+  operation. It must not leave a feature flag, fallback, compatibility adapter, old grant set,
+  or simultaneously callable legacy runtime path in the deployed application.
+- The staged compatibility and vertical-slice migration proposed in the original audit is
+  explicitly rejected. It is not an alternative implementation plan for `TSK-781`.
 
 ## Faster operating model for the continuation
 

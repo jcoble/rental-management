@@ -110,16 +110,10 @@ public sealed class WorkOrderResponsibilityModelTests
     {
         typeof(WorkspaceAccessRevisionExpectation)
             .Should().BeAssignableTo<IAtomicCommandData>();
-        typeof(WorkspaceAccessRevisionExpectation)
-            .Should().BeAssignableTo<IAtomicResultData>();
         typeof(AssignWorkOrderResponsibilityCommand)
             .Should().BeAssignableTo<IAtomicCommandData>();
         typeof(CloseWorkOrderResponsibilityCommand)
             .Should().BeAssignableTo<IAtomicCommandData>();
-        typeof(AssignWorkOrderResponsibilityResult)
-            .Should().BeAssignableTo<IAtomicResultData>();
-        typeof(CloseWorkOrderResponsibilityResult)
-            .Should().BeAssignableTo<IAtomicResultData>();
     }
 
     [Fact]
@@ -130,8 +124,9 @@ public sealed class WorkOrderResponsibilityModelTests
 
         source.Should().Contain("workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc");
         source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
-        source.Should().Contain("IAtomicReplayAuthorizer<UpdateAssignedWorkOrderCommand>");
-        source.Should().Contain("AuthorizeAndLoadAsync(command, persistence, now, tracking: false");
+        source.Should().Contain("AuthorizeReplayAsync(");
+        source.Should().Contain(
+            "AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false");
         source.Should().Contain("resultingStatus != WorkOrderStatus.Completed");
     }
 

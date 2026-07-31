@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Reporting;
 
@@ -54,6 +56,111 @@ public sealed class SecurityDepositRegisterProjection
 
 public static class FinancialReportProjections
 {
+    public static IQueryable<FinancialReportIncomeProjection> BuildAuthorizedCashFlowIncomeProjection(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow,
+        DateTime from,
+        DateTime to,
+        IReadOnlyCollection<int> propertyIds)
+    {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(db, scope, capabilityKey, utcNow, propertyIds);
+        var fromDate = DateOnly.FromDateTime(from);
+        var toDate = DateOnly.FromDateTime(to);
+
+        var tenantIncome =
+            from allocation in db.TenantLedgerAllocations.AsNoTracking()
+            join receipt in db.TenantLedgerEntries.AsNoTracking()
+                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
+                equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
+            join charge in db.TenantLedgerEntries.AsNoTracking()
+                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
+                equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
+            join account in db.TenantAccounts.AsNoTracking()
+                on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            where allocation.PortfolioId == portfolioId
+                && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
+                && receipt.EffectiveOn >= fromDate
+                && receipt.EffectiveOn <= toDate
+                && charge.EntryType != TenantLedgerEntryType.DepositCharge
+            select new FinancialReportIncomeProjection
+            {
+                PropertyId = management.PropertyId,
+                Year = receipt.EffectiveOn.Year,
+                Month = receipt.EffectiveOn.Month,
+                Amount = allocation.Amount,
+            };
+
+        var applicationIncome = db.ApplicationFinancialEntries
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                entry.EffectiveOn >= fromDate &&
+                entry.EffectiveOn <= toDate)
+            .Select(entry => new FinancialReportIncomeProjection
+            {
+                PropertyId = entry.PropertyId,
+                Year = entry.EffectiveOn.Year,
+                Month = entry.EffectiveOn.Month,
+                Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                    ? entry.Amount
+                    : -entry.Amount,
+            });
+
+        return tenantIncome
+            .Concat(applicationIncome)
+            .Where(row => row.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == row.PropertyId.Value));
+    }
+
+    public static IQueryable<FinancialReportExpenseProjection> BuildAuthorizedCashFlowExpenseProjection(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow,
+        DateTime from,
+        DateTime to,
+        IReadOnlyCollection<int> propertyIds)
+    {
+        var hasPropertyFilter = propertyIds.Count > 0;
+        var authorizedProperties = BuildAuthorizedPropertyQuery(db, scope, capabilityKey, utcNow, propertyIds);
+        var allPropertiesAuthority = db.AuthorizedAllPropertyAssignments(
+                scope,
+                capabilityKey,
+                CapabilityAuthorizationTargetKind.Property,
+                utcNow)
+            .Select(_ => 1);
+
+        return BuildExpenseAllocationProjection(db, scope.PortfolioId)
+            .Where(expense => expense.EffectiveAt >= from && expense.EffectiveAt <= to)
+            .Where(expense =>
+                (expense.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == expense.PropertyId.Value)) ||
+                (expense.PropertyId == null && !hasPropertyFilter && allPropertiesAuthority.Any()));
+    }
+
+    public static IQueryable<int> BuildAuthorizedCashFlowAnchor(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow,
+        IReadOnlyCollection<int> propertyIds)
+    {
+        var authorizedProperties = BuildAuthorizedPropertyQuery(db, scope, capabilityKey, utcNow, propertyIds);
+
+        return db.Portfolios
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == scope.PortfolioId && authorizedProperties.Any())
+            .Select(_ => 1);
+    }
+
     public static IQueryable<FinancialReportExpenseProjection> BuildExpenseAllocationProjection(
         RentalCommandDbContext db,
         int portfolioId)
@@ -105,6 +212,22 @@ public static class FinancialReportProjections
             };
 
         return allocated.Concat(unallocated);
+    }
+
+    private static IQueryable<Property> BuildAuthorizedPropertyQuery(
+        RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        string capabilityKey,
+        DateTime utcNow,
+        IReadOnlyCollection<int> propertyIds)
+    {
+        var properties = db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(db, scope, capabilityKey, utcNow);
+
+        return propertyIds.Count == 0
+            ? properties
+            : properties.Where(property => propertyIds.Contains(property.Id));
     }
 
     public static IQueryable<CashFlowMonthProjection> BuildCashFlowMonthProjection(

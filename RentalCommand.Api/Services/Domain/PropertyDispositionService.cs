@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -135,7 +136,8 @@ public class PropertyDispositionService : IPropertyDispositionService
         var atomic = _atomic
             ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
-            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Update, id, operationKey, request);
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Update, id, operationKey, request,
+            _timeProvider.UtcNow());
         var outcome = await atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found
@@ -152,7 +154,8 @@ public class PropertyDispositionService : IPropertyDispositionService
         var atomic = _atomic
             ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
-            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Delete, id, operationKey, new object());
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Delete, id, operationKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;

@@ -1,10 +1,16 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Payments;
+using RentalCommand.Data.Security;
 using RentalCommand.Core.Time;
 using RentalCommand.TestCommon;
 
@@ -14,10 +20,13 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
+    private const string EnginePassword = "scheduled-rent-engine-role-test-password";
     private static readonly DateTime SeededAtUtc =
         new(2027, 01, 08, 14, 30, 00, DateTimeKind.Utc);
-    private static readonly AtomicJsonResultCodec<ApplyScheduledTenantChargeBatchResult> Codec =
+    private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> Codec =
         new("scheduled-tenant-charges.rent.apply.v1");
+    private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> LateFeeCodec =
+        new("scheduled-tenant-charges.late-fee.apply.v1");
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
@@ -50,13 +59,10 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
 
         var result = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("scheduled-tenant-charges.rent.apply", Guid.NewGuid().ToString("N")),
-            new ApplyScheduledTenantChargeBatchCommand(
+            new ApplyScheduledRentChargeBatchCommand(
                 Guid.NewGuid(),
                 SeededAtUtc,
-                200,
-                IncludeRentCharges: true,
-                IncludeLateFeeCharges: false,
-                StateLateFeeCapsJson: "[]"),
+                200),
             Codec);
 
         result.Value.RentChargeCount.Should().Be(0);
@@ -80,6 +86,637 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         rows[0].DueOn.Should().Be(new DateOnly(2027, 01, 01));
         rows[0].LeaseAgreementId.Should().Be(graph.InitialAgreementId);
         rows[0].BusinessKey.Should().Be($"rent:{graph.InitialAgreementPublicId}:2027-01");
+    }
+
+    [Fact]
+    public async Task RentBatch_EngineRole_PostsAndReplaysWithRestrictedRuntimeGrants()
+    {
+        await AssertRuntimeTenantMoneyGrantMigrationAppliedAsync(DatabaseRuntimeIdentity.EngineRole);
+        await _ctx.Db.Database.ExecuteSqlRawAsync(
+            $"ALTER ROLE {DatabaseRuntimeIdentity.EngineRole} PASSWORD '{EnginePassword}';");
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var role = new RestrictedRoleConnectionInterceptor(DatabaseRuntimeIdentity.EngineRole);
+        await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
+            RuntimeConnectionString(DatabaseRuntimeIdentity.EngineRole, EnginePassword),
+            [role]);
+        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
+        var identity = new AtomicCommandIdentity(
+            "scheduled-tenant-charges.rent.apply",
+            "engine-role-scheduled-rent");
+        var command = new ApplyScheduledRentChargeBatchCommand(
+            Guid.Parse("3f718e3e-6d72-48f3-84fb-33f392744d45"),
+            SeededAtUtc,
+            200);
+
+        var first = await atomic.ExecuteAsync(identity, command, Codec);
+        var replay = await atomic.ExecuteAsync(identity, command, Codec);
+
+        role.OpenCount.Should().BeGreaterThan(0);
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        first.Value.RentChargeCount.Should().Be(1);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var rows = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .Select(entry => new
+            {
+                entry.Amount,
+                entry.DueOn,
+                entry.LeaseAgreementId,
+                entry.BusinessKey,
+            })
+            .ToListAsync();
+        rows.Should().ContainSingle();
+        rows[0].Amount.Should().Be(1_300m);
+        rows[0].DueOn.Should().Be(new DateOnly(2027, 01, 01));
+        rows[0].LeaseAgreementId.Should().Be(graph.LeaseAgreementId);
+        rows[0].BusinessKey.Should().Be($"rent:{graph.LeaseAgreementPublicId}:2027-01");
+    }
+
+    [Fact]
+    public async Task LateFeeBatch_UsesGoverningCorrection_KeepsPeriodKey_AndRollsBackBeforeReplay()
+    {
+        var graph = SeedCorrectedAgreementWithExistingJanuaryRent();
+        var failure = new AuditInsertFailureInterceptor { FailAtomicAudit = true };
+        await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
+            _ctx.ConnectionString,
+            [failure]);
+        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
+        var identity = new AtomicCommandIdentity(
+            "scheduled-tenant-charges.late-fee.apply",
+            "corrected-january-late-fee");
+        var command = new ApplyScheduledLateFeeChargeBatchCommand(
+            Guid.Parse("33c1695a-da03-42c9-a6f5-cb6244eb0d45"),
+            SeededAtUtc,
+            200,
+            StateLateFeeCapsJson: "[]");
+
+        await FluentActions.Invoking(() => atomic.ExecuteAsync(identity, command, LateFeeCodec))
+            .Should().ThrowAsync<Exception>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(entry =>
+            entry.TenantAccountId == graph.TenantAccountId
+            && entry.EntryType == TenantLedgerEntryType.LateFeeCharge)).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+
+        failure.FailAtomicAudit = false;
+        var first = await atomic.ExecuteAsync(identity, command, LateFeeCodec);
+        var replay = await atomic.ExecuteAsync(identity, command, LateFeeCodec);
+        var laterSweep = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.late-fee.apply",
+                "corrected-january-late-fee-later-sweep"),
+            command with { RunToken = Guid.Parse("16dd515f-fc1e-4467-9c4d-90c203ccbd4b") },
+            LateFeeCodec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        first.Value.LateFeeChargeCount.Should().Be(1);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        laterSweep.Value.LateFeeChargeCount.Should().Be(0);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var lateFee = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .SingleAsync(entry =>
+                entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.LateFeeCharge);
+        lateFee.Amount.Should().Be(50m);
+        lateFee.LeaseAgreementId.Should().Be(graph.CorrectionAgreementId);
+        lateFee.BusinessKey.Should()
+            .Be($"late-fee:rent:{graph.InitialAgreementPublicId}:2027-01");
+    }
+
+    [Fact]
+    public async Task LateFeeBatch_BecomesEligibleExactlyOnDueDatePlusGraceDays_AndRemainsIdempotent()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var februaryRent = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 1_300m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 02, 01),
+            DueOn = new DateOnly(2027, 02, 01),
+            PostedAtUtc = new DateTime(2027, 02, 01, 09, 15, 00, DateTimeKind.Utc),
+            Description = "Rent due Feb 1, 2027",
+            BusinessKey = $"rent:{graph.LeaseAgreementPublicId}:2027-02",
+            LeaseAgreementId = graph.LeaseAgreementId,
+            CreatedByUserId = 1,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(februaryRent);
+        await _ctx.Db.SaveChangesAsync();
+
+        var caps = "[]";
+        SetFrozenBusinessDate(new DateTime(2027, 02, 05, 09, 15, 00, DateTimeKind.Utc));
+        var beforeBoundary = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.late-fee.apply",
+                "february-late-fee-before-grace-boundary"),
+            new ApplyScheduledLateFeeChargeBatchCommand(
+                Guid.Parse("526524dc-afd8-46ae-ad93-c8cd1c696476"),
+                new DateTime(2027, 02, 05, 09, 15, 00, DateTimeKind.Utc),
+                200,
+                caps),
+            LateFeeCodec);
+
+        beforeBoundary.Value.LateFeeChargeCount.Should().Be(0);
+
+        var boundaryIdentity = new AtomicCommandIdentity(
+            "scheduled-tenant-charges.late-fee.apply",
+            "february-late-fee-on-grace-boundary");
+        var boundaryCommand = new ApplyScheduledLateFeeChargeBatchCommand(
+            Guid.Parse("70ffb98d-9249-4463-9597-1ae55967243a"),
+            new DateTime(2027, 02, 06, 09, 15, 00, DateTimeKind.Utc),
+            200,
+            caps);
+        SetFrozenBusinessDate(boundaryCommand.BusinessNowUtc);
+
+        var boundary = await _atomic.ExecuteAsync(
+            boundaryIdentity,
+            boundaryCommand,
+            LateFeeCodec);
+        var replay = await _atomic.ExecuteAsync(
+            boundaryIdentity,
+            boundaryCommand,
+            LateFeeCodec);
+        var laterSweep = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.late-fee.apply",
+                "february-late-fee-after-grace-boundary"),
+            boundaryCommand with
+            {
+                RunToken = Guid.Parse("fce14d0d-3109-4372-b2f0-048340beab54"),
+            },
+            LateFeeCodec);
+
+        boundary.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        boundary.Value.LateFeeChargeCount.Should().Be(1);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(boundary.Value);
+        laterSweep.Value.LateFeeChargeCount.Should().Be(0);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var lateFee = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .SingleAsync(entry =>
+                entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.LateFeeCharge);
+        lateFee.Amount.Should().Be(75m);
+        lateFee.EffectiveOn.Should().Be(new DateOnly(2027, 02, 06));
+        lateFee.DueOn.Should().Be(new DateOnly(2027, 02, 06));
+        lateFee.BusinessKey.Should().Be($"late-fee:{februaryRent.BusinessKey}");
+    }
+
+    [Fact]
+    public async Task LateFeeRecovery_ReversesAllocatedWrongFee_ReplacesAndReplaysExactResult()
+    {
+        var scope = _ctx.Db.SeedAdministratorScope(
+            PortfolioId,
+            nameof(LateFeeRecovery_ReversesAllocatedWrongFee_ReplacesAndReplaysExactResult));
+        var graph = SeedCorrectedAgreementWithExistingJanuaryRent();
+        var wrongLateFee = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Wrong late fee",
+            BusinessKey = $"late-fee:rent:{graph.InitialAgreementPublicId}:2027-01",
+            LeaseAgreementId = graph.InitialAgreementId,
+            CreatedByUserId = scope.UserId,
+        };
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 50m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Late fee payment",
+            BusinessKey = $"manual-receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+        var alreadyReversedLateFee = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Already reversed wrong late fee",
+            BusinessKey = $"late-fee:already-reversed:{Guid.NewGuid():N}",
+            LeaseAgreementId = graph.InitialAgreementId,
+            CreatedByUserId = scope.UserId,
+        };
+        _ctx.Db.TenantLedgerEntries.AddRange(wrongLateFee, receipt, alreadyReversedLateFee);
+        await _ctx.Db.SaveChangesAsync();
+        var existingReversal = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.Reversal,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = "Earlier reversal",
+            BusinessKey = $"late-fee:already-reversed-reversal:{Guid.NewGuid():N}",
+            LeaseAgreementId = graph.InitialAgreementId,
+            ReversesEntryId = alreadyReversedLateFee.Id,
+            CreatedByUserId = scope.UserId,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(existingReversal);
+        _ctx.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            DebitEntryId = wrongLateFee.Id,
+            CreditEntryId = receipt.Id,
+            Amount = 50m,
+            AllocatedAtUtc = SeededAtUtc,
+            BusinessKey = $"{receipt.BusinessKey}:{wrongLateFee.Id}",
+            CreatedByUserId = scope.UserId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var identity = new AtomicCommandIdentity(
+            "late-fee-charges.recover",
+            "late-fee-recovery-test");
+        var command = new RecoverLateFeeChargesCommand(
+            PortfolioId,
+            [
+                new RecoverLateFeeChargeRow(
+                    graph.TenantAccountId,
+                    wrongLateFee.Id,
+                    75m,
+                    50m,
+                    AlreadyReversed: false),
+                new RecoverLateFeeChargeRow(
+                    graph.TenantAccountId,
+                    alreadyReversedLateFee.Id,
+                    75m,
+                    50m,
+                    AlreadyReversed: true),
+            ],
+            ExpectedReviewedChargeCount: 2,
+            ExpectedReversedChargeCount: 1,
+            ExpectedReplacementChargeCount: 2,
+            ExpectedReversedTotal: 75m,
+            ExpectedReplacementTotal: 100m,
+            FinancialReference: "FIN-LATE-FEE-TEST",
+            ActorUserId: scope.UserId,
+            AuthSessionId: scope.SessionId,
+            AccessContextId: scope.AccessContextId,
+            ExpectedAccessRevision: scope.AccessRevision,
+            RequiredCapability: CapabilityKeys.MoneyChargesManage,
+            DeliveryIdempotencyKey: identity.IdempotencyKey);
+        var codec = new AtomicJsonResultCodec<RecoverLateFeeChargesResult>(
+            "late-fee-charges.recover.v1");
+
+        var first = await _atomic.ExecuteAsync(identity, command, codec);
+        var replay = await _atomic.ExecuteAsync(identity, command, codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        first.Value.Should().Be(new RecoverLateFeeChargesResult(
+            1, 2, 1, 1, 75m, 100m, 50m, 50m, "FIN-LATE-FEE-TEST"));
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var entries = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && (entry.Id == wrongLateFee.Id
+                    || entry.Id == alreadyReversedLateFee.Id
+                    || entry.Id == existingReversal.Id
+                    || entry.ReversesEntryId == wrongLateFee.Id
+                    || entry.ReversesEntryId == alreadyReversedLateFee.Id
+                    || entry.BusinessKey.StartsWith("late-fee-recovery:FIN-LATE-FEE-TEST:replacement:")))
+            .OrderBy(entry => entry.Id)
+            .Select(entry => new
+            {
+                entry.EntryType,
+                entry.Direction,
+                entry.Amount,
+                entry.ReversesEntryId,
+                entry.BusinessKey,
+            })
+            .ToListAsync();
+        entries.Should().HaveCount(6);
+        entries.Should().Contain(entry => entry.EntryType == TenantLedgerEntryType.Reversal
+            && entry.Direction == TenantLedgerDirection.Credit
+            && entry.Amount == 75m
+            && entry.ReversesEntryId == wrongLateFee.Id);
+        entries.Count(entry => entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+            && entry.Direction == TenantLedgerDirection.Debit
+            && entry.Amount == 50m
+            && entry.BusinessKey.StartsWith("late-fee-recovery:FIN-LATE-FEE-TEST:replacement:"))
+            .Should().Be(2);
+
+        var allocationSummary = await _ctx.Db.TenantLedgerAllocations
+            .AsNoTracking()
+            .Where(allocation => allocation.TenantAccountId == graph.TenantAccountId
+                && allocation.BusinessKey.StartsWith("late-fee-recovery:FIN-LATE-FEE-TEST:"))
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Count = group.Count(),
+                Net = group.Sum(row => row.Amount),
+                Reversed = group.Sum(row => row.ReversesAllocationId == null ? 0m : -row.Amount),
+                Replacement = group.Sum(row => row.ReversesAllocationId == null ? row.Amount : 0m),
+            })
+            .SingleAsync();
+        allocationSummary.Count.Should().Be(2);
+        allocationSummary.Net.Should().Be(0m);
+        allocationSummary.Reversed.Should().Be(50m);
+        allocationSummary.Replacement.Should().Be(50m);
+    }
+
+    [Fact]
+    public async Task LateFeeRecovery_TwoAllocatedSameAccountFees_MapOneToOneWithoutCrossProduct()
+    {
+        var scope = _ctx.Db.SeedAdministratorScope(
+            PortfolioId,
+            nameof(LateFeeRecovery_TwoAllocatedSameAccountFees_MapOneToOneWithoutCrossProduct));
+        var graph = SeedCorrectedAgreementWithExistingJanuaryRent();
+        var firstFee = LateFee("cross-product-first", 75m);
+        var secondFee = LateFee("cross-product-second", 40m);
+        var firstReceipt = Receipt("cross-product-first", 30m);
+        var secondReceipt = Receipt("cross-product-second", 20m);
+        _ctx.Db.TenantLedgerEntries.AddRange(
+            firstFee, secondFee, firstReceipt, secondReceipt);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.TenantLedgerAllocations.AddRange(
+            Allocation(firstFee.Id, firstReceipt.Id, 30m, "cross-product-first"),
+            Allocation(secondFee.Id, secondReceipt.Id, 20m, "cross-product-second"));
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var identity = new AtomicCommandIdentity(
+            "late-fee-charges.recover",
+            "late-fee-recovery-cross-product-regression");
+        var command = new RecoverLateFeeChargesCommand(
+            PortfolioId,
+            [
+                new RecoverLateFeeChargeRow(
+                    graph.TenantAccountId, firstFee.Id, 75m, 50m, AlreadyReversed: false),
+                new RecoverLateFeeChargeRow(
+                    graph.TenantAccountId, secondFee.Id, 40m, 25m, AlreadyReversed: false),
+            ],
+            ExpectedReviewedChargeCount: 2,
+            ExpectedReversedChargeCount: 2,
+            ExpectedReplacementChargeCount: 2,
+            ExpectedReversedTotal: 115m,
+            ExpectedReplacementTotal: 75m,
+            FinancialReference: "FIN-LATE-FEE-CROSS-PRODUCT",
+            ActorUserId: scope.UserId,
+            AuthSessionId: scope.SessionId,
+            AccessContextId: scope.AccessContextId,
+            ExpectedAccessRevision: scope.AccessRevision,
+            RequiredCapability: CapabilityKeys.MoneyChargesManage,
+            DeliveryIdempotencyKey: identity.IdempotencyKey);
+        var codec = new AtomicJsonResultCodec<RecoverLateFeeChargesResult>(
+            "late-fee-charges.recover.v1");
+
+        var first = await _atomic.ExecuteAsync(identity, command, codec);
+        var replay = await _atomic.ExecuteAsync(identity, command, codec);
+
+        first.Value.ReplacementAllocationCount.Should().Be(2);
+        first.Value.ReplacementAllocationTotal.Should().Be(50m);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        var replacementMappings = await (
+                from allocation in _ctx.Db.TenantLedgerAllocations.AsNoTracking()
+                join replacement in _ctx.Db.TenantLedgerEntries.AsNoTracking()
+                    on new
+                    {
+                        Id = allocation.DebitEntryId,
+                        allocation.PortfolioId,
+                        allocation.TenantAccountId,
+                    }
+                    equals new
+                    {
+                        Id = replacement.Id,
+                        replacement.PortfolioId,
+                        replacement.TenantAccountId,
+                    }
+                where allocation.PortfolioId == PortfolioId
+                    && allocation.TenantAccountId == graph.TenantAccountId
+                    && allocation.BusinessKey.StartsWith(
+                        "late-fee-recovery:FIN-LATE-FEE-CROSS-PRODUCT:replacement-allocation:")
+                orderby allocation.Id
+                select new
+                {
+                    allocation.CreditEntryId,
+                    allocation.Amount,
+                    replacement.BusinessKey,
+                })
+            .ToListAsync();
+
+        replacementMappings.Should().HaveCount(2, "two sources must produce two, not four, allocations");
+        replacementMappings.Should().ContainSingle(row =>
+            row.CreditEntryId == firstReceipt.Id
+            && row.Amount == 30m
+            && row.BusinessKey.EndsWith($":{firstFee.Id}"));
+        replacementMappings.Should().ContainSingle(row =>
+            row.CreditEntryId == secondReceipt.Id
+            && row.Amount == 20m
+            && row.BusinessKey.EndsWith($":{secondFee.Id}"));
+
+        TenantLedgerEntry LateFee(string suffix, decimal amount) => new()
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.LateFeeCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            DueOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = suffix,
+            BusinessKey = $"late-fee:{suffix}:{Guid.NewGuid():N}",
+            LeaseAgreementId = graph.InitialAgreementId,
+            CreatedByUserId = scope.UserId,
+        };
+
+        TenantLedgerEntry Receipt(string suffix, decimal amount) => new()
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 08),
+            PostedAtUtc = SeededAtUtc,
+            Description = suffix,
+            BusinessKey = $"manual-receipt:{suffix}:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+
+        TenantLedgerAllocation Allocation(
+            long debitEntryId,
+            long creditEntryId,
+            decimal amount,
+            string suffix) => new()
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.TenantAccountId,
+            DebitEntryId = debitEntryId,
+            CreditEntryId = creditEntryId,
+            Amount = amount,
+            AllocatedAtUtc = SeededAtUtc,
+            BusinessKey = $"allocation:{suffix}:{Guid.NewGuid():N}",
+            CreatedByUserId = scope.UserId,
+        };
+    }
+
+    private InitialLeaseGraph SeedInitialAgreementReadyForJanuaryRent()
+    {
+        EnsureFrozenBusinessDate();
+        EnsureAutomationSettings();
+
+        var source = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
+            BusinessKey = $"scheduled-rent-engine-source:{Guid.NewGuid():N}",
+            RendererKey = "test-lease",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = SeededAtUtc,
+            CreatedByUserId = 1,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Scheduled Rent Engine Property",
+            AddressLine1 = "200 Test Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = "B",
+            MarketRent = 1_300m,
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"LM-ENGINE-{Guid.NewGuid():N}",
+            PossessionGivenAtUtc = SeededAtUtc.AddDays(-7),
+            CreatedAtUtc = SeededAtUtc.AddDays(-7),
+            UpdatedAtUtc = SeededAtUtc,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Engine",
+            LastName = "Tenant",
+            Email = "engine.tenant@example.test",
+            CreatedAt = SeededAtUtc,
+            UpdatedAt = SeededAtUtc,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(2027, 01, 01),
+            ChangeReason = "Test setup",
+            CreatedAtUtc = SeededAtUtc,
+            CreatedByUserId = 1,
+        };
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-ENGINE-{Guid.NewGuid():N}",
+            Currency = "USD",
+            OpenedAtUtc = SeededAtUtc.AddDays(-7),
+            CreatedAtUtc = SeededAtUtc.AddDays(-7),
+            CreatedByUserId = 1,
+        };
+        var agreement = NewAgreement(
+            relationship,
+            source,
+            versionNumber: 1,
+            changeType: LeaseAgreementChangeType.Initial,
+            governingFromOn: new DateOnly(2027, 01, 01),
+            termStartOn: new DateOnly(2027, 01, 01),
+            agreementNumber: $"AGR-ENGINE-{Guid.NewGuid():N}");
+
+        _ctx.Db.AddRange(source, property, unit, relationship, tenant, party, account, agreement);
+        _ctx.Db.SaveChanges();
+        AddTenantSigner(agreement, party, tenant);
+        ExecuteAgreement(agreement, "engine");
+        return new InitialLeaseGraph(account.Id, agreement.Id, agreement.PublicId);
+    }
+
+    private async Task AssertRuntimeTenantMoneyGrantMigrationAppliedAsync(string role)
+    {
+        var applied = await _ctx.Db.Database.SqlQuery<int>($"""
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM "__EFMigrationsHistory"
+                WHERE "MigrationId" = '20260728235000_GrantRuntimeTenantMoneyDml')
+              AND EXISTS (
+                SELECT 1
+                FROM "__EFMigrationsHistory"
+                WHERE "MigrationId" = '20260728235500_GrantRuntimeTenantMoneyRowLockUpdates')
+              AND has_table_privilege({role}, '"TenantAccounts"', 'SELECT')
+              AND has_table_privilege({role}, '"TenantLedgerEntries"', 'SELECT')
+              AND has_table_privilege({role}, '"TenantLedgerEntries"', 'INSERT')
+              AND has_table_privilege({role}, '"TenantLedgerEntries"', 'UPDATE')
+              AND has_table_privilege({role}, '"TenantLedgerAllocations"', 'SELECT')
+              AND has_table_privilege({role}, '"TenantLedgerAllocations"', 'INSERT')
+              AND has_sequence_privilege({role}, '"TenantLedgerEntries_Id_seq"', 'USAGE')
+              AND has_sequence_privilege({role}, '"TenantLedgerAllocations_Id_seq"', 'USAGE')
+            THEN 1 ELSE 0 END AS "Value"
+            """).SingleAsync();
+
+        applied.Should().Be(1);
     }
 
     private CorrectedLeaseGraph SeedCorrectedAgreementWithExistingJanuaryRent()
@@ -217,7 +854,11 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
         _ctx.Db.ChangeTracker.Clear();
 
-        return new CorrectedLeaseGraph(account.Id, initial.Id, initial.PublicId);
+        return new CorrectedLeaseGraph(
+            account.Id,
+            initial.Id,
+            initial.PublicId,
+            correction.Id);
     }
 
     private static LeaseAgreement NewAgreement(
@@ -331,6 +972,9 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     };
 
     private void EnsureFrozenBusinessDate()
+        => SetFrozenBusinessDate(SeededAtUtc);
+
+    private void SetFrozenBusinessDate(DateTime frozenAtUtc)
     {
         var clock = _ctx.Db.SimulationClocks.SingleOrDefault(clock => clock.Id == 1);
         if (clock is null)
@@ -339,19 +983,19 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             {
                 Id = 1,
                 Mode = ClockMode.Frozen,
-                SimAnchorUtc = SeededAtUtc,
-                RealAnchorUtc = SeededAtUtc,
+                SimAnchorUtc = frozenAtUtc,
+                RealAnchorUtc = frozenAtUtc,
                 TimeZoneId = "UTC",
-                UpdatedAtRealUtc = SeededAtUtc,
+                UpdatedAtRealUtc = frozenAtUtc,
             });
         }
         else
         {
             clock.Mode = ClockMode.Frozen;
-            clock.SimAnchorUtc = SeededAtUtc;
-            clock.RealAnchorUtc = SeededAtUtc;
+            clock.SimAnchorUtc = frozenAtUtc;
+            clock.RealAnchorUtc = frozenAtUtc;
             clock.TimeZoneId = "UTC";
-            clock.UpdatedAtRealUtc = SeededAtUtc;
+            clock.UpdatedAtRealUtc = frozenAtUtc;
         }
 
         _ctx.Db.SaveChanges();
@@ -359,8 +1003,14 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
 
     private void EnsureAutomationSettings()
     {
-        if (_ctx.Db.AutomationSettings.Any(settings => settings.PortfolioId == PortfolioId))
+        var existing = _ctx.Db.AutomationSettings
+            .SingleOrDefault(settings => settings.PortfolioId == PortfolioId);
+        if (existing is not null)
         {
+            existing.EnableRentCharges = true;
+            existing.EnableLateFees = true;
+            existing.UpdatedAtUtc = SeededAtUtc;
+            _ctx.Db.SaveChanges();
             return;
         }
 
@@ -368,6 +1018,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
         {
             PortfolioId = PortfolioId,
             EnableRentCharges = true,
+            EnableLateFees = true,
             RentChargeLeadDays = 5,
             CreatedAtUtc = SeededAtUtc,
             UpdatedAtUtc = SeededAtUtc,
@@ -378,5 +1029,71 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     private sealed record CorrectedLeaseGraph(
         int TenantAccountId,
         int InitialAgreementId,
-        Guid InitialAgreementPublicId);
+        Guid InitialAgreementPublicId,
+        int CorrectionAgreementId);
+
+    private sealed record InitialLeaseGraph(
+        int TenantAccountId,
+        int LeaseAgreementId,
+        Guid LeaseAgreementPublicId);
+
+    private string RuntimeConnectionString(string role, string password) =>
+        new NpgsqlConnectionStringBuilder(_ctx.ConnectionString)
+        {
+            Username = role,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
+
+    private sealed class RestrictedRoleConnectionInterceptor(string expectedRole) : DbConnectionInterceptor
+    {
+        public int OpenCount { get; private set; }
+
+        public override async Task ConnectionOpenedAsync(
+            DbConnection connection,
+            ConnectionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            await DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+                connection,
+                expectedRole,
+                cancellationToken);
+            OpenCount++;
+        }
+    }
+
+    private sealed class AuditInsertFailureInterceptor : DbCommandInterceptor
+    {
+        public bool FailAtomicAudit { get; set; }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            ThrowIfConfigured(command);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfConfigured(command);
+            return ValueTask.FromResult(result);
+        }
+
+        private void ThrowIfConfigured(DbCommand command)
+        {
+            if (FailAtomicAudit
+                && command.CommandText.Contains(
+                    "INSERT INTO \"AtomicAuditLogs\"",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Injected late-fee audit failure.");
+            }
+        }
+    }
 }

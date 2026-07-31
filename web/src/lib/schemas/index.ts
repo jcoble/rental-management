@@ -461,7 +461,9 @@ export const appointmentSchema = z.object({
 	scheduledStart: required('Start time'),
 	scheduledEnd: optionalText,
 	propertyId: idString,
+	unitId: idString,
 	tenantId: idString,
+	workOrderId: idString,
 	prospectName: optionalText,
 	// prospectEmail: server [EmailAddress] optional
 	prospectEmail: optionalEmail,

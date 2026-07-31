@@ -29,7 +29,8 @@ const DESTINATIONS = new Set<NotificationDestination>([
 	'LeasingApplication',
 	'LeasingAppointment',
 	'LeasingConversation',
-	'LeasingMoveIn'
+	'LeasingMoveIn',
+	'TenantAccount'
 ]);
 
 export function notificationIntentUrl(
@@ -135,6 +136,12 @@ function resolveDestination(intent: NotificationNavigationIntent): string | null
 			return detailRoute('/leasing/conversations', resource, 'Conversation');
 		case 'LeasingMoveIn':
 			return detailRoute('/leasing/move-ins', resource, 'LeaseManagement');
+		case 'TenantAccount': {
+			const id = kindId(resource, 'TenantAccount');
+			return id === null || intent.experience !== 'Tenant'
+				? null
+				: `/portal/payments?account=${id}`;
+		}
 		default: {
 			const exhaustiveDestination: never = intent.destination;
 			void exhaustiveDestination;

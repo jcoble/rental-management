@@ -1,11 +1,15 @@
+using System.Collections.Concurrent;
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
@@ -38,6 +42,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     private ServiceProvider _services = null!;
     private IAtomicUnitOfWork _atomic = null!;
     private WorkspaceReadScope _scope;
+    private CommandRecorder Recorder => _services.GetRequiredService<CommandRecorder>();
+    private NotificationFailureInterceptor Failures => _services.GetRequiredService<NotificationFailureInterceptor>();
 
     public TenantReceiptSimulationClockTests(MigratedPostgreSqlFixture fixture)
     {
@@ -63,7 +69,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     public async Task ManualReceipt_UsesCommandSimulationClockForAttemptLedgerAllocationAndOutbox()
     {
         var graph = SeedTenantAccountWithOpenCharge("manual-sim-clock", 1_200m);
-        var command = ReceiptCommand(graph.AccountId, 1_200m, "manual-sim-clock", SimulatedEntryAtUtc);
+        var command = ReceiptCommand(
+            graph.AccountId, graph.ChargeEntryId, 1_200m, "manual-sim-clock", SimulatedEntryAtUtc);
 
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
@@ -107,10 +114,248 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ManualReceipt_StagesTenantRentReceivedNotificationOutboxAndReplayDedupe()
+    {
+        var graph = SeedTenantAccountWithOpenCharge("receipt-notification", 1_200m);
+        var primary = SeedTenantPortalAccess(
+            graph,
+            "receipt-notification-primary",
+            graph.PrimaryPartyId,
+            enableInApp: true,
+            enableEmail: true,
+            enableSms: true,
+            enablePush: true);
+        var coTenant = SeedTenantPortalAccess(
+            graph,
+            "receipt-notification-email-only",
+            null,
+            LeaseManagementPartyRole.CoTenant,
+            enableInApp: false,
+            enableEmail: true,
+            enableSms: false,
+            enablePush: false);
+        var revoked = SeedTenantPortalAccess(
+            graph,
+            "receipt-notification-revoked",
+            null,
+            LeaseManagementPartyRole.Occupant,
+            enableInApp: true,
+            enableEmail: true,
+            enableSms: true,
+            enablePush: true,
+            revokedAtUtc: SimulatedEntryAtUtc.AddMinutes(-1));
+        var command = ReceiptCommand(
+            graph.AccountId, graph.ChargeEntryId, 1_200m, "receipt-notification", SimulatedEntryAtUtc);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
+        Recorder.Clear();
+
+        var outcome = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
+        var replay = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
+
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(outcome.Value);
+        _ctx.Db.ChangeTracker.Clear();
+        var notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(row =>
+                row.PortfolioId == PortfolioId
+                && row.UserId == primary.UserId
+                && row.Type == "TenantRentReceived"
+                && row.RelatedEntityType == nameof(TenantLedgerEntry)
+                && row.RelatedEntityId == outcome.Value.LedgerEntryId);
+        notification.Title.Should().Be("Rent received");
+        notification.Message.Should().NotContain("1200");
+        notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
+        notification.NavigationDestination.Should().Be(NavigationDestination.TenantLedgerEntry);
+        notification.NavigationAccessContextId.Should().Be(primary.AccessContextId);
+        notification.NavigationAccessRevision.Should().Be(primary.AccessRevision);
+        notification.NavigationResourceKind.Should().Be(nameof(TenantLedgerEntry));
+        notification.NavigationResourceId.Should().Be((int)outcome.Value.LedgerEntryId);
+        notification.NavigationParentResourceKind.Should().Be(nameof(TenantAccount));
+        notification.NavigationParentResourceId.Should().Be(graph.AccountId);
+        notification.NavigationFallbackDestination.Should().Be(NavigationDestination.Home);
+
+        (await _ctx.Db.NotificationReadStates.AsNoTracking()
+            .CountAsync(row =>
+                row.PortfolioId == PortfolioId
+                && row.NotificationId == notification.Id
+                && row.UserId == primary.UserId)).Should().Be(0);
+        (await _ctx.Db.Notifications.AsNoTracking()
+            .CountAsync(row =>
+                row.PortfolioId == PortfolioId
+                && row.Type == "TenantRentReceived"
+                && row.RelatedEntityId == outcome.Value.LedgerEntryId)).Should().Be(1,
+                "the co-tenant disabled in-app alerts and the revoked tenant has no effective access");
+        (await _ctx.Db.Notifications.AsNoTracking()
+            .CountAsync(row => row.PortfolioId == PortfolioId && row.UserId == coTenant.UserId)).Should().Be(0);
+        (await _ctx.Db.Notifications.AsNoTracking()
+            .CountAsync(row => row.PortfolioId == PortfolioId && row.UserId == revoked.UserId)).Should().Be(0);
+
+        var outbox = await _ctx.Db.OutboxMessages.AsNoTracking()
+            .Where(row =>
+                row.PortfolioId == PortfolioId
+                && row.IdempotencyKey.Contains("tenant-rent-received-notification"))
+            .OrderBy(row => row.MessageType)
+            .Select(row => new { row.MessageType, row.Payload, row.IdempotencyKey })
+            .ToListAsync();
+        outbox.Select(row => row.MessageType).Should().Equal(
+            "data-update",
+            "email",
+            "email",
+            "push",
+            "sms");
+        outbox.Should().OnlyContain(row => !row.Payload.Contains("1200", StringComparison.Ordinal));
+        outbox.Count(row => row.Payload.Contains(primary.Email, StringComparison.Ordinal)).Should().Be(1);
+        outbox.Count(row => row.Payload.Contains(coTenant.Email, StringComparison.Ordinal)).Should().Be(1);
+        outbox.Should().NotContain(row => row.Payload.Contains(revoked.Email, StringComparison.Ordinal));
+        outbox.Should().ContainSingle(row => row.Payload.Contains(primary.PushToken!, StringComparison.Ordinal));
+        outbox.Should().ContainSingle(row => row.Payload.Contains(primary.PhoneNumber!, StringComparison.Ordinal));
+
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey
+                && row.EntityType == nameof(Notification)
+                && row.EntityId == notification.Id
+                && row.Operation == AuditLogOperation.Created
+                && row.ChangeReason == "Posted tenant rent-received notification.")).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.AsNoTracking()
+            .CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        Recorder.Commands.Count(sql =>
+            sql.Contains("YS-304 tenant receipt notification recipients", StringComparison.Ordinal))
+            .Should().Be(1, "recipient filtering, joining, ordering, and preference eligibility run in one tagged SQL query");
+    }
+
+    [Fact]
+    public async Task ManualReceipt_UsesBusinessDateForTenantNotificationClockAndWallClockForOutboxAudit()
+    {
+        var businessNowUtc = new DateTime(2027, 02, 20, 17, 00, 00, DateTimeKind.Utc);
+        var wallRecordedAtUtc = new DateTime(2026, 07, 30, 16, 00, 00, DateTimeKind.Utc);
+        var receiptEffectiveOn = new DateOnly(2027, 02, 12);
+        var expectedNotificationCreatedAtUtc = new DateTime(2027, 02, 20, 12, 00, 00, DateTimeKind.Utc);
+        var expectedNotificationExpiresAtUtc = new DateTime(2027, 03, 22, 23, 59, 59, DateTimeKind.Utc);
+        await FreezeSimulationClockAtAsync(businessNowUtc);
+        var graph = SeedTenantAccountWithOpenCharge("receipt-business-clock", 500m);
+        var primary = SeedTenantPortalAccess(
+            graph,
+            "receipt-business-clock-primary",
+            graph.PrimaryPartyId,
+            enableInApp: true,
+            enableEmail: true,
+            enableSms: true,
+            enablePush: true);
+        var command = ReceiptCommand(
+                graph.AccountId,
+                graph.ChargeEntryId,
+                500m,
+                "receipt-business-clock",
+                wallRecordedAtUtc)
+            with { EffectiveOn = receiptEffectiveOn };
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
+
+        var outcome = await _atomic.ExecuteAsync(identity, command, ReceiptCodec);
+
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        _ctx.Db.ChangeTracker.Clear();
+        var notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(row =>
+                row.PortfolioId == PortfolioId
+                && row.UserId == primary.UserId
+                && row.Type == "TenantRentReceived"
+                && row.RelatedEntityType == nameof(TenantLedgerEntry)
+                && row.RelatedEntityId == outcome.Value.LedgerEntryId);
+        notification.CreatedAt.Should().Be(expectedNotificationCreatedAtUtc);
+        notification.NavigationExpiresAtUtc.Should().Be(expectedNotificationExpiresAtUtc);
+        notification.NavigationExpiresAtUtc.Should().BeAfter(businessNowUtc);
+
+        var metadataTimes = await (
+            from audit in _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            join outbox in _ctx.Db.OutboxMessages.AsNoTracking()
+                on audit.PortfolioId equals outbox.PortfolioId
+            where audit.CommandType == identity.CommandType
+                && audit.CommandIdempotencyKey == identity.IdempotencyKey
+                && audit.EntityType == nameof(Notification)
+                && audit.EntityId == notification.Id
+                && audit.Operation == AuditLogOperation.Created
+                && outbox.IdempotencyKey.Contains("tenant-rent-received-notification")
+            select new
+            {
+                AuditTimestamp = audit.Timestamp,
+                outbox.CreatedAtUtc,
+                outbox.NextAttemptAtUtc,
+                outbox.MessageType,
+                outbox.Payload,
+            })
+            .OrderBy(row => row.MessageType)
+            .ToListAsync();
+        metadataTimes.Should().NotBeEmpty();
+        metadataTimes.Should().OnlyContain(row => row.AuditTimestamp == wallRecordedAtUtc);
+        metadataTimes.Should().OnlyContain(row => row.CreatedAtUtc == wallRecordedAtUtc);
+        metadataTimes.Should().OnlyContain(row => row.NextAttemptAtUtc == wallRecordedAtUtc);
+        metadataTimes.Should().ContainSingle(row =>
+            row.MessageType == "push"
+            && row.Payload.Contains("2027-03-22T23:59:59Z", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ManualReceipt_NotificationFailureRollsBackAttemptLedgerAuditOutboxAndReceipt()
+    {
+        var graph = SeedTenantAccountWithOpenCharge("receipt-notification-rollback", 1_200m);
+        SeedTenantPortalAccess(
+            graph,
+            "receipt-notification-rollback-primary",
+            graph.PrimaryPartyId,
+            enableInApp: true,
+            enableEmail: true,
+            enableSms: true,
+            enablePush: true);
+        var command = ReceiptCommand(
+            graph.AccountId, graph.ChargeEntryId, 1_200m, "receipt-notification-rollback", SimulatedEntryAtUtc);
+        var identity = new AtomicCommandIdentity(
+            "tenant-account.receipt.record", command.DeliveryIdempotencyKey);
+        Failures.FailNotifications = true;
+
+        try
+        {
+            await FluentActions.Invoking(() => _atomic.ExecuteAsync(identity, command, ReceiptCodec))
+                .Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("injected tenant receipt notification failure");
+        }
+        finally
+        {
+            Failures.FailNotifications = false;
+        }
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.TenantPaymentAttempts.AsNoTracking()
+            .CountAsync(attempt => attempt.IdempotencyKey == command.DeliveryIdempotencyKey)).Should().Be(0);
+        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .CountAsync(entry => entry.BusinessKey == command.BusinessKey)).Should().Be(0);
+        (await _ctx.Db.Notifications.AsNoTracking()
+            .CountAsync(row => row.PortfolioId == PortfolioId && row.Type == "TenantRentReceived")).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.AsNoTracking()
+            .CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await _ctx.Db.OutboxMessages.AsNoTracking()
+            .CountAsync(row =>
+                row.PortfolioId == PortfolioId
+                && row.IdempotencyKey.Contains("tenant-rent-received-notification"))).Should().Be(0);
+    }
+
+    [Fact]
     public async Task ScanPaymentConfirmation_CarriesConfirmedSimulationClockIntoReceiptMutation()
     {
         var graph = SeedTenantAccountWithOpenCharge("scan-sim-clock", 1_875m);
-        var draft = SeedPaymentScanDraft(graph.AccountId);
+        var draft = SeedPaymentScanDraft(graph.AccountId, graph.ChargeEntryId);
         var command = ScanCommand(draft, graph.AccountId, 1_875m, SimulatedEntryAtUtc);
 
         var outcome = await _atomic.ExecuteAsync(
@@ -151,6 +396,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var scanGraph = SeedTenantAccountWithOpenCharge("same-check-scan", 1_350m);
         var existingCommand = ReceiptCommand(
             existingGraph.AccountId,
+            existingGraph.ChargeEntryId,
             1_675m,
             "same-check-existing",
             SimulatedEntryAtUtc.AddMinutes(-5),
@@ -161,7 +407,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             new AtomicCommandIdentity("tenant-account.receipt.record", existingCommand.DeliveryIdempotencyKey),
             existingCommand,
             ReceiptCodec);
-        var draft = SeedPaymentScanDraft(scanGraph.AccountId);
+        var draft = SeedPaymentScanDraft(scanGraph.AccountId, scanGraph.ChargeEntryId);
         var scanCommand = ScanCommand(
             draft,
             scanGraph.AccountId,
@@ -215,7 +461,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         });
         await _ctx.Db.SaveChangesAsync();
         _ctx.Db.ChangeTracker.Clear();
-        var command = ReceiptCommand(graph.AccountId, 1_200m, "receipt-rollback", SimulatedEntryAtUtc)
+        var command = ReceiptCommand(
+                graph.AccountId, graph.ChargeEntryId, 1_200m, "receipt-rollback", SimulatedEntryAtUtc)
             with { BusinessKey = duplicateBusinessKey };
 
         Func<Task> act = async () => await _atomic.ExecuteAsync(
@@ -298,9 +545,11 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<TimeProvider>(new FixedTimeProvider(utcNow));
+        services.AddSingleton<CommandRecorder>();
+        services.AddSingleton<NotificationFailureInterceptor>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
-        services.AddScoped<ProductionScanConfirmationTargetWriter>();
+        services.AddAtomicPersistenceKernel();
+        services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
         services.AddAtomicCommandHandler<
             RecordTenantReceiptCommand,
             RecordTenantReceiptResult,
@@ -308,18 +557,26 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
-            ConfirmScanDraftHandler<ProductionScanConfirmationTargetWriter>>();
+            ConfirmScanDraftHandler>();
         services.AddAtomicCommandHandler<
             FundSecurityDepositCommand,
             SecurityDepositMutationResult,
             FundSecurityDepositHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
-                .UseAtomicPersistenceKernel(provider));
+                .UseAtomicPersistenceKernel(provider)
+                .AddInterceptors(
+                    provider.GetRequiredService<CommandRecorder>(),
+                    provider.GetRequiredService<NotificationFailureInterceptor>()));
         return services.BuildServiceProvider();
     }
 
     private async Task FreezeSimulationClockAsync()
+    {
+        await FreezeSimulationClockAtAsync(SimulatedEntryAtUtc);
+    }
+
+    private async Task FreezeSimulationClockAtAsync(DateTime simulatedUtc)
     {
         var clock = await _ctx.Db.SimulationClocks.SingleOrDefaultAsync(clock => clock.Id == 1);
         if (clock is null)
@@ -328,7 +585,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             {
                 Id = 1,
                 Mode = ClockMode.Frozen,
-                SimAnchorUtc = SimulatedEntryAtUtc,
+                SimAnchorUtc = simulatedUtc,
                 RealAnchorUtc = DateTime.UtcNow,
                 TimeZoneId = "America/New_York",
             });
@@ -336,7 +593,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         else
         {
             clock.Mode = ClockMode.Frozen;
-            clock.SimAnchorUtc = SimulatedEntryAtUtc;
+            clock.SimAnchorUtc = simulatedUtc;
             clock.RealAnchorUtc = DateTime.UtcNow;
             clock.TimeZoneId = "America/New_York";
         }
@@ -388,7 +645,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             CreatedByUserId = _scope.UserId,
             RowVersion = Guid.NewGuid(),
         };
-        relationship.Parties.Add(new LeaseManagementParty
+        var primaryParty = new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
             Tenant = tenant,
@@ -397,7 +654,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             ChangeReason = "Test setup",
             CreatedAtUtc = seededAt,
             CreatedByUserId = _scope.UserId,
-        });
+        };
+        relationship.Parties.Add(primaryParty);
         var account = new TenantAccount
         {
             PortfolioId = PortfolioId,
@@ -426,7 +684,127 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         _ctx.Db.AddRange(property, unit, tenant, relationship, account, charge);
         _ctx.Db.SaveChanges();
         _ctx.Db.ChangeTracker.Clear();
-        return new TenantAccountGraph(account.Id);
+        return new TenantAccountGraph(account.Id, charge.Id, relationship.Id, primaryParty.Id);
+    }
+
+    private TenantPortalAccessGraph SeedTenantPortalAccess(
+        TenantAccountGraph graph,
+        string suffix,
+        int? existingPartyId,
+        LeaseManagementPartyRole role = LeaseManagementPartyRole.PrimaryTenant,
+        bool enableInApp = true,
+        bool enableEmail = true,
+        bool enableSms = false,
+        bool enablePush = true,
+        DateTime? revokedAtUtc = null)
+    {
+        var seededAt = new DateTime(2026, 12, 15, 12, 0, 0, DateTimeKind.Utc);
+        var normalized = suffix.ToUpperInvariant().Replace('-', '.');
+        var user = new ApplicationUser
+        {
+            UserName = $"tenant-{suffix}@example.test",
+            NormalizedUserName = $"TENANT-{normalized}@EXAMPLE.TEST",
+            Email = $"tenant-{suffix}@example.test",
+            NormalizedEmail = $"TENANT-{normalized}@EXAMPLE.TEST",
+            PhoneNumber = "+15555550199",
+            DisplayName = $"Tenant {suffix}",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = seededAt,
+        };
+        _ctx.Db.Users.Add(user);
+        _ctx.Db.SaveChanges();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
+        _ctx.Db.SaveChanges();
+
+        var partyId = existingPartyId;
+        if (partyId is null)
+        {
+            var tenant = new Tenant
+            {
+                PortfolioId = PortfolioId,
+                FirstName = "Portal",
+                LastName = suffix,
+                Email = $"portal-{suffix}@example.test",
+                Phone = "+15555550299",
+                CreatedAt = seededAt,
+                UpdatedAt = seededAt,
+            };
+            _ctx.Db.Tenants.Add(tenant);
+            _ctx.Db.SaveChanges();
+            var party = new LeaseManagementParty
+            {
+                PortfolioId = PortfolioId,
+                LeaseManagementId = graph.LeaseManagementId,
+                TenantId = tenant.Id,
+                Role = role,
+                EffectiveFrom = new DateOnly(2027, 01, 01),
+                ChangeReason = "receipt notification test tenant access",
+                CreatedAtUtc = seededAt,
+                CreatedByUserId = _scope.UserId,
+            };
+            _ctx.Db.LeaseManagementParties.Add(party);
+            _ctx.Db.SaveChanges();
+            partyId = party.Id;
+        }
+
+        _ctx.Db.UserAlertPreferences.Add(new UserAlertPreference
+        {
+            PortfolioId = PortfolioId,
+            UserId = user.Id,
+            EnableInApp = enableInApp,
+            EnableEmail = enableEmail,
+            EnableSms = enableSms,
+            EnableMobilePush = enablePush,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        });
+        string? pushToken = null;
+        if (enablePush)
+        {
+            pushToken = $"push-token-{suffix}";
+            _ctx.Db.DeviceTokens.Add(new DeviceToken
+            {
+                PortfolioId = PortfolioId,
+                UserId = user.Id,
+                Token = pushToken,
+                Platform = "android",
+                CreatedAt = seededAt,
+                LastSeenAt = seededAt,
+            });
+        }
+        _ctx.Db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContextId = accessContext.Id,
+            ApplicationUserId = user.Id,
+            LeaseManagementPartyId = partyId.Value,
+            GrantedAtUtc = seededAt,
+            RevokedAtUtc = revokedAtUtc,
+            GrantedByUserId = _scope.UserId,
+            RevokedByUserId = revokedAtUtc is null ? null : _scope.UserId,
+            Reason = "receipt notification test tenant portal access",
+        });
+        _ctx.Db.SaveChanges();
+        _ctx.Db.ChangeTracker.Clear();
+        return new TenantPortalAccessGraph(
+            user.Id,
+            accessContext.Id,
+            accessContext.AccessRevision,
+            user.Email!,
+            user.PhoneNumber,
+            pushToken);
     }
 
     private TenantDepositGraph SeedTenantAccountWithOpenDepositCharge(string suffix, decimal amount)
@@ -553,7 +931,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         return new TenantDepositGraph(account.Id, depositAccount.Id);
     }
 
-    private ScanDraft SeedPaymentScanDraft(int tenantAccountId)
+    private ScanDraft SeedPaymentScanDraft(int tenantAccountId, long tenantLedgerEntryId)
     {
         var extractedFields = "{\"document_type\":{\"value\":\"Payment\"}}";
         var draft = new ScanDraft
@@ -566,6 +944,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             CaptureAccessContextId = _scope.AccessContextId,
             CaptureAccessRevision = _scope.AccessRevision,
             CaptureTenantAccountId = tenantAccountId,
+            CaptureTenantLedgerEntryId = tenantLedgerEntryId,
         };
         _ctx.Db.ScanDrafts.Add(draft);
         _ctx.Db.SaveChanges();
@@ -575,6 +954,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
 
     private RecordTenantReceiptCommand ReceiptCommand(
         int accountId,
+        long targetChargeEntryId,
         decimal amount,
         string suffix,
         DateTime recordedAtUtc,
@@ -592,7 +972,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             checkNumber,
             bankName,
             null,
-            AllocateOldestCharges: true,
+            targetChargeEntryId,
             _scope.UserId,
             _scope.SessionId,
             _scope.AccessContextId,
@@ -657,7 +1037,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
                 ScanConfirmationTargetKind.Payment,
                 Payment: new ScanPaymentTargetData(
                     Receipt(amount, confirmedAtUtc, checkNumber),
-                    accountId)),
+                    accountId,
+                    draft.CaptureTenantLedgerEntryId)),
             draft.SourceStoredFileId,
             _scope.SessionId,
             _scope.AccessContextId,
@@ -716,7 +1097,75 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 
-    private sealed record TenantAccountGraph(int AccountId);
+    private sealed class CommandRecorder : DbCommandInterceptor
+    {
+        private readonly ConcurrentQueue<string> _commands = new();
+        public IReadOnlyCollection<string> Commands => _commands.ToArray();
+
+        public void Clear()
+        {
+            while (_commands.TryDequeue(out _)) { }
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            _commands.Enqueue(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class NotificationFailureInterceptor : DbCommandInterceptor
+    {
+        public bool FailNotifications { get; set; }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (FailNotifications
+                && command.CommandText.Contains("INSERT INTO \"Notifications\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("injected tenant receipt notification failure");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (FailNotifications
+                && command.CommandText.Contains("INSERT INTO \"Notifications\"", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("injected tenant receipt notification failure");
+            }
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed record TenantAccountGraph(
+        int AccountId,
+        long ChargeEntryId,
+        int LeaseManagementId = 0,
+        int PrimaryPartyId = 0);
+
+    private sealed record TenantPortalAccessGraph(
+        int UserId,
+        int AccessContextId,
+        long AccessRevision,
+        string Email,
+        string? PhoneNumber,
+        string? PushToken);
 
     private sealed record TenantDepositGraph(int AccountId, int DepositAccountId);
 }

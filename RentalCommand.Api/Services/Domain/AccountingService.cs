@@ -205,14 +205,14 @@ public class AccountingService : IAccountingService
 
         var spentMtd = expensesSpent?.Mtd ?? 0m;
         var spent30 = expensesSpent?.Last30 ?? 0m;
-        var debtServiceSpent = await _db.LoanPayments
-            .AsNoTracking()
+        var debtServiceSpent = await LoanPaymentEffectiveQuery.From(_db)
             .Where(payment =>
                 payment.PortfolioId == portfolioId &&
                 payment.Status == LoanPaymentStatus.Paid &&
                 payment.PaidDate != null &&
-                payment.Loan != null &&
-                authorizedProperties.Any(property => property.Id == payment.Loan.PropertyId))
+                _db.Loans.Any(loan =>
+                    loan.Id == payment.LoanId &&
+                    authorizedProperties.Any(property => property.Id == loan.PropertyId)))
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -303,7 +303,12 @@ public class AccountingService : IAccountingService
                         && charge.IsPastDue)
                     .OrderBy(charge => charge.DueOn)
                     .ThenBy(charge => charge.TenantLedgerEntryId)
-                    .Select(charge => new { charge.TenantLedgerEntryId, charge.DueOn })
+                    .Select(charge => new
+                    {
+                        charge.TenantLedgerEntryId,
+                        charge.DueOn,
+                        charge.OpenAmount,
+                    })
                     .First()
                 orderby oldest.DueOn, oldest.TenantLedgerEntryId
                 select new PastDueLeaseResponse
@@ -326,6 +331,7 @@ public class AccountingService : IAccountingService
                 OverduePaymentCount = balance.PastDueCount,
                 OldestDueOn = oldest.DueOn!.Value,
                 OldestLedgerEntryId = oldest.TenantLedgerEntryId,
+                OldestLedgerEntryOpenAmount = oldest.OpenAmount,
             })
             .Skip(skip)
             .Take(take)
@@ -664,7 +670,24 @@ public class AccountingService : IAccountingService
         if (!string.IsNullOrWhiteSpace(query.Category))
         {
             var category = query.Category.Trim();
-            rows = rows.Where(r => EF.Functions.ILike(r.Category, category));
+            if (TryResolveTenantChargeCategory(category, out var chargeCategory))
+            {
+                var persistedCategory = chargeCategory.ToString();
+                rows = rows.Where(r =>
+                    r.Category == persistedCategory ||
+                    (r.Kind == KindPayment &&
+                     r.TenantAccountId != null &&
+                     _db.TenantLedgerAllocations.Any(allocation =>
+                         allocation.PortfolioId == portfolioId &&
+                         allocation.TenantAccountId == r.TenantAccountId &&
+                         allocation.CreditEntryId == r.Id &&
+                         allocation.DebitEntry != null &&
+                         allocation.DebitEntry.EntryType == chargeCategory)));
+            }
+            else
+            {
+                rows = rows.Where(r => EF.Functions.ILike(r.Category, category));
+            }
         }
 
         if (query.PropertyId.HasValue)
@@ -782,6 +805,24 @@ public class AccountingService : IAccountingService
         KindApplicationFee => "/applications",
         _ => "/banking",
     };
+
+    private static bool TryResolveTenantChargeCategory(
+        string category,
+        out TenantLedgerEntryType entryType)
+    {
+        var resolved = category.ToUpperInvariant() switch
+        {
+            "RENT" or "RENTCHARGE" => (TenantLedgerEntryType?)TenantLedgerEntryType.RentCharge,
+            "SECURITYDEPOSIT" or "DEPOSITCHARGE" => TenantLedgerEntryType.DepositCharge,
+            "LATEFEE" or "LATEFEECHARGE" => TenantLedgerEntryType.LateFeeCharge,
+            "ADDENDUMCHARGE" => TenantLedgerEntryType.AddendumCharge,
+            "MANUALCHARGE" => TenantLedgerEntryType.ManualCharge,
+            _ => null,
+        };
+
+        entryType = resolved.GetValueOrDefault();
+        return resolved.HasValue;
+    }
 
     public Task<AccountingReportsResponse> GetReportsAsync(
         WorkspaceReadScope scope,
@@ -995,14 +1036,14 @@ public class AccountingService : IAccountingService
                 Count = 1,
             });
 
-        var modeledInterestComponents = _db.LoanPayments
-            .AsNoTracking()
+        var modeledInterestComponents = LoanPaymentEffectiveQuery.From(_db)
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
                 lp.Status == LoanPaymentStatus.Paid &&
                 lp.PaidDate != null &&
-                lp.Loan != null &&
-                authorizedProperties.Any(property => property.Id == lp.Loan.PropertyId) &&
+                _db.Loans.Any(loan =>
+                    loan.Id == lp.LoanId &&
+                    authorizedProperties.Any(property => property.Id == loan.PropertyId)) &&
                 lp.PaidDate >= yearStart &&
                 lp.PaidDate < yearEndExclusive)
             .Select(lp => new

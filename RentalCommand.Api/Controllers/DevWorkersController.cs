@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -26,39 +28,43 @@ namespace RentalCommand.Api.Controllers;
 [SimulationOnly]
 [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.SecurityManage)]
 [Produces("application/json")]
-public sealed class DevWorkersController : ControllerBase
+public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
 {
+    private static readonly AtomicJsonResultCodec<EnqueueSimulationWorkerResult> EnqueueWorkerCodec =
+        new("simulation.worker.enqueue.v1");
     private static readonly TimeSpan LongPollTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan LongPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly RentalCommandDbContext _db;
-    private readonly TimeProvider _timeProvider;
-    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public DevWorkersController(
         RentalCommandDbContext db,
-        TimeProvider timeProvider,
-        IAtomicInfrastructureUnitOfWork infrastructure)
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _timeProvider = timeProvider;
-        _infrastructure = infrastructure;
+        _atomic = atomic;
     }
 
     /// <summary>Enqueue one automation job and wait (long-poll) for it to finish.</summary>
     [HttpPost("{key}/run-once")]
-    public async Task<ActionResult<SimWorkerCommandResponse>> RunOnce(string key, CancellationToken ct)
+    public async Task<ActionResult<SimWorkerCommandResponse>> RunOnce(
+        string key,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!SimWorkerKeys.All.Contains(key))
             return BadRequest(new { error = $"Unknown worker key '{key}'.", validKeys = SimWorkerKeys.All });
 
-        return await EnqueueAndAwaitAsync(key, ct);
+        return await EnqueueAndAwaitAsync(key, idempotencyKey, ct);
     }
 
     /// <summary>Enqueue the full due-order batch (see <see cref="SimWorkerKeys.RunDueSequence"/>) and wait.</summary>
     [HttpPost("run-due")]
-    public Task<ActionResult<SimWorkerCommandResponse>> RunDue(CancellationToken ct)
-        => EnqueueAndAwaitAsync(SimWorkerKeys.RunDue, ct);
+    public Task<ActionResult<SimWorkerCommandResponse>> RunDue(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+        => EnqueueAndAwaitAsync(SimWorkerKeys.RunDue, idempotencyKey, ct);
 
     /// <summary>Poll a single command's status/result (non-blocking).</summary>
     [HttpGet("commands/{id:guid}")]
@@ -68,24 +74,45 @@ public sealed class DevWorkersController : ControllerBase
         return row is null ? NotFound() : Ok(ToResponse(row));
     }
 
-    private async Task<ActionResult<SimWorkerCommandResponse>> EnqueueAndAwaitAsync(string key, CancellationToken ct)
+    private async Task<ActionResult<SimWorkerCommandResponse>> EnqueueAndAwaitAsync(
+        string key,
+        string? idempotencyKey,
+        CancellationToken ct)
     {
-        var command = new SimWorkerCommand
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var deliveryKey))
         {
-            Id = Guid.NewGuid(),
-            WorkerKey = key,
-            RequestedSimUtc = _timeProvider.GetUtcNow().UtcDateTime,   // the (usually frozen) sim instant
-            Status = SimWorkerCommandStatus.Pending,
-            CreatedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime,
-        };
-        await _infrastructure.ExecuteAsync(
-            AtomicInfrastructureOperation.SimulationWorkerCommand,
-            _ =>
-            {
-                _db.SimWorkerCommands.Add(command);
-                return Task.CompletedTask;
-            },
-            ct);
+            return BadRequest(new { error = "Idempotency-Key header is required and must be 128 characters or fewer." });
+        }
+
+        if (!TryGetActiveAccessContext(out var access))
+        {
+            return Forbid();
+        }
+
+        var commandId = BuildCommandId(access, key, deliveryKey);
+        var command = new EnqueueSimulationWorkerCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            commandId,
+            key);
+
+        EnqueueSimulationWorkerResult enqueue;
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("simulation.worker.enqueue", BuildIdentityKey(access, deliveryKey)),
+                command,
+                EnqueueWorkerCodec,
+                ct);
+            enqueue = outcome.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
 
         // Long-poll the row for a terminal state — the Engine worker runs it cross-process. Poll timing is
         // on the REAL clock so the timeout still fires under a frozen sim clock.
@@ -94,7 +121,7 @@ public sealed class DevWorkersController : ControllerBase
         {
             await Task.Delay(LongPollInterval, ct);
 
-            var row = await _db.SimWorkerCommands.AsNoTracking().FirstOrDefaultAsync(c => c.Id == command.Id, ct);
+            var row = await _db.SimWorkerCommands.AsNoTracking().FirstOrDefaultAsync(c => c.Id == enqueue.CommandId, ct);
             if (row is not null
                 && (row.Status == SimWorkerCommandStatus.Done || row.Status == SimWorkerCommandStatus.Error))
             {
@@ -105,7 +132,7 @@ public sealed class DevWorkersController : ControllerBase
         return StatusCode(StatusCodes.Status503ServiceUnavailable, new
         {
             error = "Engine command worker not responding (timed out waiting for the command to complete).",
-            commandId = command.Id,
+            commandId = enqueue.CommandId,
         });
     }
 
@@ -122,6 +149,16 @@ public sealed class DevWorkersController : ControllerBase
             row.Id, row.WorkerKey, row.Status, row.RequestedSimUtc,
             result, row.Error, row.CreatedRealUtc, row.CompletedRealUtc);
     }
+
+    private static Guid BuildCommandId(ActiveAccessContext access, string workerKey, string idempotencyKey)
+    {
+        var payload = $"simulation-worker:{access.PortfolioId}:{access.UserId}:{workerKey}:{idempotencyKey}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+        return new Guid(hash[..16]);
+    }
+
+    private static string BuildIdentityKey(ActiveAccessContext access, string idempotencyKey) =>
+        $"{access.PortfolioId}:{access.UserId}:{idempotencyKey}";
 }
 
 /// <summary>A command's status + result. <c>Result</c> is the parsed <c>ResultJson</c> (e.g. <c>{"created":3}</c>).</summary>

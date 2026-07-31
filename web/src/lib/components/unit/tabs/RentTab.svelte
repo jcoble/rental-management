@@ -132,7 +132,7 @@
 	let formKind = $state<FormKind>(null);
 	let operationKey = $state<string | null>(null);
 	let errors = $state<Record<string, string>>({});
-	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' });
+	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '', targetChargeEntryId: '' });
 	let chargeForm = $state({ amount: '', effectiveOn: today(), dueOn: today(), description: '' });
 	let reversalTarget = $state<TenantLedgerEntry | null>(null);
 	let reversalForm = $state({ effectiveOn: today(), reason: '' });
@@ -153,6 +153,9 @@
 	});
 	$effect(() => {
 		if (formKind === 'receipt' && receiptForm.method) clearCreateError('method');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.targetChargeEntryId) clearCreateError('targetChargeEntryId');
 	});
 	$effect(() => {
 		if (formKind === 'charge' && Number(chargeForm.amount) > 0) clearCreateError('amount');
@@ -177,7 +180,7 @@
 		formKind = kind;
 		operationKey = null;
 		errors = {};
-		if (kind === 'receipt') receiptForm = { amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' };
+		if (kind === 'receipt') receiptForm = { amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '', targetChargeEntryId: '' };
 		else if (kind === 'charge') chargeForm = { amount: '', effectiveOn: today(), dueOn: today(), description: '' };
 	}
 	function openReversal(entry: TenantLedgerEntry) {
@@ -208,12 +211,17 @@
 				paymentMethodSummary: receiptForm.method,
 				externalReference: receiptForm.reference.trim() || undefined,
 				payerName: receiptForm.payerName.trim() || undefined,
-				allocateOldestCharges: true
+				targetChargeEntryId: receiptTargetChargeEntryId()
 			});
 		},
 		onSuccess: () => { showSuccess('Receipt recorded.'); closeForm(); invalidateMoney(); },
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
+
+	function receiptTargetChargeEntryId(): number | null {
+		if (receiptForm.targetChargeEntryId === 'unapplied') return null;
+		return Number(receiptForm.targetChargeEntryId);
+	}
 
 	const chargeMutation = createMutation(() => ({
 		mutationFn: () => {
@@ -251,6 +259,7 @@
 		if (!receiptForm.effectiveOn) errors.effectiveOn = 'Pick the date received.';
 		if (!receiptForm.description.trim()) errors.description = 'Describe this receipt.';
 		if (!receiptForm.method) errors.method = 'Choose a payment method.';
+		if (!receiptForm.targetChargeEntryId) errors.targetChargeEntryId = 'Choose one charge or leave the receipt unapplied.';
 		if (Object.keys(errors).length === 0) receiptMutation.mutate();
 	}
 	function submitCharge() {
@@ -297,6 +306,19 @@
 					<label class="text-xs font-medium text-muted-foreground">Reference<Input bind:value={receiptForm.reference} placeholder="Check or confirmation number" /></label>
 					<label class="text-xs font-medium text-muted-foreground">Payer<Input bind:value={receiptForm.payerName} placeholder="Optional" /></label>
 					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Description<Input bind:value={receiptForm.description} />{#if errors.description}<span class="text-destructive">{errors.description}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">
+						Apply payment to
+						<Select.Root type="single" bind:value={receiptForm.targetChargeEntryId}>
+							<Select.Trigger class="w-full">{receiptForm.targetChargeEntryId === 'unapplied' ? 'Leave unapplied/advance receipt' : receiptForm.targetChargeEntryId ? `Charge #${receiptForm.targetChargeEntryId}` : 'Choose a charge or leave unapplied'}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="unapplied" label="Leave unapplied/advance receipt">Leave unapplied/advance receipt</Select.Item>
+								{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} - ${money(charge.openAmount)} still owed`}>{charge.description} - {money(charge.openAmount)} still owed</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						{#if errors.targetChargeEntryId}<span class="text-destructive">{errors.targetChargeEntryId}</span>{/if}
+					</label>
 				</div>
 				<div class="mt-3 flex justify-end"><Button onclick={submitReceipt} disabled={receiptMutation.isPending}>{receiptMutation.isPending ? 'Recording…' : 'Record payment'}</Button></div>
 			{:else if formKind === 'charge'}

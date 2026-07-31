@@ -312,6 +312,7 @@ internal static class TenantChargeBalanceViewSql
            AND debit_allocations."TenantAccountId" = entry."TenantAccountId"
            AND debit_allocations."TenantLedgerEntryId" = entry."Id"
           WHERE entry."Direction" = 'Debit'
+            AND entry."EffectiveOn" <= effective_time."BusinessDate"
             AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
         )
         SELECT "PortfolioId",
@@ -378,11 +379,14 @@ internal static class TenantAccountBalanceViewSql
                  GREATEST(entry."Amount" - COALESCE(entry_reversals."ReversedAmount", 0::numeric), 0::numeric)
                    AS "NetAmount"
           FROM "TenantLedgerEntries" AS entry
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = entry."PortfolioId"
           LEFT JOIN entry_reversals
             ON entry_reversals."PortfolioId" = entry."PortfolioId"
            AND entry_reversals."TenantAccountId" = entry."TenantAccountId"
            AND entry_reversals."TenantLedgerEntryId" = entry."Id"
           WHERE entry."EntryType" <> 'Reversal'
+            AND entry."EffectiveOn" <= effective_time."BusinessDate"
         ),
         debit_allocations AS (
           SELECT allocation."PortfolioId",

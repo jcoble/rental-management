@@ -115,6 +115,202 @@ class WorkOrderListPage {
   }
 }
 
+bool _jsonBool(
+  Map<String, dynamic> json,
+  String key, {
+  bool fallback = false,
+}) => json[key] as bool? ?? fallback;
+
+class WorkOrderDetailCapabilities {
+  const WorkOrderDetailCapabilities({
+    required this.canViewTenantContact,
+    required this.canViewResidents,
+    required this.canViewAccessInstructions,
+    required this.canViewPrivateManagementNotes,
+    required this.canViewCosts,
+    required this.canCommentPublicly,
+    required this.canCommentPrivately,
+    required this.canUploadPhoto,
+    required this.canDeletePhoto,
+    required this.canCancel,
+    required this.canEditRequestFields,
+    required this.canEditManagementFields,
+    required this.canAssignTechnician,
+    required this.canDispatchVendor,
+    required this.allowedStatusTransitions,
+  });
+
+  final bool canViewTenantContact;
+  final bool canViewResidents;
+  final bool canViewAccessInstructions;
+  final bool canViewPrivateManagementNotes;
+  final bool canViewCosts;
+  final bool canCommentPublicly;
+  final bool canCommentPrivately;
+  final bool canUploadPhoto;
+  final bool canDeletePhoto;
+  final bool canCancel;
+  final bool canEditRequestFields;
+  final bool canEditManagementFields;
+  final bool canAssignTechnician;
+  final bool canDispatchVendor;
+  final List<String> allowedStatusTransitions;
+
+  bool get canEdit => canEditRequestFields || canEditManagementFields;
+  bool get canUpdateStatus => allowedStatusTransitions.isNotEmpty;
+  bool get canContactVendor => canDispatchVendor;
+  bool get canRateVendor => canEditManagementFields;
+
+  static const none = WorkOrderDetailCapabilities(
+    canViewTenantContact: false,
+    canViewResidents: false,
+    canViewAccessInstructions: false,
+    canViewPrivateManagementNotes: false,
+    canViewCosts: false,
+    canCommentPublicly: false,
+    canCommentPrivately: false,
+    canUploadPhoto: false,
+    canDeletePhoto: false,
+    canCancel: false,
+    canEditRequestFields: false,
+    canEditManagementFields: false,
+    canAssignTechnician: false,
+    canDispatchVendor: false,
+    allowedStatusTransitions: [],
+  );
+
+  factory WorkOrderDetailCapabilities.fromJson(Map<String, dynamic> json) {
+    final raw = json['capabilities'];
+    if (raw is! Map<String, dynamic>) return none;
+    final source = raw;
+    final rawTransitions = source['allowedStatusTransitions'];
+    return WorkOrderDetailCapabilities(
+      canViewTenantContact: _jsonBool(source, 'canViewTenantContact'),
+      canViewResidents: _jsonBool(source, 'canViewResidents'),
+      canViewAccessInstructions: _jsonBool(source, 'canViewAccessInstructions'),
+      canViewPrivateManagementNotes: _jsonBool(
+        source,
+        'canViewPrivateManagementNotes',
+      ),
+      canViewCosts: _jsonBool(source, 'canViewCosts'),
+      canCommentPublicly: _jsonBool(source, 'canCommentPublicly'),
+      canCommentPrivately: _jsonBool(source, 'canCommentPrivately'),
+      canUploadPhoto: _jsonBool(source, 'canUploadPhoto'),
+      canDeletePhoto: _jsonBool(source, 'canDeletePhoto'),
+      canCancel: _jsonBool(source, 'canCancel'),
+      canEditRequestFields: _jsonBool(source, 'canEditRequestFields'),
+      canEditManagementFields: _jsonBool(source, 'canEditManagementFields'),
+      canAssignTechnician: _jsonBool(source, 'canAssignTechnician'),
+      canDispatchVendor: _jsonBool(source, 'canDispatchVendor'),
+      allowedStatusTransitions: rawTransitions is List
+          ? rawTransitions.map((value) => value.toString()).toList()
+          : const [],
+    );
+  }
+}
+
+class WorkOrderActivityItem {
+  const WorkOrderActivityItem({
+    required this.id,
+    required this.kind,
+    this.fromStatus,
+    this.toStatus,
+    this.note,
+    this.actorLabel,
+    this.visibility,
+    required this.createdAtUtc,
+  });
+
+  final int id;
+  final String kind;
+  final String? fromStatus;
+  final String? toStatus;
+  final String? note;
+  final String? actorLabel;
+  final String? visibility;
+  final DateTime createdAtUtc;
+
+  factory WorkOrderActivityItem.fromJson(Map<String, dynamic> json) {
+    return WorkOrderActivityItem(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      kind: json['kind'] as String? ?? 'Activity',
+      fromStatus: json['fromStatus'] as String?,
+      toStatus: json['toStatus'] as String?,
+      note: json['note'] as String?,
+      actorLabel: json['actorLabel'] as String?,
+      visibility: json['visibility'] as String?,
+      createdAtUtc:
+          DateTime.tryParse(json['createdAtUtc'] as String? ?? '')?.toLocal() ??
+          DateTime(0),
+    );
+  }
+}
+
+class RoleAwareWorkOrderDetail extends WorkOrderDetail {
+  const RoleAwareWorkOrderDetail({
+    required super.workOrder,
+    required super.timeline,
+    required this.detailRole,
+    required this.capabilities,
+    required this.residentNames,
+    this.privateManagementNotes,
+    required this.activity,
+    required this.hasActiveDispatch,
+    this.activeDispatchId,
+    this.activeDispatchVendorId,
+    this.activeDispatchVendorName,
+  });
+
+  final String detailRole;
+  final WorkOrderDetailCapabilities capabilities;
+  final List<String> residentNames;
+  final String? privateManagementNotes;
+  final List<WorkOrderActivityItem> activity;
+  final bool hasActiveDispatch;
+  final int? activeDispatchId;
+  final int? activeDispatchVendorId;
+  final String? activeDispatchVendorName;
+
+  factory RoleAwareWorkOrderDetail.fromJson(Map<String, dynamic> json) {
+    final base = WorkOrderDetail.fromJson(json);
+    final residents = json['residentNames'];
+    final activity = json['activity'];
+    return RoleAwareWorkOrderDetail(
+      workOrder: base.workOrder,
+      timeline: base.timeline,
+      detailRole: json['detailRole'] as String? ?? '',
+      capabilities: WorkOrderDetailCapabilities.fromJson(json),
+      residentNames: residents is List
+          ? residents.map((value) => value.toString()).toList()
+          : const [],
+      privateManagementNotes: json['privateManagementNotes'] as String?,
+      activity: activity is List
+          ? activity
+                .whereType<Map<String, dynamic>>()
+                .map(WorkOrderActivityItem.fromJson)
+                .toList()
+          : const [],
+      hasActiveDispatch: _jsonBool(json, 'hasActiveDispatch'),
+      activeDispatchId: (json['activeDispatchId'] as num?)?.toInt(),
+      activeDispatchVendorId: (json['activeDispatchVendorId'] as num?)?.toInt(),
+      activeDispatchVendorName: json['activeDispatchVendorName'] as String?,
+    );
+  }
+
+  factory RoleAwareWorkOrderDetail.fromBase(WorkOrderDetail detail) {
+    if (detail is RoleAwareWorkOrderDetail) return detail;
+    return RoleAwareWorkOrderDetail(
+      workOrder: detail.workOrder,
+      timeline: detail.timeline,
+      detailRole: '',
+      capabilities: WorkOrderDetailCapabilities.none,
+      residentNames: const [],
+      activity: const [],
+      hasActiveDispatch: false,
+    );
+  }
+}
+
 /// Repository for work orders.
 ///
 /// Endpoints:
@@ -231,7 +427,7 @@ class WorkOrdersRepository {
           message: 'Empty response from server.',
         );
       }
-      return WorkOrderDetail.fromJson(data);
+      return RoleAwareWorkOrderDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -336,6 +532,26 @@ class WorkOrdersRepository {
         );
       }
       return WorkOrder.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> commentWorkOrder(
+    int id, {
+    required String body,
+    bool isPrivate = false,
+  }) async {
+    final payload = {'body': body, 'isPrivate': isPrivate};
+    try {
+      await IdempotentMutation.run(
+        'work-order:comment:$id:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders/$id/comments',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

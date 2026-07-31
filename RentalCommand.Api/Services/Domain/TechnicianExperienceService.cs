@@ -45,38 +45,43 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
             query.NormalizedSkip, query.NormalizedTake);
     }
 
-    internal IQueryable<WorkOrder> BuildFilteredAssignmentQuery(
+    internal IQueryable<AuthorizedAssignmentRow> BuildFilteredAssignmentQuery(
         WorkspaceReadScope scope, TechnicianAssignmentQuery query, bool conversationsOnly,
         DateTime now)
     {
-        var assignments = AuthorizedAssignments(scope, CapabilityKeys.AssignedWorkRead, now);
+        var assignments = AuthorizedAssignmentRows(scope, CapabilityKeys.AssignedWorkRead, now);
         if (query.OpenOnly)
-            assignments = assignments.Where(work => work.Status != WorkOrderStatus.Completed &&
-                work.Status != WorkOrderStatus.Cancelled && work.Status != WorkOrderStatus.Archived);
-        if (query.Status is { } status) assignments = assignments.Where(work => work.Status == status);
+            assignments = assignments.Where(row => row.WorkOrder.Status != WorkOrderStatus.Completed &&
+                row.WorkOrder.Status != WorkOrderStatus.Cancelled &&
+                row.WorkOrder.Status != WorkOrderStatus.Archived);
+        if (query.Status is { } status)
+            assignments = assignments.Where(row => row.WorkOrder.Status == status);
         if (query.ScheduledFrom is { } from)
         {
             var utc = from.UtcDateTime;
-            assignments = assignments.Where(work => work.ScheduledFor != null && work.ScheduledFor >= utc);
+            assignments = assignments.Where(row =>
+                row.WorkOrder.ScheduledFor != null && row.WorkOrder.ScheduledFor >= utc);
         }
         if (query.ScheduledTo is { } to)
         {
             var utc = to.UtcDateTime;
-            assignments = assignments.Where(work => work.ScheduledFor != null && work.ScheduledFor < utc);
+            assignments = assignments.Where(row =>
+                row.WorkOrder.ScheduledFor != null && row.WorkOrder.ScheduledFor < utc);
         }
         if (conversationsOnly)
-            assignments = assignments.Where(work => _db.Conversations.Any(conversation =>
-                conversation.PortfolioId == work.PortfolioId && conversation.WorkOrderId == work.Id));
+            assignments = assignments.Where(row => _db.Conversations.Any(conversation =>
+                conversation.PortfolioId == row.WorkOrder.PortfolioId &&
+                conversation.WorkOrderId == row.WorkOrder.Id));
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            assignments = assignments.Where(work =>
-                EF.Functions.ILike(work.Title, $"%{term}%") ||
-                EF.Functions.ILike(work.Description, $"%{term}%") ||
-                EF.Functions.ILike(work.Category, $"%{term}%") ||
-                EF.Functions.ILike(work.Property!.AddressLine1, $"%{term}%") ||
-                EF.Functions.ILike(work.Property.City, $"%{term}%") ||
-                (work.Unit != null && EF.Functions.ILike(work.Unit.UnitNumber, $"%{term}%")));
+            assignments = assignments.Where(row =>
+                EF.Functions.ILike(row.WorkOrder.Title, $"%{term}%") ||
+                EF.Functions.ILike(row.WorkOrder.Description, $"%{term}%") ||
+                EF.Functions.ILike(row.WorkOrder.Category, $"%{term}%") ||
+                EF.Functions.ILike(row.AddressLine1, $"%{term}%") ||
+                EF.Functions.ILike(row.City, $"%{term}%") ||
+                (row.UnitNumber != null && EF.Functions.ILike(row.UnitNumber, $"%{term}%")));
         }
 
         return assignments;
@@ -87,44 +92,56 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         DateTime now)
     {
         var assignments = BuildFilteredAssignmentQuery(scope, query, conversationsOnly, now);
-        IOrderedQueryable<WorkOrder> ordered = query.SortField switch
+        IOrderedQueryable<AuthorizedAssignmentRow> ordered = query.SortField switch
         {
-            "title" => query.SortDescending ? assignments.OrderByDescending(work => work.Title) : assignments.OrderBy(work => work.Title),
-            "status" => query.SortDescending ? assignments.OrderByDescending(work => work.Status) : assignments.OrderBy(work => work.Status),
-            "scheduledfor" => query.SortDescending ? assignments.OrderByDescending(work => work.ScheduledFor) : assignments.OrderBy(work => work.ScheduledFor),
-            "updatedat" => query.SortDescending ? assignments.OrderByDescending(work => work.UpdatedAt) : assignments.OrderBy(work => work.UpdatedAt),
-            _ => assignments.OrderBy(work => work.ScheduledFor == null).ThenBy(work => work.ScheduledFor).ThenByDescending(work => work.UpdatedAt),
+            "title" => query.SortDescending
+                ? assignments.OrderByDescending(row => row.WorkOrder.Title)
+                : assignments.OrderBy(row => row.WorkOrder.Title),
+            "status" => query.SortDescending
+                ? assignments.OrderByDescending(row => row.WorkOrder.Status)
+                : assignments.OrderBy(row => row.WorkOrder.Status),
+            "scheduledfor" => query.SortDescending
+                ? assignments.OrderByDescending(row => row.WorkOrder.ScheduledFor)
+                : assignments.OrderBy(row => row.WorkOrder.ScheduledFor),
+            "updatedat" => query.SortDescending
+                ? assignments.OrderByDescending(row => row.WorkOrder.UpdatedAt)
+                : assignments.OrderBy(row => row.WorkOrder.UpdatedAt),
+            _ => assignments.OrderBy(row => row.WorkOrder.ScheduledFor == null)
+                .ThenBy(row => row.WorkOrder.ScheduledFor)
+                .ThenByDescending(row => row.WorkOrder.UpdatedAt),
         };
-        return ordered.ThenBy(work => work.Id)
+        return ordered.ThenBy(row => row.WorkOrder.Id)
             .Skip(query.NormalizedSkip).Take(query.NormalizedTake)
-            .Select(work => new TechnicianAssignmentReadRow(
-                work.Id, work.PropertyId, work.UnitId, work.Title, work.Category, work.Status,
-                work.Property!.AddressLine1, work.Property.AddressLine2, work.Property.City,
-                work.Property.State, work.Property.PostalCode,
-                work.Unit != null ? work.Unit.UnitNumber : null,
-                work.ScheduledFor, work.ScheduledWindowEnd, work.UpdatedAt,
-                _db.Conversations.Where(conversation => conversation.PortfolioId == work.PortfolioId &&
-                    conversation.WorkOrderId == work.Id)
+            .Select(row => new TechnicianAssignmentReadRow(
+                row.WorkOrder.Id, row.WorkOrder.PropertyId, row.WorkOrder.UnitId,
+                row.WorkOrder.Title, row.WorkOrder.Category, row.WorkOrder.Status,
+                row.AddressLine1, row.AddressLine2, row.City, row.State, row.PostalCode,
+                row.UnitNumber,
+                row.WorkOrder.ScheduledFor, row.WorkOrder.ScheduledWindowEnd, row.WorkOrder.UpdatedAt,
+                _db.Conversations.Where(conversation =>
+                    conversation.PortfolioId == row.WorkOrder.PortfolioId &&
+                    conversation.WorkOrderId == row.WorkOrder.Id)
                     .Select(conversation => (int?)conversation.TechnicianUnreadCount).FirstOrDefault() ?? 0));
     }
 
     public async Task<TechnicianAssignmentDetail?> GetAssignmentAsync(
         WorkspaceReadScope scope, int workOrderId, CancellationToken ct)
     {
-        var seed = await AuthorizedAssignments(scope, CapabilityKeys.AssignedWorkRead)
-            .Where(work => work.Id == workOrderId)
-            .Select(work => new AssignmentDetailSeed(
-                work.Id, work.PropertyId, work.UnitId, work.Title, work.Description, work.Category, work.Status, work.RequestedAt,
-                work.ScheduledFor, work.ScheduledWindowEnd, work.CompletedAt, work.UpdatedAt,
-                work.Property!.AddressLine1, work.Property.AddressLine2, work.Property.City,
-                work.Property.State, work.Property.PostalCode,
-                work.Unit != null ? work.Unit.UnitNumber : null,
-                work.TechnicianAccessInstructions,
-                work.Tenant != null ? (work.Tenant.FirstName + " " + work.Tenant.LastName).Trim() : null,
-                work.Tenant != null ? work.Tenant.Phone : null,
-                work.Tenant != null ? work.Tenant.Email : null,
-                _db.Conversations.Where(conversation => conversation.PortfolioId == work.PortfolioId &&
-                    conversation.WorkOrderId == work.Id).Select(conversation => (int?)conversation.Id).FirstOrDefault()))
+        var seed = await AuthorizedAssignmentRows(
+                scope, CapabilityKeys.AssignedWorkRead, targetWorkOrderId: workOrderId)
+            .Select(row => new AssignmentDetailSeed(
+                row.WorkOrder.Id, row.WorkOrder.PropertyId, row.WorkOrder.UnitId,
+                row.WorkOrder.Title, row.WorkOrder.Description, row.WorkOrder.Category,
+                row.WorkOrder.Status, row.WorkOrder.RequestedAt,
+                row.WorkOrder.ScheduledFor, row.WorkOrder.ScheduledWindowEnd,
+                row.WorkOrder.CompletedAt, row.WorkOrder.UpdatedAt,
+                row.AddressLine1, row.AddressLine2, row.City, row.State, row.PostalCode,
+                row.UnitNumber, row.WorkOrder.TechnicianAccessInstructions,
+                row.WorkOrder.RequesterName, row.WorkOrder.RequesterPhone, row.WorkOrder.RequesterEmail,
+                _db.Conversations.Where(conversation =>
+                        conversation.PortfolioId == row.WorkOrder.PortfolioId &&
+                        conversation.WorkOrderId == row.WorkOrder.Id)
+                    .Select(conversation => (int?)conversation.Id).FirstOrDefault()))
             .SingleOrDefaultAsync(ct);
         if (seed is null) return null;
 
@@ -175,6 +192,39 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         _db.WorkOrders.AsNoTracking().WhereAuthorized(
             _db, scope, [capability], now ?? _timeProvider.GetUtcNow().UtcDateTime);
 
+    private IQueryable<AuthorizedAssignmentRow> AuthorizedAssignmentRows(
+        WorkspaceReadScope scope,
+        string capability,
+        DateTime? now = null,
+        int? targetWorkOrderId = null)
+    {
+        var safeContexts = _db.Database.SqlQuery<AssignedWorkOrderContextRow>($"""
+            SELECT assigned_context."WorkOrderId",
+                   assigned_context."AddressLine1",
+                   assigned_context."AddressLine2",
+                   assigned_context."City",
+                   assigned_context."State",
+                   assigned_context."PostalCode",
+                   assigned_context."UnitNumber"
+            FROM public.rc_api_assigned_work_order_detail_context(
+                {scope.PortfolioId}, {targetWorkOrderId}) AS assigned_context
+            """);
+
+        return
+            from workOrder in AuthorizedAssignments(scope, capability, now)
+            join context in safeContexts on workOrder.Id equals context.WorkOrderId
+            select new AuthorizedAssignmentRow
+            {
+                WorkOrder = workOrder,
+                AddressLine1 = context.AddressLine1,
+                AddressLine2 = context.AddressLine2,
+                City = context.City,
+                State = context.State,
+                PostalCode = context.PostalCode,
+                UnitNumber = context.UnitNumber,
+            };
+    }
+
     private static TechnicianAssignmentListItem ToListItem(TechnicianAssignmentReadRow row) => new(
         row.Id, row.PropertyId, row.UnitId, row.Title, row.Category, row.Status,
         Address(row.Address1, row.Address2, row.City, row.State, row.PostalCode), row.Unit,
@@ -188,6 +238,28 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         int Id, int PropertyId, int? UnitId, string Title, string Category, WorkOrderStatus Status,
         string Address1, string? Address2, string City, string State, string PostalCode, string? Unit,
         DateTime? ScheduledFor, DateTime? ScheduledWindowEnd, DateTime UpdatedAt, int UnreadMessageCount);
+
+    internal sealed class AuthorizedAssignmentRow
+    {
+        public WorkOrder WorkOrder { get; init; } = null!;
+        public string AddressLine1 { get; init; } = string.Empty;
+        public string? AddressLine2 { get; init; }
+        public string City { get; init; } = string.Empty;
+        public string State { get; init; } = string.Empty;
+        public string PostalCode { get; init; } = string.Empty;
+        public string? UnitNumber { get; init; }
+    }
+
+    private sealed class AssignedWorkOrderContextRow
+    {
+        public int WorkOrderId { get; init; }
+        public string AddressLine1 { get; init; } = string.Empty;
+        public string? AddressLine2 { get; init; }
+        public string City { get; init; } = string.Empty;
+        public string State { get; init; } = string.Empty;
+        public string PostalCode { get; init; } = string.Empty;
+        public string? UnitNumber { get; init; }
+    }
 
     private sealed record AssignmentDetailSeed(int Id, int PropertyId, int? UnitId,
         string Title, string Description, string Category,

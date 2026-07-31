@@ -25,13 +25,12 @@ class OwnerSummary {
   final double undistributed;
 
   factory OwnerSummary.fromJson(Map<String, dynamic> json) => OwnerSummary(
-        ownerId: (json['ownerId'] as num).toInt(),
-        ownerName: json['ownerName'] as String? ?? '',
-        netToOwner: (json['netToOwner'] as num?)?.toDouble() ?? 0,
-        totalDistributed:
-            (json['totalDistributed'] as num?)?.toDouble() ?? 0,
-        undistributed: (json['undistributed'] as num?)?.toDouble() ?? 0,
-      );
+    ownerId: (json['ownerId'] as num).toInt(),
+    ownerName: json['ownerName'] as String? ?? '',
+    netToOwner: (json['netToOwner'] as num?)?.toDouble() ?? 0,
+    totalDistributed: (json['totalDistributed'] as num?)?.toDouble() ?? 0,
+    undistributed: (json['undistributed'] as num?)?.toDouble() ?? 0,
+  );
 }
 
 class PropertyStatement {
@@ -99,12 +98,9 @@ class OwnerStatement {
       properties: props,
       totalIncome: (json['totalIncome'] as num?)?.toDouble() ?? 0,
       totalExpenses: (json['totalExpenses'] as num?)?.toDouble() ?? 0,
-      totalManagementFee:
-          (json['totalManagementFee'] as num?)?.toDouble() ?? 0,
-      totalNetToOwner:
-          (json['totalNetToOwner'] as num?)?.toDouble() ?? 0,
-      totalDistributed:
-          (json['totalDistributed'] as num?)?.toDouble() ?? 0,
+      totalManagementFee: (json['totalManagementFee'] as num?)?.toDouble() ?? 0,
+      totalNetToOwner: (json['totalNetToOwner'] as num?)?.toDouble() ?? 0,
+      totalDistributed: (json['totalDistributed'] as num?)?.toDouble() ?? 0,
       undistributed: (json['undistributed'] as num?)?.toDouble() ?? 0,
     );
   }
@@ -122,12 +118,12 @@ enum DistributionMethod {
   final String label;
 
   String get apiValue => switch (this) {
-        DistributionMethod.check => 'Check',
-        DistributionMethod.ach => 'Ach',
-        DistributionMethod.wire => 'Wire',
-        DistributionMethod.cash => 'Cash',
-        DistributionMethod.other => 'Other',
-      };
+    DistributionMethod.check => 'Check',
+    DistributionMethod.ach => 'Ach',
+    DistributionMethod.wire => 'Wire',
+    DistributionMethod.cash => 'Cash',
+    DistributionMethod.other => 'Other',
+  };
 
   static DistributionMethod fromJson(Object? value) {
     final raw = value?.toString().toLowerCase();
@@ -171,7 +167,8 @@ class OwnerDistribution {
       ownerName: json['ownerName'] as String? ?? '',
       propertyId: (json['propertyId'] as num?)?.toInt(),
       propertyName: json['propertyName'] as String?,
-      date: DateTime.tryParse(json['date'] as String? ?? '') ??
+      date:
+          DateTime.tryParse(json['date'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       method: DistributionMethod.fromJson(json['method']),
@@ -218,13 +215,106 @@ class CreateOwnerDistributionInput {
   final String? memo;
 
   Map<String, dynamic> toJson() => {
-        'ownerEntityId': ownerEntityId,
-        if (propertyId != null) 'propertyId': propertyId,
-        'date': DateTime.utc(date.year, date.month, date.day).toIso8601String(),
-        'amount': amount,
-        'method': method.apiValue,
-        if (memo != null && memo!.isNotEmpty) 'memo': memo,
-      };
+    'ownerEntityId': ownerEntityId,
+    if (propertyId != null) 'propertyId': propertyId,
+    'date': DateTime.utc(date.year, date.month, date.day).toIso8601String(),
+    'amount': amount,
+    'method': method.apiValue,
+    if (memo != null && memo!.isNotEmpty) 'memo': memo,
+  };
+}
+
+class ReportCatalogEntry {
+  const ReportCatalogEntry({
+    required this.key,
+    required this.title,
+    required this.description,
+    required this.endpoint,
+    required this.params,
+    required this.external,
+    required this.categoryTitle,
+  });
+
+  final String key;
+  final String title;
+  final String description;
+  final String endpoint;
+  final List<String> params;
+  final bool external;
+  final String categoryTitle;
+
+  factory ReportCatalogEntry.fromJson(
+    Map<String, dynamic> json, {
+    required String categoryTitle,
+  }) {
+    final rawParams = json['params'];
+    return ReportCatalogEntry(
+      key: json['key'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+      endpoint: json['endpoint'] as String? ?? '',
+      params: rawParams is List
+          ? rawParams.map((value) => value.toString()).toList()
+          : const [],
+      external: json['external'] as bool? ?? false,
+      categoryTitle: categoryTitle,
+    );
+  }
+}
+
+class ReportRunResult {
+  const ReportRunResult({required this.entry, required this.data});
+
+  final ReportCatalogEntry entry;
+  final Map<String, dynamic> data;
+}
+
+class ReportPaging {
+  const ReportPaging({this.skip = 0, this.take = 20, this.sort = 'property'});
+
+  final int skip;
+  final int take;
+  final String sort;
+
+  ReportPaging copyWith({int? skip, int? take, String? sort}) => ReportPaging(
+    skip: skip ?? this.skip,
+    take: take ?? this.take,
+    sort: sort ?? this.sort,
+  );
+}
+
+class MonthlyReportsState {
+  const MonthlyReportsState({
+    required this.month,
+    this.results = const [],
+    this.pagingByReportKey = const {},
+    this.loading = false,
+    this.error,
+  });
+
+  final DateTime month;
+  final List<ReportRunResult> results;
+  final Map<String, ReportPaging> pagingByReportKey;
+  final bool loading;
+  final String? error;
+
+  ReportPaging pagingFor(String reportKey) =>
+      pagingByReportKey[reportKey] ?? const ReportPaging();
+
+  MonthlyReportsState copyWith({
+    DateTime? month,
+    List<ReportRunResult>? results,
+    Map<String, ReportPaging>? pagingByReportKey,
+    bool? loading,
+    String? error,
+    bool clearError = false,
+  }) => MonthlyReportsState(
+    month: month ?? this.month,
+    results: results ?? this.results,
+    pagingByReportKey: pagingByReportKey ?? this.pagingByReportKey,
+    loading: loading ?? this.loading,
+    error: clearError ? null : error ?? this.error,
+  );
 }
 
 // ── Repository ────────────────────────────────────────────────────────────────
@@ -339,17 +429,80 @@ class OwnerReportsRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<List<ReportCatalogEntry>> listReportsCatalog() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/reports/catalog');
+      final categories = response.data?['categories'];
+      if (categories is! List) return const [];
+      return categories
+          .whereType<Map<String, dynamic>>()
+          .expand((category) {
+            final title = category['title'] as String? ?? '';
+            final reports = category['reports'];
+            if (reports is! List) return const <ReportCatalogEntry>[];
+            return reports.whereType<Map<String, dynamic>>().map(
+              (report) =>
+                  ReportCatalogEntry.fromJson(report, categoryTitle: title),
+            );
+          })
+          .where((entry) => entry.key.isNotEmpty && entry.endpoint.isNotEmpty)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ReportRunResult> runReport(
+    ReportCatalogEntry entry, {
+    required DateTime month,
+    ReportPaging paging = const ReportPaging(),
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        _relativeReportEndpoint(entry.endpoint),
+        queryParameters: _queryFor(entry, month, paging),
+      );
+      return ReportRunResult(entry: entry, data: response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  static String _relativeReportEndpoint(String endpoint) =>
+      endpoint.replaceFirst(RegExp(r'^/api/v1'), '');
+
+  static Map<String, dynamic> _queryFor(
+    ReportCatalogEntry entry,
+    DateTime month,
+    ReportPaging paging,
+  ) {
+    final params = entry.params.toSet();
+    final from = DateTime.utc(month.year, month.month, 1);
+    final to = DateTime.utc(month.year, month.month + 1, 0);
+    return {
+      if (params.contains('from')) 'from': _dateOnly(from),
+      if (params.contains('to')) 'to': _dateOnly(to),
+      if (params.contains('year')) 'year': month.year,
+      if (params.contains('skip')) 'skip': paging.skip,
+      if (params.contains('take')) 'take': paging.take,
+      if (params.contains('sort')) 'sort': paging.sort,
+    };
+  }
+
+  static String _dateOnly(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
-final ownerReportsRepositoryProvider =
-    Provider<OwnerReportsRepository>((ref) {
+final ownerReportsRepositoryProvider = Provider<OwnerReportsRepository>((ref) {
   return OwnerReportsRepository(ref.watch(dioProvider));
 });
 
-class OwnerSummariesNotifier
-    extends Notifier<AsyncValue<List<OwnerSummary>>> {
+class OwnerSummariesNotifier extends Notifier<AsyncValue<List<OwnerSummary>>> {
   int _year = DateTime.now().year;
 
   int get year => _year;
@@ -357,8 +510,7 @@ class OwnerSummariesNotifier
   @override
   AsyncValue<List<OwnerSummary>> build() => const AsyncValue.loading();
 
-  OwnerReportsRepository get _repo =>
-      ref.read(ownerReportsRepositoryProvider);
+  OwnerReportsRepository get _repo => ref.read(ownerReportsRepositoryProvider);
 
   Future<void> load({int? year}) async {
     if (year != null) _year = year;
@@ -376,19 +528,17 @@ class OwnerSummariesNotifier
 
 final ownerSummariesProvider =
     NotifierProvider<OwnerSummariesNotifier, AsyncValue<List<OwnerSummary>>>(
-  OwnerSummariesNotifier.new,
-);
+      OwnerSummariesNotifier.new,
+    );
 
-class OwnerStatementNotifier
-    extends Notifier<AsyncValue<OwnerStatement?>> {
+class OwnerStatementNotifier extends Notifier<AsyncValue<OwnerStatement?>> {
   int? _ownerId;
   int? _year;
 
   @override
   AsyncValue<OwnerStatement?> build() => const AsyncValue.data(null);
 
-  OwnerReportsRepository get _repo =>
-      ref.read(ownerReportsRepositoryProvider);
+  OwnerReportsRepository get _repo => ref.read(ownerReportsRepositoryProvider);
 
   Future<void> load(int ownerId, int year) async {
     _ownerId = ownerId;
@@ -412,15 +562,100 @@ class OwnerStatementNotifier
   void clear() => state = const AsyncValue.data(null);
 }
 
-final ownerStatementProvider = NotifierProvider<OwnerStatementNotifier,
-    AsyncValue<OwnerStatement?>>(
-  OwnerStatementNotifier.new,
-);
+final ownerStatementProvider =
+    NotifierProvider<OwnerStatementNotifier, AsyncValue<OwnerStatement?>>(
+      OwnerStatementNotifier.new,
+    );
 
 final ownerDistributionsProvider = FutureProvider.autoDispose
     .family<List<OwnerDistribution>, OwnerDistributionQuery>((ref, query) {
-  return ref.watch(ownerReportsRepositoryProvider).listDistributions(
-        ownerEntityId: query.ownerEntityId,
-        year: query.year,
+      return ref
+          .watch(ownerReportsRepositoryProvider)
+          .listDistributions(
+            ownerEntityId: query.ownerEntityId,
+            year: query.year,
+          );
+    });
+
+class MonthlyReportsNotifier extends Notifier<MonthlyReportsState> {
+  static const _requiredCloseReportKeys = <String>{
+    'income-expense-statement',
+    'property-pnl-summary',
+    'cash-flow',
+    'general-ledger',
+    'rent-roll',
+    'rent-ledger',
+    'security-deposit-register',
+    'delinquency',
+    'owner-distributions',
+  };
+
+  @override
+  MonthlyReportsState build() {
+    final now = DateTime.now();
+    return MonthlyReportsState(month: DateTime.utc(now.year, now.month));
+  }
+
+  OwnerReportsRepository get _repo => ref.read(ownerReportsRepositoryProvider);
+
+  Future<void> load({required DateTime month}) async {
+    final normalizedMonth = DateTime.utc(month.year, month.month);
+    final pagingByReportKey = state.pagingByReportKey;
+    state = MonthlyReportsState(
+      month: normalizedMonth,
+      pagingByReportKey: pagingByReportKey,
+      loading: true,
+    );
+    try {
+      final catalog = await _repo.listReportsCatalog();
+      final entries = catalog
+          .where(
+            (entry) =>
+                !entry.external && _requiredCloseReportKeys.contains(entry.key),
+          )
+          .toList();
+      final results = <ReportRunResult>[];
+      for (final entry in entries) {
+        results.add(
+          await _repo.runReport(
+            entry,
+            month: normalizedMonth,
+            paging: state.pagingFor(entry.key),
+          ),
+        );
+      }
+      state = MonthlyReportsState(
+        month: normalizedMonth,
+        results: results,
+        pagingByReportKey: pagingByReportKey,
       );
-});
+    } on ApiException catch (error) {
+      state = state.copyWith(loading: false, error: error.message);
+    } catch (_) {
+      state = state.copyWith(
+        loading: false,
+        error: "Couldn't load monthly reports.",
+      );
+    }
+  }
+
+  Future<void> refresh() => load(month: state.month);
+
+  Future<void> pageReport(String reportKey, int pageDelta) {
+    final current = state.pagingFor(reportKey);
+    final nextSkip = current.skip + (pageDelta * current.take);
+    final updatedPaging = current.copyWith(skip: nextSkip < 0 ? 0 : nextSkip);
+    state = state.copyWith(
+      pagingByReportKey: {
+        ...state.pagingByReportKey,
+        reportKey: updatedPaging,
+      },
+    );
+    return load(month: state.month);
+  }
+}
+
+final monthlyReportsProvider =
+    NotifierProvider<MonthlyReportsNotifier, MonthlyReportsState>(
+      MonthlyReportsNotifier.new,
+    );

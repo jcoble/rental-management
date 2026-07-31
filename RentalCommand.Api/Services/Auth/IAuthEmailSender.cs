@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Services.Auth;
 /// Enqueueing is receipt-backed and fails with the owning auth operation instead of silently
 /// losing a confirmation or reset message.
 /// </summary>
-public interface IAuthEmailSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface IAuthEmailSender
 {
     Task SendEmailConfirmationAsync(
         ApplicationUser user,

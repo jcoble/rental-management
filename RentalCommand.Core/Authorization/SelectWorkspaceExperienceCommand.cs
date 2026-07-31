@@ -10,11 +10,11 @@ namespace RentalCommand.Core.Authorization;
 public sealed record SelectWorkspaceExperienceCommand(
     int PortfolioId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     WorkspaceExperience Experience) : IAtomicCommandData;
 
 /// <summary>Receipt-safe result for one workspace-experience selection.</summary>
 public sealed record SelectWorkspaceExperienceResult(
-    WorkspaceExperience Experience) : IAtomicResultData;
+    WorkspaceExperience Experience);

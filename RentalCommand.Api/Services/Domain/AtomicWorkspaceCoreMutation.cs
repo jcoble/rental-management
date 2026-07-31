@@ -6,6 +6,8 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -19,42 +21,49 @@ public enum AtomicWorkspaceCoreMutationOperation
 public sealed record AtomicWorkspaceCoreMutationCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicWorkspaceCoreMutationOperation Operation,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicWorkspaceCoreMutationResult(
     bool Found,
     bool Applied,
     string? ResponseJson = null,
-    string? PublicApplicationToken = null) : IAtomicResultData;
+    string? PublicApplicationToken = null);
 
 public sealed class AtomicWorkspaceCoreMutationHandler
-    : IAtomicCommandHandler<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult>,
-      IAtomicReplayAuthorizer<AtomicWorkspaceCoreMutationCommand>
+    : IAtomicCommandHandler<AtomicWorkspaceCoreMutationCommand, AtomicWorkspaceCoreMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicWorkspaceCoreMutationHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicWorkspaceCoreMutationResult> HandleAsync(
         AtomicWorkspaceCoreMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, attempt.Persistence, now, ct))
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or does not permit this operation. Refresh and try again.");
         }
 
-        var portfolio = await attempt.Persistence.Query<Portfolio>()
+        var portfolio = await _db.Set<Portfolio>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.PortfolioId, ct);
         if (portfolio is null)
         {
@@ -76,22 +85,22 @@ public sealed class AtomicWorkspaceCoreMutationHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicWorkspaceCoreMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or does not permit this operation. Refresh and try again.");
         }
     }
 
-    private static async Task<AtomicWorkspaceCoreMutationResult> UpdatePortfolioAsync(
+    private async Task<AtomicWorkspaceCoreMutationResult> UpdatePortfolioAsync(
         AtomicWorkspaceCoreMutationCommand command,
         Portfolio portfolio,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
@@ -123,10 +132,10 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             true, true, ResponseJson: JsonSerializer.Serialize(response));
     }
 
-    private static async Task<AtomicWorkspaceCoreMutationResult> DeletePortfolioAsync(
+    private async Task<AtomicWorkspaceCoreMutationResult> DeletePortfolioAsync(
         AtomicWorkspaceCoreMutationCommand command,
         Portfolio portfolio,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
@@ -144,10 +153,10 @@ public sealed class AtomicWorkspaceCoreMutationHandler
         return new AtomicWorkspaceCoreMutationResult(true, true);
     }
 
-    private static async Task<AtomicWorkspaceCoreMutationResult> RotateApplicationLinkAsync(
+    private async Task<AtomicWorkspaceCoreMutationResult> RotateApplicationLinkAsync(
         AtomicWorkspaceCoreMutationCommand command,
         Portfolio portfolio,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
@@ -168,9 +177,9 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             true, true, PublicApplicationToken: token);
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         AtomicWorkspaceCoreMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
@@ -181,7 +190,7 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             ? CapabilityAuthorizationTargetKind.Property
             : CapabilityAuthorizationTargetKind.Workspace;
 
-        return persistence.Query<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+        return db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -196,13 +205,13 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -212,8 +221,8 @@ public sealed class AtomicWorkspaceCoreMutationHandler
                 && grant.CapabilityDefinition.AuthorizationTargetKind == targetKind), ct);
     }
 
-    private static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+    private void StageDataUpdate(
+        IAtomicCommandContext attempt,
         AtomicWorkspaceCoreMutationCommand command,
         DateTime now,
         bool deleted,
@@ -234,11 +243,11 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             NextAttemptAtUtc = now,
         });
 
-    private static T Read<T>(AtomicWorkspaceCoreMutationCommand command) where T : class =>
+    private T Read<T>(AtomicWorkspaceCoreMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Workspace mutation request payload is invalid.");
 
-    private static string GenerateToken()
+    private string GenerateToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
         return Convert.ToBase64String(bytes)
@@ -247,7 +256,7 @@ public sealed class AtomicWorkspaceCoreMutationHandler
             .TrimEnd('=');
     }
 
-    private static void Validate(AtomicWorkspaceCoreMutationCommand command)
+    private void Validate(AtomicWorkspaceCoreMutationCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0

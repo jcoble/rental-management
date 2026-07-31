@@ -11,20 +11,25 @@ using RentalCommand.Data.Operations;
 namespace RentalCommand.Data.Documents;
 
 public sealed class CreateDocumentTemplateHandler
-    : IAtomicCommandHandler<CreateDocumentTemplateCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<CreateDocumentTemplateCommand>
+    : IAtomicCommandHandler<CreateDocumentTemplateCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateDocumentTemplateHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        CreateDocumentTemplateCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         if (!await DocumentTemplateCommandSupport.CanManageAsync(
-                command.PortfolioId, command.Actor, command.PropertyId, attempt.Persistence, now, ct))
+                command.PortfolioId, command.Actor, command.PropertyId,
+                _db, businessNowUtc, securityNowUtc, ct))
             return DocumentTemplateCommandSupport.NotFound(0, "Document template target not found");
         if (!await DocumentTemplateCommandSupport.ReferencesValidAsync(
-                attempt.Persistence, command.PortfolioId,
+                _db, command.PortfolioId,
                 command.OriginalStoredFileId, command.CompiledStoredFileId, ct))
             return DocumentTemplateCommandSupport.Invalid(0, "Document file not found in this portfolio");
 
@@ -41,53 +46,59 @@ public sealed class CreateDocumentTemplateHandler
             DraftHtml = command.DraftHtml,
             DefaultForPortfolio = command.DefaultForPortfolio,
             PropertyId = command.PropertyId,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            UpdatedAtUtc = businessNowUtc,
         };
 
-        attempt.UseDatabaseWallClockForAudit(now);
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
         if (template.DefaultForPortfolio)
             await DocumentTemplateCommandSupport.ClearOtherDefaultAsync(
-                attempt, command, template.Kind, template.PropertyId, null, now, ct);
-        attempt.Persistence.Add(template);
-        attempt.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
+                context, command, _db, template.Kind, template.PropertyId, null, businessNowUtc, ct);
+        _db.Add(template);
+        context.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
             command.PortfolioId, command.Actor.UserId, template, AuditLogOperation.Created,
             "Created document template."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await DocumentTemplateCommandSupport.LoadTemplateSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, template.Id, ct);
+            _db, command.PortfolioId, template.Id, ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, now, "create");
+            context, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "create");
         return new(DocumentTemplateMutationOutcome.Applied, template.Id, Template: snapshot);
     }
 
     public async Task AuthorizeReplayAsync(
-        CreateDocumentTemplateCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
+        CreateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await DocumentTemplateCommandSupport.CanManageAsync(
-                command.PortfolioId, command.Actor, command.PropertyId, persistence, now, ct))
+                command.PortfolioId, command.Actor, command.PropertyId,
+                _db, command.BusinessNowUtc, securityNowUtc, ct))
             throw new UnauthorizedAccessException("The active assignment cannot create this document template.");
     }
 }
 
 public sealed class FinalizeDocumentTemplateUploadHandler
-    : IAtomicCommandHandler<FinalizeDocumentTemplateUploadCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<FinalizeDocumentTemplateUploadCommand>
+    : IAtomicCommandHandler<FinalizeDocumentTemplateUploadCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeDocumentTemplateUploadHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        FinalizeDocumentTemplateUploadCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         if (!await DocumentTemplateCommandSupport.CanManageAsync(
-                command.PortfolioId, command.Actor, command.PropertyId, attempt.Persistence, now, ct))
+                command.PortfolioId, command.Actor, command.PropertyId,
+                _db, businessNowUtc, securityNowUtc, ct))
             return DocumentTemplateCommandSupport.NotFound(0, "Document template target not found");
 
-        var pending = (await attempt.PendingFileUploads.LockPreparedSetAsync(
-            command.PortfolioId,
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(_db,
+            context, command.PortfolioId,
             command.Actor.UserId,
             [new AtomicPendingFileUploadExpectation(
                 command.PendingUploadId, command.Purpose, command.OperationKeyHash,
@@ -103,7 +114,7 @@ public sealed class FinalizeDocumentTemplateUploadHandler
             FilePath = command.StoragePath,
             ContentType = command.ContentType,
             FileSize = command.SizeBytes,
-            UploadedAt = now,
+            UploadedAt = businessNowUtc,
         };
         var template = new DocumentTemplate
         {
@@ -116,17 +127,17 @@ public sealed class FinalizeDocumentTemplateUploadHandler
             OriginalStoredFile = stored,
             DefaultForPortfolio = command.DefaultForPortfolio,
             PropertyId = command.PropertyId,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            UpdatedAtUtc = businessNowUtc,
         };
 
-        attempt.UseDatabaseWallClockForAudit(now);
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
         if (template.DefaultForPortfolio)
             await DocumentTemplateCommandSupport.ClearOtherDefaultAsync(
-                attempt, command, template.Kind, template.PropertyId, null, now, ct);
-        attempt.Persistence.Add(stored);
-        attempt.Persistence.Add(template);
-        attempt.BindSemanticAudit(stored, new AtomicSemanticAudit(
+                context, command, _db, template.Kind, template.PropertyId, null, businessNowUtc, ct);
+        _db.Add(stored);
+        _db.Add(template);
+        context.BindSemanticAudit(stored, new AtomicSemanticAudit(
             command.PortfolioId, nameof(StoredFile), stored.Id, AuditLogOperation.Created,
             command.Actor.UserId,
             NewValues: JsonSerializer.Serialize(new
@@ -134,61 +145,65 @@ public sealed class FinalizeDocumentTemplateUploadHandler
                 command.FileName, command.ContentType, command.SizeBytes, command.Sha256,
             }),
             ChangeReason: "Uploaded document template source PDF."));
-        attempt.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
+        context.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
             command.PortfolioId, command.Actor.UserId, template, AuditLogOperation.Created,
             "Created document template from uploaded PDF."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         stored.EntityId = template.Id;
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = stored.Id;
-        pending.UpdatedAtUtc = now;
-        await attempt.FlushBusinessAsync(ct);
+        pending.UpdatedAtUtc = businessNowUtc;
+        await context.FlushBusinessAsync(ct);
 
         var snapshot = await DocumentTemplateCommandSupport.LoadTemplateSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, template.Id, ct);
+            _db, command.PortfolioId, template.Id, ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, now, "upload");
+            context, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "upload");
         return new(DocumentTemplateMutationOutcome.Applied, template.Id, Template: snapshot);
     }
 
     public async Task AuthorizeReplayAsync(
-        FinalizeDocumentTemplateUploadCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        FinalizeDocumentTemplateUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await DocumentTemplateCommandSupport.CanManageAsync(
-                command.PortfolioId, command.Actor, command.PropertyId, persistence, now, ct))
+                command.PortfolioId, command.Actor, command.PropertyId,
+                _db, command.BusinessNowUtc, securityNowUtc, ct))
             throw new UnauthorizedAccessException("The active assignment cannot upload this document template.");
     }
 }
 
 public sealed class UpdateDocumentTemplateHandler
-    : IAtomicCommandHandler<UpdateDocumentTemplateCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<UpdateDocumentTemplateCommand>
+    : IAtomicCommandHandler<UpdateDocumentTemplateCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateDocumentTemplateHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        UpdateDocumentTemplateCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         var template = await DocumentTemplateCommandSupport.AuthorizedTemplates(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, _db, businessNowUtc, securityNowUtc, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.DocumentTemplateId, ct);
         if (template is null)
             return DocumentTemplateCommandSupport.NotFound(command.DocumentTemplateId, "Document template not found");
 
         var propertyId = command.PropertyId ?? template.PropertyId;
         if (!await DocumentTemplateCommandSupport.CanManageAsync(
-                command.PortfolioId, command.Actor, propertyId, attempt.Persistence, now, ct))
+                command.PortfolioId, command.Actor, propertyId,
+                _db, businessNowUtc, securityNowUtc, ct))
             return DocumentTemplateCommandSupport.NotFound(command.DocumentTemplateId, "Document template target not found");
         var originalFileId = command.OriginalStoredFileId ?? template.OriginalStoredFileId;
         var compiledFileId = command.CompiledStoredFileId ?? template.CompiledStoredFileId;
         if (!await DocumentTemplateCommandSupport.ReferencesValidAsync(
-                attempt.Persistence, command.PortfolioId, originalFileId, compiledFileId, ct))
+                _db, command.PortfolioId, originalFileId, compiledFileId, ct))
             return DocumentTemplateCommandSupport.Invalid(
                 command.DocumentTemplateId, "Document file not found in this portfolio");
 
@@ -198,7 +213,7 @@ public sealed class UpdateDocumentTemplateHandler
         if (command.Status.HasValue)
         {
             template.Status = command.Status.Value;
-            template.ArchivedAtUtc = command.Status.Value == DocumentTemplateStatus.Archived ? now : null;
+            template.ArchivedAtUtc = command.Status.Value == DocumentTemplateStatus.Archived ? businessNowUtc : null;
         }
         if (command.RenderMode.HasValue) template.RenderMode = command.RenderMode.Value;
         if (command.OriginalStoredFileId.HasValue) template.OriginalStoredFileId = command.OriginalStoredFileId;
@@ -206,44 +221,48 @@ public sealed class UpdateDocumentTemplateHandler
         if (command.PropertyId.HasValue) template.PropertyId = command.PropertyId;
         if (command.DraftHtml is not null) template.DraftHtml = command.DraftHtml;
         if (command.DefaultForPortfolio.HasValue) template.DefaultForPortfolio = command.DefaultForPortfolio.Value;
-        template.UpdatedAtUtc = now;
+        template.UpdatedAtUtc = businessNowUtc;
         template.Version++;
 
-        attempt.UseDatabaseWallClockForAudit(now);
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
         if (template.DefaultForPortfolio)
             await DocumentTemplateCommandSupport.ClearOtherDefaultAsync(
-                attempt, command, template.Kind, template.PropertyId, template.Id, now, ct);
-        attempt.BindSemanticAudit(template, new AtomicSemanticAudit(
+                context, command, _db, template.Kind, template.PropertyId, template.Id, businessNowUtc, ct);
+        context.BindSemanticAudit(template, new AtomicSemanticAudit(
             command.PortfolioId, nameof(DocumentTemplate), template.Id, AuditLogOperation.Updated,
             command.Actor.UserId, OldValues: oldValues,
             NewValues: DocumentTemplateCommandSupport.TemplateValues(template),
             ChangeReason: "Updated document template."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await DocumentTemplateCommandSupport.LoadTemplateSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, template.Id, ct);
+            _db, command.PortfolioId, template.Id, ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, now, "update");
+            context, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "update");
         return new(DocumentTemplateMutationOutcome.Applied, template.Id, Template: snapshot);
     }
 
     public Task AuthorizeReplayAsync(
-        UpdateDocumentTemplateCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        UpdateDocumentTemplateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         DocumentTemplateCommandSupport.AuthorizeTemplateReplayAsync(
-            command.PortfolioId, command.Actor, command.DocumentTemplateId, persistence, ct);
+            command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, _db, ct);
 }
 
 public sealed class AddDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<AddDocumentTemplateFieldCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<AddDocumentTemplateFieldCommand>
+    : IAtomicCommandHandler<AddDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AddDocumentTemplateFieldHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        AddDocumentTemplateFieldCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         var template = await DocumentTemplateCommandSupport.AuthorizedTemplates(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, _db, businessNowUtc, securityNowUtc, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.DocumentTemplateId, ct);
         if (template is null)
             return DocumentTemplateCommandSupport.NotFound(command.DocumentTemplateId, "Document template not found");
@@ -270,42 +289,46 @@ public sealed class AddDocumentTemplateFieldHandler
             SortOrder = command.SortOrder,
             DefaultText = DocumentTemplateCommandSupport.Clean(command.DefaultText),
         };
-        attempt.Persistence.Add(field);
-        DocumentTemplateCommandSupport.Bump(template, now);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(field, DocumentTemplateCommandSupport.FieldAudit(
+        _db.Add(field);
+        DocumentTemplateCommandSupport.Bump(template, businessNowUtc);
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        context.BindSemanticAudit(field, DocumentTemplateCommandSupport.FieldAudit(
             command.PortfolioId, command.Actor.UserId, field, AuditLogOperation.Created,
             "Added document template field."));
-        attempt.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
+        context.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
             command.PortfolioId, command.Actor.UserId, template, AuditLogOperation.Updated,
             "Incremented template version after adding a field."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await DocumentTemplateCommandSupport.LoadFieldSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, template.Id, field.Id, ct);
+            _db, command.PortfolioId, template.Id, field.Id, ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, now, "field-add");
+            context, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "field-add");
         return new(DocumentTemplateMutationOutcome.Applied, template.Id, field.Id, Field: snapshot);
     }
 
     public Task AuthorizeReplayAsync(
-        AddDocumentTemplateFieldCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        AddDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         DocumentTemplateCommandSupport.AuthorizeTemplateReplayAsync(
-            command.PortfolioId, command.Actor, command.DocumentTemplateId, persistence, ct);
+            command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, _db, ct);
 }
 
 public sealed class UpdateDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<UpdateDocumentTemplateFieldCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<UpdateDocumentTemplateFieldCommand>
+    : IAtomicCommandHandler<UpdateDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateDocumentTemplateFieldHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        UpdateDocumentTemplateFieldCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargetAsync(
             command.PortfolioId, command.Actor, command.DocumentTemplateId, command.FieldId,
-            attempt.Persistence, now, tracking: true, ct);
+            _db, businessNowUtc, securityNowUtc, tracking: true, ct);
         if (target is null)
             return DocumentTemplateCommandSupport.NotFound(
                 command.DocumentTemplateId, "Document template field not found", command.FieldId);
@@ -333,67 +356,71 @@ public sealed class UpdateDocumentTemplateFieldHandler
         if (command.Locked.HasValue) field.Locked = command.Locked.Value;
         if (command.SortOrder.HasValue) field.SortOrder = command.SortOrder.Value;
         if (command.DefaultText is not null) field.DefaultText = DocumentTemplateCommandSupport.Clean(command.DefaultText);
-        DocumentTemplateCommandSupport.Bump(target.Template, now);
+        DocumentTemplateCommandSupport.Bump(target.Template, businessNowUtc);
 
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(field, new AtomicSemanticAudit(
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        context.BindSemanticAudit(field, new AtomicSemanticAudit(
             command.PortfolioId, nameof(DocumentTemplateField), field.Id, AuditLogOperation.Updated,
             command.Actor.UserId, OldValues: oldValues,
             NewValues: DocumentTemplateCommandSupport.FieldValues(field),
             ChangeReason: "Updated document template field."));
-        attempt.BindSemanticAudit(target.Template, DocumentTemplateCommandSupport.TemplateAudit(
+        context.BindSemanticAudit(target.Template, DocumentTemplateCommandSupport.TemplateAudit(
             command.PortfolioId, command.Actor.UserId, target.Template, AuditLogOperation.Updated,
             "Incremented template version after updating a field."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await DocumentTemplateCommandSupport.LoadFieldSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, target.Template.Id, field.Id, ct);
+            _db, command.PortfolioId, target.Template.Id, field.Id, ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, target.Template.Id, command.DeliveryIdempotencyKey, now, "field-update");
+            context, command.PortfolioId, target.Template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "field-update");
         return new(DocumentTemplateMutationOutcome.Applied, target.Template.Id, field.Id, Field: snapshot);
     }
 
     public Task AuthorizeReplayAsync(
-        UpdateDocumentTemplateFieldCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        UpdateDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         DocumentTemplateCommandSupport.AuthorizeTemplateReplayAsync(
-            command.PortfolioId, command.Actor, command.DocumentTemplateId, persistence, ct);
+            command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, _db, ct);
 }
 
 public sealed class DeleteDocumentTemplateFieldHandler
-    : IAtomicCommandHandler<DeleteDocumentTemplateFieldCommand, DocumentTemplateMutationResult>,
-      IAtomicReplayAuthorizer<DeleteDocumentTemplateFieldCommand>
+    : IAtomicCommandHandler<DeleteDocumentTemplateFieldCommand, DocumentTemplateMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public DeleteDocumentTemplateFieldHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<DocumentTemplateMutationResult> HandleAsync(
-        DeleteDocumentTemplateFieldCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         DocumentTemplateCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         var target = await DocumentTemplateCommandSupport.AuthorizedFieldTargetAsync(
             command.PortfolioId, command.Actor, command.DocumentTemplateId, command.FieldId,
-            attempt.Persistence, now, tracking: true, ct);
+            _db, businessNowUtc, securityNowUtc, tracking: true, ct);
         if (target is null)
             return DocumentTemplateCommandSupport.NotFound(
                 command.DocumentTemplateId, "Document template field not found", command.FieldId);
 
-        attempt.Persistence.Remove(target.Field);
-        DocumentTemplateCommandSupport.Bump(target.Template, now);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(target.Field, DocumentTemplateCommandSupport.FieldAudit(
+        _db.Remove(target.Field);
+        DocumentTemplateCommandSupport.Bump(target.Template, businessNowUtc);
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        context.BindSemanticAudit(target.Field, DocumentTemplateCommandSupport.FieldAudit(
             command.PortfolioId, command.Actor.UserId, target.Field, AuditLogOperation.Deleted,
             "Deleted document template field."));
-        attempt.BindSemanticAudit(target.Template, DocumentTemplateCommandSupport.TemplateAudit(
+        context.BindSemanticAudit(target.Template, DocumentTemplateCommandSupport.TemplateAudit(
             command.PortfolioId, command.Actor.UserId, target.Template, AuditLogOperation.Updated,
             "Incremented template version after deleting a field."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         DocumentTemplateCommandSupport.StageUpdate(
-            attempt, command.PortfolioId, target.Template.Id, command.DeliveryIdempotencyKey, now, "field-delete");
+            context, command.PortfolioId, target.Template.Id, command.DeliveryIdempotencyKey, businessNowUtc, "field-delete");
         return new(DocumentTemplateMutationOutcome.Applied, target.Template.Id, target.Field.Id);
     }
 
     public Task AuthorizeReplayAsync(
-        DeleteDocumentTemplateFieldCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        DeleteDocumentTemplateFieldCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         DocumentTemplateCommandSupport.AuthorizeTemplateReplayAsync(
-            command.PortfolioId, command.Actor, command.DocumentTemplateId, persistence, ct);
+            command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DocumentTemplateId, _db, ct);
 }
 
 internal static class DocumentTemplateCommandSupport
@@ -405,35 +432,38 @@ internal static class DocumentTemplateCommandSupport
     ];
 
     internal static IQueryable<DocumentTemplate> AuthorizedTemplates(
-        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence,
-        DateTime now, bool tracking)
+        int portfolioId, StaffOperationActor actor, RentalCommandDbContext db,
+        DateTime businessNowUtc, DateTime securityNowUtc, bool tracking)
     {
         var properties = StaffOperationAuthorization.AuthorizedProperties(
-            portfolioId, actor, TemplateCapabilityKeys, persistence, now);
-        var templateScopes = AuthorizedTemplateScopes(portfolioId, actor, persistence, now);
-        var query = persistence.Query<DocumentTemplate>().Where(template =>
+            portfolioId, actor, TemplateCapabilityKeys, db, businessNowUtc, securityNowUtc);
+        var templateScopes = AuthorizedTemplateScopes(
+            portfolioId, actor, db, businessNowUtc, securityNowUtc);
+        var query = db.Set<DocumentTemplate>().Where(template =>
             template.PortfolioId == portfolioId &&
             (template.PropertyId.HasValue
                 ? properties.Any(property => property.Id == template.PropertyId.Value)
                 : templateScopes.Any()));
-        return tracking ? query : query.AsNoTracking();
+        return tracking ? query.AsTracking() : query.AsNoTracking();
     }
 
     internal static Task<DocumentTemplateFieldTarget?> AuthorizedFieldTargetAsync(
         int portfolioId, StaffOperationActor actor, int documentTemplateId, int fieldId,
-        IAtomicPersistenceSession persistence, DateTime now, bool tracking, CancellationToken ct) =>
+        RentalCommandDbContext db, DateTime businessNowUtc, DateTime securityNowUtc, bool tracking,
+        CancellationToken ct) =>
         AuthorizedFieldTargetCoreAsync(
-            portfolioId, actor, documentTemplateId, fieldId, persistence, now, tracking, ct);
+            portfolioId, actor, documentTemplateId, fieldId, db, businessNowUtc, securityNowUtc, tracking, ct);
 
     private static async Task<DocumentTemplateFieldTarget?> AuthorizedFieldTargetCoreAsync(
         int portfolioId, StaffOperationActor actor, int documentTemplateId, int fieldId,
-        IAtomicPersistenceSession persistence, DateTime now, bool tracking, CancellationToken ct)
+        RentalCommandDbContext db, DateTime businessNowUtc, DateTime securityNowUtc, bool tracking,
+        CancellationToken ct)
     {
-        var templates = AuthorizedTemplates(portfolioId, actor, persistence, now, tracking)
+        var templates = AuthorizedTemplates(portfolioId, actor, db, businessNowUtc, securityNowUtc, tracking)
             .Where(template => template.Id == documentTemplateId);
         var fields = tracking
-            ? persistence.Query<DocumentTemplateField>()
-            : persistence.Query<DocumentTemplateField>().AsNoTracking();
+            ? db.Set<DocumentTemplateField>().AsTracking()
+            : db.Set<DocumentTemplateField>().AsNoTracking();
         fields = fields.Where(field => field.Id == fieldId);
         var target = await (from template in templates
                             join field in fields
@@ -452,42 +482,45 @@ internal static class DocumentTemplateCommandSupport
 
     internal static Task<bool> CanManageAsync(
         int portfolioId, StaffOperationActor actor, int? propertyId,
-        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+        RentalCommandDbContext db, DateTime businessNowUtc, DateTime securityNowUtc, CancellationToken ct)
     {
         if (propertyId.HasValue)
         {
             return StaffOperationAuthorization.CanManagePropertyAsync(
                 portfolioId, actor, propertyId.Value, TemplateCapabilityKeys,
-                persistence, now, ct);
+                db, businessNowUtc, securityNowUtc, ct);
         }
 
-        return AuthorizedTemplateScopes(portfolioId, actor, persistence, now).AnyAsync(ct);
+        return AuthorizedTemplateScopes(
+            portfolioId, actor, db, businessNowUtc, securityNowUtc).AnyAsync(ct);
     }
 
     private static IQueryable<MembershipRoleAssignment> AuthorizedTemplateScopes(
-        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence, DateTime now) =>
+        int portfolioId, StaffOperationActor actor, RentalCommandDbContext db,
+        DateTime businessNowUtc, DateTime securityNowUtc) =>
         StaffOperationAuthorization.ActiveAssignments(
-                portfolioId, actor, TemplateCapabilityKeys, persistence, now)
+                portfolioId, actor, TemplateCapabilityKeys, db, businessNowUtc, securityNowUtc)
             .Where(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
                 assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId));
 
     internal static async Task<bool> ReferencesValidAsync(
-        IAtomicPersistenceSession persistence, int portfolioId,
+        RentalCommandDbContext db, int portfolioId,
         int? originalStoredFileId, int? compiledStoredFileId, CancellationToken ct) =>
-        await persistence.Query<Portfolio>().AsNoTracking()
+        await db.Set<Portfolio>().AsNoTracking()
             .Where(portfolio => portfolio.Id == portfolioId)
             .Select(_ =>
-                (!originalStoredFileId.HasValue || persistence.Query<StoredFile>().AsNoTracking().Any(file =>
+                (!originalStoredFileId.HasValue || db.Set<StoredFile>().AsNoTracking().Any(file =>
                     file.Id == originalStoredFileId.Value && file.PortfolioId == portfolioId && file.DeletedAt == null)) &&
-                (!compiledStoredFileId.HasValue || persistence.Query<StoredFile>().AsNoTracking().Any(file =>
+                (!compiledStoredFileId.HasValue || db.Set<StoredFile>().AsNoTracking().Any(file =>
                     file.Id == compiledStoredFileId.Value && file.PortfolioId == portfolioId && file.DeletedAt == null)))
             .SingleOrDefaultAsync(ct);
 
     internal static async Task ClearOtherDefaultAsync<TCommand>(
-        IAtomicWriteAttempt attempt, TCommand command, DocumentTemplateKind kind,
-        int? propertyId, int? exceptId, DateTime now, CancellationToken ct)
+        IAtomicCommandContext context, TCommand command, RentalCommandDbContext db,
+        DocumentTemplateKind kind,
+        int? propertyId, int? exceptId, DateTime businessNowUtc, CancellationToken ct)
         where TCommand : notnull, IAtomicCommandData
     {
         var portfolioId = command switch
@@ -504,32 +537,32 @@ internal static class DocumentTemplateCommandSupport
             UpdateDocumentTemplateCommand value => value.Actor.UserId,
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
-        var prior = await attempt.Persistence.Query<DocumentTemplate>()
+        var prior = await db.Set<DocumentTemplate>()
             .SingleOrDefaultAsync(template =>
                 template.PortfolioId == portfolioId && template.Kind == kind &&
                 template.PropertyId == propertyId && template.DefaultForPortfolio &&
                 (!exceptId.HasValue || template.Id != exceptId.Value), ct);
         if (prior is null) return;
         prior.DefaultForPortfolio = false;
-        prior.UpdatedAtUtc = now;
-        attempt.BindSemanticAudit(prior, TemplateAudit(
+        prior.UpdatedAtUtc = businessNowUtc;
+        context.BindSemanticAudit(prior, TemplateAudit(
             portfolioId, actorUserId, prior, AuditLogOperation.Updated,
             "Replaced the previous default document template."));
     }
 
     internal static async Task AuthorizeTemplateReplayAsync(
-        int portfolioId, StaffOperationActor actor, int templateId,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+        int portfolioId, StaffOperationActor actor, DateTime businessNowUtc, int templateId,
+        RentalCommandDbContext db, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedTemplates(portfolioId, actor, persistence, now, tracking: false)
+        var securityNowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedTemplates(portfolioId, actor, db, businessNowUtc, securityNowUtc, tracking: false)
                 .AnyAsync(template => template.Id == templateId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this document template.");
     }
 
     internal static Task<DocumentTemplateSnapshot> LoadTemplateSnapshotAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int templateId, CancellationToken ct) =>
-        persistence.Query<DocumentTemplate>().AsNoTracking()
+        RentalCommandDbContext db, int portfolioId, int templateId, CancellationToken ct) =>
+        db.Set<DocumentTemplate>().AsNoTracking()
             .Where(template => template.Id == templateId && template.PortfolioId == portfolioId)
             .Select(template => new DocumentTemplateSnapshot(
                 template.Id, template.PortfolioId, template.Kind, template.Status, template.RenderMode,
@@ -546,9 +579,9 @@ internal static class DocumentTemplateCommandSupport
             .SingleAsync(ct);
 
     internal static Task<DocumentTemplateFieldSnapshot> LoadFieldSnapshotAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int templateId, int fieldId, CancellationToken ct) =>
-        (from template in persistence.Query<DocumentTemplate>().AsNoTracking()
-         join field in persistence.Query<DocumentTemplateField>().AsNoTracking()
+        RentalCommandDbContext db, int portfolioId, int templateId, int fieldId, CancellationToken ct) =>
+        (from template in db.Set<DocumentTemplate>().AsNoTracking()
+         join field in db.Set<DocumentTemplateField>().AsNoTracking()
              on new { template.Id, template.PortfolioId }
              equals new { Id = field.DocumentTemplateId, field.PortfolioId }
          where template.PortfolioId == portfolioId && template.Id == templateId && field.Id == fieldId
@@ -564,10 +597,10 @@ internal static class DocumentTemplateCommandSupport
     internal static DocumentTemplateMutationResult Invalid(int templateId, string error, int? fieldId = null) =>
         new(DocumentTemplateMutationOutcome.Invalid, templateId, fieldId, Error: error);
 
-    internal static void Bump(DocumentTemplate template, DateTime now)
+    internal static void Bump(DocumentTemplate template, DateTime businessNowUtc)
     {
         template.Version++;
-        template.UpdatedAtUtc = now;
+        template.UpdatedAtUtc = businessNowUtc;
     }
 
     internal static string? ValidateExtent(double x, double y, double width, double height)
@@ -606,21 +639,21 @@ internal static class DocumentTemplateCommandSupport
         NewValues: FieldValues(field), ChangeReason: reason);
 
     internal static void StageUpdate(
-        IAtomicWriteAttempt attempt, int portfolioId, int templateId,
-        string key, DateTime now, string operation) =>
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        IAtomicCommandContext context, int portfolioId, int templateId,
+        string key, DateTime businessNowUtc, string operation) =>
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             portfolioId, nameof(DocumentTemplate), templateId,
-            $"document-template:{operation}:{key}", now, operation));
+            $"document-template:{operation}:{key}", businessNowUtc, operation));
 
     internal static void Validate(CreateDocumentTemplateCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Name);
     }
 
     internal static void Validate(UpdateDocumentTemplateCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (command.DocumentTemplateId <= 0) throw new ArgumentOutOfRangeException(nameof(command.DocumentTemplateId));
         if (command.Name is not null && string.IsNullOrWhiteSpace(command.Name))
             throw new ArgumentException("Template name cannot be blank.", nameof(command.Name));
@@ -628,7 +661,7 @@ internal static class DocumentTemplateCommandSupport
 
     internal static void Validate(FinalizeDocumentTemplateUploadCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Purpose);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.OperationKeyHash);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.RequestFingerprint);
@@ -643,7 +676,7 @@ internal static class DocumentTemplateCommandSupport
 
     internal static void Validate(AddDocumentTemplateFieldCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (command.DocumentTemplateId <= 0 || command.PageNumber <= 0)
             throw new ArgumentOutOfRangeException(nameof(command));
         ArgumentException.ThrowIfNullOrWhiteSpace(command.FieldKey);
@@ -652,7 +685,7 @@ internal static class DocumentTemplateCommandSupport
 
     internal static void Validate(UpdateDocumentTemplateFieldCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (command.DocumentTemplateId <= 0 || command.FieldId <= 0)
             throw new ArgumentOutOfRangeException(nameof(command));
         if (command.FieldKey is not null && string.IsNullOrWhiteSpace(command.FieldKey))
@@ -663,15 +696,16 @@ internal static class DocumentTemplateCommandSupport
 
     internal static void Validate(DeleteDocumentTemplateFieldCommand command)
     {
-        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ValidateCommon(command.PortfolioId, command.Actor, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (command.DocumentTemplateId <= 0 || command.FieldId <= 0)
             throw new ArgumentOutOfRangeException(nameof(command));
     }
 
-    private static void ValidateCommon(int portfolioId, StaffOperationActor actor, string idempotencyKey)
+    private static void ValidateCommon(
+        int portfolioId, StaffOperationActor actor, DateTime businessNowUtc, string idempotencyKey)
     {
         if (portfolioId <= 0 || actor.UserId <= 0 || actor.AuthSessionId == Guid.Empty ||
-            actor.AccessContextId <= 0 || actor.AccessRevision <= 0)
+            actor.AccessContextId <= 0 || actor.AccessRevision <= 0 || businessNowUtc == default)
             throw new ArgumentOutOfRangeException(nameof(portfolioId), "Document template command scope is invalid.");
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
     }

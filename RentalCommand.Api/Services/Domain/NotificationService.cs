@@ -37,7 +37,7 @@ public class NotificationService : INotificationService
         var normalizedSkip = Math.Max(0, skip);
         var normalizedTake = Math.Clamp(take, 1, 100);
 
-        var query = AuthorizedNotifications(scope.PortfolioId, scope.UserId);
+        var query = AuthorizedNotifications(scope.PortfolioId, scope.UserId, experience);
 
         if (unreadOnly)
         {
@@ -78,7 +78,7 @@ public class NotificationService : INotificationService
         int notificationId,
         CancellationToken ct = default)
     {
-        return await AuthorizedNotifications(scope.PortfolioId, scope.UserId)
+        return await AuthorizedNotifications(scope.PortfolioId, scope.UserId, experience)
             .Where(notification => notification.Id == notificationId)
             .Select(ProjectRead(
                 scope.PortfolioId, scope.UserId, scope.AccessContextId,
@@ -86,25 +86,27 @@ public class NotificationService : INotificationService
             .SingleOrDefaultAsync(ct);
     }
 
+    public async Task<int> GetUnreadCountAsync(
+        WorkspaceReadScope scope,
+        NavigationExperience experience,
+        CancellationToken ct = default)
+    {
+        var query = AuthorizedNotifications(scope.PortfolioId, scope.UserId, experience)
+            .Where(n => !_db.NotificationReadStates.Any(readState =>
+                readState.PortfolioId == scope.PortfolioId &&
+                readState.NotificationId == n.Id &&
+                readState.UserId == scope.UserId));
+
+        return await query.CountAsync(ct);
+    }
+
     public async Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default)
     {
-        var query = _db.Notifications
-            .AsNoTracking()
-            .Where(n => n.PortfolioId == portfolioId &&
-                (n.UserId == null || n.UserId == userId) &&
-                (!_db.UserAlertPreferences.Any(preference =>
-                        preference.PortfolioId == portfolioId && preference.UserId == userId)
-                    || _db.UserAlertPreferences.Any(preference =>
-                        preference.PortfolioId == portfolioId && preference.UserId == userId
-                        && preference.EnableInApp)) &&
-                !_db.NotificationReadStates.Any(readState =>
-                    readState.PortfolioId == portfolioId &&
-                    readState.NotificationId == n.Id &&
-                    readState.UserId == userId));
-        if (!await IsStaffUserAsync(portfolioId, userId, ct))
-        {
-            query = query.Where(n => n.Type != "TenantMessage");
-        }
+        var query = AuthorizedNotifications(portfolioId, userId, experience: null)
+            .Where(n => !_db.NotificationReadStates.Any(readState =>
+                readState.PortfolioId == portfolioId &&
+                readState.NotificationId == n.Id &&
+                readState.UserId == userId));
 
         return await query.CountAsync(ct);
     }
@@ -151,16 +153,10 @@ public class NotificationService : INotificationService
             : throw new InvalidOperationException("Atomic broadcast result did not contain a response snapshot.");
     }
 
-    private async Task<bool> IsStaffUserAsync(int portfolioId, int userId, CancellationToken ct)
-    {
-        return await ScopedNotificationRecipientQuery
-            .ForWorkspaceMembership(_db, portfolioId, _timeProvider.UtcNow())
-            .AnyAsync(candidateUserId => candidateUserId == userId, ct);
-    }
-
     private IQueryable<Notification> AuthorizedNotifications(
         int portfolioId,
-        int userId)
+        int userId,
+        NavigationExperience? experience)
     {
         var staffUserIds = ScopedNotificationRecipientQuery
             .ForWorkspaceMembership(_db, portfolioId, _timeProvider.UtcNow());
@@ -168,16 +164,34 @@ public class NotificationService : INotificationService
             .AsNoTracking()
             .Where(notification =>
                 notification.PortfolioId == portfolioId &&
-                (notification.UserId == null || notification.UserId == userId) &&
+                ((notification.UserId == userId) ||
+                 (notification.UserId == null &&
+                    staffUserIds.Any(candidateUserId => candidateUserId == userId) &&
+                    (notification.NavigationExperience == experience ||
+                     notification.NavigationExperience == null &&
+                     (experience == null ||
+                      experience == NavigationExperience.Management ||
+                      experience == NavigationExperience.Leasing ||
+                      experience == NavigationExperience.Maintenance)))) &&
                 (!_db.UserAlertPreferences.Any(preference =>
                         preference.PortfolioId == portfolioId && preference.UserId == userId)
                     || _db.UserAlertPreferences.Any(preference =>
                         preference.PortfolioId == portfolioId && preference.UserId == userId
                         && preference.EnableInApp)) &&
                 (notification.Type != "TenantMessage" ||
-                 staffUserIds.Any(candidateUserId => candidateUserId == userId)));
+                 staffUserIds.Any(candidateUserId => candidateUserId == userId)))
+            .Where(IsVisibleAsOfBusinessDate());
         return query;
     }
+
+    private Expression<Func<Notification, bool>> IsVisibleAsOfBusinessDate() =>
+        notification => notification.Type != "ScheduledRentCharge" ||
+            notification.RelatedEntityType != nameof(TenantLedgerEntry) ||
+            notification.RelatedEntityId == null ||
+            _db.TenantLedgerEntries.Any(entry =>
+                entry.PortfolioId == notification.PortfolioId &&
+                entry.Id == notification.RelatedEntityId.Value &&
+                entry.EffectiveOn <= BusinessDateDbFunction.ForPortfolio(notification.PortfolioId));
 
     private Expression<Func<Notification, NotificationResponse>> ProjectRead(
         int portfolioId,
@@ -272,7 +286,28 @@ public class NotificationService : INotificationService
                      _db.TenantLedgerEntries.Any(entry =>
                          entry.PortfolioId == portfolioId &&
                          entry.Id == notification.NavigationResourceId &&
-                         entry.TenantAccountId == notification.NavigationParentResourceId))
+                         entry.TenantAccountId == notification.NavigationParentResourceId) &&
+                     _db.EffectiveTenantAccess.Any(access =>
+                         access.PortfolioId == portfolioId &&
+                         access.UserId == userId &&
+                         access.AccessContextId == accessContextId &&
+                         access.AccessRevision == accessRevision &&
+                         access.TenantAccountId == notification.NavigationParentResourceId))
+                    ||
+                    (notification.NavigationDestination == NavigationDestination.TenantAccount &&
+                     experience == NavigationExperience.Tenant &&
+                     notification.NavigationResourceKind == nameof(TenantAccount) &&
+                     notification.NavigationResourceId != null &&
+                     notification.NavigationParentResourceKind == null &&
+                     notification.NavigationParentResourceId == null &&
+                     notification.NavigationChildResourceKind == null &&
+                     notification.NavigationChildResourceId == null &&
+                     _db.EffectiveTenantAccess.Any(access =>
+                         access.PortfolioId == portfolioId &&
+                         access.UserId == userId &&
+                         access.AccessContextId == accessContextId &&
+                         access.AccessRevision == accessRevision &&
+                         access.TenantAccountId == notification.NavigationResourceId))
                 )
                     ? new NavigationIntentDto
                     {

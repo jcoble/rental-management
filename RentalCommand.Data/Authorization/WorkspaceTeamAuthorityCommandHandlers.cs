@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Data.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -15,8 +16,9 @@ internal static class WorkspaceTeamAuthoritySupport
 {
     public static async Task<DateTime> LockAndAuthorizeActorAsync(
         IWorkspaceTeamAuthorityCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         int? targetAccessContextId,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         var lockIds = targetAccessContextId is > 0
@@ -24,26 +26,56 @@ internal static class WorkspaceTeamAuthoritySupport
             : new[] { command.ActorAccessContextId };
         foreach (var contextId in lockIds)
         {
-            await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, contextId, ct);
+            await context.AcquireLockAsync("WorkspaceAccessContext", contextId, ct);
         }
 
-        var utcNow = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeActorAsync(command, attempt.Persistence, utcNow, ct);
+        var utcNow = await context.ReadDatabaseClockUtcAsync(ct);
+        await AuthorizeActorAsync(command, db, utcNow, ct);
         return utcNow;
     }
 
     public static async Task AuthorizeReplayAsync(
         IWorkspaceTeamAuthorityCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var utcNow = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeActorAsync(command, persistence, utcNow, ct);
+        var utcNow = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        await AuthorizeActorAsync(command, db, utcNow, ct);
+    }
+
+    public static void EnsureExpectedRevision(WorkspaceAccessContext context, long expectedRevision)
+    {
+        if (context.AccessRevision != expectedRevision)
+        {
+            throw new StaleAccessRevisionException(expectedRevision, context.AccessRevision);
+        }
+    }
+
+    public static async Task ValidateAndFlushMutationAsync(
+        IWorkspaceAccessMutationCommand command,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator,
+        CancellationToken ct)
+    {
+        var validation = await accessRevisionGuard.ValidatePendingMutationAsync(
+            db,
+            command.AccessContextId,
+            command.ExpectedRevision,
+            ct);
+        await context.FlushBusinessAsync(ct);
+        var assignmentIds = validation.ExistingAssignmentIdsToValidate
+            .Concat(validation.AssignmentEntitiesToValidate.Select(assignment => assignment.Id))
+            .Where(id => id > 0)
+            .Distinct()
+            .ToArray();
+        await assignmentScopeValidator.ValidateAsync(assignmentIds, ct);
     }
 
     private static async Task AuthorizeActorAsync(
         IWorkspaceTeamAuthorityCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime utcNow,
         CancellationToken ct)
     {
@@ -54,10 +86,10 @@ internal static class WorkspaceTeamAuthoritySupport
                 "Team members cannot change their own role, scope, or membership status.");
         }
 
-        var sessions = persistence.Query<AuthSession>().AsNoTracking();
-        var memberships = persistence.Query<WorkspaceMembership>().AsNoTracking();
-        var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking();
-        var actor = await persistence.Query<WorkspaceAccessContext>()
+        var sessions = db.Set<AuthSession>().AsNoTracking();
+        var memberships = db.Set<WorkspaceMembership>().AsNoTracking();
+        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking();
+        var actor = await db.Set<WorkspaceAccessContext>()
             .AsNoTracking()
             .Where(context =>
                 context.Id == command.ActorAccessContextId &&
@@ -117,7 +149,7 @@ internal static class WorkspaceTeamAuthoritySupport
         MembershipRoleAssignmentScopeKind scopeKind,
         IReadOnlyCollection<int> selectedPropertyIds,
         int portfolioId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(roleProfileKey);
@@ -126,11 +158,11 @@ internal static class WorkspaceTeamAuthoritySupport
             throw new DomainValidationException("Only the four canonical Team role profiles are accepted.");
         }
 
-        var role = await persistence.Query<RoleProfile>()
+        var role = await db.Set<RoleProfile>()
             .SingleOrDefaultAsync(profile => profile.Key == roleProfileKey, ct)
             ?? throw new DomainValidationException("The canonical Team role profile is unavailable.");
         ValidateScope(roleProfileKey, scopeKind, selectedPropertyIds);
-        await ValidatePropertiesAsync(portfolioId, selectedPropertyIds, scopeKind, persistence, ct);
+        await ValidatePropertiesAsync(portfolioId, selectedPropertyIds, scopeKind, db, ct);
         return role;
     }
 
@@ -170,7 +202,7 @@ internal static class WorkspaceTeamAuthoritySupport
         int portfolioId,
         IReadOnlyCollection<int> selectedPropertyIds,
         MembershipRoleAssignmentScopeKind scopeKind,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (scopeKind != MembershipRoleAssignmentScopeKind.SelectedProperties)
@@ -184,7 +216,7 @@ internal static class WorkspaceTeamAuthoritySupport
             throw new DomainValidationException("Selected properties must be unique positive identifiers.");
         }
 
-        var matchingCount = await persistence.Query<Property>()
+        var matchingCount = await db.Set<Property>()
             .AsNoTracking()
             .CountAsync(property => ids.Contains(property.Id) && property.PortfolioId == portfolioId, ct);
         if (matchingCount != ids.Length)
@@ -239,16 +271,19 @@ internal static class WorkspaceTeamAuthoritySupport
 }
 
 public sealed class CreateWorkspaceMembershipHandler
-    : IAtomicCommandHandler<CreateWorkspaceMembershipCommand, CreateWorkspaceMembershipResult>,
-      IAtomicReplayAuthorizer<CreateWorkspaceMembershipCommand>
+    : IAtomicCommandHandler<CreateWorkspaceMembershipCommand, CreateWorkspaceMembershipResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateWorkspaceMembershipHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CreateWorkspaceMembershipResult> HandleAsync(
         CreateWorkspaceMembershipCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, null, ct);
+            command, context, null, _db, ct);
         var email = command.Email.Trim();
         var displayName = command.DisplayName.Trim();
         if (email.Length is 0 or > 256 || displayName.Length is 0 or > 200)
@@ -263,11 +298,11 @@ public sealed class CreateWorkspaceMembershipHandler
 
         var role = await WorkspaceTeamAuthoritySupport.LoadAndValidateRoleAsync(
             command.RoleProfileKey, command.ScopeKind, command.SelectedPropertyIds,
-            command.PortfolioId, attempt.Persistence, ct);
+            command.PortfolioId, _db, ct);
         var normalizedEmail = email.ToUpperInvariant();
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
-        WorkspaceAccessContext? context = null;
+        WorkspaceAccessContext? accessContext = null;
         if (user is null)
         {
             user = new ApplicationUser
@@ -282,11 +317,11 @@ public sealed class CreateWorkspaceMembershipHandler
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),
                 CreatedAt = changedAtUtc,
             };
-            attempt.Persistence.Add(user);
+            _db.Add(user);
         }
         else
         {
-            var existingContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            var existingContextId = await _db.Set<WorkspaceAccessContext>()
                 .AsNoTracking()
                 .Where(candidate =>
                     candidate.UserId == user.Id &&
@@ -295,31 +330,31 @@ public sealed class CreateWorkspaceMembershipHandler
                 .SingleOrDefaultAsync(ct);
             if (existingContextId is not null)
             {
-                await attempt.Locking.AcquireAsync(
-                    AtomicLockResource.WorkspaceAccessContext,
+                await context.AcquireLockAsync(
+                    "WorkspaceAccessContext",
                     existingContextId.Value,
                     ct);
-                context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+                accessContext = await _db.Set<WorkspaceAccessContext>()
                     .Include(candidate => candidate.Membership)
                     .SingleAsync(candidate => candidate.Id == existingContextId.Value, ct);
-                if (context.Membership is not null)
+                if (accessContext.Membership is not null)
                 {
                     throw new DomainValidationException("This person is already a Team member in the workspace.");
                 }
-                if (context.Status != WorkspaceAccessContextStatus.Active ||
-                    context.SuspendedAtUtc is not null ||
-                    context.RevokedAtUtc is not null)
+                if (accessContext.Status != WorkspaceAccessContextStatus.Active ||
+                    accessContext.SuspendedAtUtc is not null ||
+                    accessContext.RevokedAtUtc is not null)
                 {
                     throw new DomainValidationException(
                         "This person's existing workspace access is not active and cannot receive a Team assignment.");
                 }
 
-                context.UpdatedAtUtc = changedAtUtc;
-                context.AdvanceRevision(context.AccessRevision);
+                accessContext.UpdatedAtUtc = changedAtUtc;
+                accessContext.AdvanceRevision(accessContext.AccessRevision);
             }
         }
 
-        context ??= new WorkspaceAccessContext
+        accessContext ??= new WorkspaceAccessContext
         {
             User = user,
             PortfolioId = command.PortfolioId,
@@ -330,7 +365,7 @@ public sealed class CreateWorkspaceMembershipHandler
         };
         var membership = new WorkspaceMembership
         {
-            AccessContext = context,
+            AccessContext = accessContext,
             PortfolioId = command.PortfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = role.DefaultExperience,
@@ -341,8 +376,8 @@ public sealed class CreateWorkspaceMembershipHandler
         var assignment = WorkspaceTeamAuthoritySupport.NewAssignment(
             membership, command.PortfolioId, role, command.ScopeKind,
             command.SelectedPropertyIds, changedAtUtc, changedAtUtc);
-        attempt.Persistence.Add(assignment);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(assignment);
+        await context.FlushBusinessAsync(ct);
 
         var requiresAccountActivation = string.IsNullOrEmpty(user.PasswordHash);
         if (requiresAccountActivation)
@@ -358,30 +393,29 @@ public sealed class CreateWorkspaceMembershipHandler
                 CreatedAtUtc = changedAtUtc,
                 ExpiresAtUtc = changedAtUtc.AddDays(7),
             };
-            attempt.Persistence.Add(invitation);
-            attempt.StageOutbox(BuildActivationEmail(
+            _db.Add(invitation);
+            context.StageOutbox(BuildActivationEmail(
                 command, membership, role.DisplayName, user, rawToken, changedAtUtc));
         }
 
-        attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+        context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(WorkspaceMembership), membership.Id,
             AuditLogOperation.Created, command.ActorUserId, "Workspace member invited",
             new
             {
-                AccessContextId = context.Id,
+                AccessContextId = accessContext.Id,
                 WorkspaceMembershipId = membership.Id,
                 AssignmentId = assignment.Id,
                 role.Key,
                 command.ScopeKind,
             }));
         return new CreateWorkspaceMembershipResult(
-            user.Id, context.Id, membership.Id, assignment.Id, context.AccessRevision,
+            user.Id, accessContext.Id, membership.Id, assignment.Id, accessContext.AccessRevision,
             requiresAccountActivation);
     }
 
-    public Task AuthorizeReplayAsync(CreateWorkspaceMembershipCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(CreateWorkspaceMembershipCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 
     private static string CreateInvitationToken()
     {
@@ -437,20 +471,23 @@ public sealed class CreateWorkspaceMembershipHandler
 }
 
 public sealed class ActivateWorkspaceInvitationHandler
-    : IAtomicCommandHandler<ActivateWorkspaceInvitationCommand, ActivateWorkspaceInvitationResult>,
-      IAtomicReplayAuthorizer<ActivateWorkspaceInvitationCommand>
+    : IAtomicCommandHandler<ActivateWorkspaceInvitationCommand, ActivateWorkspaceInvitationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ActivateWorkspaceInvitationHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ActivateWorkspaceInvitationResult> HandleAsync(
         ActivateWorkspaceInvitationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.ApplicationUser, command.InvitedUserId, ct);
+        await context.AcquireLockAsync(
+            "ApplicationUser", command.InvitedUserId, ct);
 
-        var activation = await attempt.AccountSecurity.ActivateWorkspaceInvitationAsync(
-            command.InvitationId,
+        var activation = await AtomicAccountSecurityPersistence.ActivateWorkspaceInvitationAsync(_db,
+            context, command.InvitationId,
             command.InvitedUserId,
             command.TokenHash,
             command.PasswordHash,
@@ -462,8 +499,8 @@ public sealed class ActivateWorkspaceInvitationHandler
             return Invalid(command.InvitedUserId);
         }
 
-        attempt.UseDatabaseWallClockForAudit(activation.AcceptedAtUtc);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.UseDatabaseWallClockForAudit(activation.AcceptedAtUtc);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             activation.PortfolioId,
             nameof(ApplicationUser),
             activation.InvitedUserId,
@@ -489,13 +526,11 @@ public sealed class ActivateWorkspaceInvitationHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ActivateWorkspaceInvitationCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ActivateWorkspaceInvitationCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var utcNow = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var remainsUsable = await persistence.Query<WorkspaceInvitation>()
+        var utcNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var remainsUsable = await _db.Set<WorkspaceInvitation>()
             .IgnoreQueryFilters()
             .AsNoTracking()
             .AnyAsync(invitation =>
@@ -534,47 +569,61 @@ public sealed class ActivateWorkspaceInvitationHandler
 }
 
 public sealed class AddWorkspaceRoleAssignmentHandler
-    : IAtomicCommandHandler<AddWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>,
-      IAtomicReplayAuthorizer<AddWorkspaceRoleAssignmentCommand>
+    : IAtomicCommandHandler<AddWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+    private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
+
+    public AddWorkspaceRoleAssignmentHandler(
+        RentalCommandDbContext db,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator)
+    {
+        _db = db;
+        _accessRevisionGuard = accessRevisionGuard;
+        _assignmentScopeValidator = assignmentScopeValidator;
+    }
+
     public async Task<WorkspaceTeamMutationResult> HandleAsync(
-        AddWorkspaceRoleAssignmentCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        AddWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, command.TargetAccessContextId, ct);
-        var target = await LoadTargetAsync(command, attempt.Persistence, ct);
+            command, context, command.TargetAccessContextId, _db, ct);
+        var target = await LoadTargetAsync(command, _db, ct);
         EnsureActive(target);
         var role = await WorkspaceTeamAuthoritySupport.LoadAndValidateRoleAsync(
             command.RoleProfileKey, command.ScopeKind, command.SelectedPropertyIds,
-            command.PortfolioId, attempt.Persistence, ct);
+            command.PortfolioId, _db, ct);
         var assignment = WorkspaceTeamAuthoritySupport.NewAssignment(
             target.Membership, command.PortfolioId, role, command.ScopeKind,
             command.SelectedPropertyIds, changedAtUtc, changedAtUtc);
-        attempt.Persistence.Add(assignment);
+        _db.Add(assignment);
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Context.AdvanceRevision(command.ExpectedRevision);
-        attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+        context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(MembershipRoleAssignment), command.TargetAccessContextId,
             AuditLogOperation.Created, command.ActorUserId, "Team role assignment added",
             new { role.Key, command.ScopeKind, Revision = command.ExpectedRevision + 1 }));
+        await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
+            command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
         return Result(target, assignment.Id, command.ExpectedRevision + 1);
     }
 
-    public Task AuthorizeReplayAsync(AddWorkspaceRoleAssignmentCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(AddWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 
     internal static async Task<TeamTarget> LoadTargetAsync(
         IWorkspaceAccessMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var target = await persistence.Query<WorkspaceAccessContext>()
+        var target = await db.Set<WorkspaceAccessContext>()
             .Where(context => context.Id == command.AccessContextId)
             .Select(context => new TeamTarget(context, context.Membership!))
             .SingleOrDefaultAsync(ct)
             ?? throw new AccessContextUnavailableException();
-        ChangeWorkspaceAssignmentScopeHandler.EnsureExpectedRevision(target.Context, command.ExpectedRevision);
+        WorkspaceTeamAuthoritySupport.EnsureExpectedRevision(target.Context, command.ExpectedRevision);
         if (target.Membership is null)
         {
             throw new DomainValidationException("The target is not a Team member.");
@@ -599,17 +648,30 @@ public sealed class AddWorkspaceRoleAssignmentHandler
 }
 
 public sealed class EndWorkspaceRoleAssignmentHandler
-    : IAtomicCommandHandler<EndWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>,
-      IAtomicReplayAuthorizer<EndWorkspaceRoleAssignmentCommand>
+    : IAtomicCommandHandler<EndWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+    private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
+
+    public EndWorkspaceRoleAssignmentHandler(
+        RentalCommandDbContext db,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator)
+    {
+        _db = db;
+        _accessRevisionGuard = accessRevisionGuard;
+        _assignmentScopeValidator = assignmentScopeValidator;
+    }
+
     public async Task<WorkspaceTeamMutationResult> HandleAsync(
-        EndWorkspaceRoleAssignmentCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        EndWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, command.TargetAccessContextId, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, attempt.Persistence, ct);
+            command, context, command.TargetAccessContextId, _db, ct);
+        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
         AddWorkspaceRoleAssignmentHandler.EnsureActive(target);
-        var assignment = await attempt.Persistence.Query<MembershipRoleAssignment>()
+        var assignment = await _db.Set<MembershipRoleAssignment>()
             .SingleOrDefaultAsync(item => item.Id == command.AssignmentId &&
                                           item.WorkspaceMembershipId == target.Membership.Id &&
                                           item.PortfolioId == command.PortfolioId, ct)
@@ -622,32 +684,46 @@ public sealed class EndWorkspaceRoleAssignmentHandler
         assignment.UpdatedAtUtc = changedAtUtc;
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Context.AdvanceRevision(command.ExpectedRevision);
-        attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+        context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(MembershipRoleAssignment), assignment.Id,
             AuditLogOperation.Updated, command.ActorUserId, "Team role assignment ended",
             new { command.EffectiveToUtc, Revision = command.ExpectedRevision + 1 }));
+        await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
+            command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
         return AddWorkspaceRoleAssignmentHandler.Result(target, assignment.Id, command.ExpectedRevision + 1);
     }
 
-    public Task AuthorizeReplayAsync(EndWorkspaceRoleAssignmentCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(EndWorkspaceRoleAssignmentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
-    : IAtomicCommandHandler<ReplaceWorkspaceAssignmentPropertyScopeCommand, WorkspaceTeamMutationResult>,
-      IAtomicReplayAuthorizer<ReplaceWorkspaceAssignmentPropertyScopeCommand>
+    : IAtomicCommandHandler<ReplaceWorkspaceAssignmentPropertyScopeCommand, WorkspaceTeamMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+    private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
+
+    public ReplaceWorkspaceAssignmentPropertyScopeHandler(
+        RentalCommandDbContext db,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator)
+    {
+        _db = db;
+        _accessRevisionGuard = accessRevisionGuard;
+        _assignmentScopeValidator = assignmentScopeValidator;
+    }
+
     public async Task<WorkspaceTeamMutationResult> HandleAsync(
         ReplaceWorkspaceAssignmentPropertyScopeCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, command.TargetAccessContextId, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, attempt.Persistence, ct);
+            command, context, command.TargetAccessContextId, _db, ct);
+        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
         AddWorkspaceRoleAssignmentHandler.EnsureActive(target);
-        var assignment = await attempt.Persistence.Query<MembershipRoleAssignment>()
+        var assignment = await _db.Set<MembershipRoleAssignment>()
             .Where(item => item.Id == command.AssignmentId &&
                            item.WorkspaceMembershipId == target.Membership.Id &&
                            item.PortfolioId == command.PortfolioId)
@@ -659,19 +735,19 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
             command.SelectedPropertyIds);
         await WorkspaceTeamAuthoritySupport.ValidatePropertiesAsync(
             command.PortfolioId, command.SelectedPropertyIds,
-            MembershipRoleAssignmentScopeKind.SelectedProperties, attempt.Persistence, ct);
+            MembershipRoleAssignmentScopeKind.SelectedProperties, _db, ct);
 
-        var obsoleteScopes = await attempt.Persistence.Query<MembershipRoleAssignmentProperty>()
+        var obsoleteScopes = await _db.Set<MembershipRoleAssignmentProperty>()
             .Where(scope => scope.MembershipRoleAssignmentId == command.AssignmentId &&
                             scope.PortfolioId == command.PortfolioId &&
                             !command.SelectedPropertyIds.Contains(scope.PropertyId))
             .ToListAsync(ct);
         foreach (var scope in obsoleteScopes)
         {
-            attempt.Persistence.Remove(scope);
+            _db.Remove(scope);
         }
 
-        var existingSelectedPropertyIds = await attempt.Persistence.Query<MembershipRoleAssignmentProperty>()
+        var existingSelectedPropertyIds = await _db.Set<MembershipRoleAssignmentProperty>()
             .AsNoTracking()
             .Where(scope => scope.MembershipRoleAssignmentId == command.AssignmentId &&
                             scope.PortfolioId == command.PortfolioId &&
@@ -680,7 +756,7 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
             .ToArrayAsync(ct);
         foreach (var propertyId in command.SelectedPropertyIds.Except(existingSelectedPropertyIds))
         {
-            attempt.Persistence.Add(new MembershipRoleAssignmentProperty
+            _db.Add(new MembershipRoleAssignmentProperty
             {
                 MembershipRoleAssignment = assignment.Entity,
                 PropertyId = propertyId,
@@ -691,36 +767,50 @@ public sealed class ReplaceWorkspaceAssignmentPropertyScopeHandler
         assignment.Entity.UpdatedAtUtc = changedAtUtc;
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Context.AdvanceRevision(command.ExpectedRevision);
-        attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+        context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(MembershipRoleAssignment), assignment.Entity.Id,
             AuditLogOperation.Updated, command.ActorUserId, "Selected-property scope replaced",
             new { PropertyIds = command.SelectedPropertyIds, Revision = command.ExpectedRevision + 1 }));
+        await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
+            command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
         return AddWorkspaceRoleAssignmentHandler.Result(
             target, assignment.Entity.Id, command.ExpectedRevision + 1);
     }
 
-    public Task AuthorizeReplayAsync(ReplaceWorkspaceAssignmentPropertyScopeCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(ReplaceWorkspaceAssignmentPropertyScopeCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class ChangeWorkspaceMembershipStatusHandler
-    : IAtomicCommandHandler<ChangeWorkspaceMembershipStatusCommand, WorkspaceTeamMutationResult>,
-      IAtomicReplayAuthorizer<ChangeWorkspaceMembershipStatusCommand>
+    : IAtomicCommandHandler<ChangeWorkspaceMembershipStatusCommand, WorkspaceTeamMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+    private readonly IMembershipAssignmentScopeValidator _assignmentScopeValidator;
+
+    public ChangeWorkspaceMembershipStatusHandler(
+        RentalCommandDbContext db,
+        WorkspaceAccessRevisionGuard accessRevisionGuard,
+        IMembershipAssignmentScopeValidator assignmentScopeValidator)
+    {
+        _db = db;
+        _accessRevisionGuard = accessRevisionGuard;
+        _assignmentScopeValidator = assignmentScopeValidator;
+    }
+
     public async Task<WorkspaceTeamMutationResult> HandleAsync(
         ChangeWorkspaceMembershipStatusCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var changedAtUtc = await WorkspaceTeamAuthoritySupport.LockAndAuthorizeActorAsync(
-            command, attempt, command.TargetAccessContextId, ct);
-        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, attempt.Persistence, ct);
+            command, context, command.TargetAccessContextId, _db, ct);
+        var target = await AddWorkspaceRoleAssignmentHandler.LoadTargetAsync(command, _db, ct);
         Apply(command, target, changedAtUtc);
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Membership.UpdatedAtUtc = changedAtUtc;
         target.Context.AdvanceRevision(command.ExpectedRevision);
-        attempt.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
+        context.StageSemanticEvent(WorkspaceTeamAuthoritySupport.Audit(
             command.PortfolioId, nameof(WorkspaceMembership), target.Membership.Id,
             AuditLogOperation.Updated, command.ActorUserId, $"Team membership {command.Action}",
             new
@@ -730,12 +820,13 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
                 MembershipStatus = target.Membership.Status,
                 Revision = command.ExpectedRevision + 1
             }));
+        await WorkspaceTeamAuthoritySupport.ValidateAndFlushMutationAsync(
+            command, context, _db, _accessRevisionGuard, _assignmentScopeValidator, ct);
         return AddWorkspaceRoleAssignmentHandler.Result(target, null, command.ExpectedRevision + 1);
     }
 
-    public Task AuthorizeReplayAsync(ChangeWorkspaceMembershipStatusCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(ChangeWorkspaceMembershipStatusCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        WorkspaceTeamAuthoritySupport.AuthorizeReplayAsync(command, _db, ct);
 
     private static void Apply(
         ChangeWorkspaceMembershipStatusCommand command,

@@ -41,4 +41,4 @@ public sealed record NativeSignerActionResult(
     int? LeaseAddendumId,
     SignatureSignerStatus SignerStatus,
     SignatureRequestStatus RequestStatus,
-    bool ExecutionRequired) : IAtomicResultData;
+    bool ExecutionRequired);

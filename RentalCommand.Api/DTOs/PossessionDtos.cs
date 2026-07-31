@@ -16,6 +16,18 @@ public sealed record GivePossessionResponse(
     DateTime PossessionGivenAtUtc,
     bool Replayed);
 
+public sealed class ReconcileHistoricalPossessionRequest
+{
+    public int UnitId { get; set; }
+    public DateOnly PossessionGivenOn { get; set; }
+}
+
+public sealed record ReconcileHistoricalPossessionResponse(
+    int LeaseManagementId,
+    int UnitId,
+    DateTime PossessionGivenAtUtc,
+    bool Replayed);
+
 public sealed class ConfirmMoveInRequest
 {
     public int UnitId { get; set; }

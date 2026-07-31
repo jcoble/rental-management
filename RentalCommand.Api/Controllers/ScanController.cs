@@ -52,7 +52,9 @@ public class ScanController : ManagementControllerBase
     // upload and each file in a batch; an explicit target skips classification.
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan"
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan",
+        "LeaseEndingNotice",
+        "PropertyAcquisition"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
@@ -100,7 +102,7 @@ public class ScanController : ManagementControllerBase
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrEmpty(target) && !ValidTargets.Contains(target))
         {
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
         }
         if (!string.IsNullOrEmpty(target))
             target = ValidTargets.First(validTarget =>
@@ -180,7 +182,7 @@ public class ScanController : ManagementControllerBase
         // independently routed to its own typed review draft; an explicit target skips that pass.
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(target) && !ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
         if (!string.IsNullOrWhiteSpace(target))
             target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
 
@@ -656,6 +658,7 @@ public class ScanController : ManagementControllerBase
             GetWorkspaceReadScope(),
             status,
             new ListQuery { Skip = skip, Take = take },
+            includeTotalCount: false,
             ct);
         return Ok(page.Items);
     }
@@ -667,7 +670,12 @@ public class ScanController : ManagementControllerBase
         [FromQuery] string? status,
         CancellationToken ct = default)
     {
-        var page = await LoadScanDraftPageAsync(GetWorkspaceReadScope(), status, query, ct);
+        var page = await LoadScanDraftPageAsync(
+            GetWorkspaceReadScope(),
+            status,
+            query,
+            includeTotalCount: true,
+            ct);
         return Ok(page);
     }
 
@@ -675,6 +683,7 @@ public class ScanController : ManagementControllerBase
         WorkspaceReadScope scope,
         string? status,
         ListQuery listQuery,
+        bool includeTotalCount,
         CancellationToken ct)
     {
         var portfolioId = scope.PortfolioId;
@@ -691,7 +700,12 @@ public class ScanController : ManagementControllerBase
             _ => query.OrderByDescending(d => d.CreatedAt),
         };
 
-        var totalCount = await query.CountAsync(ct);
+        // The legacy array endpoint does not expose a total. Avoid executing its expensive
+        // authorization-shaped COUNT only to discard the result; the paged endpoint still
+        // requests and returns the exact DB-side count.
+        var totalCount = includeTotalCount
+            ? await query.CountAsync(ct)
+            : 0;
 
         var drafts = await query
             .Skip(listQuery.NormalizedSkip)
@@ -1203,7 +1217,7 @@ public class ScanController : ManagementControllerBase
         ConfirmScanDraftResult result,
         AtomicCommandDisposition disposition)
     {
-        var replayed = disposition is AtomicCommandDisposition.Replayed or AtomicCommandDisposition.Joined;
+        var replayed = disposition == AtomicCommandDisposition.Replayed;
         var atomicDisposition = disposition.ToString();
         var entityType = Enum.TryParse<ScanConfirmationTargetKind>(
             result.TargetEntityType, ignoreCase: true, out var targetKind)
@@ -1218,6 +1232,8 @@ public class ScanController : ManagementControllerBase
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Loan" => Ok(new { loanId = result.TargetEntityId, loanPaymentId = result.LoanPaymentId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "PropertyAcquisition" => Ok(new { propertyId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "LeaseEndingNotice" => Ok(new { leaseManagementId = result.LeaseManagementId ?? result.TargetEntityId, entityType = nameof(LeaseManagement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             nameof(LeaseAgreement) => Ok(new { leaseManagementId = result.LeaseManagementId, agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };

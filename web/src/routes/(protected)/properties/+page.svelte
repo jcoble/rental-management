@@ -29,6 +29,7 @@
 	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import { hasAllPropertiesRentalsManageAuthority } from '$lib/auth/property-authority';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import {
 		formatPropertyStatus,
@@ -59,6 +60,7 @@
 	const canManageRentals = $derived(
 		activeExperience === 'Management' && activeCapabilities.has(CAPABILITY.rentalsManage)
 	);
+	const canCreateProperty = $derived(hasAllPropertiesRentalsManageAuthority(currentAccess));
 	const PAGE_SIZE = 20;
 
 	// Second coach hop for the "add a unit" checklist step. That step lands here (the property LIST)
@@ -198,9 +200,10 @@
 		queryClient.invalidateQueries({ queryKey: ['properties'] });
 	}
 
+	type SavePropertyVariables = { id: number; data: Record<string, unknown> };
+
 	const savePropertyMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) =>
-			properties.update(id, data),
+		mutationFn: (vars: SavePropertyVariables) => properties.update(vars.id, vars.data),
 		onSuccess: () => {
 			showSuccess('Property updated.');
 			closeForm();
@@ -220,8 +223,8 @@
 	}));
 
 	function openCreate() {
-		if (!canManageRentals) return;
-		void goto('/onboarding?step=property&from=properties');
+		if (!canCreateProperty) return;
+		goto('/onboarding?step=property&from=properties');
 	}
 
 	function openEdit(p: Property) {
@@ -319,7 +322,7 @@
 		formErrors = {};
 		const mutableProperty = propertyUpdateFields(result.data);
 		const ownerEntityId = result.data.ownerEntityId;
-		const ownershipChange = String(ownerEntityId ?? '') === initialOwnerEntityId
+		const ownershipChange = editingId != null && String(ownerEntityId ?? '') === initialOwnerEntityId
 			? {}
 			: ownerEntityId == null
 				? { ownerships: [], clearOwnership: true }
@@ -327,16 +330,16 @@
 						ownerships: [{ ownerEntityId, ownershipSharePercent: 100 }],
 						clearOwnership: false
 					};
-		savePropertyMutation.mutate({
-			id: editingId,
-			data: {
-				portfolioId,
-				...mutableProperty,
-				...operations.data,
-				...basis.data,
-				...ownershipChange,
-			},
-		});
+		const data = {
+			portfolioId,
+			...mutableProperty,
+			...operations.data,
+			...basis.data,
+			...ownershipChange,
+		};
+		savePropertyMutation.mutate(
+			{ id: editingId, data }
+		);
 	}
 
 	// DataGrid column definitions
@@ -462,7 +465,7 @@
 		emptyDescription={emptyStateCopy.description}
 		emptyIcon={Building}
 		emptyActionLabel={emptyStateCopy.actionLabel}
-		emptyOnAction={canManageRentals ? openCreate : undefined}
+		emptyOnAction={canCreateProperty ? openCreate : undefined}
 		emptyTone="primary"
 		onRowClick={openProperty}
 		getRowKey={(p) => p.id}
@@ -502,7 +505,7 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
-			{#if canManageRentals}
+			{#if canCreateProperty}
 				<Button data-testid="property-create-button" data-coach="add-property" class="gap-2 shrink-0" onclick={openCreate}>
 					<Plus class="h-4 w-4" />
 					New Property
@@ -517,7 +520,7 @@
 <Dialog.Root open={canManageRentals && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
-			<Dialog.Title>{editingId == null ? 'New Property' : 'Edit Property'}</Dialog.Title>
+			<Dialog.Title>Edit Property</Dialog.Title>
 		</Dialog.Header>
 		<FormStepper
 			steps={propertySteps}

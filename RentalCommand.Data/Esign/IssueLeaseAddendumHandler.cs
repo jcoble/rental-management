@@ -15,18 +15,21 @@ namespace RentalCommand.Data.Esign;
 
 /// <summary>Canonical Addendum issuance through the shared immutable native e-sign workflow.</summary>
 public sealed class IssueLeaseAddendumHandler
-    : IAtomicCommandHandler<IssueLeaseAddendumCommand, IssueLeaseAddendumResult>,
-      IAtomicReplayAuthorizer<IssueLeaseAddendumCommand>
+    : IAtomicCommandHandler<IssueLeaseAddendumCommand, IssueLeaseAddendumResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public IssueLeaseAddendumHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<IssueLeaseAddendumResult> HandleAsync(
-        IssueLeaseAddendumCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var businessNowUtc = times.EffectiveNowUtc;
         var candidate = await LeaseAddendumCommandSupport.AuthorizedRelationships(
-                command, attempt.Persistence, times.WallClockUtc)
+                command, _db, times.WallClockUtc)
             .SelectMany(item => item.Addenda)
             .Where(item => item.Id == command.LeaseAddendumId)
             .Select(item => new
@@ -122,7 +125,7 @@ public sealed class IssueLeaseAddendumHandler
             throw new DomainValidationException(
                 "The issued PDF fingerprint does not match the Addendum source, terms, and artifact.");
 
-        var pending = await attempt.Persistence.Query<PendingFileUpload>()
+        var pending = await _db.Set<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == command.PortfolioId
                 && upload.ActorScopeId == command.ActorUserId
@@ -140,8 +143,8 @@ public sealed class IssueLeaseAddendumHandler
             ContentType = "application/pdf", FileSize = command.FileSize, EntityType = nameof(LeaseAddendum),
             EntityId = addendum.Id, UploadedAt = businessNowUtc,
         };
-        attempt.Persistence.Add(storedFile);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(storedFile);
+        await context.FlushBusinessAsync(ct);
         var artifact = new LegalDocumentArtifact
         {
             PortfolioId = command.PortfolioId, StoredFileId = storedFile.Id,
@@ -151,13 +154,13 @@ public sealed class IssueLeaseAddendumHandler
             CreatedAtUtc = businessNowUtc,
             CreatedByUserId = command.ActorUserId,
         };
-        attempt.Persistence.Add(artifact);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(artifact);
+        await context.FlushBusinessAsync(ct);
 
         addendum.IssuedArtifactId = artifact.Id;
         addendum.IssuedAtUtc = businessNowUtc;
         addendum.UpdatedAtUtc = businessNowUtc;
-        attempt.BindSemanticAudit(addendum, new AtomicSemanticAudit(command.PortfolioId,
+        context.BindSemanticAudit(addendum, new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { addendum.IssuedArtifactId, addendum.IssuedAtUtc }),
             ChangeReason: "Issued immutable Addendum artifact and froze its signer/effect snapshot."));
@@ -191,18 +194,18 @@ public sealed class IssueLeaseAddendumHandler
             OccurredAtUtc = businessNowUtc,
             Detail = $"Native Addendum packet admitted for {packet.Signers.Count} required signer(s).",
         });
-        attempt.Persistence.Add(packet);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(packet);
+        await context.FlushBusinessAsync(ct);
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
         pending.UpdatedAtUtc = businessNowUtc;
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(SignatureRequest),
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(SignatureRequest),
             packet.Id, AuditLogOperation.Created, UserId: command.ActorUserId,
             ChangeReason: "Created canonical Addendum signature packet."), businessNowUtc);
         foreach (var signer in packet.Signers)
         {
             var link = $"{command.WebBaseUrl.TrimEnd('/')}/sign/{tokens[signer.AddendumSignerId!.Value]}";
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId, MessageType = "email",
                 Payload = JsonSerializer.Serialize(new
@@ -220,12 +223,11 @@ public sealed class IssueLeaseAddendumHandler
         return new(packet.PublicId, command.LeaseManagementId, addendum.Id, packet.Id, artifact.Id);
     }
 
-    public async Task AuthorizeReplayAsync(IssueLeaseAddendumCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(IssueLeaseAddendumCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await LeaseAddendumCommandSupport.AuthorizedRelationships(command, persistence, now)
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
                 .SelectMany(item => item.Addenda).AnyAsync(item => item.Id == command.LeaseAddendumId, ct))
             throw LeaseAddendumCommandSupport.Unauthorized();
     }

@@ -10,30 +10,60 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Voice;
 
-public class VoiceIntakeServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class VoiceIntakeServiceTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
-    private readonly WorkspaceReadScope _scope;
-    private readonly ServiceProvider _services;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
 
-    public VoiceIntakeServiceTests()
+    public VoiceIntakeServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceIntakeServiceTests));
-        _services = VoiceAtomicTestKernel.Create(_ctx.ConnectionString);
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceIntakeServiceTests));
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            CreateVoiceScanDraftCommand,
+            ScanDraftMutationResult,
+            CreateVoiceScanDraftHandler>();
+        services.AddAtomicCommandHandler<
+            AnswerVoiceScanDraftCommand,
+            ScanDraftMutationResult,
+            AnswerVoiceScanDraftHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(
+                    _ctx.Db.Database.GetDbConnection(),
+                    contextOwnsConnection: false)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -52,6 +82,7 @@ public class VoiceIntakeServiceTests : IDisposable
             UpdatedAt = now,
         });
         await _ctx.Db.SaveChangesAsync();
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         _llm.Setup(x => x.ChatAsync(It.Is<string>(p => p.Contains("water is coming through", StringComparison.OrdinalIgnoreCase)), It.IsAny<CancellationToken>()))
             .ReturnsAsync("""
@@ -107,6 +138,7 @@ public class VoiceIntakeServiceTests : IDisposable
     [InlineData("left right maybe")]
     public async Task CreateDraftAsync_LowQualityInitialTranscript_ThrowsBeforeCreatingNoisyDraft(string transcript)
     {
+        await _ctx.ActivateApiScopeAsync(_scope);
         var sut = new VoiceIntakeService(
             _ctx.Db,
             _services.GetRequiredService<IAtomicUnitOfWork>(),

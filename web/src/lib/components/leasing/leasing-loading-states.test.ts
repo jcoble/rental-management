@@ -28,4 +28,12 @@ describe('leasing role loading states', () => {
 		assert.match(listPage, /pageQuery\.refetch\(\)/);
 		assert.match(detailPage, /detailQuery\.refetch\(\)/);
 	});
+
+	test('keys pipeline rows by kind and record id before unit id', () => {
+		assert.match(
+			listPage,
+			/if \(kind === 'pipeline' && record\.kind != null && record\.recordId != null\) \{\s+return `\$\{record\.kind\}-\$\{record\.recordId\}`;\s+\}/
+		);
+		assert.match(listPage, /\{#each result\.items as raw \(itemKey\(raw\)\)\}/);
+	});
 });

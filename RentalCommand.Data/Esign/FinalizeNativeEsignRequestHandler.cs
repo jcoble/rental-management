@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data.Leasing;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
 using RentalCommand.Core.Leasing;
@@ -12,11 +13,15 @@ namespace RentalCommand.Data.Esign;
 public sealed class FinalizeNativeEsignRequestHandler
     : IAtomicCommandHandler<FinalizeNativeEsignRequestCommand, FinalizeNativeEsignRequestResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeNativeEsignRequestHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<FinalizeNativeEsignRequestResult> HandleAsync(
-        FinalizeNativeEsignRequestCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        FinalizeNativeEsignRequestCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.SignatureRequest, command.SignatureRequestId, ct);
-        var request = await attempt.Persistence.Query<SignatureRequest>()
+        await context.AcquireLockAsync("SignatureRequest", command.SignatureRequestId, ct);
+        var request = await _db.Set<SignatureRequest>()
             .Include(item => item.LeaseAgreement)
             .Include(item => item.LeaseAddendum)
             .SingleOrDefaultAsync(item => item.Id == command.SignatureRequestId && item.PublicId == command.PublicId, ct)
@@ -25,14 +30,14 @@ public sealed class FinalizeNativeEsignRequestHandler
             throw new DomainValidationException("A signature packet must identify exactly one Agreement or Addendum.");
         var leaseManagementId = request.LeaseAgreement?.LeaseManagementId
             ?? request.LeaseAddendum!.LeaseManagementId;
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, leaseManagementId, ct);
+        await context.AcquireLockAsync("LeaseManagement", leaseManagementId, ct);
         if (request.Status == SignatureRequestStatus.Completed && request.ExecutedArtifactId.HasValue)
         {
             if (request.LeaseAgreementId is { } completedAgreementId)
             {
-                var completedTimes = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
-                await attempt.Leasing.ReconcileInitialSecurityDepositChargeAsync(
-                    request.PortfolioId, completedAgreementId, completedTimes.EffectiveNowUtc, ct);
+                var completedTimes = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, request.PortfolioId, ct);
+                await AtomicLeaseMutationPersistence.ReconcileInitialSecurityDepositChargeAsync(_db,
+                    context, request.PortfolioId, completedAgreementId, completedTimes.EffectiveNowUtc, ct);
             }
             return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId,
                 request.ExecutedArtifactId.Value);
@@ -40,16 +45,16 @@ public sealed class FinalizeNativeEsignRequestHandler
         if (request.Status != SignatureRequestStatus.ExecutionPending)
             throw new DomainValidationException("The signature request is not ready for execution.");
 
-        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, request.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
         var businessNowUtc = times.EffectiveNowUtc;
         if (request.ExecutionClaimToken != command.ClaimToken || request.ExecutionClaimExpiresAtUtc <= securityNowUtc)
             throw new NativeEsignExecutionClaimLostException(request.Id);
-        if (await attempt.Persistence.Query<SignatureSigner>().AnyAsync(signer => signer.SignatureRequestId == request.Id
+        if (await _db.Set<SignatureSigner>().AnyAsync(signer => signer.SignatureRequestId == request.Id
                 && signer.IsRequired && signer.Status != SignatureSignerStatus.Signed, ct))
             throw new DomainValidationException("Every required signer must sign before execution.");
 
-        var pending = await attempt.Persistence.Query<PendingFileUpload>()
+        var pending = await _db.Set<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == request.PortfolioId && upload.State == PendingFileUploadState.Prepared
                 && upload.CleanupClaimToken == null && upload.RequestFingerprint == command.RequestFingerprint, ct)
@@ -69,8 +74,8 @@ public sealed class FinalizeNativeEsignRequestHandler
             EntityId = request.LeaseAgreementId ?? request.LeaseAddendumId!.Value,
             UploadedAt = businessNowUtc,
         };
-        attempt.Persistence.Add(storedFile);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(storedFile);
+        await context.FlushBusinessAsync(ct);
         var artifact = new LegalDocumentArtifact
         {
             PortfolioId = request.PortfolioId,
@@ -86,8 +91,8 @@ public sealed class FinalizeNativeEsignRequestHandler
             CreatedAtUtc = businessNowUtc,
             CreatedByUserId = request.CreatedByUserId,
         };
-        attempt.Persistence.Add(artifact);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(artifact);
+        await context.FlushBusinessAsync(ct);
 
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
@@ -100,8 +105,8 @@ public sealed class FinalizeNativeEsignRequestHandler
         request.ExecutionClaimToken = null;
         request.ExecutionClaimExpiresAtUtc = null;
         request.LastError = null;
-        var transition = await attempt.Leasing.ExecuteLegalArtifactTransitionAsync(
-            request.PortfolioId,
+        var transition = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(_db,
+            context, request.PortfolioId,
             leaseManagementId,
             request.LeaseAgreementId,
             request.LeaseAddendumId,
@@ -115,13 +120,13 @@ public sealed class FinalizeNativeEsignRequestHandler
 
         if (request.LeaseAgreementId is { } agreementId)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+            context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAgreement), agreementId, AuditLogOperation.Updated, ActorLabel: "esign-system",
                 NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = businessNowUtc }),
                 ChangeReason: "Finalized immutable executed Agreement artifact."), businessNowUtc);
             if (transition.PredecessorId is { } predecessorId)
             {
-                attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                     nameof(LeaseAgreement), predecessorId, AuditLogOperation.Updated, ActorLabel: "esign-system",
                     NewValues: JsonSerializer.Serialize(new
                     {
@@ -134,14 +139,14 @@ public sealed class FinalizeNativeEsignRequestHandler
         else
         {
             var addendumId = request.LeaseAddendumId!.Value;
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+            context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAddendum), addendumId, AuditLogOperation.Updated, ActorLabel: "esign-system",
                 NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = businessNowUtc }),
                 ChangeReason: "Finalized immutable executed Addendum artifact."), businessNowUtc);
         }
         foreach (var supersededAddendumId in transition.SupersededAddendumIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+            context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                 nameof(LeaseAddendum), supersededAddendumId, AuditLogOperation.Updated,
                 ActorLabel: "esign-system",
                 ChangeReason: "Applied the executed legal artifact's atomic Addendum supersession transition."), businessNowUtc);
@@ -151,14 +156,14 @@ public sealed class FinalizeNativeEsignRequestHandler
         {
             foreach (var reissuedAddendumId in transition.ReissuedAddendumIds)
             {
-                attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
                     nameof(LeaseAddendum), reissuedAddendumId, AuditLogOperation.Updated,
                     ActorLabel: "esign-system",
                     ChangeReason: "Activated the fully executed Addendum reissue with its executed base renewal."), businessNowUtc);
             }
         }
 
-        attempt.Persistence.Add(new SignatureAuditEvent
+        _db.Add(new SignatureAuditEvent
         {
             PortfolioId = request.PortfolioId,
             SignatureRequestId = request.Id,
@@ -166,14 +171,14 @@ public sealed class FinalizeNativeEsignRequestHandler
             OccurredAtUtc = businessNowUtc,
             Detail = $"Every required signer signed; executed artifact SHA-256 {command.ContentSha256}.",
         });
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+        context.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
             nameof(SignatureRequest), request.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
             NewValues: JsonSerializer.Serialize(new { Status = request.Status.ToString(), request.ExecutedArtifactId, request.CompletedAtUtc }),
             ChangeReason: "Completed canonical legal-artifact signature packet."), businessNowUtc);
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = request.PortfolioId,
-            MessageType = "entity-update",
+            MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new
             {
                 entityType = request.LeaseAgreementId.HasValue ? nameof(LeaseAgreement) : nameof(LeaseAddendum),
@@ -186,5 +191,50 @@ public sealed class FinalizeNativeEsignRequestHandler
             NextAttemptAtUtc = businessNowUtc,
         });
         return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId, artifact.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        FinalizeNativeEsignRequestCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+
+        var finalizedRequestExists = await _db.Set<SignatureRequest>()
+            .AsNoTracking()
+            .AnyAsync(request =>
+                request.Id == command.SignatureRequestId &&
+                request.PublicId == command.PublicId &&
+                request.Status == SignatureRequestStatus.Completed &&
+                request.ExecutedArtifactId != null &&
+                _db.Set<LegalDocumentArtifact>().Any(artifact =>
+                    artifact.Id == request.ExecutedArtifactId &&
+                    artifact.StorageKey == command.StorageKey &&
+                    artifact.FileName == command.FileName &&
+                    artifact.ContentType == "application/pdf" &&
+                    artifact.ByteLength == command.FileSize &&
+                    artifact.ContentSha256 == command.ContentSha256),
+                ct);
+        if (!finalizedRequestExists)
+        {
+            throw new UnauthorizedAccessException("The finalized native e-sign request is unavailable.");
+        }
+    }
+
+    private static void Validate(FinalizeNativeEsignRequestCommand command)
+    {
+        if (command.PendingUploadId == Guid.Empty ||
+            command.SignatureRequestId <= 0 ||
+            command.PublicId == Guid.Empty ||
+            command.ClaimToken == Guid.Empty ||
+            command.FileSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.RequestFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.StorageKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ContentSha256);
     }
 }

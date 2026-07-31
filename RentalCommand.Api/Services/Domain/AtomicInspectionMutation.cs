@@ -3,26 +3,35 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Data.Inspections;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public enum AtomicInspectionMutationDomain { Template, Inspection, Item }
-public enum AtomicInspectionMutationOperation { Create, Update, Delete, Reorder, AttachPhoto, Complete, AttachReport }
+public enum AtomicInspectionMutationOperation { Create, Update, Delete, Reorder, AttachPhoto, Complete, AttachReport, RecoverChronology }
 
 public sealed record AtomicInspectionMutationCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicInspectionMutationDomain Domain,
     AtomicInspectionMutationOperation Operation,
     int EntityId,
     int RelatedEntityId,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
+    DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicInspectionMutationResult(
@@ -30,7 +39,7 @@ public sealed record AtomicInspectionMutationResult(
     bool Applied,
     int EntityId,
     string? ResponseJson = null,
-    string? Error = null) : IAtomicResultData;
+    string? Error = null);
 
 public sealed record AttachInspectionReportRequest(
     string FileName,
@@ -39,56 +48,60 @@ public sealed record AttachInspectionReportRequest(
     long FileSize);
 
 public sealed class AtomicInspectionMutationHandler
-    : IAtomicCommandHandler<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>,
-      IAtomicReplayAuthorizer<AtomicInspectionMutationCommand>
+    : IAtomicCommandHandler<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicInspectionMutationHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaxTemplateItems = 100;
     private const int MaxInspectionItems = 100;
 
     public async Task<AtomicInspectionMutationResult> HandleAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         if (command.EntityId > 0)
         {
-            await attempt.Locking.AcquireAsync(
+            await attempt.AcquireLockAsync(
                 command.Domain == AtomicInspectionMutationDomain.Template
-                    ? AtomicLockResource.InspectionTemplate
-                    : AtomicLockResource.Inspection,
+                    ? "InspectionTemplate"
+                    : "Inspection",
                 command.EntityId,
                 ct);
         }
         if (command.Domain == AtomicInspectionMutationDomain.Item && command.RelatedEntityId > 0)
-            await attempt.Locking.AcquireAsync(AtomicLockResource.InspectionItem, command.RelatedEntityId, ct);
+            await attempt.AcquireLockAsync("InspectionItem", command.RelatedEntityId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
-        await AuthorizeAsync(command, attempt.Persistence, now, ct);
+        var securityNow = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        var businessNow = NormalizeBusinessNow(command.BusinessNowUtc);
+        attempt.UseDatabaseWallClockForAudit(businessNow);
+        await AuthorizeAsync(command, _db, businessNow, securityNow, ct);
 
         return command.Domain switch
         {
             AtomicInspectionMutationDomain.Template =>
-                await MutateTemplateAsync(command, attempt, now, ct),
+                await MutateTemplateAsync(command, attempt, businessNow, ct),
             AtomicInspectionMutationDomain.Inspection =>
-                await MutateInspectionAsync(command, attempt, now, ct),
+                await MutateInspectionAsync(command, attempt, businessNow, securityNow, ct),
             AtomicInspectionMutationDomain.Item =>
-                await MutateItemAsync(command, attempt, now, ct),
+                await MutateItemAsync(command, attempt, businessNow, ct),
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
         };
     }
 
-    private static async Task<AtomicInspectionMutationResult> MutateItemAsync(
+    private async Task<AtomicInspectionMutationResult> MutateItemAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicInspectionMutationOperation.Reorder)
         {
             var request = Read<ReorderInspectionItemsRequest>(command);
@@ -100,8 +113,8 @@ public sealed class AtomicInspectionMutationHandler
             if (requestedIds.Distinct().Count() != requestedIds.Length)
                 throw new DomainValidationException("Each checklist question can appear only once in the new order.");
 
-            var reordered = await attempt.Inspections.ReorderItemsAsync(
-                command.PortfolioId, command.EntityId, requestedIds, now, ct);
+            var reordered = await AtomicInspectionPersistence.ReorderItemsAsync(_db,
+                attempt, command.PortfolioId, command.EntityId, requestedIds, now, ct);
             if (!reordered.InspectionExists) return Missing();
             EnsureChecklistItemEditable((InspectionStatus)reordered.InspectionStatus);
             if (!reordered.IsValid)
@@ -114,18 +127,18 @@ public sealed class AtomicInspectionMutationHandler
                 StageDataUpdate(attempt, command, nameof(Inspection), command.EntityId, now, suffix: "inspection");
             }
             return Applied(command.EntityId,
-                await SnapshotInspectionItemsAsync(persistence, command.PortfolioId, command.EntityId, ct));
+                await SnapshotInspectionItemsAsync(db, command.PortfolioId, command.EntityId, ct));
         }
 
         if (command.Operation == AtomicInspectionMutationOperation.Create)
         {
             var request = Read<CreateInspectionItemRequest>(command);
-            var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
+            var inspection = await db.Set<Inspection>().SingleOrDefaultAsync(entity =>
                 entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
             if (inspection is null) return Missing();
             EnsureChecklistItemEditable(inspection.Status);
 
-            var manifest = await persistence.Query<InspectionItem>().AsNoTracking()
+            var manifest = await db.Set<InspectionItem>().AsNoTracking()
                 .Where(item => item.InspectionId == command.EntityId
                     && item.PortfolioId == command.PortfolioId)
                 .GroupBy(_ => 1)
@@ -145,7 +158,7 @@ public sealed class AtomicInspectionMutationHandler
                 Result = InspectionItemResult.Pending,
                 SortOrder = (manifest?.MaxSortOrder ?? -1) + 1,
             };
-            persistence.Add(item);
+            db.Add(item);
             inspection.UpdatedAt = now;
             attempt.BindSemanticAudit(item, Audit(command, nameof(InspectionItem), 0,
                 AuditLogOperation.Created, "Inspection checklist item created"));
@@ -155,10 +168,10 @@ public sealed class AtomicInspectionMutationHandler
             StageDataUpdate(attempt, command, nameof(InspectionItem), item.Id, now, suffix: "item");
             StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now, suffix: "inspection");
             return Applied(item.Id,
-                await SnapshotInspectionItemAsync(persistence, command.PortfolioId, command.EntityId, item.Id, ct));
+                await SnapshotInspectionItemAsync(db, command.PortfolioId, command.EntityId, item.Id, ct));
         }
 
-        var target = await persistence.Query<InspectionItem>()
+        var target = await db.Set<InspectionItem>()
             .Where(item => item.Id == command.RelatedEntityId
                 && item.InspectionId == command.EntityId
                 && item.PortfolioId == command.PortfolioId)
@@ -169,7 +182,7 @@ public sealed class AtomicInspectionMutationHandler
 
         if (command.Operation == AtomicInspectionMutationOperation.Delete)
         {
-            persistence.Remove(target.Item);
+            db.Remove(target.Item);
             target.Inspection.UpdatedAt = now;
             attempt.BindSemanticAudit(target.Item, Audit(command, nameof(InspectionItem), target.Item.Id,
                 AuditLogOperation.Deleted, "Inspection checklist item deleted"));
@@ -184,7 +197,7 @@ public sealed class AtomicInspectionMutationHandler
         if (command.Operation == AtomicInspectionMutationOperation.AttachPhoto)
         {
             var request = Read<AttachInspectionItemPhotoRequest>(command);
-            var fileExists = await persistence.Query<StoredFile>().AsNoTracking().AnyAsync(file =>
+            var fileExists = await db.Set<StoredFile>().AsNoTracking().AnyAsync(file =>
                 file.Id == request.StoredFileId && file.PortfolioId == command.PortfolioId
                 && file.DeletedAt == null, ct);
             if (!fileExists) return Missing();
@@ -198,47 +211,72 @@ public sealed class AtomicInspectionMutationHandler
             StageDataUpdate(attempt, command, nameof(InspectionItem), target.Item.Id, now, suffix: "item");
             StageDataUpdate(attempt, command, nameof(Inspection), target.Inspection.Id, now, suffix: "inspection");
             return Applied(target.Item.Id,
-                await SnapshotInspectionItemAsync(persistence, command.PortfolioId, command.EntityId, target.Item.Id, ct));
+                await SnapshotInspectionItemAsync(db, command.PortfolioId, command.EntityId, target.Item.Id, ct));
         }
 
         if (command.Operation != AtomicInspectionMutationOperation.Update)
             throw new ArgumentOutOfRangeException(nameof(command.Operation));
         var update = Read<UpdateInspectionItemRequest>(command);
+        var itemChanged = false;
         if (update.Area is not null || update.Label is not null)
         {
             var normalized = NormalizeInspectionItemText(
                 update.Area ?? target.Item.Area,
                 update.Label ?? target.Item.Label,
                 target.Item.SortOrder + 1);
-            target.Item.Area = normalized.Area;
-            target.Item.Label = normalized.Label;
+            if (!string.Equals(target.Item.Area, normalized.Area, StringComparison.Ordinal))
+            {
+                target.Item.Area = normalized.Area;
+                itemChanged = true;
+            }
+            if (!string.Equals(target.Item.Label, normalized.Label, StringComparison.Ordinal))
+            {
+                target.Item.Label = normalized.Label;
+                itemChanged = true;
+            }
         }
-        if (update.Result.HasValue) target.Item.Result = update.Result.Value;
-        if (update.Note is not null) target.Item.Note = update.Note;
-        target.Inspection.UpdatedAt = now;
+        if (update.Result.HasValue && target.Item.Result != update.Result.Value)
+        {
+            target.Item.Result = update.Result.Value;
+            itemChanged = true;
+        }
+        if (update.Note is not null && !string.Equals(target.Item.Note, update.Note, StringComparison.Ordinal))
+        {
+            target.Item.Note = update.Note;
+            itemChanged = true;
+        }
+        if (!itemChanged)
+            return Applied(target.Item.Id,
+                await SnapshotInspectionItemAsync(db, command.PortfolioId, command.EntityId, target.Item.Id, ct));
+
+        var inspectionChanged = target.Inspection.UpdatedAt != now;
+        if (inspectionChanged) target.Inspection.UpdatedAt = now;
         attempt.BindSemanticAudit(target.Item, Audit(command, nameof(InspectionItem), target.Item.Id,
             AuditLogOperation.Updated, "Inspection checklist item updated"));
-        attempt.BindSemanticAudit(target.Inspection, Audit(command, nameof(Inspection), target.Inspection.Id,
-            AuditLogOperation.Updated, "Inspection checklist changed"));
+        if (inspectionChanged)
+            attempt.BindSemanticAudit(target.Inspection, Audit(command, nameof(Inspection), target.Inspection.Id,
+                AuditLogOperation.Updated, "Inspection checklist changed"));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(InspectionItem), target.Item.Id, now, suffix: "item");
-        StageDataUpdate(attempt, command, nameof(Inspection), target.Inspection.Id, now, suffix: "inspection");
+        if (inspectionChanged)
+            StageDataUpdate(attempt, command, nameof(Inspection), target.Inspection.Id, now, suffix: "inspection");
         return Applied(target.Item.Id,
-            await SnapshotInspectionItemAsync(persistence, command.PortfolioId, command.EntityId, target.Item.Id, ct));
+            await SnapshotInspectionItemAsync(db, command.PortfolioId, command.EntityId, target.Item.Id, ct));
     }
 
     public async Task AuthorizeReplayAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await AuthorizeAsync(command, persistence, await persistence.ReadDatabaseClockUtcAsync(ct), ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        await AuthorizeAsync(command, _db, NormalizeBusinessNow(command.BusinessNowUtc), securityNow, ct);
     }
 
-    private static async Task<AtomicInspectionMutationResult> MutateTemplateAsync(
+    private async Task<AtomicInspectionMutationResult> MutateTemplateAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
@@ -249,7 +287,7 @@ public sealed class AtomicInspectionMutationHandler
                 "Built-in checklists are read-only. Copy one to a custom checklist before editing.");
         }
 
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicInspectionMutationOperation.Create)
         {
             var request = Read<CreateInspectionTemplateRequest>(command);
@@ -262,22 +300,22 @@ public sealed class AtomicInspectionMutationHandler
                 IsBuiltIn = false,
             };
             AddTemplateItems(template, normalized.Items);
-            persistence.Add(template);
+            db.Add(template);
             await attempt.FlushBusinessAsync(ct);
             attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), template.Id,
                 AuditLogOperation.Created, "Custom inspection checklist created"), now);
             StageDataUpdate(attempt, command, nameof(InspectionTemplate), template.Id, now);
-            return Applied(template.Id, await SnapshotTemplateAsync(persistence, command.PortfolioId, template.Id, ct));
+            return Applied(template.Id, await SnapshotTemplateAsync(db, command.PortfolioId, template.Id, ct));
         }
 
-        var existing = await persistence.Query<InspectionTemplate>()
+        var existing = await db.Set<InspectionTemplate>()
             .SingleOrDefaultAsync(template => template.Id == command.EntityId
                 && template.PortfolioId == command.PortfolioId && !template.IsBuiltIn, ct);
         if (existing is null) return Missing();
 
         if (command.Operation == AtomicInspectionMutationOperation.Delete)
         {
-            persistence.Remove(existing);
+            db.Remove(existing);
             await attempt.FlushBusinessAsync(ct);
             attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), existing.Id,
                 AuditLogOperation.Deleted, "Custom inspection checklist deleted"), now);
@@ -290,7 +328,7 @@ public sealed class AtomicInspectionMutationHandler
 
         var update = Read<UpdateInspectionTemplateRequest>(command);
         var replacement = NormalizeTemplate(update.Name, update.InspectionType, update.Items);
-        await persistence.Query<InspectionTemplateItem>()
+        await db.Set<InspectionTemplateItem>()
             .Where(item => item.TemplateId == existing.Id)
             .ExecuteDeleteAsync(ct);
         existing.Name = replacement.Name;
@@ -300,16 +338,17 @@ public sealed class AtomicInspectionMutationHandler
         attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), existing.Id,
             AuditLogOperation.Updated, "Custom inspection checklist replaced"), now);
         StageDataUpdate(attempt, command, nameof(InspectionTemplate), existing.Id, now);
-        return Applied(existing.Id, await SnapshotTemplateAsync(persistence, command.PortfolioId, existing.Id, ct));
+        return Applied(existing.Id, await SnapshotTemplateAsync(db, command.PortfolioId, existing.Id, ct));
     }
 
-    private static async Task<AtomicInspectionMutationResult> MutateInspectionAsync(
+    private async Task<AtomicInspectionMutationResult> MutateInspectionAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
+        DateTime securityNow,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         if (command.Operation == AtomicInspectionMutationOperation.Create)
         {
             var request = Read<CreateInspectionRequest>(command);
@@ -317,24 +356,24 @@ public sealed class AtomicInspectionMutationHandler
                 throw new DomainValidationException(
                     "Use the Complete action to finish an inspection so its checklist, work orders, and report stay consistent.");
 
-            var references = await AuthorizedProperties(command, persistence, now)
+            var references = await AuthorizedProperties(command, db, securityNow)
                 .Where(property => property.Id == request.PropertyId)
                 .Select(property => new InspectionReferenceValidation(
                     true,
-                    request.UnitId == null || persistence.Query<Unit>().Any(unit =>
+                    request.UnitId == null || db.Set<Unit>().Any(unit =>
                         unit.Id == request.UnitId && unit.PortfolioId == command.PortfolioId
                         && unit.PropertyId == property.Id && unit.DeletedAt == null),
-                    request.LeaseManagementId == null || persistence.Query<LeaseManagement>().Any(management =>
+                    request.LeaseManagementId == null || db.Set<LeaseManagement>().Any(management =>
                         management.Id == request.LeaseManagementId && management.PortfolioId == command.PortfolioId
                         && management.PropertyId == property.Id
                         && (request.UnitId == null || management.UnitId == request.UnitId)),
                     request.LeaseAgreementId == null || (request.LeaseManagementId != null
-                        && persistence.Query<LeaseAgreement>().Any(agreement =>
+                        && db.Set<LeaseAgreement>().Any(agreement =>
                             agreement.Id == request.LeaseAgreementId
                             && agreement.PortfolioId == command.PortfolioId
                             && agreement.LeaseManagementId == request.LeaseManagementId)),
                     request.TemplateId == null || request.TemplateId < 0
-                        || persistence.Query<InspectionTemplate>().Any(template =>
+                        || db.Set<InspectionTemplate>().Any(template =>
                             template.Id == request.TemplateId && template.PortfolioId == command.PortfolioId
                             && !template.IsBuiltIn)))
                 .SingleOrDefaultAsync(ct);
@@ -362,7 +401,7 @@ public sealed class AtomicInspectionMutationHandler
                 CreatedAt = now,
                 UpdatedAt = now,
             };
-            persistence.Add(entity);
+            db.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Inspection), 0,
                 AuditLogOperation.Created, "Inspection created"));
 
@@ -378,7 +417,7 @@ public sealed class AtomicInspectionMutationHandler
                 }
                 else
                 {
-                    var templateItems = await persistence.Query<InspectionTemplateItem>().AsNoTracking()
+                    var templateItems = await db.Set<InspectionTemplateItem>().AsNoTracking()
                         .Where(item => item.TemplateId == templateId)
                         .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
                         .Select(item => new TemplateItemProjection(item.Area, item.Label, item.SortOrder))
@@ -391,7 +430,7 @@ public sealed class AtomicInspectionMutationHandler
             await attempt.FlushBusinessAsync(ct);
             StageDataUpdate(attempt, command, nameof(Inspection), entity.Id, now);
             return Applied(entity.Id,
-                await SnapshotInspectionDetailAsync(persistence, command.PortfolioId, entity.Id, ct));
+                await SnapshotInspectionDetailAsync(db, command.PortfolioId, entity.Id, ct));
         }
 
         if (command.Operation == AtomicInspectionMutationOperation.Complete)
@@ -400,13 +439,16 @@ public sealed class AtomicInspectionMutationHandler
         if (command.Operation == AtomicInspectionMutationOperation.AttachReport)
             return await AttachInspectionReportAsync(command, attempt, now, ct);
 
-        var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
+        if (command.Operation == AtomicInspectionMutationOperation.RecoverChronology)
+            return await RecoverInspectionChronologyAsync(command, attempt, now, ct);
+
+        var inspection = await db.Set<Inspection>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
         if (inspection is null) return Missing();
 
         if (command.Operation == AtomicInspectionMutationOperation.Delete)
         {
-            persistence.Remove(inspection);
+            db.Remove(inspection);
             attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
                 AuditLogOperation.Deleted, "Inspection deleted"));
             await attempt.FlushBusinessAsync(ct);
@@ -424,21 +466,21 @@ public sealed class AtomicInspectionMutationHandler
 
         var effectiveUnitId = requestUpdate.UnitId ?? inspection.UnitId;
         var effectiveManagementId = requestUpdate.LeaseManagementId ?? inspection.LeaseManagementId;
-        var referenceValid = await persistence.Query<Property>().AsNoTracking()
+        var referenceValid = await db.Set<Property>().AsNoTracking()
             .Where(property => property.Id == inspection.PropertyId && property.PortfolioId == command.PortfolioId)
             .Select(property => new
             {
-                UnitValid = requestUpdate.UnitId == null || persistence.Query<Unit>().Any(unit =>
+                UnitValid = requestUpdate.UnitId == null || db.Set<Unit>().Any(unit =>
                     unit.Id == requestUpdate.UnitId && unit.PortfolioId == command.PortfolioId
                     && unit.PropertyId == property.Id && unit.DeletedAt == null),
                 ManagementValid = requestUpdate.LeaseManagementId == null
-                    || persistence.Query<LeaseManagement>().Any(management =>
+                    || db.Set<LeaseManagement>().Any(management =>
                         management.Id == requestUpdate.LeaseManagementId
                         && management.PortfolioId == command.PortfolioId
                         && management.PropertyId == property.Id
                         && (effectiveUnitId == null || management.UnitId == effectiveUnitId)),
                 AgreementValid = requestUpdate.LeaseAgreementId == null || (effectiveManagementId != null
-                    && persistence.Query<LeaseAgreement>().Any(agreement =>
+                    && db.Set<LeaseAgreement>().Any(agreement =>
                         agreement.Id == requestUpdate.LeaseAgreementId
                         && agreement.PortfolioId == command.PortfolioId
                         && agreement.LeaseManagementId == effectiveManagementId)),
@@ -462,17 +504,17 @@ public sealed class AtomicInspectionMutationHandler
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now);
         return Applied(inspection.Id,
-            await SnapshotInspectionAsync(persistence, command.PortfolioId, inspection.Id, ct));
+            await SnapshotInspectionAsync(db, command.PortfolioId, inspection.Id, ct));
     }
 
-    private static async Task<AtomicInspectionMutationResult> CompleteInspectionAsync(
+    private async Task<AtomicInspectionMutationResult> CompleteInspectionAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
-        var state = await persistence.Query<Inspection>().AsNoTracking()
+        var db = _db;
+        var state = await db.Set<Inspection>().AsNoTracking()
             .Where(inspection => inspection.Id == command.EntityId
                 && inspection.PortfolioId == command.PortfolioId)
             .Select(inspection => new CompletionState(
@@ -493,9 +535,9 @@ public sealed class AtomicInspectionMutationHandler
             return Rejected(command.EntityId,
                 "Mark at least one checklist item Pass, Fail, or N/A before completing — a completed inspection must record what was inspected.");
 
-        var inspection = await persistence.Query<Inspection>().SingleAsync(entity =>
+        var inspection = await db.Set<Inspection>().SingleAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
-        var failedItems = await persistence.Query<InspectionItem>()
+        var failedItems = await db.Set<InspectionItem>()
             .Where(item => item.InspectionId == command.EntityId
                 && item.PortfolioId == command.PortfolioId
                 && item.Result == InspectionItemResult.Fail)
@@ -507,7 +549,7 @@ public sealed class AtomicInspectionMutationHandler
             if (item.SpawnedWorkOrderId.HasValue) continue;
             var workOrder = BuildInspectionWorkOrder(command, inspection, item, now);
             item.SpawnedWorkOrder = workOrder;
-            persistence.Add(workOrder);
+            db.Add(workOrder);
             attempt.BindSemanticAudit(item, Audit(command, nameof(InspectionItem), item.Id,
                 AuditLogOperation.Updated, "Inspection failure linked to work order"));
             attempt.BindSemanticAudit(workOrder, Audit(command, nameof(WorkOrder), 0,
@@ -522,7 +564,7 @@ public sealed class AtomicInspectionMutationHandler
             AuditLogOperation.Updated, "Inspection completed"));
         await attempt.FlushBusinessAsync(ct);
 
-        var workOrderIds = await persistence.Query<InspectionItem>().AsNoTracking()
+        var workOrderIds = await db.Set<InspectionItem>().AsNoTracking()
             .Where(item => item.InspectionId == command.EntityId
                 && item.PortfolioId == command.PortfolioId
                 && item.Result == InspectionItemResult.Fail
@@ -549,14 +591,14 @@ public sealed class AtomicInspectionMutationHandler
         return Applied(inspection.Id, JsonSerializer.Serialize(summary));
     }
 
-    private static async Task<AtomicInspectionMutationResult> AttachInspectionReportAsync(
+    private async Task<AtomicInspectionMutationResult> AttachInspectionReportAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
-        var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
+        var db = _db;
+        var inspection = await db.Set<Inspection>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
         if (inspection is null) return Missing();
         if (inspection.Status != InspectionStatus.Completed)
@@ -580,7 +622,7 @@ public sealed class AtomicInspectionMutationHandler
             EntityId = inspection.Id,
             UploadedAt = now,
         };
-        persistence.Add(stored);
+        db.Add(stored);
         attempt.BindSemanticAudit(stored, Audit(command, nameof(StoredFile), 0,
             AuditLogOperation.Created, "Inspection report stored"));
         await attempt.FlushBusinessAsync(ct);
@@ -594,7 +636,83 @@ public sealed class AtomicInspectionMutationHandler
         return Applied(stored.Id, JsonSerializer.Serialize(stored.Id));
     }
 
-    private static WorkOrder BuildInspectionWorkOrder(
+    private async Task<AtomicInspectionMutationResult> RecoverInspectionChronologyAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicCommandContext attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var db = _db;
+        var request = Read<RecoverInspectionChronologyRequest>(command);
+        var expectedCompletedAt = Utc(request.ExpectedContaminatedCompletedAtUtc);
+        var expectedReportUploadedAt = Utc(request.ExpectedContaminatedReportUploadedAtUtc);
+        var correctCompletedAt = Utc(request.CorrectCompletedAtUtc);
+        if (correctCompletedAt != now)
+            throw new DomainValidationException(
+                "The corrected inspection completion time must match the injected business time for this recovery command.");
+
+        var state = await (
+            from inspection in db.Set<Inspection>().AsNoTracking()
+            join report in db.Set<StoredFile>().AsNoTracking()
+                on new { ReportStoredFileId = inspection.ReportStoredFileId!.Value, inspection.PortfolioId }
+                equals new { ReportStoredFileId = report.Id, report.PortfolioId }
+            where inspection.Id == command.EntityId
+                && inspection.PortfolioId == command.PortfolioId
+                && inspection.ReportStoredFileId != null
+            select new InspectionChronologyRecoveryState(
+                inspection.Id,
+                inspection.Status,
+                inspection.CompletedAt,
+                inspection.ReportStoredFileId!.Value,
+                report.Id,
+                report.EntityType,
+                report.EntityId,
+                report.UploadedAt,
+                report.DeletedAt))
+            .SingleOrDefaultAsync(ct);
+        if (state is null) return Missing();
+        if (state.Status != InspectionStatus.Completed)
+            return Rejected(command.EntityId, "Only a completed inspection can be recovered.");
+        if (state.CompletedAt != expectedCompletedAt
+            || state.ReportStoredFileId != request.ExpectedContaminatedReportStoredFileId
+            || state.ReportId != request.ExpectedContaminatedReportStoredFileId
+            || state.ReportUploadedAt != expectedReportUploadedAt
+            || state.ReportDeletedAt is not null
+            || state.ReportEntityType != nameof(Inspection)
+            || state.ReportEntityId != (long)command.EntityId)
+            return Rejected(command.EntityId,
+                "Inspection chronology recovery expected-state check failed; no rows were changed.");
+
+        var inspectionToRecover = await db.Set<Inspection>().SingleAsync(inspection =>
+            inspection.Id == command.EntityId && inspection.PortfolioId == command.PortfolioId, ct);
+        var reportToRetire = await db.Set<StoredFile>().SingleAsync(report =>
+            report.Id == request.ExpectedContaminatedReportStoredFileId
+            && report.PortfolioId == command.PortfolioId, ct);
+
+        inspectionToRecover.CompletedAt = correctCompletedAt;
+        inspectionToRecover.UpdatedAt = correctCompletedAt;
+        inspectionToRecover.ReportStoredFileId = null;
+        reportToRetire.DeletedAt = correctCompletedAt;
+
+        attempt.BindSemanticAudit(inspectionToRecover, Audit(command, nameof(Inspection), inspectionToRecover.Id,
+            AuditLogOperation.Updated, "Inspection chronology recovered; contaminated report detached"));
+        attempt.BindSemanticAudit(reportToRetire, Audit(command, nameof(StoredFile), reportToRetire.Id,
+            AuditLogOperation.Deleted, "Contaminated inspection report retired during chronology recovery"));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(Inspection), inspectionToRecover.Id, now, suffix: "inspection");
+        StageDataUpdate(attempt, command, nameof(StoredFile), reportToRetire.Id, now,
+            suffix: "retired-report-file", deleted: true);
+
+        return Applied(inspectionToRecover.Id, JsonSerializer.Serialize(new RecoverInspectionChronologyResponse
+        {
+            InspectionId = inspectionToRecover.Id,
+            CompletedAt = correctCompletedAt,
+            RetiredReportStoredFileId = reportToRetire.Id,
+            ReportStoredFileId = null,
+        }));
+    }
+
+    private WorkOrder BuildInspectionWorkOrder(
         AtomicInspectionMutationCommand command,
         Inspection inspection,
         InspectionItem item,
@@ -631,25 +749,26 @@ public sealed class AtomicInspectionMutationHandler
         return workOrder;
     }
 
-    private static async Task AuthorizeAsync(
+    private async Task AuthorizeAsync(
         AtomicInspectionMutationCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime now,
+        RentalCommandDbContext db,
+        DateTime businessNow,
+        DateTime securityNow,
         CancellationToken ct)
     {
         var authorized = command.Domain switch
         {
             AtomicInspectionMutationDomain.Template =>
-                await AuthorizedAssignments(command, persistence, now)
+                await AuthorizedAssignments(command, db, securityNow)
                     .AnyAsync(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct),
             AtomicInspectionMutationDomain.Inspection
                 when command.Operation == AtomicInspectionMutationOperation.Create =>
-                await AuthorizedProperties(command, persistence, now)
+                await AuthorizedProperties(command, db, securityNow)
                     .AnyAsync(property => property.Id == Read<CreateInspectionRequest>(command).PropertyId, ct),
             AtomicInspectionMutationDomain.Inspection or AtomicInspectionMutationDomain.Item =>
-                await persistence.Query<Inspection>().AsNoTracking().AnyAsync(inspection =>
+                await db.Set<Inspection>().AsNoTracking().AnyAsync(inspection =>
                     inspection.Id == command.EntityId && inspection.PortfolioId == command.PortfolioId
-                    && AuthorizedProperties(command, persistence, now)
+                    && AuthorizedProperties(command, db, securityNow)
                         .Any(property => property.Id == inspection.PropertyId), ct),
             _ => false,
         };
@@ -657,47 +776,47 @@ public sealed class AtomicInspectionMutationHandler
             throw new UnauthorizedAccessException("The inspection is outside the current Team role and property scope.");
     }
 
-    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+    private IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
         AtomicInspectionMutationCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime now) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+        RentalCommandDbContext db,
+        DateTime securityNow) =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= now
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.EffectiveFromUtc <= securityNow
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNow)
             && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
             && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
             && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
             && assignment.WorkspaceMembership.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= securityNow
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                || assignment.WorkspaceMembership.EffectiveToUtc > securityNow)
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > now)
+                && session.ExpiresAtUtc > securityNow)
             && assignment.RoleProfile!.Capabilities.Any(grant =>
                 grant.CapabilityDefinition!.Key == CapabilityKeys.WorkManage
                 && grant.CapabilityDefinition.AuthorizationTargetKind ==
                     CapabilityAuthorizationTargetKind.Property));
 
-    private static IQueryable<Property> AuthorizedProperties(
+    private IQueryable<Property> AuthorizedProperties(
         AtomicInspectionMutationCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime now)
+        RentalCommandDbContext db,
+        DateTime securityNow)
     {
-        var assignments = AuthorizedAssignments(command, persistence, now);
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        var assignments = AuthorizedAssignments(command, db, securityNow);
+        return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
             && assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
@@ -707,10 +826,10 @@ public sealed class AtomicInspectionMutationHandler
                         && selected.PropertyId == property.Id))));
     }
 
-    private static IQueryable<InspectionResponse> InspectionSnapshotQuery(
-        IAtomicPersistenceSession persistence,
+    private IQueryable<InspectionResponse> InspectionSnapshotQuery(
+        RentalCommandDbContext db,
         int portfolioId) =>
-        persistence.Query<Inspection>().AsNoTracking().Where(inspection => inspection.PortfolioId == portfolioId)
+        db.Set<Inspection>().AsNoTracking().Where(inspection => inspection.PortfolioId == portfolioId)
             .Select(inspection => new InspectionResponse
             {
                 Id = inspection.Id,
@@ -734,15 +853,15 @@ public sealed class AtomicInspectionMutationHandler
                 UpdatedAt = inspection.UpdatedAt,
             });
 
-    private static async Task<string> SnapshotInspectionAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int inspectionId, CancellationToken ct) =>
-        JsonSerializer.Serialize(await InspectionSnapshotQuery(persistence, portfolioId)
+    private async Task<string> SnapshotInspectionAsync(
+        RentalCommandDbContext db, int portfolioId, int inspectionId, CancellationToken ct) =>
+        JsonSerializer.Serialize(await InspectionSnapshotQuery(db, portfolioId)
             .SingleAsync(inspection => inspection.Id == inspectionId, ct));
 
-    private static async Task<string> SnapshotInspectionDetailAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int inspectionId, CancellationToken ct)
+    private async Task<string> SnapshotInspectionDetailAsync(
+        RentalCommandDbContext db, int portfolioId, int inspectionId, CancellationToken ct)
     {
-        var detail = await persistence.Query<Inspection>().AsNoTracking()
+        var detail = await db.Set<Inspection>().AsNoTracking()
             .Where(inspection => inspection.PortfolioId == portfolioId && inspection.Id == inspectionId)
             .Select(inspection => new InspectionDetailResponse
             {
@@ -782,11 +901,11 @@ public sealed class AtomicInspectionMutationHandler
         return JsonSerializer.Serialize(detail);
     }
 
-    private static IQueryable<InspectionItemResponse> InspectionItemSnapshotQuery(
-        IAtomicPersistenceSession persistence,
+    private IQueryable<InspectionItemResponse> InspectionItemSnapshotQuery(
+        RentalCommandDbContext db,
         int portfolioId,
         int inspectionId) =>
-        persistence.Query<InspectionItem>().AsNoTracking()
+        db.Set<InspectionItem>().AsNoTracking()
             .Where(item => item.PortfolioId == portfolioId && item.InspectionId == inspectionId)
             .Select(item => new InspectionItemResponse
             {
@@ -801,28 +920,28 @@ public sealed class AtomicInspectionMutationHandler
                 SortOrder = item.SortOrder,
             });
 
-    private static async Task<string> SnapshotInspectionItemAsync(
-        IAtomicPersistenceSession persistence,
+    private async Task<string> SnapshotInspectionItemAsync(
+        RentalCommandDbContext db,
         int portfolioId,
         int inspectionId,
         int itemId,
         CancellationToken ct) =>
-        JsonSerializer.Serialize(await InspectionItemSnapshotQuery(persistence, portfolioId, inspectionId)
+        JsonSerializer.Serialize(await InspectionItemSnapshotQuery(db, portfolioId, inspectionId)
             .SingleAsync(item => item.Id == itemId, ct));
 
-    private static async Task<string> SnapshotInspectionItemsAsync(
-        IAtomicPersistenceSession persistence,
+    private async Task<string> SnapshotInspectionItemsAsync(
+        RentalCommandDbContext db,
         int portfolioId,
         int inspectionId,
         CancellationToken ct) =>
-        JsonSerializer.Serialize(await InspectionItemSnapshotQuery(persistence, portfolioId, inspectionId)
+        JsonSerializer.Serialize(await InspectionItemSnapshotQuery(db, portfolioId, inspectionId)
             .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
             .ToListAsync(ct));
 
-    private static async Task<string> SnapshotTemplateAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int templateId, CancellationToken ct)
+    private async Task<string> SnapshotTemplateAsync(
+        RentalCommandDbContext db, int portfolioId, int templateId, CancellationToken ct)
     {
-        var template = await persistence.Query<InspectionTemplate>().AsNoTracking()
+        var template = await db.Set<InspectionTemplate>().AsNoTracking()
             .Where(row => row.PortfolioId == portfolioId && row.Id == templateId)
             .Select(row => new InspectionTemplateResponse
             {
@@ -842,7 +961,7 @@ public sealed class AtomicInspectionMutationHandler
         return JsonSerializer.Serialize(template);
     }
 
-    private static NormalizedTemplate NormalizeTemplate(
+    private NormalizedTemplate NormalizeTemplate(
         string name,
         InspectionType type,
         IReadOnlyList<UpsertInspectionTemplateItemRequest>? items)
@@ -868,7 +987,7 @@ public sealed class AtomicInspectionMutationHandler
         return new NormalizedTemplate(normalizedName, type, normalized);
     }
 
-    private static (string Area, string Label) NormalizeInspectionItemText(
+    private (string Area, string Label) NormalizeInspectionItemText(
         string? area,
         string? label,
         int questionNumber)
@@ -884,7 +1003,7 @@ public sealed class AtomicInspectionMutationHandler
         return (normalizedArea, normalizedLabel);
     }
 
-    private static void EnsureChecklistItemEditable(InspectionStatus status)
+    private void EnsureChecklistItemEditable(InspectionStatus status)
     {
         if (status == InspectionStatus.Completed)
             throw new DomainValidationException(
@@ -892,7 +1011,7 @@ public sealed class AtomicInspectionMutationHandler
                 statusCode: 409);
     }
 
-    private static void AddTemplateItems(InspectionTemplate template, IReadOnlyList<NormalizedTemplateItem> items)
+    private void AddTemplateItems(InspectionTemplate template, IReadOnlyList<NormalizedTemplateItem> items)
     {
         for (var index = 0; index < items.Count; index++)
             template.Items.Add(new InspectionTemplateItem
@@ -904,7 +1023,7 @@ public sealed class AtomicInspectionMutationHandler
             });
     }
 
-    private static InspectionItem NewItem(int portfolioId, string area, string label, int sortOrder) => new()
+    private InspectionItem NewItem(int portfolioId, string area, string label, int sortOrder) => new()
     {
         PortfolioId = portfolioId,
         Area = area,
@@ -913,8 +1032,8 @@ public sealed class AtomicInspectionMutationHandler
         SortOrder = sortOrder,
     };
 
-    private static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+    private void StageDataUpdate(
+        IAtomicCommandContext attempt,
         AtomicInspectionMutationCommand command,
         string entityType,
         int entityId,
@@ -939,7 +1058,7 @@ public sealed class AtomicInspectionMutationHandler
             NextAttemptAtUtc = now,
         });
 
-    private static AtomicSemanticAudit Audit(
+    private AtomicSemanticAudit Audit(
         AtomicInspectionMutationCommand command,
         string entityType,
         int entityId,
@@ -947,17 +1066,18 @@ public sealed class AtomicInspectionMutationHandler
         string reason) => new(command.PortfolioId, entityType, entityId, operation,
             UserId: command.ActorUserId, ChangeReason: reason);
 
-    private static T Read<T>(AtomicInspectionMutationCommand command) where T : class =>
+    private T Read<T>(AtomicInspectionMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Inspection mutation request payload is invalid.");
 
-    private static void Validate(AtomicInspectionMutationCommand command)
+    private void Validate(AtomicInspectionMutationCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
             || command.ExpectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.RequestJson)
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
             || command.DeliveryIdempotencyKey.Length > 128
+            || command.BusinessNowUtc == default
             || (command.Domain == AtomicInspectionMutationDomain.Item && command.EntityId <= 0)
             || (command.Operation != AtomicInspectionMutationOperation.Create && command.EntityId <= 0)
             || (command.Domain == AtomicInspectionMutationDomain.Item
@@ -969,13 +1089,20 @@ public sealed class AtomicInspectionMutationHandler
                 "Portfolio, actor, access revision, operation, and delivery identifiers are required.");
     }
 
-    private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Utc
+    private DateTime NormalizeBusinessNow(DateTime value)
+    {
+        if (value == default)
+            throw new ArgumentException("Inspection mutation requires a business clock time.");
+        return Utc(value);
+    }
+
+    private DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Utc
         ? value
         : value.ToUniversalTime();
-    private static AtomicInspectionMutationResult Missing() => new(false, false, 0);
-    private static AtomicInspectionMutationResult Rejected(int id, string error) =>
+    private AtomicInspectionMutationResult Missing() => new(false, false, 0);
+    private AtomicInspectionMutationResult Rejected(int id, string error) =>
         new(true, false, id, Error: error);
-    private static AtomicInspectionMutationResult Applied(int id, string? responseJson = null) =>
+    private AtomicInspectionMutationResult Applied(int id, string? responseJson = null) =>
         new(true, true, id, responseJson);
 
     private sealed record InspectionReferenceValidation(
@@ -988,6 +1115,16 @@ public sealed class AtomicInspectionMutationHandler
         int FailCount,
         int NotApplicableCount,
         int PendingCount);
+    private sealed record InspectionChronologyRecoveryState(
+        int InspectionId,
+        InspectionStatus Status,
+        DateTime? CompletedAt,
+        int ReportStoredFileId,
+        int ReportId,
+        string? ReportEntityType,
+        long? ReportEntityId,
+        DateTime ReportUploadedAt,
+        DateTime? ReportDeletedAt);
     private sealed record NormalizedTemplate(string Name, InspectionType Type, IReadOnlyList<NormalizedTemplateItem> Items);
     private sealed record NormalizedTemplateItem(string Area, string Label);
 }
@@ -1004,10 +1141,11 @@ public static class AtomicInspectionMutation
         int entityId,
         int relatedEntityId,
         string operationKey,
-        TRequest request) => new(
+        TRequest request,
+        DateTime businessNowUtc) => new(
             scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
             scope.AccessRevision, domain, operation, entityId, relatedEntityId,
-            JsonSerializer.Serialize(request), operationKey);
+            JsonSerializer.Serialize(request), businessNowUtc, operationKey);
 
     public static AtomicCommandIdentity Identity(AtomicInspectionMutationCommand command) => new(
         $"rental.inspection.{command.Domain.ToString().ToLowerInvariant()}." +

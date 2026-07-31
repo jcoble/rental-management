@@ -11,12 +11,16 @@ namespace RentalCommand.Data.Esign;
 public sealed class RecordNativeSignatureHandler
     : IAtomicCommandHandler<RecordNativeSignatureCommand, NativeSignerActionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordNativeSignatureHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<NativeSignerActionResult> HandleAsync(
         RecordNativeSignatureCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var requestId = await attempt.Persistence.Query<SignatureSigner>()
+        var requestId = await _db.Set<SignatureSigner>()
             .Where(signer => signer.TokenHash == command.TokenHash)
             .Select(signer => (int?)signer.SignatureRequestId)
             .SingleOrDefaultAsync(ct);
@@ -25,12 +29,12 @@ public sealed class RecordNativeSignatureHandler
             return Missing();
         }
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.SignatureRequest, requestId.Value, ct);
-        var signer = await attempt.Persistence.Query<SignatureSigner>()
+        await context.AcquireLockAsync("SignatureRequest", requestId.Value, ct);
+        var signer = await _db.Set<SignatureSigner>()
             .Include(candidate => candidate.SignatureRequest!)
             .SingleAsync(candidate => candidate.TokenHash == command.TokenHash, ct);
         var request = signer.SignatureRequest!;
-        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, request.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
         var occurredAtUtc = times.EffectiveNowUtc;
 
@@ -53,7 +57,7 @@ public sealed class RecordNativeSignatureHandler
                 || string.IsNullOrWhiteSpace(command.DrawnSignatureStorageKey)
                 || command.DrawnSignatureFileSize is null or <= 0)
                 throw new DomainValidationException("Drawn signature evidence admission is required.");
-            var pending = await attempt.Persistence.Query<PendingFileUpload>()
+            var pending = await _db.Set<PendingFileUpload>()
                 .SingleOrDefaultAsync(upload => upload.Id == command.DrawnSignaturePendingUploadId.Value
                     && upload.PortfolioId == request.PortfolioId
                     && upload.State == PendingFileUploadState.Prepared
@@ -74,8 +78,8 @@ public sealed class RecordNativeSignatureHandler
                 EntityId = signer.Id,
                 UploadedAt = occurredAtUtc,
             };
-            attempt.Persistence.Add(evidence);
-            await attempt.FlushBusinessAsync(ct);
+            _db.Add(evidence);
+            await context.FlushBusinessAsync(ct);
             signer.DrawnSignatureStoredFileId = evidence.Id;
             pending.State = PendingFileUploadState.Finalized;
             pending.StoredFileId = evidence.Id;
@@ -92,7 +96,7 @@ public sealed class RecordNativeSignatureHandler
         signer.UserAgent = command.UserAgent ?? signer.UserAgent;
         signer.ViewedAtUtc ??= occurredAtUtc;
 
-        var hasOtherUnsignedSigner = await attempt.Persistence.Query<SignatureSigner>()
+        var hasOtherUnsignedSigner = await _db.Set<SignatureSigner>()
             .AnyAsync(
                 candidate => candidate.SignatureRequestId == request.Id
                     && candidate.Id != signer.Id
@@ -103,7 +107,7 @@ public sealed class RecordNativeSignatureHandler
             ? SignatureRequestStatus.ExecutionPending
             : SignatureRequestStatus.PartiallySigned;
 
-        attempt.Persistence.Add(new SignatureAuditEvent
+        _db.Add(new SignatureAuditEvent
         {
             SignatureRequestId = request.Id,
             SignatureSignerId = signer.Id,
@@ -114,9 +118,33 @@ public sealed class RecordNativeSignatureHandler
             UserAgent = command.UserAgent,
             Detail = $"{signer.NameSnapshot} signed ({signer.SignatureType}).",
         });
-        StageSignerAndRequestAudits(attempt, request, signer, "Signer captured an electronic signature.");
+        StageSignerAndRequestAudits(context, request, signer, "Signer captured an electronic signature.");
 
         return Applied(signer, request, allSigned);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        RecordNativeSignatureCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ValidateSignature(command);
+
+        var signerStillOwned = await _db.Set<SignatureSigner>()
+            .AsNoTracking()
+            .AnyAsync(signer =>
+                signer.TokenHash == command.TokenHash &&
+                signer.SignatureRequest != null &&
+                (signer.Status == SignatureSignerStatus.Signed ||
+                 signer.TokenExpiresAtUtc <= command.OccurredAtUtc ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Completed ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Declined ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Voided),
+                ct);
+        if (!signerStillOwned)
+        {
+            throw new UnauthorizedAccessException("The original native signature signer token is unavailable.");
+        }
     }
 
     private static NativeSignerActionResult Missing() => new(
@@ -140,12 +168,12 @@ public sealed class RecordNativeSignatureHandler
             signer.Status, request.Status, executionRequired);
 
     internal static void StageSignerAndRequestAudits(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         SignatureRequest request,
         SignatureSigner signer,
         string reason)
     {
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             request.PortfolioId,
             nameof(SignatureSigner),
             signer.Id,
@@ -160,7 +188,7 @@ public sealed class RecordNativeSignatureHandler
             }),
             ChangeReason: reason,
             IpAddress: signer.IpAddress));
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             request.PortfolioId,
             nameof(SignatureRequest),
             request.Id,
@@ -170,17 +198,49 @@ public sealed class RecordNativeSignatureHandler
             ChangeReason: reason,
             IpAddress: signer.IpAddress));
     }
+
+    internal static void ValidateToken(string tokenHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenHash);
+        if (tokenHash.Length > 128)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tokenHash));
+        }
+    }
+
+    private static void ValidateSignature(RecordNativeSignatureCommand command)
+    {
+        ValidateToken(command.TokenHash);
+        if (command.SignatureType == SignatureSignatureType.Typed)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(command.TypedName);
+        }
+        else if (command.SignatureType == SignatureSignatureType.Drawn)
+        {
+            if (!command.DrawnSignaturePendingUploadId.HasValue ||
+                string.IsNullOrWhiteSpace(command.DrawnSignatureRequestFingerprint) ||
+                string.IsNullOrWhiteSpace(command.DrawnSignatureStorageKey) ||
+                command.DrawnSignatureFileSize is null or <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(command.DrawnSignaturePendingUploadId));
+            }
+        }
+    }
 }
 
 public sealed class RecordNativeDeclineHandler
     : IAtomicCommandHandler<RecordNativeDeclineCommand, NativeSignerActionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordNativeDeclineHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<NativeSignerActionResult> HandleAsync(
         RecordNativeDeclineCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var target = await attempt.Persistence.Query<SignatureSigner>()
+        var target = await _db.Set<SignatureSigner>()
             .Where(signer => signer.TokenHash == command.TokenHash)
             .Select(signer => new { signer.Id, signer.SignatureRequestId })
             .SingleOrDefaultAsync(ct);
@@ -191,12 +251,12 @@ public sealed class RecordNativeDeclineHandler
                 SignatureSignerStatus.Pending, SignatureRequestStatus.AwaitingSignatures, false);
         }
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.SignatureRequest, target.SignatureRequestId, ct);
-        var signer = await attempt.Persistence.Query<SignatureSigner>()
+        await context.AcquireLockAsync("SignatureRequest", target.SignatureRequestId, ct);
+        var signer = await _db.Set<SignatureSigner>()
             .Include(candidate => candidate.SignatureRequest!)
             .SingleAsync(candidate => candidate.Id == target.Id, ct);
         var request = signer.SignatureRequest!;
-        var times = await attempt.Persistence.ReadCommandTimesAsync(request.PortfolioId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, request.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
         var occurredAtUtc = times.EffectiveNowUtc;
         if (signer.TokenExpiresAtUtc <= securityNowUtc
@@ -220,7 +280,7 @@ public sealed class RecordNativeDeclineHandler
         request.Status = SignatureRequestStatus.Declined;
         request.DeclinedAtUtc = occurredAtUtc;
 
-        attempt.Persistence.Add(new SignatureAuditEvent
+        _db.Add(new SignatureAuditEvent
         {
             SignatureRequestId = request.Id,
             SignatureSignerId = signer.Id,
@@ -234,11 +294,35 @@ public sealed class RecordNativeDeclineHandler
                 : $"{signer.NameSnapshot} declined to sign: {command.Reason.Trim()}",
         });
         RecordNativeSignatureHandler.StageSignerAndRequestAudits(
-            attempt, request, signer, "Signer declined the electronic signature request.");
+            context, request, signer, "Signer declined the electronic signature request.");
 
         return new NativeSignerActionResult(
             NativeSignerActionOutcome.Applied, null, request.Id, request.PublicId,
             request.LeaseAgreementId, request.LeaseAddendumId,
             signer.Status, request.Status, false);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        RecordNativeDeclineCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        RecordNativeSignatureHandler.ValidateToken(command.TokenHash);
+
+        var signerStillOwned = await _db.Set<SignatureSigner>()
+            .AsNoTracking()
+            .AnyAsync(signer =>
+                signer.TokenHash == command.TokenHash &&
+                signer.SignatureRequest != null &&
+                (signer.Status == SignatureSignerStatus.Declined ||
+                 signer.TokenExpiresAtUtc <= command.OccurredAtUtc ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Completed ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Declined ||
+                 signer.SignatureRequest.Status == SignatureRequestStatus.Voided),
+                ct);
+        if (!signerStillOwned)
+        {
+            throw new UnauthorizedAccessException("The original native decline signer token is unavailable.");
+        }
     }
 }

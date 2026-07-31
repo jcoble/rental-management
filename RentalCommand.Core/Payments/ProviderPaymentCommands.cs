@@ -14,7 +14,7 @@ public sealed record PrepareProviderPaymentCreateCommand(
     string Provider,
     string IdempotencyKey,
     string Currency,
-    DateTime PreparedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime PreparedAtUtc) : IAtomicCommandData;
 
 public enum PrepareProviderPaymentCreateOutcome { Prepared, NotFound }
 
@@ -29,7 +29,7 @@ public sealed record PrepareProviderPaymentCreateResult(
     string Provider,
     string IdempotencyKey,
     string? ProviderCustomerId,
-    string? ProviderPaymentMethodId) : IAtomicResultData;
+    string? ProviderPaymentMethodId);
 
 /// <summary>Creates a durable verification attempt before opening provider setup.</summary>
 public sealed record PrepareProviderAutopaySetupCommand(
@@ -40,7 +40,7 @@ public sealed record PrepareProviderAutopaySetupCommand(
     string Provider,
     string IdempotencyKey,
     string Currency,
-    DateTime PreparedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime PreparedAtUtc) : IAtomicCommandData;
 
 public enum PrepareProviderAutopaySetupOutcome { Prepared, NotFound }
 
@@ -52,7 +52,7 @@ public sealed record PrepareProviderAutopaySetupResult(
     int ActorUserId,
     long PaymentAttemptId,
     string Provider,
-    string IdempotencyKey) : IAtomicResultData;
+    string IdempotencyKey);
 
 /// <summary>Durably binds the provider receipt returned outside the database transaction.</summary>
 public sealed record FinalizeProviderPaymentCreateCommand(
@@ -64,7 +64,7 @@ public sealed record FinalizeProviderPaymentCreateCommand(
     string ProviderPaymentId,
     TenantPaymentAttemptState State,
     string? FailureReason,
-    DateTime RecordedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc) : IAtomicCommandData;
 
 public enum FinalizeProviderPaymentCreateOutcome { Applied, NotFound, AlreadyFinalized }
 
@@ -75,7 +75,7 @@ public sealed record FinalizeProviderPaymentCreateResult(
     long PaymentAttemptId,
     string Provider,
     string ProviderPaymentId,
-    TenantPaymentAttemptState State) : IAtomicResultData;
+    TenantPaymentAttemptState State);
 
 /// <summary>Records a provider-create failure without inventing a provider receipt.</summary>
 public sealed record FailProviderPaymentCreateCommand(
@@ -86,14 +86,14 @@ public sealed record FailProviderPaymentCreateCommand(
     string IdempotencyKey,
     string? FailureCode,
     string FailureReason,
-    DateTime RecordedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc) : IAtomicCommandData;
 
 public sealed record FailProviderPaymentCreateResult(
     bool Found,
     int PortfolioId,
     int TenantAccountId,
     long PaymentAttemptId,
-    TenantPaymentAttemptState State) : IAtomicResultData;
+    TenantPaymentAttemptState State);
 
 public enum ProviderPaymentEventKind
 {
@@ -117,7 +117,7 @@ public sealed record RecordVerifiedProviderPaymentEventCommand(
     string? Currency,
     string? FailureReason,
     DateTime? OccurredAtUtc,
-    DateTime ReceivedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime ReceivedAtUtc,
     int? EnrollmentPortfolioId = null,
     int? EnrollmentTenantAccountId = null,
     int? EnrollmentAuthorizingPartyId = null,
@@ -141,13 +141,13 @@ public sealed record RecordVerifiedProviderPaymentEventResult(
     int? PortfolioId,
     int? TenantAccountId,
     long? PaymentAttemptId,
-    TenantPaymentAttemptState? AttemptState) : IAtomicResultData;
+    TenantPaymentAttemptState? AttemptState);
 
 public sealed record ReconcileClaimedProviderPaymentEventCommand(
     long ProviderInboxEventId,
     string ClaimOwner,
     Guid ClaimToken,
-    DateTime ReconciledAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime ReconciledAtUtc) : IAtomicCommandData;
 
 public enum ReconcileProviderPaymentEventOutcome
 {
@@ -165,4 +165,4 @@ public sealed record ReconcileClaimedProviderPaymentEventResult(
     int? TenantAccountId,
     long? PaymentAttemptId,
     TenantPaymentAttemptState? AttemptState,
-    DateTime? NextAttemptAtUtc) : IAtomicResultData;
+    DateTime? NextAttemptAtUtc);

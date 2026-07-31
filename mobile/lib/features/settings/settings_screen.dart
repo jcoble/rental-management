@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/biometric_auth_service.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import 'ai_provider_settings_screen.dart';
 import 'change_password_screen.dart';
@@ -11,12 +12,78 @@ import 'tenant_notices_screen.dart';
 
 /// A simple settings index. Personal alerts are intentionally separate from
 /// team responsibility routing and tenant-facing automation.
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  bool? _biometricEnabled;
+  bool _biometricBusy = false;
+  String? _biometricMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBiometricPreference();
+  }
+
+  Future<void> _loadBiometricPreference() async {
+    final biometric = ref.read(biometricAuthServiceProvider);
+    if (!biometric.isSupportedPlatform) return;
+    final enabled = await biometric.isEnabled();
+    if (mounted) setState(() => _biometricEnabled = enabled);
+  }
+
+  Future<void> _setBiometricEnabled(bool enabled) async {
+    if (_biometricBusy) return;
+    final biometric = ref.read(biometricAuthServiceProvider);
+
+    if (!enabled) {
+      setState(() {
+        _biometricEnabled = false;
+        _biometricMessage = null;
+      });
+      await biometric.setEnabled(false);
+      return;
+    }
+
+    setState(() {
+      _biometricBusy = true;
+      _biometricMessage = null;
+    });
+
+    final availability = await biometric.checkAvailability();
+    if (availability != BiometricAvailability.available) {
+      if (mounted) {
+        setState(() {
+          _biometricBusy = false;
+          _biometricMessage = availability == BiometricAvailability.notEnrolled
+              ? 'Set up a fingerprint or other biometric in Android settings first.'
+              : 'Biometric sign-in isn’t available on this device.';
+        });
+      }
+      return;
+    }
+
+    final result = await biometric.authenticate();
+    if (result == BiometricAuthenticationResult.authenticated) {
+      await biometric.setEnabled(true);
+    }
+    if (!mounted) return;
+    setState(() {
+      _biometricBusy = false;
+      _biometricEnabled = result == BiometricAuthenticationResult.authenticated;
+      _biometricMessage = _biometricConfirmationCopy(result);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
+    final biometric = ref.watch(biometricAuthServiceProvider);
     final capabilities = auth is AuthStateAuthenticated
         ? auth.capabilities
         : const <String>{};
@@ -104,6 +171,38 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: 'Update the password you use to sign in.',
             onTap: () => _open(context, const ChangePasswordScreen()),
           ),
+          if (biometric.isSupportedPlatform) ...[
+            const SizedBox(height: 10),
+            Card(
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    key: const Key('biometric-sign-in-switch'),
+                    secondary: const Icon(Icons.fingerprint),
+                    title: const Text('Biometric sign-in'),
+                    subtitle: const Text(
+                      'Unlock a saved session with your device fingerprint or other biometric.',
+                    ),
+                    value: _biometricEnabled ?? false,
+                    onChanged: _biometricEnabled == null || _biometricBusy
+                        ? null
+                        : _setBiometricEnabled,
+                  ),
+                  if (_biometricMessage != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _biometricMessage!,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -114,6 +213,20 @@ class SettingsScreen extends ConsumerWidget {
       context,
     ).push<void>(MaterialPageRoute<void>(builder: (_) => screen));
   }
+}
+
+String? _biometricConfirmationCopy(BiometricAuthenticationResult result) {
+  return switch (result) {
+    BiometricAuthenticationResult.authenticated => null,
+    BiometricAuthenticationResult.canceled =>
+      'Biometric confirmation was canceled. Biometric sign-in is still off.',
+    BiometricAuthenticationResult.lockedOut =>
+      'Biometrics are temporarily locked. Biometric sign-in is still off.',
+    BiometricAuthenticationResult.notEnrolled =>
+      'Set up a fingerprint or other biometric in Android settings first.',
+    BiometricAuthenticationResult.unavailable =>
+      'Biometric sign-in isn’t available on this device.',
+  };
 }
 
 class _ProviderBoundaryCard extends StatelessWidget {

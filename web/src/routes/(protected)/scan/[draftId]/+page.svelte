@@ -42,6 +42,8 @@
 		parseScanContext
 	} from '$lib/scan/scan-context';
 	import { scanProcessingCopy } from '$lib/scan/scan-copy';
+	import { hasAllPropertiesRentalsManageAuthority } from '$lib/auth/property-authority';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -79,6 +81,9 @@
 	}
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	const canCreateLeaseProperty = $derived(hasAllPropertiesRentalsManageAuthority(currentAccess));
 
 	const draftId = $derived(parseInt(page.params.draftId ?? '0', 10));
 	const launchContext = $derived(parseScanContext(page.url.searchParams));
@@ -569,6 +574,9 @@
 	// Reset the unit pick only when the reviewer changes property. A paged/search result that does not
 	// contain the selected unit must not erase a valid choice.
 	$effect(() => {
+		if (!canCreateLeaseProperty && selectedLeasePropertyId === CREATE_PROPERTY) {
+			selectedLeasePropertyId = '';
+		}
 		const nextPropertyId = selectedLeasePropertyId;
 		if (previousLeasePropertyId && previousLeasePropertyId !== nextPropertyId) {
 			selectedLeaseUnitId = '';
@@ -754,6 +762,7 @@
 	const leaseSelectionInvalid = $derived.by(() => {
 		if (!isLease) return false;
 		if (isCreatingLeaseProperty) {
+			if (!canCreateLeaseProperty) return true;
 			const hasPropertyAnchor = !!(newPropertyAddress.trim() || newPropertyName.trim());
 			return !hasPropertyAnchor || !newPropertyRentalStructure || !newUnitNumber.trim();
 		}
@@ -903,7 +912,7 @@
 						selectedLeasePropertyId = extractedId;
 					} else if (leaseProposal?.property.action === 'link' && leaseProposal.property.existingId != null) {
 						selectedLeasePropertyId = String(leaseProposal.property.existingId);
-					} else if (leaseProposal && (leaseProposal.property.action === 'create' || leaseProposal.property.action === 'select')) {
+					} else if (canCreateLeaseProperty && leaseProposal && (leaseProposal.property.action === 'create' || leaseProposal.property.action === 'select')) {
 						// Nothing to link — start in create-new mode (the empty-portfolio bootstrap).
 						selectedLeasePropertyId = CREATE_PROPERTY;
 					}
@@ -1735,16 +1744,16 @@
 										<p class="mb-1 font-semibold text-foreground">When you confirm, this lease will:</p>
 										<ul class="space-y-0.5 text-muted-foreground">
 											<li data-testid="scan-lease-proposal-property">
-												{#if isCreatingLeaseProperty || leaseProposal.property.action === 'create'}
+												{#if isCreatingLeaseProperty || (canCreateLeaseProperty && leaseProposal.property.action === 'create')}
 													<span class="font-medium text-[var(--success)]">Create</span> a new property{leaseProposal.property.label ? ` — ${leaseProposal.property.label}` : ''}
 												{:else if leaseProposal.property.action === 'link'}
 													<span class="font-medium">Link</span> to {leaseProposal.property.label ?? 'an existing property'}
 												{:else}
-													Need you to choose a property
+													Need you to choose an authorized property
 												{/if}
 											</li>
 											<li data-testid="scan-lease-proposal-unit">
-												{#if isCreatingLeaseProperty || leaseProposal.unit.action === 'create'}
+												{#if isCreatingLeaseProperty || (canCreateLeaseProperty && leaseProposal.unit.action === 'create')}
 													<span class="font-medium text-[var(--success)]">Create</span> {leaseProposal.unit.label ?? 'a unit'}
 												{:else if leaseProposal.unit.action === 'link'}
 													<span class="font-medium">Link</span> to {leaseProposal.unit.label ?? 'an existing unit'}
@@ -1775,7 +1784,9 @@
 											{selectedLeasePropertyLabel}
 										</Select.Trigger>
 										<Select.Content>
-											<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
+											{#if canCreateLeaseProperty}
+												<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
+											{/if}
 									{#if propertiesQuery.data}
 										{#each propertyChoices as prop (prop.id)}
 													<Select.Item value={String(prop.id)} label={prop.name}>

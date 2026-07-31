@@ -9,11 +9,14 @@ using RentalCommand.Core.Screening;
 namespace RentalCommand.Data.Screening;
 
 public sealed class TrackExternalScreeningHandler
-    : IAtomicCommandHandler<TrackExternalScreeningCommand, ScreeningMutationResult>,
-      IAtomicReplayAuthorizer<TrackExternalScreeningCommand>
+    : IAtomicCommandHandler<TrackExternalScreeningCommand, ScreeningMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public TrackExternalScreeningHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ScreeningMutationResult> HandleAsync(
-        TrackExternalScreeningCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        TrackExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -23,19 +26,19 @@ public sealed class TrackExternalScreeningHandler
         if (command.Status == ApplicantScreeningStatus.AwaitingProvider)
             throw new ArgumentException("AwaitingProvider is reserved for integrated screening.");
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         var application = await ScreeningCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                attempt.Persistence, now, tracking: true)
+                _db, now, tracking: true)
             .SingleOrDefaultAsync(ct);
         if (application is null)
             throw ScreeningCommandSupport.Denied();
 
-        var existingId = await attempt.Persistence.Query<ApplicantScreening>().AsNoTracking()
+        var existingId = await _db.Set<ApplicantScreening>().AsNoTracking()
             .Where(screening => screening.PortfolioId == command.PortfolioId
                 && screening.ApplicationId == command.ApplicationId
                 && screening.OperationKey == command.OperationKey)
@@ -43,7 +46,7 @@ public sealed class TrackExternalScreeningHandler
             .SingleOrDefaultAsync(ct);
         if (existingId.HasValue)
             return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-                attempt.Persistence, command.PortfolioId, existingId.Value, ct));
+                _db, command.PortfolioId, existingId.Value, ct));
 
         var screening = new ApplicantScreening
         {
@@ -67,32 +70,35 @@ public sealed class TrackExternalScreeningHandler
             CreatedAt = now,
             UpdatedAt = now,
         };
-        attempt.Persistence.Add(screening);
-        attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+        _db.Add(screening);
+        context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), 0,
             AuditLogOperation.Created, "External applicant screening tracked."));
         ScreeningCommandSupport.MarkApplicationUnderReview(
-            application, command.ActorUserId, attempt, now);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.StageUpdate(attempt, command.PortfolioId, screening.Id,
+            application, command.ActorUserId, context, now);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.StageUpdate(context, command.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, "external-create");
         return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, screening.Id, ct));
+            _db, command.PortfolioId, screening.Id, ct));
     }
 
     public Task AuthorizeReplayAsync(
-        TrackExternalScreeningCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        TrackExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 public sealed class PrepareIntegratedScreeningHandler
-    : IAtomicCommandHandler<PrepareIntegratedScreeningCommand, PrepareIntegratedScreeningResult>,
-      IAtomicReplayAuthorizer<PrepareIntegratedScreeningCommand>
+    : IAtomicCommandHandler<PrepareIntegratedScreeningCommand, PrepareIntegratedScreeningResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PrepareIntegratedScreeningHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<PrepareIntegratedScreeningResult> HandleAsync(
-        PrepareIntegratedScreeningCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        PrepareIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -101,19 +107,19 @@ public sealed class PrepareIntegratedScreeningHandler
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderDisplayName);
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         var application = await ScreeningCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
-                attempt.Persistence, now, tracking: true)
+                _db, now, tracking: true)
             .SingleOrDefaultAsync(ct);
         if (application is null)
             throw ScreeningCommandSupport.Denied();
 
-        var screening = await attempt.Persistence.Query<ApplicantScreening>()
+        var screening = await _db.Set<ApplicantScreening>()
             .SingleOrDefaultAsync(candidate => candidate.PortfolioId == command.PortfolioId
                 && candidate.ApplicationId == command.ApplicationId
                 && candidate.OperationKey == command.OperationKey, ct);
@@ -122,7 +128,7 @@ public sealed class PrepareIntegratedScreeningHandler
             return new PrepareIntegratedScreeningResult(
                 ScreeningMutationOutcome.Applied,
                 await ApplicantScreeningQueries.LoadSnapshotAsync(
-                    attempt.Persistence, command.PortfolioId, screening.Id, ct),
+                    _db, command.PortfolioId, screening.Id, ct),
                 command.ApplicationId,
                 command.OperationKey,
                 null,
@@ -150,14 +156,14 @@ public sealed class PrepareIntegratedScreeningHandler
                 CreatedByUserId = command.ActorUserId,
                 CreatedAt = now,
             };
-            attempt.Persistence.Add(screening);
-            attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+            _db.Add(screening);
+            context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
                 command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), 0,
                 AuditLogOperation.Created, "Integrated applicant screening prepared."));
         }
         else
         {
-            attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+            context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
                 command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), screening.Id,
                 AuditLogOperation.Updated, "Integrated applicant screening preparation resumed."));
         }
@@ -166,12 +172,12 @@ public sealed class PrepareIntegratedScreeningHandler
         screening.LastStatusAtUtc = now;
         screening.UpdatedAt = now;
         ScreeningCommandSupport.MarkApplicationUnderReview(
-            application, command.ActorUserId, attempt, now);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.StageUpdate(attempt, command.PortfolioId, screening.Id,
+            application, command.ActorUserId, context, now);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.StageUpdate(context, command.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, "integrated-prepare");
         var snapshot = await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, screening.Id, ct);
+            _db, command.PortfolioId, screening.Id, ct);
         return new PrepareIntegratedScreeningResult(
             ScreeningMutationOutcome.Applied,
             snapshot,
@@ -183,18 +189,21 @@ public sealed class PrepareIntegratedScreeningHandler
     }
 
     public Task AuthorizeReplayAsync(
-        PrepareIntegratedScreeningCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        PrepareIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 public sealed class FinalizeIntegratedScreeningHandler
-    : IAtomicCommandHandler<FinalizeIntegratedScreeningCommand, ScreeningMutationResult>,
-      IAtomicReplayAuthorizer<FinalizeIntegratedScreeningCommand>
+    : IAtomicCommandHandler<FinalizeIntegratedScreeningCommand, ScreeningMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeIntegratedScreeningHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ScreeningMutationResult> HandleAsync(
-        FinalizeIntegratedScreeningCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        FinalizeIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -202,16 +211,16 @@ public sealed class FinalizeIntegratedScreeningHandler
         ScreeningCommandSupport.RequireKey(command.OperationKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderKey);
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         if (!await ScreeningCommandSupport.IsAuthorizedAsync(command.PortfolioId, command.ApplicationId,
                 command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, attempt.Persistence, now, ct))
+                command.ExpectedAccessRevision, _db, now, ct))
             throw ScreeningCommandSupport.Denied();
 
-        var screening = await attempt.Persistence.Query<ApplicantScreening>()
+        var screening = await _db.Set<ApplicantScreening>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.ScreeningId
                 && candidate.PortfolioId == command.PortfolioId
                 && candidate.ApplicationId == command.ApplicationId
@@ -233,7 +242,7 @@ public sealed class FinalizeIntegratedScreeningHandler
         screening.FailedAtUtc = command.Accepted ? null : now;
         screening.LastStatusAtUtc = now;
         screening.UpdatedAt = now;
-        attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+        context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), screening.Id,
             AuditLogOperation.Updated,
             command.Accepted ? "Integrated screening invitation accepted." : "Integrated screening invitation failed."));
@@ -241,28 +250,31 @@ public sealed class FinalizeIntegratedScreeningHandler
             screening, command.ProviderKey, command.DeliveryIdempotencyKey,
             command.Accepted ? "invitation.accepted" : $"invitation.failed:{command.ErrorCode ?? "unknown"}",
             screening.Status, now, now);
-        attempt.Persistence.Add(milestone);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.AuditMilestone(attempt, milestone, now);
-        ScreeningCommandSupport.StageUpdate(attempt, command.PortfolioId, screening.Id,
+        _db.Add(milestone);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.AuditMilestone(context, milestone, now);
+        ScreeningCommandSupport.StageUpdate(context, command.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, "integrated-finalize");
         return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, screening.Id, ct));
+            _db, command.PortfolioId, screening.Id, ct));
     }
 
     public Task AuthorizeReplayAsync(
-        FinalizeIntegratedScreeningCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        FinalizeIntegratedScreeningCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 public sealed class UpdateExternalScreeningHandler
-    : IAtomicCommandHandler<UpdateExternalScreeningCommand, ScreeningMutationResult>,
-      IAtomicReplayAuthorizer<UpdateExternalScreeningCommand>
+    : IAtomicCommandHandler<UpdateExternalScreeningCommand, ScreeningMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateExternalScreeningHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ScreeningMutationResult> HandleAsync(
-        UpdateExternalScreeningCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -271,15 +283,15 @@ public sealed class UpdateExternalScreeningHandler
         if (command.Status is ApplicantScreeningStatus.Created or ApplicantScreeningStatus.AwaitingProvider)
             throw new ArgumentException("That status is not valid for an externally managed screening.");
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         if (!await ScreeningCommandSupport.IsAuthorizedAsync(command.PortfolioId, command.ApplicationId,
                 command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, attempt.Persistence, now, ct))
+                command.ExpectedAccessRevision, _db, now, ct))
             throw ScreeningCommandSupport.Denied();
-        var screening = await attempt.Persistence.Query<ApplicantScreening>()
+        var screening = await _db.Set<ApplicantScreening>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.ScreeningId
                 && candidate.PortfolioId == command.PortfolioId
                 && candidate.ApplicationId == command.ApplicationId
@@ -300,7 +312,7 @@ public sealed class UpdateExternalScreeningHandler
         screening.FailedAtUtc = nextStatus == ApplicantScreeningStatus.Failed ? occurredAt : null;
         screening.LastStatusAtUtc = occurredAt;
         screening.UpdatedAt = now;
-        attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+        context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), screening.Id,
             AuditLogOperation.Updated, "External applicant screening updated."));
         var milestone = ScreeningCommandSupport.Milestone(
@@ -309,28 +321,31 @@ public sealed class UpdateExternalScreeningHandler
                 ? "external.cra-contact-updated"
                 : $"external.{nextStatus.ToString().ToLowerInvariant()}",
             nextStatus, occurredAt, now);
-        attempt.Persistence.Add(milestone);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.AuditMilestone(attempt, milestone, now, command.ActorUserId);
-        ScreeningCommandSupport.StageUpdate(attempt, command.PortfolioId, screening.Id,
+        _db.Add(milestone);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.AuditMilestone(context, milestone, now, command.ActorUserId);
+        ScreeningCommandSupport.StageUpdate(context, command.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, "external-update");
         return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, screening.Id, ct));
+            _db, command.PortfolioId, screening.Id, ct));
     }
 
     public Task AuthorizeReplayAsync(
-        UpdateExternalScreeningCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        UpdateExternalScreeningCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 public sealed class RecordScreeningDecisionHandler
-    : IAtomicCommandHandler<RecordScreeningDecisionCommand, ScreeningMutationResult>,
-      IAtomicReplayAuthorizer<RecordScreeningDecisionCommand>
+    : IAtomicCommandHandler<RecordScreeningDecisionCommand, ScreeningMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordScreeningDecisionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ScreeningMutationResult> HandleAsync(
-        RecordScreeningDecisionCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        RecordScreeningDecisionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateActor(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
@@ -339,15 +354,15 @@ public sealed class RecordScreeningDecisionHandler
         if (command.ConsumerReportUsed && string.IsNullOrWhiteSpace(command.Reason))
             throw new ArgumentException("Record the principal decision reason when a consumer report was used.");
 
-        await ScreeningCommandSupport.LockStaffApplicationAsync(attempt, command.PortfolioId,
+        await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
         if (!await ScreeningCommandSupport.IsAuthorizedAsync(command.PortfolioId, command.ApplicationId,
                 command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, attempt.Persistence, now, ct))
+                command.ExpectedAccessRevision, _db, now, ct))
             throw ScreeningCommandSupport.Denied();
-        var screening = await attempt.Persistence.Query<ApplicantScreening>()
+        var screening = await _db.Set<ApplicantScreening>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.ScreeningId
                 && candidate.PortfolioId == command.PortfolioId
                 && candidate.ApplicationId == command.ApplicationId, ct);
@@ -366,37 +381,40 @@ public sealed class RecordScreeningDecisionHandler
         screening.DecisionRecordedAtUtc = now;
         screening.ConsumerReportUsedForDecision = command.ConsumerReportUsed;
         screening.UpdatedAt = now;
-        attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+        context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(ApplicantScreening), screening.Id,
             AuditLogOperation.Updated, "Applicant screening decision recorded."));
         var milestone = ScreeningCommandSupport.Milestone(
             screening, "decision", command.DeliveryIdempotencyKey,
             $"decision.{command.Decision.ToString().ToLowerInvariant()}", screening.Status, now, now);
-        attempt.Persistence.Add(milestone);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.AuditMilestone(attempt, milestone, now, command.ActorUserId);
-        ScreeningCommandSupport.StageUpdate(attempt, command.PortfolioId, screening.Id,
+        _db.Add(milestone);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.AuditMilestone(context, milestone, now, command.ActorUserId);
+        ScreeningCommandSupport.StageUpdate(context, command.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, "decision");
         return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, command.PortfolioId, screening.Id, ct));
+            _db, command.PortfolioId, screening.Id, ct));
     }
 
     public Task AuthorizeReplayAsync(
-        RecordScreeningDecisionCommand command, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        RecordScreeningDecisionCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ScreeningCommandSupport.AuthorizeReplayAsync(command.PortfolioId, command.ApplicationId,
             command.ActorUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, persistence, ct);
+            command.ExpectedAccessRevision, _db, ct);
 }
 
 public sealed class ApplyScreeningProviderDeliveryHandler
-    : IAtomicCommandHandler<ApplyScreeningProviderDeliveryCommand, ScreeningMutationResult>,
-      IAtomicReplayAuthorizer<ApplyScreeningProviderDeliveryCommand>
+    : IAtomicCommandHandler<ApplyScreeningProviderDeliveryCommand, ScreeningMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyScreeningProviderDeliveryHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ScreeningMutationResult> HandleAsync(
-        ApplyScreeningProviderDeliveryCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        ApplyScreeningProviderDeliveryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateProviderDelivery(command);
-        var target = await attempt.Persistence.Query<ApplicantScreening>().AsNoTracking()
+        var target = await _db.Set<ApplicantScreening>().AsNoTracking()
             .Where(screening => screening.Mode == ScreeningMode.Integrated
                 && screening.ProviderKey == command.ProviderKey
                 && screening.ProviderReference == command.ProviderReference)
@@ -405,11 +423,11 @@ public sealed class ApplyScreeningProviderDeliveryHandler
         if (target is null)
             return new(ScreeningMutationOutcome.NotFound);
 
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.RentalApplication, target.ApplicationId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
-        var screening = await attempt.Persistence.Query<ApplicantScreening>()
+        await context.AcquireLockAsync(
+            "RentalApplication", target.ApplicationId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
+        var screening = await _db.Set<ApplicantScreening>()
             .SingleOrDefaultAsync(candidate => candidate.Id == target.Id
                 && candidate.PortfolioId == target.PortfolioId
                 && candidate.ApplicationId == target.ApplicationId
@@ -436,7 +454,7 @@ public sealed class ApplyScreeningProviderDeliveryHandler
                 ? command.OccurredAtUtc : null;
             screening.LastStatusAtUtc = command.OccurredAtUtc;
             screening.UpdatedAt = now;
-            attempt.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
+            context.BindSemanticAudit(screening, ScreeningCommandSupport.Audit(
                 screening.PortfolioId, null, nameof(ApplicantScreening), screening.Id,
                 AuditLogOperation.Updated, "Verified screening provider delivery applied."));
         }
@@ -444,19 +462,17 @@ public sealed class ApplyScreeningProviderDeliveryHandler
         var milestone = ScreeningCommandSupport.Milestone(
             screening, command.ProviderKey, command.DeliveryId, command.EventType,
             command.Status, command.OccurredAtUtc, now);
-        attempt.Persistence.Add(milestone);
-        await attempt.FlushBusinessAsync(ct);
-        ScreeningCommandSupport.AuditMilestone(attempt, milestone, now);
-        ScreeningCommandSupport.StageUpdate(attempt, screening.PortfolioId, screening.Id,
+        _db.Add(milestone);
+        await context.FlushBusinessAsync(ct);
+        ScreeningCommandSupport.AuditMilestone(context, milestone, now);
+        ScreeningCommandSupport.StageUpdate(context, screening.PortfolioId, screening.Id,
             command.DeliveryIdempotencyKey, now, applied ? "provider-delivery" : "provider-delivery-stale");
         return ScreeningCommandSupport.Applied(await ApplicantScreeningQueries.LoadSnapshotAsync(
-            attempt.Persistence, screening.PortfolioId, screening.Id, ct));
+            _db, screening.PortfolioId, screening.Id, ct));
     }
 
     public Task AuthorizeReplayAsync(
-        ApplyScreeningProviderDeliveryCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ApplyScreeningProviderDeliveryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         ScreeningCommandSupport.ValidateProviderDelivery(command);
         // The controller re-verifies the provider signature before every call. A valid delivery
@@ -485,13 +501,13 @@ internal static class ScreeningCommandSupport
     }
 
     internal static async Task LockStaffApplicationAsync(
-        IAtomicWriteAttempt attempt, int portfolioId, int applicationId,
+        IAtomicCommandContext context, int portfolioId, int applicationId,
         Guid authSessionId, int accessContextId, CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, authSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, accessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, portfolioId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.RentalApplication, applicationId, ct);
+        await context.AcquireLockAsync("AuthSession", authSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", accessContextId, ct);
+        await context.AcquireLockAsync("Portfolio", portfolioId, ct);
+        await context.AcquireLockAsync("RentalApplication", applicationId, ct);
     }
 
     internal static IQueryable<RentalApplication> AuthorizedApplications(
@@ -501,22 +517,22 @@ internal static class ScreeningCommandSupport
         Guid authSessionId,
         int accessContextId,
         long expectedAccessRevision,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc,
         bool tracking)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>();
-        var query = persistence.Query<RentalApplication>().Where(application =>
+        var assignments = db.Set<MembershipRoleAssignment>();
+        var query = db.Set<RentalApplication>().Where(application =>
             application.Id == applicationId
             && application.PortfolioId == portfolioId
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == authSessionId
                 && session.UserId == actorUserId
                 && session.ActiveAccessContextId == accessContextId
                 && session.Status == AuthSessionStatus.Active
                 && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > securityNowUtc)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == accessContextId
                 && context.UserId == actorUserId
                 && context.PortfolioId == portfolioId
@@ -524,7 +540,7 @@ internal static class ScreeningCommandSupport
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == accessContextId
                 && membership.PortfolioId == portfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -556,32 +572,32 @@ internal static class ScreeningCommandSupport
     internal static Task<bool> IsAuthorizedAsync(
         int portfolioId, int applicationId, int actorUserId, Guid authSessionId,
         int accessContextId, long expectedAccessRevision,
-        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
+        RentalCommandDbContext db, DateTime now, CancellationToken ct) =>
         AuthorizedApplications(portfolioId, applicationId, actorUserId, authSessionId,
-                accessContextId, expectedAccessRevision, persistence, now, tracking: false)
+                accessContextId, expectedAccessRevision, db, now, tracking: false)
             .AnyAsync(ct);
 
     internal static async Task AuthorizeReplayAsync(
         int portfolioId, int applicationId, int actorUserId, Guid authSessionId,
         int accessContextId, long expectedAccessRevision,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+        RentalCommandDbContext db, CancellationToken ct)
     {
         ValidateActor(portfolioId, applicationId, actorUserId, authSessionId,
             accessContextId, expectedAccessRevision);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await IsAuthorizedAsync(portfolioId, applicationId, actorUserId, authSessionId,
-                accessContextId, expectedAccessRevision, persistence, now, ct))
+                accessContextId, expectedAccessRevision, db, now, ct))
             throw Denied();
     }
 
     internal static void MarkApplicationUnderReview(
-        RentalApplication application, int actorUserId, IAtomicWriteAttempt attempt, DateTime now)
+        RentalApplication application, int actorUserId, IAtomicCommandContext context, DateTime now)
     {
         if (application.Status == ApplicationStatus.UnderReview)
             return;
         application.Status = ApplicationStatus.UnderReview;
         application.UpdatedAt = now;
-        attempt.BindSemanticAudit(application, Audit(
+        context.BindSemanticAudit(application, Audit(
             application.PortfolioId, actorUserId, nameof(RentalApplication), application.Id,
             AuditLogOperation.Updated, "Application moved to review for screening."));
     }
@@ -601,9 +617,9 @@ internal static class ScreeningCommandSupport
     };
 
     internal static void AuditMilestone(
-        IAtomicWriteAttempt attempt, ApplicantScreeningMilestone milestone,
+        IAtomicCommandContext context, ApplicantScreeningMilestone milestone,
         DateTime now, int? userId = null) =>
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             milestone.PortfolioId,
             nameof(ApplicantScreeningMilestone),
             milestone.Id,
@@ -626,9 +642,9 @@ internal static class ScreeningCommandSupport
         new(portfolioId, entityType, entityId, operation, userId, ChangeReason: reason);
 
     internal static void StageUpdate(
-        IAtomicWriteAttempt attempt, int portfolioId, int screeningId,
+        IAtomicCommandContext context, int portfolioId, int screeningId,
         string idempotencyKey, DateTime now, string operation) =>
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = portfolioId,
             MessageType = "data-update",

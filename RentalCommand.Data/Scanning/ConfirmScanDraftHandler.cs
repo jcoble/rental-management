@@ -10,18 +10,21 @@ namespace RentalCommand.Data.Scanning;
 /// Atomic scan lifecycle owner. Target writers are supplied as a concrete sealed transaction-safe
 /// dependency so claiming, canonical writes, file linkage, audit, and receipt commit together.
 /// </summary>
-public sealed class ConfirmScanDraftHandler<TTargetWriter>
-    : IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult>,
-      IAtomicReplayAuthorizer<ConfirmScanDraftCommand>
-    where TTargetWriter : class, IScanConfirmationTargetWriter
+public sealed class ConfirmScanDraftHandler
+    : IAtomicCommandHandler<ConfirmScanDraftCommand, ConfirmScanDraftResult>
 {
-    private readonly TTargetWriter _targetWriter;
+    private readonly IScanConfirmationTargetWriter _targetWriter;
+    private readonly RentalCommandDbContext _db;
 
-    public ConfirmScanDraftHandler(TTargetWriter targetWriter) => _targetWriter = targetWriter;
+    public ConfirmScanDraftHandler(IScanConfirmationTargetWriter targetWriter, RentalCommandDbContext db)
+    {
+        _targetWriter = targetWriter;
+        _db = db;
+    }
 
     public async Task<ConfirmScanDraftResult> HandleAsync(
         ConfirmScanDraftCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         command.Target.Validate();
@@ -35,10 +38,10 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         // Normal executions need the same current-session/access-revision/resource proof as
         // receipt replays. Revalidate before claiming so authorization and every protected write
         // share this transaction.
-        await _targetWriter.AuthorizeReplayAsync(command, attempt.Persistence, ct);
+        await _targetWriter.AuthorizeReplayAsync(command, context, ct);
 
-        var claim = await attempt.ScanConfirmation.TryClaimAsync(
-            command.PortfolioId,
+        var claim = await AtomicScanConfirmationPersistence.TryClaimAsync(_db,
+            context, command.PortfolioId,
             command.DraftId,
             command.Target.EntityType,
             command.ExpectedDraftFingerprint,
@@ -61,8 +64,8 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
             case AtomicScanDraftClaimOutcome.AlreadyConfirmed:
                 var existingReceipt = command.Target.Kind == ScanConfirmationTargetKind.Payment
                     ? await (
-                        from entry in attempt.Persistence.Query<TenantLedgerEntry>()
-                        join account in attempt.Persistence.Query<TenantAccount>()
+                        from entry in _db.Set<TenantLedgerEntry>()
+                        join account in _db.Set<TenantAccount>()
                             on new { entry.TenantAccountId, entry.PortfolioId }
                             equals new { TenantAccountId = account.Id, account.PortfolioId }
                         where entry.PortfolioId == command.PortfolioId
@@ -77,7 +80,7 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                     : null;
                 var existingAgreement = command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement
                     ? await (
-                        from agreement in attempt.Persistence.Query<LeaseAgreement>()
+                        from agreement in _db.Set<LeaseAgreement>()
                         where agreement.PortfolioId == command.PortfolioId
                             && agreement.Id == claim.CanonicalEntityId
                         select new
@@ -88,7 +91,7 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                     : null;
                 var existingLoanPaymentId = command.Target.Kind == ScanConfirmationTargetKind.Loan
                     && command.Target.Loan?.ExistingLoanPaymentId is int requestedPaymentId
-                    ? await attempt.Persistence.Query<LoanPayment>()
+                    ? await _db.Set<LoanPayment>()
                         .Where(payment =>
                             payment.Id == requestedPaymentId
                             && payment.LoanId == claim.CanonicalEntityId
@@ -96,14 +99,26 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                         .Select(payment => (int?)payment.Id)
                         .SingleOrDefaultAsync(ct)
                     : null;
+                var existingEndingRelationship = command.Target.Kind == ScanConfirmationTargetKind.LeaseEndingNotice
+                    ? await _db.Set<LeaseManagement>()
+                        .Where(relationship =>
+                            relationship.Id == claim.CanonicalEntityId
+                            && relationship.PortfolioId == command.PortfolioId)
+                        .Select(relationship => new
+                        {
+                            LeaseManagementId = (int?)relationship.Id,
+                            UnitId = (int?)relationship.UnitId,
+                        })
+                        .SingleOrDefaultAsync(ct)
+                    : null;
                 return new ConfirmScanDraftResult(
                     ConfirmScanDraftOutcome.AlreadyConfirmed,
                     command.DraftId,
                     command.Target.EntityType,
                     claim.CanonicalEntityId,
-                    existingReceipt?.UnitId ?? existingAgreement?.UnitId,
+                    existingReceipt?.UnitId ?? existingAgreement?.UnitId ?? existingEndingRelationship?.UnitId,
                     LedgerEntryId: existingReceipt?.LedgerEntryId,
-                    LeaseManagementId: existingAgreement?.LeaseManagementId,
+                    LeaseManagementId: existingAgreement?.LeaseManagementId ?? existingEndingRelationship?.LeaseManagementId,
                     LoanPaymentId: existingLoanPaymentId);
             case AtomicScanDraftClaimOutcome.DuplicateSourceContent:
                 return new ConfirmScanDraftResult(
@@ -118,25 +133,25 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
                 throw new ArgumentOutOfRangeException(nameof(claim.Outcome));
         }
 
-        await attempt.FlushBusinessAsync(ct);
-        var target = await _targetWriter.WriteAsync(command, claim.ExtractedFieldsJson, attempt, ct);
+        await context.FlushBusinessAsync(ct);
+        var target = await _targetWriter.WriteAsync(command, claim.ExtractedFieldsJson, context, ct);
         if (target.EntityId <= 0)
         {
             throw new InvalidOperationException("A scan target writer must return a generated positive entity id.");
         }
 
         var canonicalEntityType = target.CanonicalEntityType ?? command.Target.EntityType;
-        await attempt.ScanConfirmation.FinalizeAsync(
-            claim,
+        await AtomicScanConfirmationPersistence.FinalizeAsync(_db,
+            context, claim,
             canonicalEntityType,
             target.EntityId,
             command.ConfirmedByUserId,
             command.ConfirmedAtUtc,
             ct);
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         if (!target.TargetAuditRecorded)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 canonicalEntityType,
                 target.EntityId,
@@ -164,7 +179,6 @@ public sealed class ConfirmScanDraftHandler<TTargetWriter>
         new(outcome, command.DraftId, command.Target.EntityType, null, Error: error);
 
     public Task AuthorizeReplayAsync(
-        ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) => _targetWriter.AuthorizeReplayAsync(command, persistence, ct);
+        ConfirmScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        _targetWriter.AuthorizeReplayAsync(command, context, ct);
 }

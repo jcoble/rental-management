@@ -30,7 +30,8 @@ export type NotificationDestination =
   | "LeasingApplication"
   | "LeasingAppointment"
   | "LeasingConversation"
-  | "LeasingMoveIn";
+  | "LeasingMoveIn"
+  | "TenantAccount";
 
 export type NotificationAction = "Open" | "Review" | "Resolve";
 

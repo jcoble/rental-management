@@ -35,6 +35,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
     public async Task InitializeAsync()
     {
         _context = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        await _context.Db.Database.MigrateAsync();
         _scope = _context.Db.SeedAdministratorScope(PortfolioId, nameof(AppointmentTenantNotificationPostgreSqlTests));
         var portfolio = await _context.Db.Portfolios.SingleAsync(row => row.Id == PortfolioId);
         portfolio.TimeZone = "America/New_York";
@@ -82,6 +83,20 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         notification.NavigationResourceId.Should().BeNull();
         notification.NavigationFallbackDestination.Should().Be(NavigationDestination.Home);
         notification.CreatedAt.Should().Be(BusinessNowUtc);
+        created.WorkOrderId.Should().Be(scenario.WorkOrderId);
+
+        var appointment = await _context.Db.Appointments.AsNoTracking()
+            .SingleAsync(row => row.Id == created.Id);
+        appointment.WorkOrderId.Should().Be(scenario.WorkOrderId);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+                .CountAsync(row => row.IdempotencyKey == "appointment-create:appointment-create-tenant-notification"))
+            .Should().Be(1);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+                .CountAsync(row => row.EntityType == nameof(Appointment)
+                    && row.EntityId == created.Id
+                    && row.Operation == AuditLogOperation.Created
+                    && row.ChangeReason == "Created appointment."))
+            .Should().Be(1);
 
         await AssertEveryAppointmentNotificationHasExactlyOneCreatedAuditAsync(created.Id);
         _commands.Should().Contain(command =>
@@ -89,6 +104,46 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
             && command.Contains("\"TenantUserAccesses\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("\"LeaseManagementParties\"", StringComparison.OrdinalIgnoreCase)
             && command.Contains("\"Portfolios\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(command =>
+            command.Contains("YS-266 appointment work order authorized context match", StringComparison.Ordinal)
+            && command.Contains("\"WorkOrders\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateAuthorizedAsync_WorkOrderContextMismatchDeniesAndCreatesNoRows()
+    {
+        var scenario = await SeedLeasedTenantAppointmentScenarioAsync();
+        var mismatch = await SeedWorkOrderAsync(
+            scenario.PropertyId,
+            scenario.UnitId,
+            tenantId: null,
+            scenario.LeaseManagementId,
+            "Mismatched maintenance visit");
+        var request = Request(scenario);
+        request.WorkOrderId = mismatch;
+        request.Title = "Mismatched work order appointment";
+
+        var created = await Service(_services).CreateAuthorizedAsync(
+            _scope,
+            request,
+            "appointment-create-work-order-mismatch");
+
+        created.Should().BeNull();
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.Appointments.AsNoTracking()
+                .CountAsync(row => row.Title == "Mismatched work order appointment"))
+            .Should().Be(0);
+        (await _context.Db.Notifications.AsNoTracking()
+                .CountAsync(row => row.RelatedEntityType == nameof(Appointment)
+                    && row.Type == "TenantAppointmentScheduled"))
+            .Should().Be(0);
+        (await _context.Db.OutboxMessages.AsNoTracking()
+                .CountAsync(row => row.IdempotencyKey == "appointment-create:appointment-create-work-order-mismatch"))
+            .Should().Be(0);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+                .CountAsync(row => row.EntityType == nameof(Appointment)
+                    && row.ChangeReason == "Created appointment."))
+            .Should().Be(0);
     }
 
     [Fact]
@@ -157,6 +212,85 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
     }
 
     [Fact]
+    public async Task UpdateAuthorizedAsync_ExactStateNewKeyNoopsAndReplayReturnsCurrentSnapshotWithoutSideEffects()
+    {
+        var scenario = await SeedLeasedTenantAppointmentScenarioAsync();
+        var service = Service(_services);
+        var created = await service.CreateAuthorizedAsync(
+            _scope,
+            Request(scenario),
+            "appointment-create-before-noop-update");
+
+        _context.Db.ChangeTracker.Clear();
+        var baseline = await _context.Db.Appointments.AsNoTracking()
+            .Where(row => row.Id == created!.Id)
+            .Select(row => new
+            {
+                AppointmentUpdatedAt = row.UpdatedAt,
+                AppointmentAuditCount = _context.Db.AtomicAuditLogs.AsNoTracking()
+                    .Count(audit => audit.EntityType == nameof(Appointment)
+                        && audit.EntityId == row.Id),
+                NotificationCount = _context.Db.Notifications.AsNoTracking()
+                    .Count(notification => notification.RelatedEntityType == nameof(Appointment)
+                        && notification.RelatedEntityId == row.Id),
+                OutboxCount = _context.Db.OutboxMessages.AsNoTracking()
+                    .Count(outbox => outbox.PortfolioId == row.PortfolioId),
+                UpdateReceiptCount = _context.Db.AtomicCommandReceipts.AsNoTracking()
+                    .Count(receipt => receipt.CommandType == "appointment.update"),
+            })
+            .SingleAsync();
+
+        var request = new UpdateAppointmentRequest
+        {
+            AssignedTo = "Leasing Agent",
+        };
+
+        var noOp = await service.UpdateAuthorizedAsync(
+            _scope,
+            created!.Id,
+            request,
+            "appointment-noop-assigned-to-current");
+        var replay = await service.UpdateAuthorizedAsync(
+            _scope,
+            created.Id,
+            request,
+            "appointment-noop-assigned-to-current");
+
+        noOp.Should().NotBeNull();
+        replay.Should().BeEquivalentTo(noOp);
+        noOp!.UpdatedAt.Should().Be(baseline.AppointmentUpdatedAt);
+        _context.Db.ChangeTracker.Clear();
+        var after = await _context.Db.Appointments.AsNoTracking()
+            .Where(row => row.Id == created.Id)
+            .Select(row => new
+            {
+                AppointmentUpdatedAt = row.UpdatedAt,
+                AppointmentAuditCount = _context.Db.AtomicAuditLogs.AsNoTracking()
+                    .Count(audit => audit.EntityType == nameof(Appointment)
+                        && audit.EntityId == row.Id),
+                NotificationCount = _context.Db.Notifications.AsNoTracking()
+                    .Count(notification => notification.RelatedEntityType == nameof(Appointment)
+                        && notification.RelatedEntityId == row.Id),
+                OutboxCount = _context.Db.OutboxMessages.AsNoTracking()
+                    .Count(outbox => outbox.PortfolioId == row.PortfolioId),
+                NoOpUpdateOutboxCount = _context.Db.OutboxMessages.AsNoTracking()
+                    .Count(outbox => outbox.IdempotencyKey == "appointment-update:appointment-noop-assigned-to-current"),
+                UpdateReceiptCount = _context.Db.AtomicCommandReceipts.AsNoTracking()
+                    .Count(receipt => receipt.CommandType == "appointment.update"),
+            })
+            .SingleAsync();
+
+        after.AppointmentUpdatedAt.Should().Be(baseline.AppointmentUpdatedAt);
+        after.AppointmentAuditCount.Should().Be(baseline.AppointmentAuditCount);
+        after.NotificationCount.Should().Be(baseline.NotificationCount);
+        after.OutboxCount.Should().Be(baseline.OutboxCount);
+        after.NoOpUpdateOutboxCount.Should().Be(0, "a pure no-op update must not stage an update outbox message");
+        after.UpdateReceiptCount.Should().Be(baseline.UpdateReceiptCount + 1);
+        (await CountAppointmentNotificationsAsync(created.Id, "TenantAppointmentUpdated"))
+            .Should().Be(0);
+    }
+
+    [Fact]
     public async Task CreateAuthorizedAsync_ReplayDoesNotDuplicateTenantNotification()
     {
         var scenario = await SeedLeasedTenantAppointmentScenarioAsync();
@@ -177,6 +311,15 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
                 .CountAsync(row => row.RelatedEntityType == nameof(Appointment)
                     && row.RelatedEntityId == first.Id
                     && row.Type == "TenantAppointmentScheduled"))
+            .Should().Be(1);
+        (await _context.Db.Appointments.AsNoTracking()
+                .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId))
+            .Should().Be(1);
+        (await _context.Db.AtomicAuditLogs.AsNoTracking()
+                .CountAsync(row => row.EntityType == nameof(Appointment)
+                    && row.EntityId == first.Id
+                    && row.Operation == AuditLogOperation.Created
+                    && row.ChangeReason == "Created appointment."))
             .Should().Be(1);
         (await _context.Db.AtomicCommandReceipts.AsNoTracking()
                 .CountAsync(row => row.CommandType == "appointment.create"))
@@ -342,15 +485,51 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
 
         _context.Db.Add(tenantAccess);
         await _context.Db.SaveChangesAsync();
+        var workOrderId = await SeedWorkOrderAsync(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            relationship.Id,
+            "Move-in walkthrough maintenance visit");
         _context.Db.ChangeTracker.Clear();
         return new TenantAppointmentScenario(
             property.Id,
             unit.Id,
             relationship.Id,
             tenant.Id,
+            workOrderId,
             tenantUser.Id,
             accessContext.Id,
             accessContext.AccessRevision);
+    }
+
+    private async Task<int> SeedWorkOrderAsync(
+        int propertyId,
+        int? unitId,
+        int? tenantId,
+        int? leaseManagementId,
+        string title)
+    {
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            TenantId = tenantId,
+            LeaseManagementId = leaseManagementId,
+            Title = title,
+            Description = "Appointment-linked maintenance visit fixture",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.Scheduled,
+            RequestedAt = SeededAtUtc,
+            ScheduledFor = new DateTime(2027, 1, 26, 14, 0, 0, DateTimeKind.Utc),
+            ScheduledWindowEnd = new DateTime(2027, 1, 26, 15, 0, 0, DateTimeKind.Utc),
+            UpdatedAt = SeededAtUtc,
+        };
+        _context.Db.WorkOrders.Add(workOrder);
+        await _context.Db.SaveChangesAsync();
+        return workOrder.Id;
     }
 
     private static CreateAppointmentRequest Request(TenantAppointmentScenario scenario) => new()
@@ -359,6 +538,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         UnitId = scenario.UnitId,
         LeaseManagementId = scenario.LeaseManagementId,
         TenantId = scenario.TenantId,
+        WorkOrderId = scenario.WorkOrderId,
         Title = "Frozen-clock move-in walkthrough",
         Type = AppointmentType.MoveIn,
         Status = AppointmentStatus.Scheduled,
@@ -372,6 +552,7 @@ public sealed class AppointmentTenantNotificationPostgreSqlTests : IAsyncLifetim
         int UnitId,
         int LeaseManagementId,
         int TenantId,
+        int WorkOrderId,
         int TenantUserId,
         int AccessContextId,
         long AccessRevision);

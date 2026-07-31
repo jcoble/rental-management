@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
@@ -16,6 +17,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
+using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -24,12 +26,14 @@ namespace RentalCommand.IntegrationTests;
 /// <summary>
 /// PostgreSQL proof for the destructive scheduled-rent and late-fee cutover. Candidate generation,
 /// proration, duplicate suppression, ordering, paging, and posting all execute in the set-based SQL
-/// owned by <see cref="IAtomicTenantMoneyPersistence"/>.
+/// owned by the tenant-money persistence writer.
 /// </summary>
 public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledTenantChargeBatchResult> Codec =
-        new("scheduled-tenant-charges.apply.v1");
+    private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> Codec =
+        new("scheduled-tenant-charges.rent.apply.v1");
+    private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> LateFeeCodec =
+        new("scheduled-tenant-charges.late-fee.apply.v1");
     private static readonly DateTime FrozenNow =
         new(2026, 7, 15, 12, 0, 0, DateTimeKind.Utc);
 
@@ -62,9 +66,13 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
-            ApplyScheduledTenantChargeBatchCommand,
-            ApplyScheduledTenantChargeBatchResult,
-            ApplyScheduledTenantChargeBatchHandler>();
+            ApplyScheduledRentChargeBatchCommand,
+            ApplyScheduledRentChargeBatchResult,
+            ApplyScheduledRentChargeBatchHandler>();
+        services.AddAtomicCommandHandler<
+            ApplyScheduledLateFeeChargeBatchCommand,
+            ApplyScheduledLateFeeChargeBatchResult,
+            ApplyScheduledLateFeeChargeBatchHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -91,6 +99,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
         await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+        await db.Database.ExecuteSqlRawAsync(TenantAccountBalanceViewSql.Create);
     }
 
     public async Task DisposeAsync()
@@ -116,9 +125,9 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var command = RentCommand("rent-replay");
         var identity = Identity("scheduled-tenant-charges.rent.apply", "rent-replay");
 
-        var executed = await Atomic.ExecuteAsync(identity, command, Codec);
-        var replayed = await Atomic.ExecuteAsync(identity, command, Codec);
-        var laterSweep = await Atomic.ExecuteAsync(
+        var executed = await ExecuteAtomicAsync(identity, command, Codec);
+        var replayed = await ExecuteAtomicAsync(identity, command, Codec);
+        var laterSweep = await ExecuteAtomicAsync(
             Identity("scheduled-tenant-charges.rent.apply", "rent-replay-later"),
             RentCommand("rent-replay-later"),
             Codec);
@@ -241,11 +250,11 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var raceCommandA = RentCommand("rent-race-a");
         var raceCommandB = RentCommand("rent-race-b");
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 Identity("scheduled-tenant-charges.rent.apply", "rent-race-a"),
                 raceCommandA,
                 Codec),
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 Identity("scheduled-tenant-charges.rent.apply", "rent-race-b"),
                 raceCommandB,
                 Codec));
@@ -263,11 +272,11 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task RentBatch_RespectsBackfillCurrentAndCustomAccountCutoffs()
+    public async Task RentBatch_RoutineSchedulerNeverBackfillsPriorMonths()
     {
         SkipIfNoDocker();
         var leaseStart = new DateOnly(2026, 5, 10);
-        var backfill = await SeedScenarioAsync("rent-backfill", FrozenNow, leaseStart);
+        var noCutoff = await SeedScenarioAsync("rent-no-cutoff", FrozenNow, leaseStart);
         var current = await SeedScenarioAsync(
             "rent-current",
             FrozenNow,
@@ -279,36 +288,33 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             leaseStart,
             new DateOnly(2026, 6, 20));
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             Identity("scheduled-tenant-charges.rent.apply", "rent-cutoffs"),
             RentCommand("rent-cutoffs"),
             Codec);
 
-        result.Value.RentChargeCount.Should().Be(6);
+        result.Value.RentChargeCount.Should().Be(3);
         await using var verify = NewContext();
         var rows = await verify.TenantLedgerEntries
             .Where(row =>
-                row.TenantAccountId == backfill.AccountId
+                row.TenantAccountId == noCutoff.AccountId
                 || row.TenantAccountId == current.AccountId
                 || row.TenantAccountId == custom.AccountId)
             .OrderBy(row => row.TenantAccountId)
             .ThenBy(row => row.EffectiveOn)
             .ToListAsync();
 
-        rows.Where(row => row.TenantAccountId == backfill.AccountId)
+        rows.Where(row => row.TenantAccountId == noCutoff.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
-            .Should().Equal(
-                (new DateOnly(2026, 5, 10), 2200m),
-                (new DateOnly(2026, 6, 1), 3100m),
-                (new DateOnly(2026, 7, 1), 3100m));
+            .Should().Equal([(new DateOnly(2026, 7, 1), 3100m)],
+                "a null tracking cutoff starts routine billing in the current business month, not at lease inception");
         rows.Where(row => row.TenantAccountId == current.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
             .Should().Equal((new DateOnly(2026, 7, 15), 1700m));
         rows.Where(row => row.TenantAccountId == custom.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
-            .Should().Equal(
-                (new DateOnly(2026, 6, 20), 1136.67m),
-                (new DateOnly(2026, 7, 1), 3100m));
+            .Should().Equal([(new DateOnly(2026, 7, 1), 3100m)],
+                "an old explicit tracking cutoff still cannot turn routine scheduling into historical recovery");
     }
 
     [SkippableFact]
@@ -325,7 +331,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         var command = RentCommand("rent-business-clock", businessNow);
         Recorder.Clear();
 
-        var result = await Atomic.ExecuteAsync(identity, command, Codec);
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
 
         result.Value.RentChargeCount.Should().Be(1);
         await using var verify = NewContext();
@@ -368,32 +374,667 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task RentBatch_LeavesUnappliedReceiptUnallocatedWhenPostingNewCharge()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 4, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 1, 31, 13, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "advance-credit",
+            receiptNow,
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 31,
+            baseRentAmount: 1225m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 4),
+            "advance-credit:ash-duplex-a:2027-01",
+            receiptNow,
+            withProviderPaymentAttempt: true);
+        await FreezeAtAsync(chargeNow);
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "advance-credit");
+        var command = RentCommand("advance-credit", chargeNow);
+        Recorder.Clear();
+
+        var executed = await ExecuteAtomicAsync(identity, command, Codec);
+        var replayed = await ExecuteAtomicAsync(identity, command, Codec);
+        var laterSweep = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "advance-credit-later"),
+            RentCommand("advance-credit-later", chargeNow),
+            Codec);
+
+        executed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        executed.Value.RentChargeCount.Should().Be(1);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().Be(executed.Value);
+        laterSweep.Value.RentChargeCount.Should().Be(0);
+        await using var verify = NewContext();
+        var charge = await verify.TenantLedgerEntries.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge);
+        charge.Amount.Should().Be(1225m);
+        charge.EffectiveOn.Should().Be(new DateOnly(2027, 1, 31));
+        charge.DueOn.Should().Be(new DateOnly(2027, 1, 31));
+
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == charge.Id
+            && row.CreditEntryId == receiptId)).Should().Be(0,
+                "scheduled rent posting must not allocate an unapplied receipt");
+        var balance = await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == charge.Id);
+        balance.OpenAmount.Should().Be(1225m);
+        var receipt = await verify.TenantLedgerEntries.SingleAsync(row => row.Id == receiptId);
+        (await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == receipt.ProviderPaymentAttemptId)).AttemptType
+            .Should().Be(TenantPaymentAttemptType.UnappliedReceipt);
+        var auditPayloads = await verify.AtomicAuditLogs
+            .Where(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey
+            && row.EntityType == nameof(TenantAccount)
+            && row.EntityId == scenario.AccountId)
+            .Select(row => row.NewValues)
+            .ToListAsync();
+        auditPayloads.Should().ContainSingle();
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey == OutboxIdempotency.Create(
+                "scheduled-tenant-charge",
+                $"{scenario.AccountId}:{charge.BusinessKey}"))).Should().Be(1);
+
+        Recorder.Commands.Should().NotContain(sql =>
+            sql.Contains("INSERT INTO \"TenantLedgerAllocations\"", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_UnappliedReceiptRemainsUnallocatedAcrossRollbackAndRecovery()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 4, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 1, 31, 13, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "advance-credit-rollback",
+            receiptNow,
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 31,
+            baseRentAmount: 1225m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 4),
+            "advance-credit-rollback:ash-duplex-a:2027-01",
+            receiptNow);
+        await FreezeAtAsync(chargeNow);
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "advance-credit-rollback");
+        var command = RentCommand("advance-credit-rollback", chargeNow);
+        Failures.FailAtomicAudit = true;
+
+        var failure = await FluentActions
+            .Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
+            .Should().ThrowAsync<DbUpdateException>();
+        failure.WithInnerException<InvalidOperationException>()
+            .WithMessage("injected scheduled tenant-charge audit failure");
+
+        await using (var failed = NewContext())
+        {
+            (await failed.TenantLedgerEntries.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId
+                && row.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(0);
+            (await failed.TenantLedgerEntries.CountAsync(row => row.Id == receiptId)).Should().Be(1,
+                "the pre-existing advance receipt is outside the failed scheduled-charge transaction");
+            (await failed.TenantLedgerAllocations.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+            (await failed.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            (await failed.OutboxMessages.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId)).Should().Be(0);
+        }
+
+        Failures.FailAtomicAudit = false;
+        var recovered = await ExecuteAtomicAsync(identity, command, Codec);
+        recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        recovered.Value.RentChargeCount.Should().Be(1);
+
+        await using var verify = NewContext();
+        var charge = await verify.TenantLedgerEntries.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge);
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == charge.Id
+            && row.CreditEntryId == receiptId
+            && row.Amount == 1225m)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_DoesNotBackfillExistingChargeFromImportedReceipt()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 4, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 1, 31, 13, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "advance-credit-existing",
+            receiptNow,
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 31,
+            baseRentAmount: 1225m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 4),
+            "advance-credit-existing:ash-duplex-a:2027-01",
+            receiptNow,
+            withProviderPaymentAttempt: true,
+            attemptType: TenantPaymentAttemptType.ImportedReceipt);
+        var chargeId = await SeedExistingRentChargeAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 31),
+            $"rent:{scenario.AgreementPublicId}:2027-01",
+            chargeNow);
+        await FreezeAtAsync(chargeNow);
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "advance-credit-existing");
+        var command = RentCommand("advance-credit-existing", chargeNow);
+
+        var executed = await ExecuteAtomicAsync(identity, command, Codec);
+        var replayed = await ExecuteAtomicAsync(identity, command, Codec);
+        var laterSweep = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "advance-credit-existing-later"),
+            RentCommand("advance-credit-existing-later", chargeNow),
+            Codec);
+
+        executed.Value.RentChargeCount.Should().Be(0);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        laterSweep.Value.RentChargeCount.Should().Be(0);
+        await using var verify = NewContext();
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == chargeId
+            && row.CreditEntryId == receiptId)).Should().Be(0,
+                "scheduled billing must not backfill an existing charge from an imported receipt");
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(1);
+        (await verify.Notifications.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.Type == "ScheduledRentCharge")).Should().Be(0,
+            "an existing charge must not produce a second charge-posted notification");
+        var receipt = await verify.TenantLedgerEntries.SingleAsync(row => row.Id == receiptId);
+        (await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == receipt.ProviderPaymentAttemptId)).AttemptType
+            .Should().Be(TenantPaymentAttemptType.ImportedReceipt);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_DoesNotAllocateFullyRefundedAdvanceReceiptToExistingDueCharge()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 5, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 2, 1, 5, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "refunded-advance-credit",
+            receiptNow,
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 1,
+            baseRentAmount: 1200m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1200m,
+            new DateOnly(2027, 1, 5),
+            "refunded-advance-credit:receipt",
+            receiptNow,
+            withProviderPaymentAttempt: true);
+        await SeedFullRefundAsync(
+            scenario,
+            receiptId,
+            1200m,
+            new DateOnly(2027, 1, 6),
+            receiptNow.AddDays(1));
+        var chargeId = await SeedExistingRentChargeAsync(
+            scenario,
+            1200m,
+            new DateOnly(2027, 2, 1),
+            $"rent:{scenario.AgreementPublicId}:2027-02",
+            chargeNow);
+        await FreezeAtAsync(chargeNow);
+        var identity = Identity(
+            "scheduled-tenant-charges.rent.apply",
+            "refunded-advance-credit");
+        Recorder.Clear();
+
+        var result = await ExecuteAtomicAsync(
+            identity,
+            RentCommand("refunded-advance-credit", chargeNow),
+            Codec);
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        result.Value.RentChargeCount.Should().Be(0);
+        await using var verify = NewContext();
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == chargeId
+            && row.CreditEntryId == receiptId)).Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        Recorder.Commands.Should().NotContain(sql =>
+            sql.Contains("TenantPaymentAttempts", StringComparison.Ordinal)
+            || sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_RunOnceDoesNotBackfillExistingChargeWhenCandidateAmountDiffers()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 4, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "advance-credit-existing-amount-diff",
+            receiptNow,
+            new DateOnly(2026, 2, 1),
+            new DateOnly(2027, 1, 31),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 31,
+            baseRentAmount: 1225m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 4),
+            "manual-receipt:2a5-integration",
+            receiptNow,
+            withProviderPaymentAttempt: true,
+            attemptType: TenantPaymentAttemptType.ImportedReceipt);
+        var chargeId = await SeedExistingRentChargeAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 31),
+            $"rent:{scenario.AgreementPublicId}:2027-01",
+            chargeNow);
+        await FreezeAtAsync(chargeNow, "America/New_York");
+        await using var atomicScope = _services!.CreateAsyncScope();
+        var service = new RentChargeService(
+            atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            new FixedTimeProvider(chargeNow),
+            NullLogger<RentChargeService>.Instance);
+
+        await using (var before = NewContext())
+        {
+            var receipt = await before.TenantLedgerEntries.SingleAsync(row => row.Id == receiptId);
+            receipt.EntryType.Should().Be(TenantLedgerEntryType.PaymentReceipt);
+            receipt.Direction.Should().Be(TenantLedgerDirection.Credit);
+            receipt.ProviderPaymentAttemptId.Should().NotBeNull();
+            receipt.EffectiveOn.Should().Be(new DateOnly(2027, 1, 4));
+            var account = await before.TenantAccounts.SingleAsync(row => row.Id == scenario.AccountId);
+            account.RentTrackingStartOn.Should().Be(new DateOnly(2027, 1, 31),
+                "an existing committed full-period charge remains the recoverable debit even if a later cutoff would now recompute a prorated candidate");
+            var openCharge = await before.TenantChargeBalanceProjections.SingleAsync(row =>
+                row.TenantLedgerEntryId == chargeId);
+            openCharge.OpenAmount.Should().Be(1225m);
+            (await before.TenantLedgerAllocations.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+        }
+
+        Recorder.Clear();
+        var created = await service.GenerateAsync();
+        var replayCreated = await service.GenerateAsync();
+
+        created.Should().Be(0);
+        replayCreated.Should().Be(0);
+        await using var verify = NewContext();
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == chargeId
+            && row.CreditEntryId == receiptId)).Should().Be(0);
+        var balance = await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == chargeId);
+        balance.OpenAmount.Should().Be(1225m);
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(1);
+        (await verify.Notifications.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.Type == "ScheduledRentCharge")).Should().Be(0,
+            "an existing charge must not produce a second charge-posted notification");
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == "scheduled-tenant-charges.rent.apply")).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_RunOnceLeavesDepositReceiptUnallocatedAndExistingChargeOpen()
+    {
+        SkipIfNoDocker();
+        var receiptNow = new DateTime(2027, 1, 4, 15, 0, 0, DateTimeKind.Utc);
+        var chargeNow = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "advance-credit-existing-exact-row",
+            receiptNow,
+            new DateOnly(2026, 2, 1),
+            new DateOnly(2027, 1, 1),
+            termEndOn: new DateOnly(2027, 12, 31),
+            rentDueDay: 31,
+            baseRentAmount: 1225m);
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 4),
+            "manual-receipt:2a5-exact",
+            receiptNow,
+            withProviderPaymentAttempt: true,
+            attemptType: TenantPaymentAttemptType.DepositReceipt);
+        var chargeId = await SeedExistingRentChargeAsync(
+            scenario,
+            1225m,
+            new DateOnly(2027, 1, 31),
+            $"rent:{scenario.AgreementPublicId}:2027-01",
+            chargeNow);
+        await FreezeAtAsync(chargeNow, "America/New_York");
+        await using var atomicScope = _services!.CreateAsyncScope();
+        var service = new RentChargeService(
+            atomicScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            new FixedTimeProvider(chargeNow),
+            NullLogger<RentChargeService>.Instance);
+
+        await using (var before = NewContext())
+        {
+            var receipt = await before.TenantLedgerEntries.SingleAsync(row => row.Id == receiptId);
+            receipt.EntryType.Should().Be(TenantLedgerEntryType.PaymentReceipt);
+            receipt.Direction.Should().Be(TenantLedgerDirection.Credit);
+            receipt.Amount.Should().Be(1225m);
+            receipt.EffectiveOn.Should().Be(new DateOnly(2027, 1, 4));
+            receipt.DueOn.Should().BeNull();
+            receipt.BusinessKey.Should().Be("manual-receipt:2a5-exact");
+            receipt.ProviderPaymentAttemptId.Should().NotBeNull();
+            var charge = await before.TenantLedgerEntries.SingleAsync(row => row.Id == chargeId);
+            charge.EntryType.Should().Be(TenantLedgerEntryType.RentCharge);
+            charge.Direction.Should().Be(TenantLedgerDirection.Debit);
+            charge.Amount.Should().Be(1225m);
+            charge.EffectiveOn.Should().Be(new DateOnly(2027, 1, 31));
+            charge.DueOn.Should().Be(new DateOnly(2027, 1, 31));
+            charge.BusinessKey.Should().Be($"rent:{scenario.AgreementPublicId}:2027-01");
+            var account = await before.TenantAccounts.SingleAsync(row => row.Id == scenario.AccountId);
+            account.RentTrackingStartOn.Should().Be(new DateOnly(2027, 1, 1));
+            var openCharge = await before.TenantChargeBalanceProjections.SingleAsync(row =>
+                row.TenantLedgerEntryId == chargeId);
+            openCharge.OpenAmount.Should().Be(1225m);
+            openCharge.BusinessDate.Should().Be(new DateOnly(2027, 1, 31));
+            (await before.TenantLedgerAllocations.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+            (await before.SecurityDepositEntries.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.TenantLedgerEntryId == receiptId
+                && row.EntryType == SecurityDepositEntryType.Receipt)).Should().Be(1);
+        }
+
+        Recorder.Clear();
+        var created = await service.GenerateAsync();
+        var replayCreated = await service.GenerateAsync();
+
+        created.Should().Be(0);
+        replayCreated.Should().Be(0);
+        await using var verify = NewContext();
+        (await verify.TenantLedgerAllocations.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.DebitEntryId == chargeId
+            && row.CreditEntryId == receiptId)).Should().Be(0);
+        var balance = await verify.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.TenantLedgerEntryId == chargeId);
+        balance.OpenAmount.Should().Be(1225m);
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(1);
+        (await verify.Notifications.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.Type == "ScheduledRentCharge")).Should().Be(0,
+            "an existing charge must not produce a second charge-posted notification");
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == "scheduled-tenant-charges.rent.apply")).Should().Be(0);
+        Recorder.Commands.Should().NotContain(sql =>
+            sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal)
+            || sql.Contains("PaymentReceipt", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task RentBatch_DoesNotPostNextMonthChargeBeforeFrozenBusinessDueDate()
+    {
+        SkipIfNoDocker();
+        var january29 = new DateTime(2027, 1, 29, 14, 0, 0, DateTimeKind.Utc);
+        var february1 = new DateTime(2027, 2, 1, 14, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "rent-month-boundary",
+            january29,
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 12, 31));
+        await SetRentChargeLeadDaysAsync(scenario.PortfolioId, 5, january29);
+        var identity = Identity("scheduled-tenant-charges.rent.apply", "rent-month-boundary-jan29");
+        var command = RentCommand("rent-month-boundary-jan29", january29);
+        Recorder.Clear();
+
+        var early = await ExecuteAtomicAsync(identity, command, Codec);
+        var earlyReplay = await ExecuteAtomicAsync(identity, command, Codec);
+        var earlyLaterSweep = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "rent-month-boundary-jan29-later"),
+            RentCommand("rent-month-boundary-jan29-later", january29),
+            Codec);
+
+        early.Value.RentChargeCount.Should().Be(0,
+            "tenant-notice candidates may drive reminders, but ledger charges must not post before the due date");
+        earlyReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        earlyLaterSweep.Value.RentChargeCount.Should().Be(0);
+        await using (var earlyVerify = NewContext())
+        {
+            (await earlyVerify.TenantLedgerEntries.CountAsync(row =>
+                row.TenantAccountId == scenario.AccountId
+                && row.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(0);
+            (await earlyVerify.Notifications.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.UserId == scenario.UserId
+                && row.Type == "ScheduledRentDueReminder:2027-02")).Should().Be(0);
+            (await earlyVerify.OutboxMessages.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.IdempotencyKey.Contains("scheduled-rent-due-reminder"))).Should().Be(0);
+        }
+
+        await FreezeAtAsync(february1);
+        var dueIdentity = Identity("scheduled-tenant-charges.rent.apply", "rent-month-boundary-feb1");
+        var dueCommand = RentCommand("rent-month-boundary-feb1", february1);
+        var due = await ExecuteAtomicAsync(dueIdentity, dueCommand, Codec);
+        var replay = await ExecuteAtomicAsync(dueIdentity, dueCommand, Codec);
+        var laterSweep = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "rent-month-boundary-feb1-later"),
+            RentCommand("rent-month-boundary-feb1-later", february1),
+            Codec);
+
+        due.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        due.Value.RentChargeCount.Should().Be(1);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(due.Value);
+        laterSweep.Value.RentChargeCount.Should().Be(0);
+
+        await using var verify = NewContext();
+        var entry = await verify.TenantLedgerEntries.SingleAsync(row =>
+            row.TenantAccountId == scenario.AccountId
+            && row.EntryType == TenantLedgerEntryType.RentCharge);
+        entry.EffectiveOn.Should().Be(new DateOnly(2027, 2, 1));
+        entry.DueOn.Should().Be(new DateOnly(2027, 2, 1));
+        entry.PostedAtUtc.Should().Be(february1);
+        entry.BusinessKey.Should().Be($"rent:{scenario.AgreementPublicId}:2027-02");
+
+        Recorder.Commands.Should().Contain(sql =>
+            sql.Contains("generate_series", StringComparison.Ordinal)
+            && sql.Contains("INSERT INTO \"TenantLedgerEntries\"", StringComparison.Ordinal)
+            && !sql.Contains("\"RentChargeLeadDays\"", StringComparison.Ordinal));
+    }
+
+    [SkippableFact]
+    public async Task RentReminder_DirectScheduledChargeNotificationPathIsRetired()
+    {
+        SkipIfNoDocker();
+        var january29 = new DateTime(2027, 1, 29, 14, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "rent-reminder-rollback",
+            january29,
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 12, 31));
+        await SetRentChargeLeadDaysAsync(scenario.PortfolioId, 5, january29);
+        var identity = Identity(
+            "scheduled-tenant-charges.rent.apply",
+            "rent-reminder-retired");
+        var command = RentCommand("rent-reminder-retired", january29);
+        Failures.FailNotifications = true;
+        AtomicCommandOutcome<ApplyScheduledRentChargeBatchResult> result;
+        try
+        {
+            result = await ExecuteAtomicAsync(identity, command, Codec);
+        }
+        finally
+        {
+            Failures.FailNotifications = false;
+        }
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        result.Value.RentChargeCount.Should().Be(0);
+
+        await using var verify = NewContext();
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+        (await verify.Notifications.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.Type == "ScheduledRentDueReminder:2027-02")).Should().Be(0);
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.IdempotencyKey.Contains("scheduled-rent-due-reminder"))).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RentReminder_DirectScheduledChargePathDoesNotProjectAnyPortfolio()
+    {
+        SkipIfNoDocker();
+        var january29 = new DateTime(2027, 1, 29, 14, 0, 0, DateTimeKind.Utc);
+        var first = await SeedScenarioAsync(
+            "rent-reminder-portfolio-a",
+            january29,
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 12, 31));
+        var second = await SeedScenarioAsync(
+            "rent-reminder-portfolio-b",
+            january29,
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 12, 31),
+            forceNewPortfolio: true);
+        await SetRentChargeLeadDaysAsync(first.PortfolioId, 5, january29);
+        await SetRentChargeLeadDaysAsync(second.PortfolioId, 5, january29);
+
+        var result = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.rent.apply", "rent-reminder-two-portfolios"),
+            RentCommand("rent-reminder-two-portfolios", january29),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(0);
+        await using var verify = NewContext();
+        (await verify.Notifications.CountAsync(row =>
+            row.Type == "ScheduledRentDueReminder:2027-02"
+            && (row.PortfolioId == first.PortfolioId
+                || row.PortfolioId == second.PortfolioId))).Should().Be(0);
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey.Contains("scheduled-rent-due-reminder")
+            && (row.PortfolioId == first.PortfolioId
+                || row.PortfolioId == second.PortfolioId))).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task BalanceViews_HideLegacyFutureEffectiveRentUntilItsBusinessDate()
+    {
+        SkipIfNoDocker();
+        var january29 = new DateTime(2027, 1, 29, 14, 0, 0, DateTimeKind.Utc);
+        var scenario = await SeedScenarioAsync(
+            "legacy-future-rent-as-of",
+            january29,
+            new DateOnly(2027, 1, 1),
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 12, 31));
+        await using (var seed = NewContext())
+        {
+            seed.TenantLedgerEntries.Add(new TenantLedgerEntry
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                LeaseAgreementId = scenario.AgreementId,
+                EntryType = TenantLedgerEntryType.RentCharge,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = 3100m,
+                Currency = "USD",
+                EffectiveOn = new DateOnly(2027, 2, 1),
+                DueOn = new DateOnly(2027, 2, 1),
+                PostedAtUtc = january29,
+                Description = "Legacy future-effective rent",
+                BusinessKey = $"rent:{scenario.AgreementPublicId}:2027-02",
+                CreatedByUserId = scenario.UserId,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var january = NewContext())
+        {
+            (await january.TenantChargeBalanceProjections.CountAsync(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.TenantAccountId == scenario.AccountId)).Should().Be(0);
+            var balance = await january.TenantAccountBalanceProjections.SingleAsync(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.TenantAccountId == scenario.AccountId);
+            balance.ReceivableBalance.Should().Be(0m);
+            balance.TotalDebits.Should().Be(0m);
+        }
+
+        await FreezeAtAsync(new DateTime(2027, 2, 1, 14, 0, 0, DateTimeKind.Utc));
+        await using var february = NewContext();
+        var charge = await february.TenantChargeBalanceProjections.SingleAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.TenantAccountId == scenario.AccountId);
+        charge.OpenAmount.Should().Be(3100m);
+        var februaryBalance = await february.TenantAccountBalanceProjections.SingleAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.TenantAccountId == scenario.AccountId);
+        februaryBalance.ReceivableBalance.Should().Be(3100m);
+    }
+
+    [SkippableFact]
     public async Task LateFeeBatch_UsesOpenChargeBusinessDateGraceAndStateCap_AndDoesNotMutateRent()
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("late-fee", FrozenNow);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity("scheduled-tenant-charges.rent.apply", "late-fee-rent"),
             RentCommand("late-fee-rent"),
             Codec);
         await FreezeAtAsync(new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc));
 
         var caps = "[{\"State\":\"OH\",\"MaxFlat\":500,\"MaxPercentOfRent\":5}]";
-        var command = new ApplyScheduledTenantChargeBatchCommand(
+        var command = new ApplyScheduledLateFeeChargeBatchCommand(
             Guid.NewGuid(),
             new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
             200,
-            false,
-            true,
             caps);
-        var first = await Atomic.ExecuteAsync(
+        var first = await ExecuteAtomicAsync(
             Identity("scheduled-tenant-charges.late-fee.apply", "late-fee-first"),
             command,
-            Codec);
-        var duplicate = await Atomic.ExecuteAsync(
+            LateFeeCodec);
+        var duplicate = await ExecuteAtomicAsync(
             Identity("scheduled-tenant-charges.late-fee.apply", "late-fee-second"),
             command with { RunToken = Guid.NewGuid() },
-            Codec);
+            LateFeeCodec);
 
         first.Value.LateFeeChargeCount.Should().Be(1);
         duplicate.Value.LateFeeChargeCount.Should().Be(0);
@@ -421,7 +1062,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         Failures.FailAtomicAudit = true;
 
         var failure = await FluentActions
-            .Invoking(() => Atomic.ExecuteAsync(identity, command, Codec))
+            .Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
             .Should().ThrowAsync<DbUpdateException>();
         failure.WithInnerException<InvalidOperationException>()
             .WithMessage("injected scheduled tenant-charge audit failure");
@@ -441,7 +1082,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         }
 
         Failures.FailAtomicAudit = false;
-        var recovered = await Atomic.ExecuteAsync(identity, command, Codec);
+        var recovered = await ExecuteAtomicAsync(identity, command, Codec);
         recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         recovered.Value.RentChargeCount.Should().Be(1);
     }
@@ -456,7 +1097,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         Failures.FailNotifications = true;
 
         var failure = await FluentActions
-            .Invoking(() => Atomic.ExecuteAsync(identity, command, Codec))
+            .Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
             .Should().ThrowAsync<DbUpdateException>();
         failure.WithInnerException<InvalidOperationException>()
             .WithMessage("injected scheduled tenant-charge notification failure");
@@ -478,7 +1119,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         }
 
         Failures.FailNotifications = false;
-        var recovered = await Atomic.ExecuteAsync(identity, command, Codec);
+        var recovered = await ExecuteAtomicAsync(identity, command, Codec);
         recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         recovered.Value.RentChargeCount.Should().Be(1);
         await using var verify = NewContext();
@@ -492,10 +1133,15 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         DateTime frozenAtUtc,
         DateOnly? termStartOn = null,
         DateOnly? rentTrackingStartOn = null,
-        DateOnly? termEndOn = null)
+        DateOnly? termEndOn = null,
+        bool forceNewPortfolio = false,
+        short rentDueDay = 1,
+        decimal baseRentAmount = 3100m)
     {
         await using var db = NewContext();
-        var portfolio = await db.Portfolios.FirstOrDefaultAsync();
+        var portfolio = forceNewPortfolio
+            ? null
+            : await db.Portfolios.FirstOrDefaultAsync();
         if (portfolio is null)
         {
             portfolio = new Portfolio
@@ -519,15 +1165,18 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                 CreatedAtUtc = frozenAtUtc,
                 UpdatedAtUtc = frozenAtUtc,
             });
-            db.SimulationClocks.Add(new SimulationClock
+            if (!await db.SimulationClocks.AnyAsync(row => row.Id == 1))
             {
-                Id = 1,
-                Mode = ClockMode.Frozen,
-                SimAnchorUtc = frozenAtUtc,
-                RealAnchorUtc = frozenAtUtc,
-                TimeZoneId = "UTC",
-                UpdatedAtRealUtc = frozenAtUtc,
-            });
+                db.SimulationClocks.Add(new SimulationClock
+                {
+                    Id = 1,
+                    Mode = ClockMode.Frozen,
+                    SimAnchorUtc = frozenAtUtc,
+                    RealAnchorUtc = frozenAtUtc,
+                    TimeZoneId = "UTC",
+                    UpdatedAtRealUtc = frozenAtUtc,
+                });
+            }
             await db.SaveChangesAsync();
         }
         else
@@ -696,8 +1345,8 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             TermStartOn = termStartOn ?? new DateOnly(2026, 7, 10),
             TermEndOn = termEndOn ?? new DateOnly(2026, 8, 31),
             GoverningFromOn = termStartOn ?? new DateOnly(2026, 7, 10),
-            BaseRentAmount = 3100m,
-            RentDueDay = 1,
+            BaseRentAmount = baseRentAmount,
+            RentDueDay = rentDueDay,
             SecurityDepositObligation = 0m,
             LateFeeAmount = 500m,
             GracePeriodDays = 5,
@@ -731,6 +1380,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             portfolio.Id,
             account.Id,
             agreement.PublicId,
+            agreement.Id,
             management.Id,
             party.Id,
             user.Id,
@@ -886,16 +1536,200 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         scenario.RevokedUserId = revoked.Id;
     }
 
-    private async Task FreezeAtAsync(DateTime instant)
+    private async Task<long> SeedAdvanceReceiptAsync(
+        Scenario scenario,
+        decimal amount,
+        DateOnly effectiveOn,
+        string businessKey,
+        DateTime postedAtUtc,
+        bool withProviderPaymentAttempt = false,
+        TenantPaymentAttemptType attemptType = TenantPaymentAttemptType.UnappliedReceipt)
+    {
+        await using var db = NewContext();
+        TenantPaymentAttempt? attempt = null;
+        if (withProviderPaymentAttempt)
+        {
+            attempt = new TenantPaymentAttempt
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                Provider = "manual",
+                ProviderObjectId = $"manual-payment-{businessKey}",
+                IdempotencyKey = $"manual-payment-{businessKey}",
+                AttemptType = attemptType,
+                State = TenantPaymentAttemptState.Succeeded,
+                Amount = amount,
+                Currency = "USD",
+                PaymentMethodSummary = "Portal card",
+                PreparedAtUtc = postedAtUtc,
+                SubmittedAtUtc = postedAtUtc,
+                SettledAtUtc = postedAtUtc,
+                UpdatedAtUtc = postedAtUtc,
+                CreatedByUserId = scenario.UserId,
+            };
+            db.TenantPaymentAttempts.Add(attempt);
+            await db.SaveChangesAsync();
+        }
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = scenario.PortfolioId,
+            TenantAccountId = scenario.AccountId,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            PostedAtUtc = postedAtUtc,
+            Description = "Advance rent receipt",
+            BusinessKey = businessKey,
+            ProviderPaymentAttemptId = attempt?.Id,
+            CreatedByUserId = scenario.UserId,
+        };
+        db.TenantLedgerEntries.Add(receipt);
+        await db.SaveChangesAsync();
+        if (attemptType == TenantPaymentAttemptType.DepositReceipt)
+        {
+            var depositAccount = new SecurityDepositAccount
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                OriginatingAgreementId = scenario.AgreementId,
+                Currency = "USD",
+                CreatedAtUtc = postedAtUtc,
+                CreatedByUserId = scenario.UserId,
+            };
+            db.SecurityDepositAccounts.Add(depositAccount);
+            await db.SaveChangesAsync();
+            db.SecurityDepositEntries.Add(new SecurityDepositEntry
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = scenario.PortfolioId,
+                SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Receipt,
+                Direction = SecurityDepositDirection.Increase,
+                Amount = amount,
+                Currency = "USD",
+                EffectiveOn = effectiveOn,
+                PostedAtUtc = postedAtUtc,
+                BusinessKey = $"{businessKey}:deposit",
+                Description = "Security deposit receipt",
+                LeaseAgreementId = scenario.AgreementId,
+                TenantLedgerEntryId = receipt.Id,
+                CreatedByUserId = scenario.UserId,
+            });
+            await db.SaveChangesAsync();
+        }
+        return receipt.Id;
+    }
+
+    private async Task<long> SeedExistingRentChargeAsync(
+        Scenario scenario,
+        decimal amount,
+        DateOnly dueOn,
+        string businessKey,
+        DateTime postedAtUtc)
+    {
+        await using var db = NewContext();
+        var charge = new TenantLedgerEntry
+        {
+            PortfolioId = scenario.PortfolioId,
+            TenantAccountId = scenario.AccountId,
+            LeaseAgreementId = scenario.AgreementId,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = dueOn,
+            DueOn = dueOn,
+            PostedAtUtc = postedAtUtc,
+            Description = $"Rent due {dueOn:MMM d, yyyy}",
+            BusinessKey = businessKey,
+            CreatedByUserId = scenario.UserId,
+        };
+        db.TenantLedgerEntries.Add(charge);
+        await db.SaveChangesAsync();
+        return charge.Id;
+    }
+
+    private async Task SeedFullRefundAsync(
+        Scenario scenario,
+        long receiptId,
+        decimal amount,
+        DateOnly effectiveOn,
+        DateTime settledAtUtc)
+    {
+        await using var db = NewContext();
+        var sourceAttemptId = await db.TenantLedgerEntries
+            .Where(row =>
+                row.PortfolioId == scenario.PortfolioId
+                && row.TenantAccountId == scenario.AccountId
+                && row.Id == receiptId)
+            .Select(row => row.ProviderPaymentAttemptId)
+            .SingleAsync();
+        sourceAttemptId.Should().NotBeNull();
+
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var refundAttempt = new TenantPaymentAttempt
+        {
+            PortfolioId = scenario.PortfolioId,
+            TenantAccountId = scenario.AccountId,
+            Provider = "manual",
+            ProviderObjectId = $"manual-refund-{receiptId}",
+            RefundsPaymentAttemptId = sourceAttemptId,
+            IdempotencyKey = $"manual-refund-{receiptId}",
+            AttemptType = TenantPaymentAttemptType.Refund,
+            State = TenantPaymentAttemptState.Succeeded,
+            Amount = amount,
+            Currency = "USD",
+            PaymentMethodSummary = "Manual refund",
+            PreparedAtUtc = settledAtUtc,
+            SubmittedAtUtc = settledAtUtc,
+            SettledAtUtc = settledAtUtc,
+            UpdatedAtUtc = settledAtUtc,
+            AttemptCount = 1,
+            CreatedByUserId = scenario.UserId,
+        };
+        db.TenantPaymentAttempts.Add(refundAttempt);
+        await db.SaveChangesAsync();
+        db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PortfolioId = scenario.PortfolioId,
+            TenantAccountId = scenario.AccountId,
+            EntryType = TenantLedgerEntryType.Refund,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            PostedAtUtc = settledAtUtc,
+            Description = "Refunded advance receipt",
+            BusinessKey = $"refund:{receiptId}",
+            ProviderPaymentAttemptId = refundAttempt.Id,
+            CreatedByUserId = scenario.UserId,
+        });
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+    }
+
+    private async Task FreezeAtAsync(DateTime instant, string timeZoneId = "UTC")
     {
         await using var db = NewContext();
         var clock = await db.SimulationClocks.SingleAsync(row => row.Id == 1);
         clock.Mode = ClockMode.Frozen;
         clock.SimAnchorUtc = instant;
         clock.RealAnchorUtc = instant;
-        clock.TimeZoneId = "UTC";
+        clock.TimeZoneId = timeZoneId;
         clock.UpdatedAtRealUtc = instant;
         await db.SaveChangesAsync();
+    }
+
+    private async Task SetRentChargeLeadDaysAsync(int portfolioId, int leadDays, DateTime now)
+    {
+        await using var db = NewContext();
+        await db.AutomationSettings
+            .Where(row => row.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.RentChargeLeadDays, leadDays)
+                .SetProperty(row => row.UpdatedAtUtc, now));
     }
 
     private static StoredFile StoredFile(int portfolioId, string name, DateTime now) => new()
@@ -932,10 +1766,10 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         CreatedByUserId = userId,
     };
 
-    private static ApplyScheduledTenantChargeBatchCommand RentCommand(
+    private static ApplyScheduledRentChargeBatchCommand RentCommand(
         string _,
         DateTime? businessNowUtc = null) => new(
-        Guid.NewGuid(), businessNowUtc ?? FrozenNow, 200, true, false, "[]");
+        Guid.NewGuid(), businessNowUtc ?? FrozenNow, 200);
 
     private static AtomicCommandIdentity Identity(string type, string suffix) => new(type, suffix);
 
@@ -945,7 +1779,18 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
                     System.Text.Encoding.UTF8.GetBytes(destination.Trim().ToLowerInvariant())))
             .ToLowerInvariant();
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        return await atomic.ExecuteAsync(identity, command, codec);
+    }
+
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private CompanionFailureInterceptor Failures =>
         _services!.GetRequiredService<CompanionFailureInterceptor>();
@@ -1032,10 +1877,16 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         }
     }
 
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
+
     private sealed record Scenario(
         int PortfolioId,
         int AccountId,
         Guid AgreementPublicId,
+        int AgreementId,
         int LeaseManagementId,
         int LeaseManagementPartyId,
         int UserId,

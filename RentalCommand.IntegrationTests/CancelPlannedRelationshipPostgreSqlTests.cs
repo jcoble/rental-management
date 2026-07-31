@@ -266,6 +266,7 @@ public sealed class CancelPlannedRelationshipPostgreSqlTests : IAsyncLifetime
         scenario.SessionId,
         scenario.AccessContextId,
         scenario.AccessRevision,
+        DateTime.UtcNow,
         "ManualCorrection",
         null,
         "Canceled before possession during integration proof.",

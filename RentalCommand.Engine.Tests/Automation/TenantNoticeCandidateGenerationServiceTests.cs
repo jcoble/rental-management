@@ -1,14 +1,29 @@
 using FluentAssertions;
+using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
+using Moq;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
 public sealed class TenantNoticeCandidateGenerationServiceTests
 {
     [Fact]
+    public async Task GenerateDueAsync_DelegatesToDataCandidateStore()
+    {
+        var candidates = new Mock<ITenantNoticeCandidateStore>(MockBehavior.Strict);
+        candidates.Setup(store => store.GenerateDueAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(7);
+
+        var service = new TenantNoticeCandidateGenerationService(candidates.Object);
+
+        (await service.GenerateDueAsync()).Should().Be(7);
+        candidates.VerifyAll();
+    }
+
+    [Fact]
     public void CandidateSql_UsesOnlyCanonicalLeaseAndNoticeSources()
     {
-        var sql = TenantNoticeCandidateGenerationService.CandidateInsertSql;
+        var sql = TenantNoticeCandidateStore.CandidateInsertSql;
 
         sql.Should().Contain("\"TenantNoticePolicies\"");
         sql.Should().Contain("\"TenantNoticeWorkItems\"");
@@ -26,7 +41,7 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
     [Fact]
     public void CandidateSql_RequiresExplicitDispositionAndEligibleRecipientChannel()
     {
-        var sql = TenantNoticeCandidateGenerationService.CandidateInsertSql;
+        var sql = TenantNoticeCandidateStore.CandidateInsertSql;
 
         sql.Should().Contain("OfferRenewal");
         sql.Should().Contain("OfferMonthToMonth");
@@ -52,7 +67,7 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
     [Fact]
     public void CandidateSql_ComputesDueTimeAndDeduplicatesInsidePostgres()
     {
-        var sql = TenantNoticeCandidateGenerationService.CandidateInsertSql;
+        var sql = TenantNoticeCandidateStore.CandidateInsertSql;
 
         sql.Should().Contain("AT TIME ZONE");
         sql.Should().Contain("LeadDays");
@@ -65,7 +80,7 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
     [Fact]
     public void CandidateSql_UsesCanonicalChargeProjectionForExactRentAndLateWork()
     {
-        var sql = TenantNoticeCandidateGenerationService.CandidateInsertSql;
+        var sql = TenantNoticeCandidateStore.CandidateInsertSql;
 
         sql.Should().Contain("\"vw_tenant_charge_balances\"");
         sql.Should().Contain("'rent-reminder'");

@@ -39,27 +39,27 @@ public sealed record IssueLoginContextSelectionChallengeCommand(
     int UserId,
     Guid ChallengeId,
     string ChallengeTokenHash,
-    DateTime IssuedAtUtc,
-    DateTime ExpiresAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime IssuedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime ExpiresAtUtc) : IAtomicCommandData;
 
 public sealed record LoginContextSelectionChallengeResult(
     bool Issued,
     Guid ChallengeId,
     int UserId,
-    DateTime ExpiresAtUtc) : IAtomicResultData;
+    DateTime ExpiresAtUtc);
 
 public sealed record StartAuthSessionCommand(
     int UserId,
     int SelectedAccessContextId,
-    long ExpectedAccessRevision,
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     Guid CredentialId,
     string CredentialTokenHash,
-    DateTime IssuedAtUtc,
-    DateTime SessionExpiresAtUtc,
-    DateTime CredentialExpiresAtUtc,
-    DateTime AbsoluteFamilyExpiresAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime IssuedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime SessionExpiresAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime CredentialExpiresAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime AbsoluteFamilyExpiresAtUtc,
     Guid? ContextSelectionChallengeId = null,
     string? ContextSelectionChallengeTokenHash = null) : IAtomicCommandData;
 
@@ -71,15 +71,15 @@ public sealed record StartAuthSessionResult(
     int PortfolioId,
     long AccessRevision,
     Guid RefreshTokenFamilyId,
-    Guid CredentialId) : IAtomicResultData;
+    Guid CredentialId);
 
 public sealed record SwitchAuthSessionContextCommand(
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     int UserId,
     int CurrentAccessContextId,
     long CurrentAccessRevision,
     int SelectedAccessContextId,
-    DateTime ChangedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime ChangedAtUtc) : IAtomicCommandData;
 
 public sealed record SwitchAuthSessionContextResult(
     bool Switched,
@@ -87,36 +87,36 @@ public sealed record SwitchAuthSessionContextResult(
     int UserId,
     int AccessContextId,
     int PortfolioId,
-    long AccessRevision) : IAtomicResultData;
+    long AccessRevision);
 
 public sealed record RevokeAuthSessionCommand(
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     int UserId,
-    int AccessContextId,
-    long AccessRevision,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long AccessRevision,
     DateTime RevokedAtUtc,
     string Reason) : IAtomicCommandData;
 
 public sealed record RevokeAuthSessionResult(
     bool Revoked,
-    Guid AuthSessionId) : IAtomicResultData;
+    Guid AuthSessionId);
 
 public sealed record IssueSessionRefreshCredentialCommand(
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     Guid CredentialId,
     string TokenHash,
-    DateTime IssuedAtUtc,
-    DateTime ExpiresAtUtc,
-    DateTime AbsoluteFamilyExpiresAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime IssuedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime ExpiresAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime AbsoluteFamilyExpiresAtUtc) : IAtomicCommandData;
 
 public sealed record RotateSessionRefreshCredentialCommand(
     Guid OperationId,
     string PresentedTokenHash,
     Guid ReplacementCredentialId,
     string ReplacementTokenHash,
-    DateTime PresentedAtUtc,
-    DateTime ReplacementExpiresAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime PresentedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime ReplacementExpiresAtUtc) : IAtomicCommandData;
 
 public enum SessionRefreshMutationStatus
 {
@@ -140,4 +140,4 @@ public sealed record SessionRefreshMutationResult(
     int? UserId = null,
     int? AccessContextId = null,
     int? PortfolioId = null,
-    long? AccessRevision = null) : IAtomicResultData;
+    long? AccessRevision = null);

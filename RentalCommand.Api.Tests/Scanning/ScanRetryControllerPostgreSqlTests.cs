@@ -10,6 +10,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -203,6 +204,47 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
             securityUtcNow: realSecurityNow);
 
         authorized.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LeaseEndingNotice_ContextualCreateAndReview_UseCanonicalRentalsAuthorization()
+    {
+        var account = SeedTenantAccount("lease-ending-notice");
+        var relationship = await _db.LeaseManagements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == account.LeaseManagementId);
+        var businessNow = new DateTime(2027, 1, 14, 12, 0, 0, DateTimeKind.Utc);
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+
+        var canCreate = await ScanDraftAuthorizationQuery.CanCreateDraftAsync(
+            _db,
+            _authorization.Scope,
+            "LeaseEndingNotice",
+            relationship.PropertyId,
+            businessNow,
+            securityUtcNow: DateTime.UtcNow);
+
+        canCreate.Should().BeTrue();
+        ScanDraftAuthorizationQuery.CapabilitiesForTarget("LeaseEndingNotice")
+            .Should().Equal(CapabilityKeys.RentalsManage);
+
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Reviewing", targetEntityType: "LeaseEndingNotice");
+        draft.CapturePropertyId = relationship.PropertyId;
+        draft.CaptureUnitId = relationship.UnitId;
+        draft.CaptureLeaseManagementId = relationship.Id;
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+
+        var authorizedDrafts = _db.ScanDrafts.AsNoTracking()
+            .WhereAuthorizedForReview(
+                _db,
+                _authorization.Scope,
+                businessNow,
+                DateTime.UtcNow);
+
+        authorizedDrafts.ToQueryString().Should().Contain("UNION ALL");
+        (await authorizedDrafts.AnyAsync(candidate => candidate.Id == draft.Id))
+            .Should().BeTrue();
     }
 
     private ScanController CreateController()

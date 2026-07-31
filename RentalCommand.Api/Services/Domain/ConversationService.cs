@@ -233,6 +233,13 @@ public class ConversationService : IConversationService
             Id = c.Id,
             TenantId = c.TenantId,
             TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            CounterpartyName = tenantViewer
+                ? c.Portfolio != null && c.Portfolio.ManagementCompanyName.Trim() != string.Empty
+                    ? c.Portfolio.ManagementCompanyName.Trim()
+                    : "Property management"
+                : c.Tenant != null
+                    ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim()
+                    : string.Empty,
             Subject = c.Subject,
             PropertyName = c.Property != null ? c.Property.Name : null,
             LastMessagePreview = c.LastMessagePreview,
@@ -251,6 +258,13 @@ public class ConversationService : IConversationService
             Id = c.Id,
             TenantId = c.TenantId,
             TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            CounterpartyName = tenantViewer
+                ? c.Portfolio != null && c.Portfolio.ManagementCompanyName.Trim() != string.Empty
+                    ? c.Portfolio.ManagementCompanyName.Trim()
+                    : "Property management"
+                : c.Tenant != null
+                    ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim()
+                    : string.Empty,
             Subject = c.Subject,
             PropertyName = c.Property != null ? c.Property.Name : null,
             LastMessagePreview = c.LastMessagePreview,

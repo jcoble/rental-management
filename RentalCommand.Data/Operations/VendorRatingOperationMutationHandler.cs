@@ -10,17 +10,22 @@ using RentalCommand.Core.Operations;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CreateVendorRatingHandler
-    : IAtomicCommandHandler<CreateVendorRatingCommand, VendorRatingMutationResult>,
-      IAtomicReplayAuthorizer<CreateVendorRatingCommand>
+    : IAtomicCommandHandler<CreateVendorRatingCommand, VendorRatingMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateVendorRatingHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<VendorRatingMutationResult> HandleAsync(
-        CreateVendorRatingCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Vendor, command.VendorId, ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
+        await context.AcquireLockAsync("Vendor", command.VendorId, ct);
 
-        var vendor = await AuthorizedVendors(command, attempt.Persistence, now, tracking: true)
+        var vendor = await AuthorizedVendors(
+                command, _db, businessNow, securityNow, tracking: true)
             .SingleOrDefaultAsync(ct);
         if (vendor is null)
             return new(OperationMutationOutcome.NotFound, 0, command.VendorId);
@@ -32,13 +37,13 @@ public sealed class CreateVendorRatingHandler
             WorkOrderId = command.WorkOrderId,
             Stars = command.Stars,
             Comment = Normalize(command.Comment),
-            CreatedAtUtc = now,
+            CreatedAtUtc = businessNow,
         };
-        attempt.Persistence.Add(rating);
-        attempt.UseDatabaseWallClockForAudit(now);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(rating);
+        context.UseDatabaseWallClockForAudit(businessNow);
+        await context.FlushBusinessAsync(ct);
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(VendorRating),
             rating.Id,
@@ -51,9 +56,9 @@ public sealed class CreateVendorRatingHandler
                 rating.Stars,
                 rating.Comment,
             }),
-            ChangeReason: "Rated vendor."), now);
+            ChangeReason: "Rated vendor."), businessNow);
 
-        var aggregate = await attempt.Persistence.Query<VendorRating>()
+        var aggregate = await _db.Set<VendorRating>()
             .AsNoTracking()
             .Where(item => item.PortfolioId == command.PortfolioId && item.VendorId == command.VendorId)
             .GroupBy(_ => 1)
@@ -65,8 +70,8 @@ public sealed class CreateVendorRatingHandler
             .SingleAsync(ct);
         vendor.RatingCount = aggregate.Count;
         vendor.AverageRating = Math.Round(aggregate.Average, 2);
-        vendor.UpdatedAt = now;
-        attempt.BindSemanticAudit(vendor, new AtomicSemanticAudit(
+        vendor.UpdatedAt = businessNow;
+        context.BindSemanticAudit(vendor, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(Vendor),
             vendor.Id,
@@ -78,47 +83,49 @@ public sealed class CreateVendorRatingHandler
                 vendor.RatingCount,
             }),
             ChangeReason: "Refreshed vendor rating aggregates."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         var snapshot = await VendorRatingSnapshot.LoadAsync(
-            attempt.Persistence, command.PortfolioId, rating.Id, ct);
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            _db, command.PortfolioId, rating.Id, ct);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId,
             nameof(VendorRating),
             rating.Id,
             $"vendor-rating-create:{command.DeliveryIdempotencyKey}",
-            now));
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            businessNow));
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId,
             nameof(Vendor),
             vendor.Id,
             $"vendor-rating-vendor-update:{command.DeliveryIdempotencyKey}",
-            now));
+            businessNow));
         return new(OperationMutationOutcome.Applied, rating.Id, vendor.Id, snapshot);
     }
 
     public async Task AuthorizeReplayAsync(
-        CreateVendorRatingCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedVendors(command, persistence, now, tracking: false).AnyAsync(ct))
+        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedVendors(
+                command, _db, command.BusinessNowUtc, securityNow, tracking: false).AnyAsync(ct))
             throw new UnauthorizedAccessException("The active assignment cannot rate this vendor.");
     }
 
     private static IQueryable<Vendor> AuthorizedVendors(
         CreateVendorRatingCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime now,
+        RentalCommandDbContext db,
+        DateTime businessNow,
+        DateTime securityNow,
         bool tracking)
     {
         var assignments = StaffOperationAuthorization.ActiveAssignments(
-            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage, persistence, now);
+            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage,
+            db, businessNow, securityNow);
         var workOrders = StaffOperationAuthorization.AuthorizedWorkOrders(
-            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage, persistence, now, tracking);
-        var query = persistence.Query<Vendor>().Where(vendor =>
+            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage,
+            db, businessNow, securityNow, tracking);
+        var query = db.Set<Vendor>().Where(vendor =>
             vendor.Id == command.VendorId &&
             vendor.PortfolioId == command.PortfolioId &&
             (command.WorkOrderId.HasValue
@@ -151,9 +158,9 @@ internal static class VendorRatingOperationValidation
 internal static class VendorRatingSnapshot
 {
     internal static async Task<string> LoadAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int ratingId, CancellationToken ct)
+        RentalCommandDbContext db, int portfolioId, int ratingId, CancellationToken ct)
     {
-        var row = await persistence.Query<VendorRating>()
+        var row = await db.Set<VendorRating>()
             .AsNoTracking()
             .Where(item => item.Id == ratingId && item.PortfolioId == portfolioId)
             .Select(item => new

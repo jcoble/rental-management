@@ -7,20 +7,23 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class RecordLeaseEndingDispositionHandler
-    : IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>,
-      IAtomicReplayAuthorizer<RecordLeaseEndingDispositionCommand>
+    : IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordLeaseEndingDispositionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RecordLeaseEndingDispositionResult> HandleAsync(
         RecordLeaseEndingDispositionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
 
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var relationship = await AuthorizedRelationship(attempt.Persistence, command, nowUtc)
+        var nowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var relationship = await AuthorizedRelationship(_db, command, nowUtc)
             .SingleOrDefaultAsync(ct);
         if (relationship is null)
         {
@@ -62,7 +65,7 @@ public sealed class RecordLeaseEndingDispositionHandler
         relationship.UpdatedAtUtc = nowUtc;
         relationship.RowVersion = Guid.NewGuid();
 
-        attempt.BindSemanticAudit(
+        context.BindSemanticAudit(
             relationship,
             new AtomicSemanticAudit(
                 command.PortfolioId,
@@ -71,7 +74,7 @@ public sealed class RecordLeaseEndingDispositionHandler
                 AuditLogOperation.Updated,
                 UserId: command.ActorUserId,
                 ChangeReason: command.DecisionReason.Trim()));
-        attempt.StageOutbox(PossessionOutbox.Create(
+        context.StageOutbox(PossessionOutbox.Create(
             command.PortfolioId,
             command.DeliveryIdempotencyKey,
             nowUtc,
@@ -80,7 +83,7 @@ public sealed class RecordLeaseEndingDispositionHandler
             relationship.Id,
             relationship.Id,
             relationship.UnitId));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
         return new(
             RecordLeaseEndingDispositionOutcome.Recorded,
@@ -94,13 +97,11 @@ public sealed class RecordLeaseEndingDispositionHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        RecordLeaseEndingDispositionCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        RecordLeaseEndingDispositionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedRelationship(persistence, command, nowUtc).AnyAsync(ct))
+        var nowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedRelationship(_db, command, nowUtc).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException(
                 "The lease relationship is not authorized in the current property scope.");
@@ -108,10 +109,10 @@ public sealed class RecordLeaseEndingDispositionHandler
     }
 
     private static IQueryable<LeaseManagement> AuthorizedRelationship(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         RecordLeaseEndingDispositionCommand command,
         DateTime nowUtc) =>
-        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, persistence, nowUtc)
+        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, db, nowUtc)
             .Where(relationship => relationship.UnitId == command.UnitId);
 
     private static void Validate(RecordLeaseEndingDispositionCommand command)

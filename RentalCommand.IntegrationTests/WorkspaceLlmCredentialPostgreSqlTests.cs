@@ -8,10 +8,13 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.AiIntegrations;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 using RentalCommand.TestCommon;
 using Xunit.Abstractions;
 
@@ -50,7 +53,10 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             new ActivateAiCredentialRequest(
                 "openai",
                 "gpt-4o",
-                "sk-do-not-return"));
+                "sk-do-not-return")
+            {
+                ClientOperationId = "credential-write-only-activate",
+            });
 
         status.Configured.Should().BeTrue();
         status.Provider.Should().Be("openai");
@@ -78,6 +84,44 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CredentialCommands_UseStableSecretIntentDigestAcrossRandomizedEncryption()
+    {
+        var portfolioId = await CreatePortfolioAsync("credential-stable-intent");
+        var atomic = new CapturingCredentialAtomicUnitOfWork();
+        var service = CreateService(
+            atomic,
+            new RandomizedTestDataProtectionProvider());
+        var access = Access(portfolioId);
+
+        await service.ActivateAsync(
+            access,
+            new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-same-secret")
+            {
+                ClientOperationId = "credential-stable-intent-first",
+            });
+        await service.ActivateAsync(
+            access,
+            new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-same-secret")
+            {
+                ClientOperationId = "credential-stable-intent-retry",
+            });
+        await service.ActivateAsync(
+            access,
+            new ActivateAiCredentialRequest("openai", "gpt-4o", "sk-changed-secret")
+            {
+                ClientOperationId = "credential-stable-intent-changed",
+            });
+
+        var first = atomic.Commands[0].Should().BeOfType<ActivateWorkspaceLlmCredentialCommand>().Which;
+        var retry = atomic.Commands[1].Should().BeOfType<ActivateWorkspaceLlmCredentialCommand>().Which;
+        var changed = atomic.Commands[2].Should().BeOfType<ActivateWorkspaceLlmCredentialCommand>().Which;
+
+        retry.ApiKeyIntentDigest.Should().Be(first.ApiKeyIntentDigest);
+        retry.ApiKeyCipherText.Should().NotBe(first.ApiKeyCipherText);
+        changed.ApiKeyIntentDigest.Should().NotBe(first.ApiKeyIntentDigest);
+    }
+
+    [Fact]
     public async Task RuntimeResolution_IsWorkspaceScoped()
     {
         var firstId = await CreatePortfolioAsync("runtime-first");
@@ -86,13 +130,19 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
 
         await service.ActivateAsync(
             Access(firstId),
-            new ActivateAiCredentialRequest("openai", "gpt-4o", "first-secret"));
+            new ActivateAiCredentialRequest("openai", "gpt-4o", "first-secret")
+            {
+                ClientOperationId = "runtime-first-activate",
+            });
         await service.ActivateAsync(
             Access(secondId),
             new ActivateAiCredentialRequest(
                 "anthropic",
                 "claude-3-5-sonnet-latest",
-                "second-secret"));
+                "second-secret")
+            {
+                ClientOperationId = "runtime-second-activate",
+            });
 
         var first = await service.ResolveActiveAsync(firstId);
         var second = await service.ResolveActiveAsync(secondId);
@@ -114,7 +164,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             420,
             120,
             30,
-            0.00021m);
+            0.00021m,
+            usageEventIdentity: "scan:first:attempt:1");
         await service.RecordUsageAsync(
             firstId,
             first.Provider,
@@ -123,7 +174,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             180,
             80,
             20,
-            0.00009m);
+            0.00009m,
+            usageEventIdentity: "scan:first:attempt:2");
         await service.RecordUsageAsync(
             secondId,
             second.Provider,
@@ -132,7 +184,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             250,
             200,
             50,
-            0.00045m);
+            0.00045m,
+            usageEventIdentity: "scan:second:attempt:1");
 
         var usageAggregationQuery = _context.Db.LlmUsageEvidence
             .AsNoTracking()
@@ -198,7 +251,8 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             42,
             0,
             0,
-            0m);
+            0m,
+            usageEventIdentity: "claude-cli-development-event");
 
         var usage = await _context.Db.LlmUsageEvidence
             .AsNoTracking()
@@ -212,7 +266,10 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             new ActivateAiCredentialRequest(
                 "claude-cli",
                 "sonnet",
-                "not-a-customer-api-key"));
+                "not-a-customer-api-key")
+            {
+                ClientOperationId = "claude-cli-activate-rejected",
+            });
         await activate.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*OpenAI or Anthropic*");
     }
@@ -263,7 +320,9 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
         }
     }
 
-    private WorkspaceLlmCredentialService CreateService()
+    private WorkspaceLlmCredentialService CreateService(
+        IAtomicUnitOfWork? atomic = null,
+        IDataProtectionProvider? dataProtection = null)
     {
         var authorization = new Mock<IWorkspaceAuthorizationEvaluator>();
         authorization
@@ -276,10 +335,11 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
             .ReturnsAsync(true);
         return new WorkspaceLlmCredentialService(
             _context.Db,
-            new TestDataProtectionProvider(),
+            dataProtection ?? new TestDataProtectionProvider(),
             [new SuccessfulProbe("openai"), new SuccessfulProbe("anthropic")],
             authorization.Object,
-            TimeProvider.System);
+            TimeProvider.System,
+            atomic ?? new InlineWorkspaceLlmAtomicUnitOfWork(_context.Db));
     }
 
     private async Task<int> CreatePortfolioAsync(string suffix)
@@ -339,6 +399,147 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
                 true,
                 ProviderKey,
                 modelId));
+    }
+
+    private sealed class InlineWorkspaceLlmAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            object result = command switch
+            {
+                ActivateWorkspaceLlmCredentialCommand activate => await ActivateAsync(activate, ct),
+                RotateWorkspaceLlmCredentialCommand rotate => await RotateAsync(rotate, ct),
+                RemoveWorkspaceLlmCredentialCommand remove => await RemoveAsync(remove, ct),
+                RecordLlmUsageEvidenceCommand usage => await RecordUsageAsync(usage, ct),
+                _ => throw new NotSupportedException(command.GetType().Name),
+            };
+            return new AtomicCommandOutcome<TResult>((TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid());
+        }
+
+        private async Task<AiIntegrationStatusResult> ActivateAsync(
+            ActivateWorkspaceLlmCredentialCommand command,
+            CancellationToken ct)
+        {
+            var row = await db.WorkspaceLlmCredentials
+                .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId, ct);
+            if (row is null)
+            {
+                row = new WorkspaceLlmCredential
+                {
+                    PortfolioId = command.PortfolioId,
+                    CreatedAtUtc = command.TestedAtUtc,
+                };
+                db.WorkspaceLlmCredentials.Add(row);
+            }
+
+            row.Provider = command.Provider;
+            row.ModelId = command.ModelId;
+            row.ApiKeyCipherText = command.ApiKeyCipherText;
+            row.LastTestedAtUtc = command.TestedAtUtc;
+            row.UpdatedAtUtc = command.TestedAtUtc;
+            await db.SaveChangesAsync(ct);
+            return new AiIntegrationStatusResult(true, row.Provider, row.ModelId, row.LastTestedAtUtc, row.UpdatedAtUtc);
+        }
+
+        private async Task<AiIntegrationStatusResult> RotateAsync(
+            RotateWorkspaceLlmCredentialCommand command,
+            CancellationToken ct)
+        {
+            var row = await db.WorkspaceLlmCredentials
+                .SingleAsync(item => item.PortfolioId == command.PortfolioId, ct);
+            row.Provider = command.Provider;
+            row.ModelId = command.ModelId;
+            row.ApiKeyCipherText = command.ApiKeyCipherText;
+            row.LastTestedAtUtc = command.TestedAtUtc;
+            row.UpdatedAtUtc = command.TestedAtUtc;
+            row.RotatedAtUtc = command.TestedAtUtc;
+            await db.SaveChangesAsync(ct);
+            return new AiIntegrationStatusResult(true, row.Provider, row.ModelId, row.LastTestedAtUtc, row.UpdatedAtUtc);
+        }
+
+        private async Task<RemoveWorkspaceLlmCredentialResult> RemoveAsync(
+            RemoveWorkspaceLlmCredentialCommand command,
+            CancellationToken ct)
+        {
+            var row = await db.WorkspaceLlmCredentials
+                .SingleAsync(item => item.PortfolioId == command.PortfolioId, ct);
+            db.WorkspaceLlmCredentials.Remove(row);
+            await db.SaveChangesAsync(ct);
+            return new RemoveWorkspaceLlmCredentialResult(true);
+        }
+
+        private async Task<RecordLlmUsageEvidenceResult> RecordUsageAsync(
+            RecordLlmUsageEvidenceCommand command,
+            CancellationToken ct)
+        {
+            var row = new LlmUsageEvidence
+            {
+                PortfolioId = command.PortfolioId,
+                Provider = command.Provider,
+                ModelId = command.ModelId,
+                Feature = command.Feature,
+                LatencyMilliseconds = command.LatencyMilliseconds,
+                InputUnits = command.InputUnits,
+                OutputUnits = command.OutputUnits,
+                EstimatedCostUsd = command.EstimatedCostUsd,
+                OccurredAtUtc = command.OccurredAtUtc,
+            };
+            db.LlmUsageEvidence.Add(row);
+            await db.SaveChangesAsync(ct);
+            return new RecordLlmUsageEvidenceResult(row.Id);
+        }
+    }
+
+    private sealed class CapturingCredentialAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public List<IAtomicCommandData> Commands { get; } = [];
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            Commands.Add(command);
+            object result = new AiIntegrationStatusResult(
+                true,
+                (command as ActivateWorkspaceLlmCredentialCommand)?.Provider,
+                (command as ActivateWorkspaceLlmCredentialCommand)?.ModelId,
+                DateTime.UtcNow,
+                DateTime.UtcNow);
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        }
+    }
+
+    private sealed class RandomizedTestDataProtectionProvider : IDataProtectionProvider
+    {
+        public IDataProtector CreateProtector(string purpose) =>
+            new RandomizedTestDataProtector(purpose);
+    }
+
+    private sealed class RandomizedTestDataProtector(string purpose) : IDataProtector
+    {
+        public IDataProtector CreateProtector(string nextPurpose) =>
+            new RandomizedTestDataProtector($"{purpose}:{nextPurpose}");
+
+        public byte[] Protect(byte[] plaintext)
+        {
+            var prefix = System.Text.Encoding.UTF8.GetBytes($"{purpose}:{Guid.NewGuid():N}:");
+            return [.. prefix, .. plaintext.Reverse()];
+        }
+
+        public byte[] Unprotect(byte[] protectedData) => throw new NotSupportedException();
     }
 
     private sealed class TestDataProtectionProvider : IDataProtectionProvider

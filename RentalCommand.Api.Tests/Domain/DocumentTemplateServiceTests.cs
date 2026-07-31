@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -19,37 +20,41 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Domain;
 
 [Collection(MigratedPostgreSqlCollection.Name)]
-public sealed class DocumentTemplateServiceTests : IDisposable
+public sealed class DocumentTemplateServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
+    private MigratedPostgreSqlTestContext _ctx = null!;
     private readonly DocumentTemplateFieldCatalog _catalog = new();
     private readonly InMemoryFileStorage _files = new();
-    private readonly DocumentTemplateService _sut;
-    private readonly WorkspaceReadScope _scope;
-    private readonly ServiceProvider _services;
+    private DocumentTemplateService _sut = null!;
+    private WorkspaceReadScope _scope;
+    private ServiceProvider _services = null!;
     private readonly MigratedPostgreSqlFixture _postgres;
 
     public DocumentTemplateServiceTests(MigratedPostgreSqlFixture postgres)
     {
         _postgres = postgres;
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _postgres.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
+        await _ctx.ActivateApiScopeAsync(_scope);
         _services = CreateAtomicServices(builder =>
-            builder.UseSqlite(_ctx.ConnectionString)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance));
+            builder.UseNpgsql(_ctx.Db.Database.GetDbConnection()));
         _sut = new DocumentTemplateService(
             _ctx.Db, _catalog, _files,
             _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
             _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -116,8 +121,8 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             Kind = DocumentTemplateFieldKind.Currency,
             SignerRole = DocumentTemplateSignerRole.None,
             PageNumber = 1,
-            WidthPct = 10,
-            HeightPct = 10,
+            WidthPct = 0.1,
+            HeightPct = 0.1,
         });
         _ctx.Db.SaveChanges();
 
@@ -173,8 +178,11 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         var fieldAudit = await _ctx.Db.AtomicAuditLogs.SingleAsync(audit =>
             audit.EntityType == nameof(DocumentTemplateField) && audit.EntityId == storedField.Id);
         fieldAudit.PortfolioId.Should().Be(PortfolioId);
-        fieldAudit.NewValues.Should().Contain($"\"PortfolioId\":{PortfolioId}")
-            .And.Contain($"\"DocumentTemplateId\":{template.Id}");
+        using var auditValues = JsonDocument.Parse(fieldAudit.NewValues!);
+        auditValues.RootElement.GetProperty(nameof(DocumentTemplateField.PortfolioId))
+            .GetInt32().Should().Be(PortfolioId);
+        auditValues.RootElement.GetProperty(nameof(DocumentTemplateField.DocumentTemplateId))
+            .GetInt32().Should().Be(template.Id);
     }
 
     [Fact]
@@ -210,8 +218,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         await using var postgres = await _postgres.CreateContextAsync();
         var scope = postgres.Db.SeedAdministratorScope(
             PortfolioId, nameof(UploadPdfAsync_StoresSourceFileAndCreatesDraftOverlayLeaseTemplate));
+        await postgres.ActivateApiScopeAsync(scope);
         await using var services = CreateAtomicServices(builder =>
-            builder.UseNpgsql(postgres.ConnectionString));
+            builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
             postgres.Db, _catalog, files,
@@ -256,8 +265,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         await using var postgres = await _postgres.CreateContextAsync();
         var scope = postgres.Db.SeedAdministratorScope(
             PortfolioId, nameof(UploadPdfAsync_FirstEmptyPortfolioUpload_IsIdempotentWithoutDuplicateTemplate));
+        await postgres.ActivateApiScopeAsync(scope);
         await using var services = CreateAtomicServices(builder =>
-            builder.UseNpgsql(postgres.ConnectionString));
+            builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
             postgres.Db, _catalog, files,
@@ -310,8 +320,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             PortfolioId,
             selectedProperty.Id,
             nameof(UploadPdfAsync_SelectedPropertyManagerScopeCreatesPortfolioTemplateWithNullTarget));
+        await postgres.ActivateApiScopeAsync(scope);
         await using var services = CreateAtomicServices(builder =>
-            builder.UseNpgsql(postgres.ConnectionString));
+            builder.UseNpgsql(postgres.Db.Database.GetDbConnection()));
         var files = new InMemoryFileStorage();
         var sut = new DocumentTemplateService(
             postgres.Db, _catalog, files,
@@ -353,8 +364,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             PortfolioId,
             otherProperty.Id,
             "unauthorized-designer-update");
+        await postgres.ActivateApiScopeAsync(scope);
         await using var services = CreateAtomicServices(builder =>
-            builder.UseNpgsql(postgres.ConnectionString)
+            builder.UseNpgsql(postgres.Db.Database.GetDbConnection())
                 .AddInterceptors(new RecordingCommandInterceptor(commands)));
         var sut = new DocumentTemplateService(
             postgres.Db, _catalog, new InMemoryFileStorage(),
@@ -450,7 +462,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             configureDatabase(builder);
             builder.UseAtomicPersistenceKernel(provider);
         });
-        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        services.AddPendingFileUploadStore();
         return services.BuildServiceProvider();
     }
 

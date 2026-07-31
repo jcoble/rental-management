@@ -39,7 +39,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILookupNormalizer, UpperInvariantLookupNormalizer>();
         services.AddScoped<ICurrentActor, TestActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult,
             GrantTenantUserAccessHandler>();
         services.AddAtomicCommandHandler<RevokeTenantUserAccessCommand, LeasePartyMutationResult,
@@ -79,8 +79,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:grant-replay");
 
         var grants = await Task.WhenAll(
-            Atomic.ExecuteAsync(grantIdentity, grant, GrantCodec),
-            Atomic.ExecuteAsync(grantIdentity, grant, GrantCodec));
+            ExecuteAtomicAsync(grantIdentity, grant, GrantCodec),
+            ExecuteAtomicAsync(grantIdentity, grant, GrantCodec));
 
         grants.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -111,7 +111,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .ExecuteDeleteAsync();
         _context.Db.ChangeTracker.Clear();
         var repairGrant = grant with { DeliveryIdempotencyKey = "household-grant-repair-tenant-role" };
-        var repairResult = await Atomic.ExecuteAsync(
+        var repairResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:grant-repair-tenant-role"),
@@ -139,7 +139,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             scenario.AccessContextId,
             scenario.AccessRevision,
             "cross-relationship-revoke-denied");
-        var crossResult = await Atomic.ExecuteAsync(
+        var crossResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.revoke",
                 $"{scenario.PortfolioId}:{scenario.SecondRelationshipId}:{tenantAccessId}:cross-relationship"),
@@ -167,8 +167,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             "leasing.household-access.revoke",
             $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{tenantAccessId}:revoke-replay");
         var revokes = await Task.WhenAll(
-            Atomic.ExecuteAsync(revokeIdentity, revoke, RevokeCodec),
-            Atomic.ExecuteAsync(revokeIdentity, revoke, RevokeCodec));
+            ExecuteAtomicAsync(revokeIdentity, revoke, RevokeCodec),
+            ExecuteAtomicAsync(revokeIdentity, revoke, RevokeCodec));
 
         revokes.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -220,8 +220,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             $"{scenario.PortfolioId}:{scenario.SecondRelationshipId}:{scenario.SecondPartyId}:same-email-second");
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(firstIdentity, firstCommand, GrantCodec),
-            Atomic.ExecuteAsync(secondIdentity, secondCommand, GrantCodec));
+            ExecuteAtomicAsync(firstIdentity, firstCommand, GrantCodec),
+            ExecuteAtomicAsync(secondIdentity, secondCommand, GrantCodec));
 
         outcomes.Select(outcome => outcome.Disposition)
             .Should().OnlyContain(disposition => disposition == AtomicCommandDisposition.Executed);
@@ -312,7 +312,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             scenario.AccessContextId,
             scenario.AccessRevision,
             "tenant-activation-proof");
-        var grantResult = await Atomic.ExecuteAsync(
+        var grantResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:tenant-activation-proof"),
@@ -373,7 +373,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             secondScenario.AccessContextId,
             secondScenario.AccessRevision,
             "tenant-revoke-pending-invitation-revoked");
-        var secondGrantResult = await Atomic.ExecuteAsync(
+        var secondGrantResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondScenario.FirstPartyId}:tenant-revoke-pending-invitation"),
@@ -392,7 +392,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             secondScenario.AccessContextId,
             secondScenario.AccessRevision,
             "tenant-revoke-pending-invitation");
-        var revokeResult = await Atomic.ExecuteAsync(
+        var revokeResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.revoke",
                 $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondAccessId}:tenant-revoke-pending-invitation"),
@@ -420,7 +420,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .Should().Be(1);
 
         var reissueGrant = secondGrant with { DeliveryIdempotencyKey = "tenant-reissue-pending-invitation" };
-        var reissueResult = await Atomic.ExecuteAsync(
+        var reissueResult = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{secondScenario.PortfolioId}:{secondScenario.FirstRelationshipId}:{secondScenario.FirstPartyId}:tenant-reissue-pending-invitation"),
@@ -462,7 +462,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             scenario.AccessContextId,
             scenario.AccessRevision,
             "scheduled-party-grant");
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:scheduled-party-grant"),
@@ -501,7 +501,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             scenario.AccessContextId,
             scenario.AccessRevision,
             "ended-party-grant");
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity(
                 "leasing.household-access.grant",
                 $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:ended-party-grant"),
@@ -515,7 +515,18 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .Should().BeFalse();
     }
 
-    private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> resultCodec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+    }
 
     private Task<DateOnly> BusinessDateAsync(int portfolioId) =>
         _context.Db.Database

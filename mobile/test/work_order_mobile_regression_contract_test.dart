@@ -136,6 +136,37 @@ void main() {
       }
     },
   );
+
+  test('work order detail actions are gated by server detail capabilities', () {
+    final source = _source(
+      'lib/features/maintenance/work_order_detail_screen.dart',
+    );
+
+    expect(source, contains('RoleAwareWorkOrderDetail.fromBase'));
+    expect(source, contains('capabilities.canDispatchVendor'));
+    expect(source, contains('detail.hasActiveDispatch'));
+    expect(source, contains('detail.activeDispatchId'));
+    expect(source, contains('Cancel dispatch'));
+    expect(source, contains('capabilities.canEditManagementFields'));
+    expect(source, contains('capabilities.canUpdateStatus'));
+    expect(source, contains('capabilities.canViewCosts'));
+    expect(source, contains('capabilities.canViewPrivateManagementNotes'));
+    expect(source, contains('capabilities.allowedStatusTransitions'));
+    expect(source, isNot(contains('work.manage')));
+  });
+
+  test('tenant work order detail stays tenant-safe', () {
+    final source = _source(
+      'lib/features/portal/tenant_work_order_detail_screen.dart',
+    );
+
+    expect(source, isNot(contains('estimatedCost')));
+    expect(source, isNot(contains('actualCost')));
+    expect(source, isNot(contains('Text a vendor')));
+    expect(source, isNot(contains('Rate this vendor')));
+    expect(source, isNot(contains('canUploadPhoto: true')));
+    expect(source, isNot(contains('technicianAccessInstructions')));
+  });
 }
 
 String _source(String relativePath) => File(relativePath).readAsStringSync();

@@ -39,7 +39,7 @@ public class TenantService : ITenantService
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _atomic = atomic;
-}
+    }
     public async Task<TenantResponse?> CreateAuthorizedAsync(
         WorkspaceReadScope scope,
         CreateTenantRequest request,
@@ -47,7 +47,8 @@ public class TenantService : ITenantService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
-            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request,
+            createdAtUtc: _timeProvider.UtcNow());
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<TenantResponse>(outcome.Value);
@@ -73,7 +74,8 @@ public class TenantService : ITenantService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
-            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request,
+            changedAtUtc: _timeProvider.UtcNow());
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<TenantResponse>(outcome.Value);
@@ -86,7 +88,8 @@ public class TenantService : ITenantService
         CancellationToken ct = default)
     {
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
-            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object(),
+            changedAtUtc: _timeProvider.UtcNow());
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return outcome.Value.Found;

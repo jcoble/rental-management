@@ -8311,7 +8311,7 @@ namespace RentalCommand.Data.Migrations
             foreach (var statement in LeaseLegalSchemaSql.CreateStatements)
                 migrationBuilder.Sql(statement);
 
-            foreach (var statement in TenantAccountPostgreSqlContract.CreateStatements)
+            foreach (var statement in TenantAccountPostgreSqlContract.InitialCreateStatements)
                 migrationBuilder.Sql(statement);
 
             foreach (var statement in FoundationBaselinePostgreSql.CreateStatements)

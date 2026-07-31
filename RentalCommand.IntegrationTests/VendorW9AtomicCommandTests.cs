@@ -150,7 +150,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now,
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(1),
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(1),
         };
         db.AddRange(assignment, session);
         await db.SaveChangesAsync();
@@ -184,8 +184,8 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         var command = Command(_portfolioId, _vendorId, "stable-concurrent");
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, Codec),
-            Atomic.ExecuteAsync(identity, command, Codec));
+            ExecuteAtomicAsync(identity, command, Codec),
+            ExecuteAtomicAsync(identity, command, Codec));
 
         outcomes.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -221,6 +221,62 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         eligibility.ParameterValues.Should().Contain(
             value => Equals(value, _portfolioId),
             "portfolio scope must be enforced by the translated query");
+        typeof(RequestVendorW9Handler).Should()
+            .Implement<IAtomicCommandHandler<RequestVendorW9Command, RequestVendorW9Result>>();
+    }
+
+    [SkippableFact]
+    public async Task Replay_ReauthorizesAndDeniesRevokedSessionBeforeReturningReceipt()
+    {
+        SkipIfNoDocker();
+        var identity = Identity("revoked-replay");
+        var command = Command(_portfolioId, _vendorId, "revoked-replay");
+        await ExecuteAtomicAsync(identity, command, Codec);
+
+        await using (var mutate = NewContext())
+        {
+            var session = await mutate.AuthSessions.SingleAsync(row => row.Id == _authSessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = _now.AddMinutes(1);
+            session.RevocationReason = "vendor-w9 replay authorization proof";
+            await mutate.SaveChangesAsync();
+        }
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
+            .Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*vendor W-9 request*");
+
+        await using var verify = NewContext();
+        (await verify.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(1);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Replay_ReauthorizesAndDeniesNaturallyExpiredSessionBeforeReturningReceipt()
+    {
+        SkipIfNoDocker();
+        var identity = Identity("expired-replay");
+        var command = Command(_portfolioId, _vendorId, "expired-replay");
+        await ExecuteAtomicAsync(identity, command, Codec);
+
+        await using (var mutate = NewContext())
+        {
+            var session = await mutate.AuthSessions.SingleAsync(row => row.Id == _authSessionId);
+            session.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-1);
+            await mutate.SaveChangesAsync();
+        }
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
+            .Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*vendor W-9 request*");
+
+        await using var verify = NewContext();
+        (await verify.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(1);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -228,8 +284,8 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
 
-        await Atomic.ExecuteAsync(Identity("first"), Command(_portfolioId, _vendorId, "first"), Codec);
-        await Atomic.ExecuteAsync(Identity("second"), Command(_portfolioId, _vendorId, "second"), Codec);
+        await ExecuteAtomicAsync(Identity("first"), Command(_portfolioId, _vendorId, "first"), Codec);
+        await ExecuteAtomicAsync(Identity("second"), Command(_portfolioId, _vendorId, "second"), Codec);
 
         await using var db = NewContext();
         (await db.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(2);
@@ -250,15 +306,15 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             noPhoneVendorId = vendor.Id;
         }
 
-        var noPhone = await Atomic.ExecuteAsync(
+        var noPhone = await ExecuteAtomicAsync(
             Identity("no-phone", noPhoneVendorId),
             Command(_portfolioId, noPhoneVendorId, "no-phone"),
             Codec);
-        var missing = await Atomic.ExecuteAsync(
+        var missing = await ExecuteAtomicAsync(
             Identity("missing", 999999),
             Command(_portfolioId, 999999, "missing"),
             Codec);
-        var crossScope = await Atomic.ExecuteAsync(
+        var crossScope = await ExecuteAtomicAsync(
             Identity("cross-scope", _vendorId, _otherPortfolioId),
             Command(_otherPortfolioId, _vendorId, "cross-scope"),
             Codec);
@@ -282,7 +338,7 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
         var command = Command(_portfolioId, _vendorId, "audit-rollback");
         Failure.FailAtomicAudit = true;
 
-        var act = () => Atomic.ExecuteAsync(identity, command, Codec);
+        var act = () => ExecuteAtomicAsync(identity, command, Codec);
         var failure = await act.Should().ThrowAsync<DbUpdateException>();
         failure.Which.InnerException.Should().BeOfType<InjectedAuditFailure>();
         Failure.FailAtomicAudit = false;
@@ -298,12 +354,24 @@ public sealed class VendorW9AtomicCommandTests : IAsyncLifetime
             (await failed.OutboxMessages.CountAsync(row => row.PortfolioId == _portfolioId)).Should().Be(0);
         }
 
-        var recovered = await Atomic.ExecuteAsync(identity, command, Codec);
+        var recovered = await ExecuteAtomicAsync(identity, command, Codec);
         recovered.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         recovered.Value.Outcome.Should().Be(RequestVendorW9Outcome.Queued);
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> resultCodec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+    }
+
     private CommandProbe Probe => _services!.GetRequiredService<CommandProbe>();
     private AuditFailureInterceptor Failure => _services!.GetRequiredService<AuditFailureInterceptor>();
 

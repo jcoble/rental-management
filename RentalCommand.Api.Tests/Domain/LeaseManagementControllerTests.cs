@@ -32,10 +32,10 @@ public sealed class LeaseManagementControllerTests
                 CancelPlannedRelationshipCommand, CancelPlannedRelationshipResult>(
                 It.IsAny<AtomicCommandIdentity>(),
                 It.IsAny<CancelPlannedRelationshipCommand>(),
-                It.IsAny<IAtomicResultCodec<CancelPlannedRelationshipResult>>(),
+                It.IsAny<AtomicJsonResultCodec<CancelPlannedRelationshipResult>>(),
                 It.IsAny<CancellationToken>()))
             .Callback<AtomicCommandIdentity, CancelPlannedRelationshipCommand,
-                IAtomicResultCodec<CancelPlannedRelationshipResult>, CancellationToken>(
+                AtomicJsonResultCodec<CancelPlannedRelationshipResult>, CancellationToken>(
                 (_, command, _, _) => capturedCommand = command)
             .ReturnsAsync(new AtomicCommandOutcome<CancelPlannedRelationshipResult>(
                 new CancelPlannedRelationshipResult(
@@ -116,10 +116,10 @@ public sealed class LeaseManagementControllerTests
                 TransferLeaseManagementCommand, TransferLeaseManagementResult>(
                 It.IsAny<AtomicCommandIdentity>(),
                 It.IsAny<TransferLeaseManagementCommand>(),
-                It.IsAny<IAtomicResultCodec<TransferLeaseManagementResult>>(),
+                It.IsAny<AtomicJsonResultCodec<TransferLeaseManagementResult>>(),
                 It.IsAny<CancellationToken>()))
             .Callback<AtomicCommandIdentity, TransferLeaseManagementCommand,
-                IAtomicResultCodec<TransferLeaseManagementResult>, CancellationToken>(
+                AtomicJsonResultCodec<TransferLeaseManagementResult>, CancellationToken>(
                 (identity, command, _, _) =>
                 {
                     capturedIdentity = identity;
@@ -216,10 +216,10 @@ public sealed class LeaseManagementControllerTests
                 CloseTenantAccountCommand, CloseTenantAccountResult>(
                 It.IsAny<AtomicCommandIdentity>(),
                 It.IsAny<CloseTenantAccountCommand>(),
-                It.IsAny<IAtomicResultCodec<CloseTenantAccountResult>>(),
+                It.IsAny<AtomicJsonResultCodec<CloseTenantAccountResult>>(),
                 It.IsAny<CancellationToken>()))
             .Callback<AtomicCommandIdentity, CloseTenantAccountCommand,
-                IAtomicResultCodec<CloseTenantAccountResult>, CancellationToken>(
+                AtomicJsonResultCodec<CloseTenantAccountResult>, CancellationToken>(
                 (_, command, _, _) => capturedCommand = command)
             .ReturnsAsync(() => outcomes.Dequeue());
         var controller = CreateCloseController(atomic.Object);
@@ -261,7 +261,7 @@ public sealed class LeaseManagementControllerTests
             CloseTenantAccountCommand, CloseTenantAccountResult>(
             It.IsAny<AtomicCommandIdentity>(),
             It.IsAny<CloseTenantAccountCommand>(),
-            It.IsAny<IAtomicResultCodec<CloseTenantAccountResult>>(),
+            It.IsAny<AtomicJsonResultCodec<CloseTenantAccountResult>>(),
             It.IsAny<CancellationToken>()), Times.Exactly(5));
     }
 
@@ -278,7 +278,8 @@ public sealed class LeaseManagementControllerTests
             atomic,
             Mock.Of<ILeaseManagementQueryService>(),
             Mock.Of<ILeaseQaService>(),
-            new ConfigurationBuilder().Build()));
+            new ConfigurationBuilder().Build(),
+            TimeProvider.System));
 
     private static TenantAccountLifecycleController CreateCloseController(
         IAtomicUnitOfWork atomic) =>

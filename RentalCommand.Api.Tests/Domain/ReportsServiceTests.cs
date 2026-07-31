@@ -428,6 +428,11 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Should().Contain("report_scopes AS MATERIALIZED");
         sql.Should().Contain("balance_scopes AS MATERIALIZED");
         sql.Should().Contain("authorized_properties AS MATERIALIZED");
+        sql.Should().Contain("reversal_totals AS MATERIALIZED");
+        sql.Should().Contain("effective_entries AS MATERIALIZED");
+        sql.Should().Contain("GREATEST(");
+        sql.Should().Contain("entry.\"EntryType\" <> 'Reversal'");
+        sql.Should().Contain("entry.\"NetAmount\" > 0::numeric");
         sql.Should().Contain("reports.read");
         sql.Should().Contain("money.balances.read");
         sql.Should().Contain("PARTITION BY management.\"Id\"");
@@ -440,6 +445,94 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Should().Contain("entry.\"PortfolioId\" = @portfolioId");
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("\"Payments\"");
+    }
+
+    [Fact]
+    public async Task RentLedger_NetsEffectiveReversalsInSinglePostgreSqlStatement()
+    {
+        var property = SeedProperty("Valley Duplex");
+        var unit = SeedUnit("B", property.Id);
+        var lease = SeedLease(
+            property,
+            unit,
+            SeedTenant("Yara", "Brooks"),
+            rent: 1300m,
+            start: D(2026, 1, 1),
+            end: D(2027, 12, 31));
+        var account = lease.LeaseManagement!.TenantAccount!;
+        account.RentTrackingStartOn = new DateOnly(2027, 1, 3);
+        _db.SaveChanges();
+
+        var preTrackingHistoricalRent = SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.RentCharge,
+            TenantLedgerDirection.Debit,
+            1150m,
+            new DateOnly(2026, 12, 1),
+            "ys234-pretracking-historical-rent");
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.RentCharge,
+            TenantLedgerDirection.Debit,
+            900m,
+            new DateOnly(2027, 1, 1),
+            "ys234-pretracking-in-range-rent");
+        var currentRent = SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.RentCharge,
+            TenantLedgerDirection.Debit,
+            1300m,
+            new DateOnly(2027, 1, 5),
+            "ys234-current-rent");
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.Reversal,
+            TenantLedgerDirection.Credit,
+            1150m,
+            new DateOnly(2027, 1, 3),
+            "ys234-d025-backfill-reversal",
+            reversesEntryId: preTrackingHistoricalRent.Id);
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.Reversal,
+            TenantLedgerDirection.Credit,
+            1300m,
+            new DateOnly(2027, 1, 6),
+            "ys234-current-rent-reversal",
+            reversesEntryId: currentRent.Id);
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentLedgerAsync(
+            new LeaseManagementReadContext(
+                _scope.PortfolioId,
+                _scope.UserId,
+                _scope.SessionId,
+                _scope.AccessContextId,
+                _scope.AccessRevision),
+            new ReportRangeQuery
+            {
+                From = D(2027, 1, 1),
+                To = D(2027, 1, 31),
+            },
+            CancellationToken.None);
+
+        var ledger = report.Leases.Should().ContainSingle().Subject;
+        ledger.TotalCharged.Should().Be(900m);
+        ledger.TotalCredits.Should().Be(0m);
+        ledger.Balance.Should().Be(900m);
+        ledger.Entries.Select(entry => entry.Description)
+            .Should().Equal("RentCharge");
+        ledger.Entries.Select(entry => entry.Charge)
+            .Should().Equal(900m);
+        report.TotalCharged.Should().Be(900m);
+        report.TotalCredits.Should().Be(0m);
+        report.TotalBalance.Should().Be(900m);
+
+        _executedSql.Should().ContainSingle(sql =>
+            sql.Contains("effective_entries AS MATERIALIZED", StringComparison.Ordinal) &&
+            sql.Contains("GREATEST(", StringComparison.Ordinal) &&
+            sql.Contains("ReversesEntryId", StringComparison.Ordinal) &&
+            sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -540,6 +633,10 @@ public class ReportsServiceTests : IAsyncLifetime
         // A late fee IS income.
         SeedPayment(lease, 50m, dueDate: D(2026, 1, 15), paidInFull: true, paidDate: D(2026, 1, 15),
             entryType: TenantLedgerEntryType.LateFeeCharge);
+        // A collected correction charge is income even when its canonical ledger type is ManualCharge.
+        SeedPayment(lease, 50m, dueDate: D(2026, 1, 16), paidInFull: true, paidDate: D(2026, 1, 16),
+            entryType: TenantLedgerEntryType.ManualCharge);
+        _executedSql.Clear();
 
         var report = await _sut.GetCashFlowAsync(_scope, new ReportRangeQuery
         {
@@ -547,8 +644,17 @@ public class ReportsServiceTests : IAsyncLifetime
             To = D(2026, 1, 31),
         }, CancellationToken.None);
 
-        // 1000 rent + 300 partial-collected + 50 late fee = 1350; the 1500 deposit is excluded.
-        report.TotalIncome.Should().Be(1350m);
+        // 1000 rent + 300 partial + 50 late fee + 50 correction = 1400; deposit is excluded.
+        report.TotalIncome.Should().Be(1400m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("\"TenantLedgerAllocations\"",
+            "collected income must be derived from persisted allocation rows in PostgreSQL");
+        sql.Should().Contain("DepositCharge");
+        sql.Should().Contain("<>",
+            "the translated income query must exclude deposits instead of enumerating revenue types");
+        sql.Should().ContainEquivalentOf("SUM",
+            "cash-flow income totals must be aggregated in PostgreSQL");
     }
 
     [Fact]
@@ -719,11 +825,12 @@ public class ReportsServiceTests : IAsyncLifetime
         var property = SeedProperty("Maple");
         var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
 
-        // Income: 1000 rent (paid) + 200 partial-collected + 50 late fee = 1250. Deposit excluded.
+        // Income: 1000 rent + 200 partial + 50 late fee + 50 correction = 1300. Deposit excluded.
         SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 2));
         SeedPayment(lease, 1000m, dueDate: D(2026, 3, 10), paidInFull: false,
             paidDate: D(2026, 3, 10), amountPaid: 200m);
         SeedPayment(lease, 50m, dueDate: D(2026, 3, 12), paidInFull: true, paidDate: D(2026, 3, 12), entryType: TenantLedgerEntryType.LateFeeCharge);
+        SeedPayment(lease, 50m, dueDate: D(2026, 3, 13), paidInFull: true, paidDate: D(2026, 3, 13), entryType: TenantLedgerEntryType.ManualCharge);
         SeedPayment(lease, 1500m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 1), entryType: TenantLedgerEntryType.DepositCharge);
         _db.SaveChanges();
 
@@ -745,16 +852,18 @@ public class ReportsServiceTests : IAsyncLifetime
 
         report.Properties.Should().HaveCount(1);
         var p = report.Properties[0];
-        p.Income.Should().Be(1250m);                 // rent + partial-collected + late fee, no deposit
+        p.Income.Should().Be(1300m);                 // collected non-deposit charges
         p.OperatingExpenses.Should().Be(300m);       // taxes excluded (escrow-funded) → only repairs
-        p.Noi.Should().Be(950m);                     // 1250 − 300
+        p.Noi.Should().Be(1000m);                    // 1300 − 300
         p.DebtService.Should().Be(1040m);            // full P&I + escrow
-        p.CashFlow.Should().Be(-90m);                // 950 − 1040
+        p.CashFlow.Should().Be(-40m);                // 1000 − 1040
 
-        report.TotalCashFlow.Should().Be(-90m);
+        report.TotalCashFlow.Should().Be(-40m);
 
         var sql = string.Join("\n---\n", _executedSql);
         sql.Should().Contain("EXISTS", "escrow-funded operating-expense exclusion must run in SQL");
+        sql.Should().Contain("LoanPaymentCorrections",
+            "debt service must select the latest correction in the report SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("true-cash-flow row values and totals must be summed in SQL");
     }
@@ -1241,6 +1350,91 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Should().NotContain("strftime", "the tax-year filter should be a date range, not a client/year extraction filter");
     }
 
+    [Fact]
+    public async Task OwnerDistributions_IncludesPropertylessApprovedPayoutsWhenOwnerScopeIsFullyAuthorized()
+    {
+        var owner = SeedOwner("January Distribution LLC");
+        var property = SeedProperty("Maple");
+        property.ManagementFeePercent = 10m;
+        SeedOwnership(owner, property, D(2026, 1, 1));
+
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 2_000m);
+        SeedPayment(lease, 2_000m, dueDate: D(2027, 1, 1), paidInFull: true, paidDate: D(2027, 1, 5));
+        SeedExpense(property.Id, 200m, D(2027, 1, 10));
+        SeedOwnerDistribution(owner.Id, 1_250m, D(2027, 1, 25));
+        SeedOwnerDistribution(owner.Id, 100m, D(2027, 1, 25), status: OwnerDistributionStatus.Rejected);
+        SeedOwnerDistribution(owner.Id, 900m, D(2026, 12, 25));
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.OwnerName.Should().Be(owner.Name);
+        row.NetToOwner.Should().Be(1_600m);
+        row.TotalDistributed.Should().Be(1_250m,
+            "approved portfolio-level owner distributions are real payouts when every owned property is authorized");
+        row.Undistributed.Should().Be(350m);
+        report.TotalNetToOwners.Should().Be(1_600m);
+        report.TotalDistributed.Should().Be(1_250m);
+        report.TotalUndistributed.Should().Be(350m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("\"OwnerDistributions\"", "recorded owner payouts must be summed from the distribution table");
+        sql.Should().ContainEquivalentOf("SUM", "owner net and distributed totals must be aggregated in SQL");
+        sql.Should().Contain("ELSE EXISTS",
+            "portfolio-level owner distributions must be included by the translated SQL predicate");
+        sql.Should().Contain("NOT EXISTS",
+            "propertyless payouts must remain blocked unless the owner's active ownership scope is fully authorized");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_PropertylessPayoutUsesCurrentOwnerScopeNotFutureYearOwnerships()
+    {
+        var owner = SeedOwner("Riverbend Homes LLC");
+        var currentProperty = SeedProperty("Dover House");
+        var futureProperty = SeedProperty("Ivy House");
+        var deletedProperty = SeedProperty("Retired Dogwood");
+        currentProperty.ManagementFeePercent = 10m;
+        deletedProperty.DeletedAt = D(2026, 7, 27);
+        SeedOwnership(owner, currentProperty, D(2026, 1, 1));
+        SeedOwnership(owner, futureProperty, D(2027, 3, 1));
+        SeedOwnership(owner, deletedProperty, D(2025, 6, 15));
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            currentProperty.Id,
+            nameof(OwnerDistributions_PropertylessPayoutUsesCurrentOwnerScopeNotFutureYearOwnerships));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        var sut = new ReportsService(
+            _db,
+            new OwnerStatementService(_db, TimeProvider.System),
+            new ScheduleEService(_db),
+            new PropertyDispositionService(_db, TimeProvider.System),
+            new FixedTimeProvider(new DateTimeOffset(D(2027, 1, 31))));
+
+        var lease = SeedLease(currentProperty, SeedUnit("1", currentProperty.Id), SeedTenant("Ann", "Acre"), rent: 5_000m);
+        SeedPayment(lease, 5_000m, dueDate: D(2027, 1, 1), paidInFull: true, paidDate: D(2027, 1, 5));
+        SeedOwnerDistribution(owner.Id, 4_100m, D(2027, 1, 25));
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await sut.GetOwnerDistributionsAsync(selectedScope, 2027, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.OwnerName.Should().Be(owner.Name);
+        row.TotalDistributed.Should().Be(4_100m,
+            "future ownerships and deleted properties are not part of the owner's current active property scope at the frozen report date");
+        report.TotalDistributed.Should().Be(4_100m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        _executedSql.Should().ContainSingle(
+            command => command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase),
+            "owner distribution rows and totals must be produced by one SQL statement");
+        sql.Should().Contain("\"OwnerDistributions\"");
+        sql.Should().Contain("NOT EXISTS",
+            "propertyless payouts must still require authorization for every active owner property");
+    }
+
     // ── Lease expirations (DB) ─────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -1331,6 +1525,11 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
         sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
 
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
     private Property SeedProperty(string name)
     {
         var now = DateTime.UtcNow;
@@ -1348,6 +1547,68 @@ public class ReportsServiceTests : IAsyncLifetime
         _db.Properties.Add(property);
         _db.SaveChanges();
         return property;
+    }
+
+    private OwnerEntity SeedOwner(string name)
+    {
+        var now = DateTime.UtcNow;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityType = OwnerEntityType.LLC,
+            Name = name,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.OwnerEntities.Add(owner);
+        _db.SaveChanges();
+        return owner;
+    }
+
+    private PropertyOwnership SeedOwnership(OwnerEntity owner, Property property, DateTime effectiveFrom)
+    {
+        var ownership = new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = owner.Id,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = effectiveFrom,
+            StatementRecipientName = owner.Name,
+            PayeeName = owner.Name,
+        };
+        _db.PropertyOwnerships.Add(ownership);
+        _db.SaveChanges();
+        return ownership;
+    }
+
+    private OwnerDistribution SeedOwnerDistribution(
+        int ownerId,
+        decimal amount,
+        DateTime date,
+        OwnerDistributionStatus status = OwnerDistributionStatus.Approved,
+        int? propertyId = null)
+    {
+        var now = DateTime.UtcNow;
+        var distribution = new OwnerDistribution
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityId = ownerId,
+            PropertyId = propertyId,
+            Date = date,
+            Amount = amount,
+            Method = DistributionMethod.Ach,
+            Status = status,
+            ApprovedAt = status == OwnerDistributionStatus.Approved ? now : null,
+            ApprovedBusinessDate = status == OwnerDistributionStatus.Approved ? date.Date : null,
+            BankReference = status == OwnerDistributionStatus.Approved ? $"DIST-{Guid.NewGuid():N}"[..16] : null,
+            ExportReference = status == OwnerDistributionStatus.Approved ? $"DIST-{Guid.NewGuid():N}"[..16] : null,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.OwnerDistributions.Add(distribution);
+        _db.SaveChanges();
+        return distribution;
     }
 
     private Unit SeedUnit(string number, int? propertyId = null)
@@ -1539,6 +1800,38 @@ public class ReportsServiceTests : IAsyncLifetime
         });
         _db.SaveChanges();
         return receipt;
+    }
+
+    private TenantLedgerEntry SeedLedgerEntry(
+        LeaseAgreement lease,
+        TenantLedgerEntryType entryType,
+        TenantLedgerDirection direction,
+        decimal amount,
+        DateOnly effectiveOn,
+        string key,
+        long? reversesEntryId = null)
+    {
+        var now = DateTime.UtcNow;
+        var entry = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = lease.LeaseManagement!.TenantAccount!.Id,
+            EntryType = entryType,
+            Direction = direction,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            DueOn = direction == TenantLedgerDirection.Debit ? effectiveOn : null,
+            PostedAtUtc = now,
+            Description = key,
+            BusinessKey = $"ledger:{key}:{Guid.NewGuid():N}",
+            LeaseAgreementId = lease.Id,
+            ReversesEntryId = reversesEntryId,
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(entry);
+        _db.SaveChanges();
+        return entry;
     }
 
     private Expense SeedExpense(int? propertyId, decimal amount, DateTime paidAt,

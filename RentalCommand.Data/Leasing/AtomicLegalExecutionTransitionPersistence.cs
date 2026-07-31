@@ -10,9 +10,11 @@ using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed partial class AtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
-    public async Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
+    public static async Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int? leaseAgreementId,
@@ -28,7 +30,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
 
         // Both the overlap exclusion and reciprocal-lineage validators must inspect the final
         // transaction state. This removes any dependency on EF/PostgreSQL statement ordering.
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "SET CONSTRAINTS \"EX_LeaseAgreements_GoverningPeriod\", " +
             "\"TR_LeaseAgreements_ValidateReciprocalLineage\", " +
             "\"TR_LeaseAddenda_ValidateReciprocalLineage\" DEFERRED",
@@ -51,11 +53,11 @@ internal sealed partial class AtomicLeaseMutationPersistence
         };
 
         LegalExecutionTransitionRow row;
-        using (var lease = _auditScope.BeginInternalRawDmlBatch(
+        using (var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAgreements", AtomicRawDmlOperation.Update),
             new("LeaseAddenda", AtomicRawDmlOperation.Update)))
         {
-            row = await _db.Database.SingleTopLevelResultAsync<LegalExecutionTransitionRow>(
+            row = await db.Database.SingleTopLevelResultAsync<LegalExecutionTransitionRow>(
                 ExecuteLegalArtifactTransitionSql, parameters, ct);
         }
 
@@ -63,7 +65,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
             && leaseAgreementId.HasValue)
         {
             await ReconcileInitialSecurityDepositChargeAsync(
-                portfolioId, leaseAgreementId.Value, executedAtUtc, ct);
+                db, context, portfolioId, leaseAgreementId.Value, executedAtUtc, ct);
         }
 
         return new(
@@ -73,7 +75,9 @@ internal sealed partial class AtomicLeaseMutationPersistence
             DeserializeIds(row.ReissuedAddendumIdsJson));
     }
 
-    public async Task<int> ReconcileInitialSecurityDepositChargeAsync(
+    public static async Task<int> ReconcileInitialSecurityDepositChargeAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseAgreementId,
         DateTime postedAtUtc,
@@ -85,22 +89,24 @@ internal sealed partial class AtomicLeaseMutationPersistence
             throw new ArgumentException("Posted time must be UTC.", nameof(postedAtUtc));
 
         var charges = await ReconcileInitialSecurityDepositChargesForAgreementAsync(
-            portfolioId, leaseAgreementId, postedAtUtc, ct);
-        StageInitialSecurityDepositChargeAudits(charges);
+            db, context, portfolioId, leaseAgreementId, postedAtUtc, ct);
+        StageInitialSecurityDepositChargeAudits(db, context, charges);
         return charges.Count;
     }
 
-    public async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
+    public static async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
         ReconcileCompletedNativeEsignInitialSecurityDepositChargesAsync(
+            RentalCommandDbContext db,
+            IAtomicCommandContext context,
             int batchSize,
             CancellationToken ct = default)
     {
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
             new("OutboxMessages", AtomicRawDmlOperation.Insert));
-        var charges = await _db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
+        var charges = await db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
             WITH candidate AS MATERIALIZED (
                 SELECT agreement."PortfolioId",
                        account."Id" AS tenant_account_id,
@@ -197,21 +203,23 @@ internal sealed partial class AtomicLeaseMutationPersistence
             FROM inserted
             ORDER BY inserted."Id"
             """).ToListAsync(ct);
-        StageInitialSecurityDepositChargeAudits(charges);
+        StageInitialSecurityDepositChargeAudits(db, context, charges);
         return charges;
     }
 
-    private async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
+    private static async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
         ReconcileInitialSecurityDepositChargesForAgreementAsync(
+            RentalCommandDbContext db,
+            IAtomicCommandContext context,
             int portfolioId,
             int leaseAgreementId,
             DateTime postedAtUtc,
             CancellationToken ct)
     {
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
             new("OutboxMessages", AtomicRawDmlOperation.Insert));
-        return await _db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
+        return await db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
             WITH candidate AS MATERIALIZED (
                 SELECT agreement."PortfolioId",
                        account."Id" AS tenant_account_id,
@@ -295,12 +303,14 @@ internal sealed partial class AtomicLeaseMutationPersistence
             """).ToListAsync(ct);
     }
 
-    private void StageInitialSecurityDepositChargeAudits(
+    private static void StageInitialSecurityDepositChargeAudits(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         IReadOnlyList<AtomicInitialSecurityDepositCharge> charges)
     {
         foreach (var charge in charges)
         {
-            _auditScope.StageSemanticEvent(new AtomicSemanticAudit(
+            RequireAuditScope(db, context).StageSemanticEvent(new AtomicSemanticAudit(
                 charge.PortfolioId,
                 nameof(TenantAccount),
                 charge.TenantAccountId,

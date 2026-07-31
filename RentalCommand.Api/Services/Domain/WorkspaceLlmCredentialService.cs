@@ -1,7 +1,10 @@
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.AiIntegrations;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -27,7 +30,10 @@ public interface IWorkspaceLlmCredentialService :
         ActiveAccessContext access,
         RotateAiCredentialRequest request,
         CancellationToken ct = default);
-    Task RemoveAsync(ActiveAccessContext access, CancellationToken ct = default);
+    Task RemoveAsync(
+        ActiveAccessContext access,
+        string? clientOperationId = null,
+        CancellationToken ct = default);
 }
 
 public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialService
@@ -41,19 +47,28 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     private readonly IReadOnlyDictionary<string, ILlmCredentialProbe> _probes;
     private readonly IWorkspaceAuthorizationEvaluator _authorization;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
+    private static readonly AtomicJsonResultCodec<AiIntegrationStatusResult> StatusCodec =
+        new("ai.integration.status.v1");
+    private static readonly AtomicJsonResultCodec<RemoveWorkspaceLlmCredentialResult> RemoveCodec =
+        new("ai.integration.remove.v1");
+    private static readonly AtomicJsonResultCodec<RecordLlmUsageEvidenceResult> UsageCodec =
+        new("ai.integration.usage.v1");
 
     public WorkspaceLlmCredentialService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         IEnumerable<ILlmCredentialProbe> probes,
         IWorkspaceAuthorizationEvaluator authorization,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _protector = dataProtection.CreateProtector(ProtectorPurpose);
         _probes = probes.ToDictionary(probe => probe.ProviderKey, StringComparer.OrdinalIgnoreCase);
         _authorization = authorization;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public Task<bool> AuthorizeAsync(ActiveAccessContext access, CancellationToken ct = default) =>
@@ -106,25 +121,22 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         await DemandValidCredentialAsync(normalized, ct);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var existing = await _db.WorkspaceLlmCredentials
-            .SingleOrDefaultAsync(row => row.PortfolioId == access.PortfolioId, ct);
-        if (existing is null)
-        {
-            existing = new WorkspaceLlmCredential
-            {
-                PortfolioId = access.PortfolioId,
-                CreatedAtUtc = now,
-            };
-            _db.WorkspaceLlmCredentials.Add(existing);
-        }
-
-        existing.Provider = normalized.Provider;
-        existing.ModelId = normalized.ModelId;
-        existing.ApiKeyCipherText = Encrypt(normalized.ApiKey);
-        existing.LastTestedAtUtc = now;
-        existing.UpdatedAtUtc = now;
-        await _db.SaveChangesAsync(ct);
-        return MapStatus(existing);
+        var command = new ActivateWorkspaceLlmCredentialCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            normalized.Provider,
+            normalized.ModelId,
+            ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
+            Encrypt(normalized.ApiKey),
+            now);
+        var identity = new AtomicCommandIdentity(
+            "ai.integration.credential.activate",
+            MutationIdentity(access.PortfolioId, request.ClientOperationId));
+        var outcome = await _atomic.ExecuteAsync(identity, command, StatusCodec, ct);
+        return MapStatus(outcome.Value);
     }
 
     public async Task<AiIntegrationStatusDto> RotateAsync(
@@ -136,33 +148,42 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         var normalized = NormalizeAndValidate(request.Provider, request.ModelId, request.ApiKey);
         await DemandValidCredentialAsync(normalized, ct);
 
-        var row = await _db.WorkspaceLlmCredentials
-            .SingleOrDefaultAsync(item => item.PortfolioId == access.PortfolioId, ct)
-            ?? throw new InvalidOperationException(
-                "No AI provider is configured. Activate a credential before rotating it.");
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        row.Provider = normalized.Provider;
-        row.ModelId = normalized.ModelId;
-        row.ApiKeyCipherText = Encrypt(normalized.ApiKey);
-        row.LastTestedAtUtc = now;
-        row.UpdatedAtUtc = now;
-        row.RotatedAtUtc = now;
-        await _db.SaveChangesAsync(ct);
-        return MapStatus(row);
+        var command = new RotateWorkspaceLlmCredentialCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            normalized.Provider,
+            normalized.ModelId,
+            ApiKeyIntentDigest(normalized.Provider, normalized.ModelId, normalized.ApiKey),
+            Encrypt(normalized.ApiKey),
+            now);
+        var identity = new AtomicCommandIdentity(
+            "ai.integration.credential.rotate",
+            MutationIdentity(access.PortfolioId, request.ClientOperationId));
+        var outcome = await _atomic.ExecuteAsync(identity, command, StatusCodec, ct);
+        return MapStatus(outcome.Value);
     }
 
-    public async Task RemoveAsync(ActiveAccessContext access, CancellationToken ct = default)
+    public async Task RemoveAsync(
+        ActiveAccessContext access,
+        string? clientOperationId = null,
+        CancellationToken ct = default)
     {
         await DemandAuthorityAsync(access, ct);
-        var row = await _db.WorkspaceLlmCredentials
-            .SingleOrDefaultAsync(item => item.PortfolioId == access.PortfolioId, ct);
-        if (row is null)
-        {
-            throw new InvalidOperationException("No AI provider credential is configured.");
-        }
-
-        _db.WorkspaceLlmCredentials.Remove(row);
-        await _db.SaveChangesAsync(ct);
+        var command = new RemoveWorkspaceLlmCredentialCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            _timeProvider.GetUtcNow().UtcDateTime);
+        var identity = new AtomicCommandIdentity(
+            "ai.integration.credential.remove",
+            MutationIdentity(access.PortfolioId, clientOperationId));
+        await _atomic.ExecuteAsync(identity, command, RemoveCodec, ct);
     }
 
     public async Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
@@ -208,21 +229,41 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         int inputUnits,
         int outputUnits,
         decimal estimatedCostUsd,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? usageEventIdentity = null)
     {
-        _db.LlmUsageEvidence.Add(new LlmUsageEvidence
+        var stableIdentity = Required(
+            usageEventIdentity ?? throw new ArgumentException(
+                "A stable LLM usage event identity is required.",
+                nameof(usageEventIdentity)),
+            nameof(usageEventIdentity),
+            200);
+        if (latencyMilliseconds < 0 ||
+            inputUnits < 0 ||
+            outputUnits < 0 ||
+            estimatedCostUsd < 0m)
         {
-            PortfolioId = portfolioId,
-            Provider = NormalizeUsageProvider(provider),
-            ModelId = Required(modelId, nameof(modelId), 128),
-            Feature = Required(feature, nameof(feature), 80),
-            LatencyMilliseconds = Math.Max(0, latencyMilliseconds),
-            InputUnits = Math.Max(0, inputUnits),
-            OutputUnits = Math.Max(0, outputUnits),
-            EstimatedCostUsd = Math.Max(0, estimatedCostUsd),
-            OccurredAtUtc = _timeProvider.GetUtcNow().UtcDateTime,
-        });
-        await _db.SaveChangesAsync(ct);
+            throw new ArgumentOutOfRangeException(
+                nameof(latencyMilliseconds),
+                "LLM usage amounts must be greater than or equal to zero.");
+        }
+
+        var command = new RecordLlmUsageEvidenceCommand(
+            portfolioId,
+            stableIdentity,
+            NormalizeUsageProvider(provider),
+            Required(modelId, nameof(modelId), 128),
+            Required(feature, nameof(feature), 80),
+            latencyMilliseconds,
+            inputUnits,
+            outputUnits,
+            estimatedCostUsd,
+            _timeProvider.GetUtcNow().UtcDateTime);
+        await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("ai.integration.usage.record", $"{portfolioId}:{stableIdentity}"),
+            command,
+            UsageCodec,
+            ct);
     }
 
     public string Encrypt(string apiKey) => _protector.Protect(apiKey);
@@ -303,8 +344,17 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         return normalized;
     }
 
-    private static AiIntegrationStatusDto MapStatus(WorkspaceLlmCredential row) =>
-        new(true, row.Provider, row.ModelId, row.LastTestedAtUtc, row.UpdatedAtUtc);
+    private static string MutationIdentity(int portfolioId, string? clientOperationId) =>
+        $"{portfolioId}:{Required(clientOperationId, nameof(clientOperationId), 160)}";
+
+    private static string ApiKeyIntentDigest(string provider, string modelId, string apiKey)
+    {
+        var material = $"{provider}\n{modelId}\n{apiKey}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    private static AiIntegrationStatusDto MapStatus(AiIntegrationStatusResult result) =>
+        new(result.Configured, result.Provider, result.ModelId, result.LastTestedAtUtc, result.UpdatedAtUtc);
 
     private sealed record NormalizedCredential(
         string Provider,

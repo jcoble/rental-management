@@ -28,7 +28,9 @@ describe('RemoteRecordSelect', () => {
 	it('hides cross-scope records', () => {
 		assert.match(source, /loadPage: \(params:/);
 		assert.match(source, /loadPage\(\{/);
+		assert.match(source, /search: debouncedSearch\.value \|\| undefined/);
 		assert.doesNotMatch(source, /\.filter\(/);
 		assert.doesNotMatch(source, /take:\s*(100|200|500)/);
+		assert.doesNotMatch(source, /placeholderData/);
 	});
 });

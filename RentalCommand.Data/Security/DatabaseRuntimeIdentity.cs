@@ -10,6 +10,7 @@ public static class DatabaseRuntimeIdentity
 {
     public const string ApiRole = "rentalcommand_api";
     public const string EngineRole = "rentalcommand_engine";
+    public const string AtomicReadOnlyRole = "rentalcommand_atomic_readonly";
 
     public static void ValidateOpenedConnection(DbConnection connection, string expectedRole)
     {
@@ -54,11 +55,25 @@ public static class DatabaseRuntimeIdentity
                AND NOT runtime_role.rolinherit
                AND NOT runtime_role.rolreplication
                AND NOT runtime_role.rolbypassrls
+               AND 1 = (
+                 SELECT count(*)
+                 FROM pg_auth_members membership
+                 JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+                 WHERE membership.member = runtime_role.oid
+                   AND granted_role.rolname = 'rentalcommand_atomic_readonly'
+                   AND NOT membership.admin_option
+                   AND NOT membership.inherit_option
+                   AND membership.set_option)
                AND NOT EXISTS (
                  SELECT 1
                  FROM pg_auth_members membership
-                 WHERE membership.member = runtime_role.oid
-                    OR membership.roleid = runtime_role.oid)
+                 LEFT JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+                 WHERE membership.roleid = runtime_role.oid
+                    OR (membership.member = runtime_role.oid
+                        AND (granted_role.rolname <> 'rentalcommand_atomic_readonly'
+                             OR membership.admin_option
+                             OR membership.inherit_option
+                             OR NOT membership.set_option)))
             FROM pg_roles runtime_role
             WHERE runtime_role.rolname = @expected_role;
             """;

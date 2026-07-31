@@ -162,16 +162,17 @@ public class ScheduleEService : IScheduleEService
 
         // ── Mortgage interest (from the loan split; principal is NEVER deductible) ─────────────────
         // Σ LoanPayment.InterestAmount for the year, per property (via the loan). Summed SQL-side.
-        var loanPaymentQuery = _db.LoanPayments
-            .AsNoTracking()
+        var loanPaymentQuery = LoanPaymentEffectiveQuery.From(_db)
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
-                lp.Loan != null &&
-                authorizedProperties.Any(property => property.Id == lp.Loan.PropertyId) &&
+                _db.Loans.Any(loan =>
+                    loan.Id == lp.LoanId &&
+                    authorizedProperties.Any(property => property.Id == loan.PropertyId)) &&
                 lp.DueDate >= yearStart &&
                 lp.DueDate < yearEndExclusive);
         if (propertyId.HasValue)
-            loanPaymentQuery = loanPaymentQuery.Where(lp => lp.Loan!.PropertyId == propertyId.Value);
+            loanPaymentQuery = loanPaymentQuery.Where(lp =>
+                _db.Loans.Any(loan => loan.Id == lp.LoanId && loan.PropertyId == propertyId.Value));
 
         // Properties that have ANY loan (active or not) — their legacy manual MortgageInterest expense
         // category is excluded to avoid double-counting once the loan models the interest.
@@ -206,7 +207,7 @@ public class ScheduleEService : IScheduleEService
             })
             .Concat(loanPaymentQuery.Select(payment => new ScheduleECategoryComponent
             {
-                PropertyId = payment.Loan!.PropertyId,
+                PropertyId = payment.PropertyId,
                 Category = ScheduleECategory.MortgageInterest,
                 Amount = payment.InterestAmount,
             }))
@@ -247,7 +248,7 @@ public class ScheduleEService : IScheduleEService
                     .Where(income => income.PropertyId == property.Id)
                     .Sum(income => (decimal?)income.Amount) ?? 0m,
                 ModeledInterest = loanPaymentQuery
-                    .Where(payment => payment.Loan != null && payment.Loan.PropertyId == property.Id)
+                    .Where(payment => payment.PropertyId == property.Id)
                     .Sum(payment => (decimal?)payment.InterestAmount) ?? 0m,
                 Depreciation = depreciationQuery
                     .Where(depreciation => depreciation.PropertyId == property.Id)

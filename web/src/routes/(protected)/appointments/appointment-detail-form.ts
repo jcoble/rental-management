@@ -9,7 +9,9 @@ export type AppointmentDetailForm = {
 	scheduledStart: string;
 	scheduledEnd: string;
 	propertyId: string;
+	unitId: string;
 	tenantId: string;
+	workOrderId: string;
 	prospectName: string;
 	prospectEmail: string;
 	assignedTo: string;
@@ -29,7 +31,9 @@ export function createAppointmentDetailEditForm(
 		scheduledStart: utcToLocal(appointment.scheduledStart),
 		scheduledEnd: utcToLocal(appointment.scheduledEnd),
 		propertyId: appointment.propertyId != null ? String(appointment.propertyId) : '',
+		unitId: appointment.unitId != null ? String(appointment.unitId) : '',
 		tenantId: appointment.tenantId != null ? String(appointment.tenantId) : '',
+		workOrderId: appointment.workOrderId != null ? String(appointment.workOrderId) : '',
 		prospectName: appointment.prospectName ?? '',
 		prospectEmail: appointment.prospectEmail ?? '',
 		assignedTo: appointment.assignedTo ?? '',

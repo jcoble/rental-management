@@ -39,6 +39,13 @@ const scanTargetOptions = <ScanTargetOption>[
     },
   ),
   ScanTargetOption(
+    value: 'LeaseEndingNotice',
+    label: 'Move-out notice',
+    description: 'Attach a notice and start the move-out workflow.',
+    icon: Icons.event_busy_outlined,
+    capabilities: {'rentals.manage'},
+  ),
+  ScanTargetOption(
     value: 'Expense',
     label: 'Receipt or bill',
     description: 'Create an expense and keep the source document.',

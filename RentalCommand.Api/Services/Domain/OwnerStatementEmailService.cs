@@ -8,6 +8,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Api.Services;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -108,7 +109,7 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
 
     // ── Plain-text renderer ──────────────────────────────────────────────────────────────────────
 
-    private static string RenderStatementText(DTOs.OwnerStatementReport report)
+    private string RenderStatementText(DTOs.OwnerStatementReport report)
     {
         var sb = new StringBuilder();
 
@@ -153,46 +154,53 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
         return sb.ToString();
     }
 
-    private static string FormatMoney(decimal amount) => amount.ToString("C2",
+    private string FormatMoney(decimal amount) => amount.ToString("C2",
         System.Globalization.CultureInfo.GetCultureInfo("en-US"));
 }
 
 public sealed record QueueOwnerStatementEmailCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     int OwnerEntityId,
     int Year,
     string ToEmail,
     string Subject,
     string Body,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record QueueOwnerStatementEmailResult(
     bool Queued,
-    string? Reason = null) : IAtomicResultData;
+    string? Reason = null);
 
 public sealed class QueueOwnerStatementEmailHandler
-    : IAtomicCommandHandler<QueueOwnerStatementEmailCommand, QueueOwnerStatementEmailResult>,
-      IAtomicReplayAuthorizer<QueueOwnerStatementEmailCommand>
+    : IAtomicCommandHandler<QueueOwnerStatementEmailCommand, QueueOwnerStatementEmailResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public QueueOwnerStatementEmailHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<QueueOwnerStatementEmailResult> HandleAsync(
         QueueOwnerStatementEmailCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.OwnerEntity, command.OwnerEntityId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("OwnerEntity", command.OwnerEntityId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         attempt.UseDatabaseWallClockForAudit(now);
-        await AuthorizeAsync(command, attempt.Persistence, now, ct);
+        await AuthorizeAsync(command, _db, now, ct);
 
         attempt.StageOutbox(new OutboxMessage
         {
@@ -222,47 +230,47 @@ public sealed class QueueOwnerStatementEmailHandler
 
     public async Task AuthorizeReplayAsync(
         QueueOwnerStatementEmailCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await AuthorizeAsync(command, persistence, await persistence.ReadDatabaseClockUtcAsync(ct), ct);
+        await AuthorizeAsync(command, _db, await context.ReadDatabaseClockUtcAsync(ct), ct);
     }
 
-    private static async Task AuthorizeAsync(
+    private async Task AuthorizeAsync(
         QueueOwnerStatementEmailCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        if (!await LiveAssignments(command, persistence, now, CapabilityKeys.DataExport,
+        if (!await LiveAssignments(command, db, now, CapabilityKeys.DataExport,
                 CapabilityAuthorizationTargetKind.Workspace).AnyAsync(ct))
             throw new UnauthorizedAccessException(
                 "Your workspace export access changed. Refresh and try again.");
 
-        var ownerIsAuthorized = await persistence.Query<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
+        var ownerIsAuthorized = await db.Set<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
             owner.Id == command.OwnerEntityId && owner.PortfolioId == command.PortfolioId
             && owner.DeletedAt == null
-            && persistence.Query<PropertyOwnership>().Any(ownership =>
+            && db.Set<PropertyOwnership>().Any(ownership =>
                 ownership.PortfolioId == command.PortfolioId
                 && ownership.OwnerEntityId == owner.Id
                 && ownership.EffectiveFromUtc <= now
                 && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
-                && AuthorizedOwnerReportProperties(command, persistence, now)
+                && AuthorizedOwnerReportProperties(command, db, now)
                     .Any(property => property.Id == ownership.PropertyId)), ct);
         if (!ownerIsAuthorized)
             throw new UnauthorizedAccessException(
                 "The owner is no longer available within your current reporting scope.");
     }
 
-    private static IQueryable<Property> AuthorizedOwnerReportProperties(
+    private IQueryable<Property> AuthorizedOwnerReportProperties(
         QueueOwnerStatementEmailCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = LiveAssignments(command, persistence, now,
+        var assignments = LiveAssignments(command, db, now,
             CapabilityKeys.MoneyOwnerReportsRead, CapabilityAuthorizationTargetKind.Property);
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
             && assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
@@ -271,13 +279,13 @@ public sealed class QueueOwnerStatementEmailHandler
                         scope.PortfolioId == command.PortfolioId && scope.PropertyId == property.Id))));
     }
 
-    private static IQueryable<MembershipRoleAssignment> LiveAssignments(
+    private IQueryable<MembershipRoleAssignment> LiveAssignments(
         QueueOwnerStatementEmailCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         string capability,
         CapabilityAuthorizationTargetKind targetKind) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -297,7 +305,7 @@ public sealed class QueueOwnerStatementEmailHandler
             && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
             && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -306,7 +314,7 @@ public sealed class QueueOwnerStatementEmailHandler
                 grant.CapabilityDefinition!.Key == capability
                 && grant.CapabilityDefinition.AuthorizationTargetKind == targetKind));
 
-    private static void Validate(QueueOwnerStatementEmailCommand command)
+    private void Validate(QueueOwnerStatementEmailCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0

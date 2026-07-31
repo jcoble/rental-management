@@ -8,7 +8,7 @@ namespace RentalCommand.Data;
 /// </summary>
 internal static class TenantAccountPostgreSqlContract
 {
-    internal static IReadOnlyList<string> CreateStatements { get; } =
+    internal static IReadOnlyList<string> InitialCreateStatements { get; } =
     [
         CreateAppendOnlyGuard,
         CreateTenantAccountCurrencyGuard,
@@ -29,6 +29,29 @@ internal static class TenantAccountPostgreSqlContract
         CreateTriggers,
     ];
 
+    internal static IReadOnlyList<string> CreateStatements { get; } =
+    [
+        CreateAppendOnlyGuard,
+        CreateTenantAccountCurrencyGuard,
+        TenantAccountCloseValidatorStatement(allowPlannedCancellation: true),
+        CreateConditionPeriodGuard,
+        CreatePaymentAttemptWriteGuard,
+        CreatePaymentAttemptIntentGuard,
+        CreatePaymentAttemptClaimFunction,
+        CreatePaymentAttemptExactClaimFunction,
+        CreatePaymentAttemptTransitionFunction,
+        CreatePaymentAttemptValidator,
+        CreateOpenAccountWriteGuard,
+        CreateLedgerEntryValidator,
+        CreatePaymentAttemptSuccessValidator,
+        CreateLedgerAllocationValidator,
+        CreateAutopayValidator,
+        CreateSecurityDepositAccountValidator,
+        CreateSecurityDepositEntryValidator,
+        CreateTriggers,
+        CreatePaymentAttemptIntentTriggers,
+    ];
+
     internal static string TenantAccountCloseValidatorStatement(bool allowPlannedCancellation)
     {
         if (allowPlannedCancellation)
@@ -43,6 +66,24 @@ internal static class TenantAccountPostgreSqlContract
             """,
             """
               IF possession_returned_at IS NULL OR possession_returned_at > account_closed_at THEN
+            """,
+            StringComparison.Ordinal);
+    }
+
+    internal static string PaymentAttemptValidatorStatement(
+        bool allowUnappliedReceiptRefund)
+    {
+        if (allowUnappliedReceiptRefund)
+        {
+            return CreatePaymentAttemptValidator;
+        }
+
+        return CreatePaymentAttemptValidator.Replace(
+            """
+               OR original_attempt."AttemptType" NOT IN ('Charge', 'UnappliedReceipt')
+            """,
+            """
+               OR original_attempt."AttemptType" <> 'Charge'
             """,
             StringComparison.Ordinal);
     }
@@ -280,6 +321,33 @@ internal static class TenantAccountPostgreSqlContract
         $function$;
         """;
 
+    private const string CreatePaymentAttemptIntentGuard = """
+        CREATE OR REPLACE FUNCTION rc_enforce_payment_attempt_intent()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          IF TG_OP = 'INSERT' AND NEW."AttemptType" = 'LegacyTargetlessCharge' THEN
+            RAISE EXCEPTION 'LegacyTargetlessCharge is retired historical data'
+              USING ERRCODE = '23514';
+          END IF;
+          IF TG_OP = 'UPDATE'
+             AND NEW."AttemptType" = 'LegacyTargetlessCharge'
+             AND OLD."AttemptType" IS DISTINCT FROM 'LegacyTargetlessCharge' THEN
+            RAISE EXCEPTION 'LegacyTargetlessCharge is retired historical data'
+              USING ERRCODE = '23514';
+          END IF;
+          IF TG_OP = 'UPDATE'
+             AND NEW."ChargeLedgerEntryId" IS DISTINCT FROM OLD."ChargeLedgerEntryId" THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt ChargeLedgerEntryId is immutable'
+              USING ERRCODE = '23514';
+          END IF;
+          RETURN NEW;
+        END;
+        $function$;
+        REVOKE EXECUTE ON FUNCTION rc_enforce_payment_attempt_intent() FROM PUBLIC;
+        """;
+
     private const string CreatePaymentAttemptClaimFunction = """
         CREATE OR REPLACE FUNCTION rc_claim_tenant_payment_attempt(
           p_id bigint,
@@ -486,14 +554,14 @@ internal static class TenantAccountPostgreSqlContract
               AND source."TenantAccountId" = NEW."TenantAccountId";
 
             IF NOT FOUND
-               OR original_attempt."AttemptType" <> 'Charge'
+               OR original_attempt."AttemptType" NOT IN ('Charge', 'UnappliedReceipt')
                OR original_attempt."State" <> 'Succeeded'
                OR original_attempt."Amount" IS DISTINCT FROM NEW."Amount"
                OR original_attempt."Currency" IS DISTINCT FROM NEW."Currency"
                OR original_attempt."Provider" IS DISTINCT FROM NEW."Provider"
                OR (original_attempt."Provider" <> 'manual'
                    AND original_attempt."ProviderObjectId" IS NULL) THEN
-              RAISE EXCEPTION 'Refund TenantPaymentAttempt % lacks exact settled Charge provenance', NEW."Id"
+              RAISE EXCEPTION 'Refund TenantPaymentAttempt % lacks exact settled receipt provenance', NEW."Id"
                 USING ERRCODE = '23514';
             END IF;
           END IF;
@@ -655,7 +723,11 @@ internal static class TenantAccountPostgreSqlContract
                      AND entry."TenantAccountId" = attempt."TenantAccountId"
                      AND entry."Amount" = attempt."Amount"
                      AND entry."Currency" = attempt."Currency"
-                     AND ((attempt."AttemptType" = 'Charge'
+                     AND ((attempt."AttemptType" IN (
+                              'Charge',
+                              'UnappliedReceipt',
+                              'DepositReceipt',
+                              'ImportedReceipt')
                            AND entry."EntryType" = 'PaymentReceipt'
                            AND entry."Direction" = 'Credit')
                        OR (attempt."AttemptType" = 'Refund'
@@ -665,13 +737,23 @@ internal static class TenantAccountPostgreSqlContract
           FROM "TenantLedgerEntries" AS entry
           WHERE entry."ProviderPaymentAttemptId" = attempt."Id";
 
-          IF attempt."AttemptType" IN ('Charge','Refund') AND attempt."State" = 'Succeeded' THEN
+          IF attempt."AttemptType" IN (
+               'Charge',
+               'UnappliedReceipt',
+               'DepositReceipt',
+               'ImportedReceipt',
+               'Refund')
+             AND attempt."State" = 'Succeeded' THEN
             IF linked_entry_count <> 1 OR matching_entry_count <> 1 THEN
               RAISE EXCEPTION 'Succeeded TenantPaymentAttempt % requires exactly one matching ledger entry',
                 attempt."Id" USING ERRCODE = '23514';
             END IF;
+          ELSIF attempt."AttemptType" = 'LegacyTargetlessCharge' THEN
+            -- Historical rows may already have their receipt link. The separate intent
+            -- guard prevents this retired shape from being inserted or newly selected.
+            RETURN NULL;
           ELSIF linked_entry_count <> 0 THEN
-            RAISE EXCEPTION 'TenantPaymentAttempt % ledger entry requires a succeeded Charge or Refund',
+            RAISE EXCEPTION 'TenantPaymentAttempt % ledger entry requires a succeeded receipt or Refund',
               attempt."Id" USING ERRCODE = '23514';
           END IF;
 
@@ -1047,6 +1129,16 @@ internal static class TenantAccountPostgreSqlContract
         FOR EACH ROW EXECUTE FUNCTION rc_validate_security_deposit_entry();
         """;
 
+    private const string CreatePaymentAttemptIntentTriggers = """
+        CREATE TRIGGER trg_tenant_payment_attempt_legacy_intent_insert
+        BEFORE INSERT ON "TenantPaymentAttempts"
+        FOR EACH ROW EXECUTE FUNCTION rc_enforce_payment_attempt_intent();
+
+        CREATE TRIGGER trg_tenant_payment_attempt_charge_target_immutable
+        BEFORE UPDATE OF "ChargeLedgerEntryId", "AttemptType" ON "TenantPaymentAttempts"
+        FOR EACH ROW EXECUTE FUNCTION rc_enforce_payment_attempt_intent();
+        """;
+
     private const string DropTriggers = """
         DROP TRIGGER IF EXISTS trg_security_deposit_entry_validate ON "SecurityDepositEntries";
         DROP TRIGGER IF EXISTS trg_security_deposit_entry_open_account ON "SecurityDepositEntries";
@@ -1061,6 +1153,8 @@ internal static class TenantAccountPostgreSqlContract
         DROP TRIGGER IF EXISTS trg_tenant_ledger_entry_open_account ON "TenantLedgerEntries";
         DROP TRIGGER IF EXISTS trg_tenant_ledger_entry_append_only ON "TenantLedgerEntries";
         DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_validate ON "TenantPaymentAttempts";
+        DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_charge_target_immutable ON "TenantPaymentAttempts";
+        DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_legacy_intent_insert ON "TenantPaymentAttempts";
         DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_write ON "TenantPaymentAttempts";
         DROP TRIGGER IF EXISTS trg_tenant_account_condition_period_guard ON "TenantAccountConditionPeriods";
         DROP TRIGGER IF EXISTS trg_lease_management_account_close ON "LeaseManagements";
@@ -1080,6 +1174,7 @@ internal static class TenantAccountPostgreSqlContract
         DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_claim_exact_tenant_payment_attempt(bigint, integer, integer, varchar, interval);
         DROP FUNCTION IF EXISTS rc_claim_tenant_payment_attempt(bigint, integer, integer, varchar, interval);
+        DROP FUNCTION IF EXISTS rc_enforce_payment_attempt_intent();
         DROP FUNCTION IF EXISTS rc_guard_tenant_payment_attempt_write();
         DROP FUNCTION IF EXISTS rc_guard_tenant_account_condition_period();
         DROP FUNCTION IF EXISTS rc_validate_tenant_account_close();

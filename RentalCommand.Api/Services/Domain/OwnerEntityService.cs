@@ -22,6 +22,8 @@ public class OwnerEntityService : IOwnerEntityService
     private const string EntityType = "OwnerEntity";
     private static readonly AtomicJsonResultCodec<ActivateOwnerPortalAccessMutationResult> OwnerActivationCodec =
         new("owner-portal-access.activation.v1");
+    private static readonly AtomicJsonResultCodec<RevokeOwnerPortalAccessMutationResult> OwnerRevocationCodec =
+        new("owner-portal-access.revocation.v1");
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -202,6 +204,69 @@ public class OwnerEntityService : IOwnerEntityService
                 outcome.Value.RequiresAccountActivation,
                 outcome.Value.InvitationExpiresAtUtc,
                 "Owner portal access could not be activated because the owner was not found."),
+        };
+    }
+
+    public async Task<RevokeOwnerPortalAccessResponse> RevokeOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        RevokeOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var keyDigest = Digest(operationKey);
+        var command = new RevokeOwnerPortalAccessCommand(
+            scope.PortfolioId,
+            id,
+            string.IsNullOrWhiteSpace(request.Reason)
+                ? "Owner portal access revoked from owner management"
+                : request.Reason.Trim(),
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            _timeProvider.UtcNow(),
+            $"owner-entity.portal-access.revoke:{scope.PortfolioId}:{id}:{keyDigest}");
+        var outcome = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "owner-entity.portal-access.revoke",
+                $"{scope.PortfolioId}:{id}:{keyDigest}"),
+            command,
+            OwnerRevocationCodec,
+            ct);
+        var replayed = outcome.Disposition == AtomicCommandDisposition.Replayed;
+        return outcome.Value.Outcome switch
+        {
+            RevokeOwnerPortalAccessMutationOutcome.Revoked => new(
+                RevokeOwnerPortalAccessOutcome.Revoked,
+                outcome.Value.OwnerEntityId,
+                outcome.Value.OwnerEmail,
+                outcome.Value.RevokedRelationshipCount,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                replayed,
+                "Owner portal access revoked."),
+            RevokeOwnerPortalAccessMutationOutcome.AlreadyRevoked => new(
+                RevokeOwnerPortalAccessOutcome.AlreadyRevoked,
+                outcome.Value.OwnerEntityId,
+                outcome.Value.OwnerEmail,
+                outcome.Value.RevokedRelationshipCount,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                replayed,
+                "Owner portal access is already revoked."),
+            _ => new(
+                RevokeOwnerPortalAccessOutcome.NotFound,
+                outcome.Value.OwnerEntityId,
+                outcome.Value.OwnerEmail,
+                outcome.Value.RevokedRelationshipCount,
+                outcome.Value.TargetAccessContextId,
+                outcome.Value.OwnerUserAccessId,
+                outcome.Value.AccessRevision,
+                replayed,
+                "Owner portal access could not be revoked because the owner was not found."),
         };
     }
 

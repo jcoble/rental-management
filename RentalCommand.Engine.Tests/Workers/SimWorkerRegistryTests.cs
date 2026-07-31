@@ -18,6 +18,18 @@ public class SimWorkerRegistryTests
 
         // daily-briefing is intentionally NOT part of run-due.
         SimWorkerKeys.RunDueSequence.Should().NotContain(SimWorkerKeys.DailyBriefing);
+        SimWorkerKeys.RunDueSequence.Should().NotContain(SimWorkerKeys.ScanProcessing);
+    }
+
+    [Fact]
+    public void RunDueSequence_RoutesRentRemindersThroughTenantNoticePipelineOnly()
+    {
+        SimWorkerKeys.All.Should().NotContain("rent-reminder");
+        SimWorkerKeys.All.Should().NotContain("scheduled-rent-due-reminder");
+        SimWorkerKeys.RunDueSequence.Should().ContainInOrder(
+            SimWorkerKeys.RentCharge,
+            SimWorkerKeys.TenantNoticeCandidates,
+            SimWorkerKeys.NoticeDraft);
     }
 
     [Theory]
@@ -30,6 +42,7 @@ public class SimWorkerRegistryTests
     [InlineData(SimWorkerKeys.RecurringExpense)]
     [InlineData(SimWorkerKeys.RecurringMaintenance)]
     [InlineData(SimWorkerKeys.DailyBriefing)]
+    [InlineData(SimWorkerKeys.ScanProcessing)]
     public async Task EachKey_InvokesOnlyTheMatchingService(string key)
     {
         var callOrder = new List<string>();
@@ -78,6 +91,7 @@ public class SimWorkerRegistryTests
         SimWorkerKeys.RecurringExpense => 7,
         SimWorkerKeys.RecurringMaintenance => 8,
         SimWorkerKeys.DailyBriefing => 9,
+        SimWorkerKeys.ScanProcessing => 10,
         _ => 0,
     };
 
@@ -138,6 +152,12 @@ public class SimWorkerRegistryTests
             .Callback(() => order.Add(SimWorkerKeys.DailyBriefing))
             .ReturnsAsync(CountFor(SimWorkerKeys.DailyBriefing));
         services.AddSingleton(dailyBriefing.Object);
+
+        var scanProcessing = new Mock<IScanProcessingCycleService>();
+        scanProcessing.Setup(s => s.RunOneCycleAsync(It.IsAny<IServiceProvider>(), It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add(SimWorkerKeys.ScanProcessing))
+            .ReturnsAsync(CountFor(SimWorkerKeys.ScanProcessing));
+        services.AddSingleton(scanProcessing.Object);
 
         return services.BuildServiceProvider();
     }

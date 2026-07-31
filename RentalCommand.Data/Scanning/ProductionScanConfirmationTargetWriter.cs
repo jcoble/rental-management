@@ -4,23 +4,27 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Data.Leasing;
+using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Scanning;
 
 /// <summary>
-/// Persistence-only writers for scan targets. This type deliberately has no injected services:
-/// every query and write goes through the transaction-owned persistence session supplied by the
-/// atomic kernel. Lease scans delegate to the canonical relationship/account/agreement writer.
+/// Persistence-only writers for scan targets. Every query and write goes through the exact scoped
+/// database context enlisted in the atomic transaction. Lease scans delegate to the canonical
+/// relationship/account/agreement writer.
 /// </summary>
 public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTargetWriter
 {
     private static readonly JsonSerializerOptions ReceiptJsonOptions = new(JsonSerializerDefaults.Web);
     private const decimal PaidStatementComponentCorrectionTolerance = 1.00m;
+    private readonly RentalCommandDbContext _db;
 
-    public ProductionScanConfirmationTargetWriter() { }
+    public ProductionScanConfirmationTargetWriter(RentalCommandDbContext db) => _db = db;
 
     public bool Supports(ScanConfirmationTargetKind kind) => kind is
         ScanConfirmationTargetKind.Expense or
@@ -28,50 +32,54 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ScanConfirmationTargetKind.WorkOrder or
         ScanConfirmationTargetKind.LeaseAgreement or
         ScanConfirmationTargetKind.Application or
-        ScanConfirmationTargetKind.Loan;
+        ScanConfirmationTargetKind.Loan or
+        ScanConfirmationTargetKind.PropertyAcquisition or
+        ScanConfirmationTargetKind.LeaseEndingNotice;
 
     public Task<ScanConfirmationTargetWriteResult> WriteAsync(
         ConfirmScanDraftCommand command,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct) => command.Target.Kind switch
         {
             ScanConfirmationTargetKind.Expense => WriteExpenseAsync(
-                command, Required(command.Target.Expense), extractedFieldsJson, attempt, ct),
+                command, Required(command.Target.Expense), extractedFieldsJson, context, ct),
             ScanConfirmationTargetKind.Payment => WritePaymentAsync(
-                command, Required(command.Target.Payment), extractedFieldsJson, attempt, ct),
+                command, Required(command.Target.Payment), extractedFieldsJson, context, ct),
             ScanConfirmationTargetKind.WorkOrder => WriteWorkOrderAsync(
-                command, Required(command.Target.WorkOrder), extractedFieldsJson, attempt, ct),
+                command, Required(command.Target.WorkOrder), extractedFieldsJson, context, ct),
             ScanConfirmationTargetKind.LeaseAgreement => CanonicalLeaseScanConfirmationWriter.WriteAsync(
-                command, Required(command.Target.LeaseAgreement), attempt, ct),
+                command, Required(command.Target.LeaseAgreement), _db, context, ct),
             ScanConfirmationTargetKind.Application => WriteApplicationAsync(
-                command, Required(command.Target.Application), extractedFieldsJson, attempt, ct),
+                command, Required(command.Target.Application), extractedFieldsJson, context, ct),
             ScanConfirmationTargetKind.Loan => WriteLoanAsync(
-                command, Required(command.Target.Loan), extractedFieldsJson, attempt, ct),
+                command, Required(command.Target.Loan), extractedFieldsJson, context, ct),
+            ScanConfirmationTargetKind.PropertyAcquisition => WritePropertyAcquisitionAsync(
+                command, Required(command.Target.PropertyAcquisition), extractedFieldsJson, context, ct),
+            ScanConfirmationTargetKind.LeaseEndingNotice => WriteLeaseEndingNoticeAsync(
+                command, Required(command.Target.LeaseEndingNotice), extractedFieldsJson, context, ct),
             _ => throw new InvalidOperationException(
                 $"Scan confirmation target {command.Target.Kind} is not supported by this writer."),
         };
 
     public async Task AuthorizeReplayAsync(
-        ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ConfirmScanDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         command.Target.Validate();
         var capabilities = RequiredCapabilities(command.Target.Kind);
-        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsDraftAuthorizedAsync(command, capabilities, persistence, securityNowUtc, ct))
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await IsDraftAuthorizedAsync(command, capabilities, _db, securityNowUtc, ct))
             throw Unauthorized();
 
         if (command.Target.Kind == ScanConfirmationTargetKind.LeaseAgreement)
         {
-            await CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, persistence, ct);
+            await CanonicalLeaseScanConfirmationWriter.AuthorizeAsync(command, _db, ct);
             return;
         }
 
-        var propertyId = await ResolveTargetPropertyIdAsync(command, persistence, ct);
+        var propertyId = await ResolveTargetPropertyIdAsync(command, _db, ct);
         if (!await HasPropertyAuthorityAsync(
-                command, capabilities, propertyId, persistence, securityNowUtc, ct))
+                command, capabilities, propertyId, _db, securityNowUtc, ct))
             throw Unauthorized();
     }
 
@@ -84,17 +92,19 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare],
         ScanConfirmationTargetKind.Application => [CapabilityKeys.LeasingApplicationsManage],
         ScanConfirmationTargetKind.Loan => [CapabilityKeys.MoneyExpensesManage],
+        ScanConfirmationTargetKind.PropertyAcquisition => [CapabilityKeys.RentalsManage],
+        ScanConfirmationTargetKind.LeaseEndingNotice => [CapabilityKeys.RentalsManage],
         _ => [],
     };
 
     private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
         var keys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
-        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        return db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -113,7 +123,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
             && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ConfirmedByUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -127,11 +137,11 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static IQueryable<Property> AuthorizedProperties(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
-        return persistence.Query<Property>().Where(property =>
+        var assignments = EffectiveAssignments(command, capabilities, db, securityNowUtc);
+        return db.Set<Property>().Where(property =>
             property.PortfolioId == command.PortfolioId
             && property.DeletedAt == null
             && assignments.Any(assignment =>
@@ -145,16 +155,16 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static Task<bool> IsDraftAuthorizedAsync(
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc,
         CancellationToken ct)
     {
-        var authorizedProperties = AuthorizedProperties(command, capabilities, persistence, securityNowUtc);
-        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
+        var authorizedProperties = AuthorizedProperties(command, capabilities, db, securityNowUtc);
+        var assignments = EffectiveAssignments(command, capabilities, db, securityNowUtc);
         var allProperties = assignments.Where(assignment =>
             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
 
-        return persistence.Query<ScanDraft>().AnyAsync(draft =>
+        return db.Set<ScanDraft>().AnyAsync(draft =>
             draft.Id == command.DraftId && draft.PortfolioId == command.PortfolioId
             && (((draft.CapturePropertyId != null || draft.CaptureUnitId != null
                     || draft.CaptureLeaseManagementId != null || draft.CaptureLeaseAgreementId != null
@@ -163,33 +173,33 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                     || draft.CaptureRentalListingId != null)
                 && (draft.CapturePropertyId == null || authorizedProperties.Any(property =>
                     property.Id == draft.CapturePropertyId))
-                && (draft.CaptureUnitId == null || persistence.Query<Unit>().Any(unit =>
+                && (draft.CaptureUnitId == null || db.Set<Unit>().Any(unit =>
                     unit.Id == draft.CaptureUnitId && unit.PortfolioId == draft.PortfolioId
                     && authorizedProperties.Any(property => property.Id == unit.PropertyId)))
-                && (draft.CaptureLeaseManagementId == null || persistence.Query<LeaseManagement>().Any(management =>
+                && (draft.CaptureLeaseManagementId == null || db.Set<LeaseManagement>().Any(management =>
                     management.Id == draft.CaptureLeaseManagementId && management.PortfolioId == draft.PortfolioId
                     && authorizedProperties.Any(property => property.Id == management.PropertyId)))
-                && (draft.CaptureLeaseAgreementId == null || persistence.Query<LeaseAgreement>().Any(agreement =>
+                && (draft.CaptureLeaseAgreementId == null || db.Set<LeaseAgreement>().Any(agreement =>
                     agreement.Id == draft.CaptureLeaseAgreementId && agreement.PortfolioId == draft.PortfolioId
                     && agreement.LeaseManagement != null
                     && authorizedProperties.Any(property => property.Id == agreement.LeaseManagement.PropertyId)))
-                && (draft.CaptureTenantAccountId == null || persistence.Query<TenantAccount>().Any(account =>
+                && (draft.CaptureTenantAccountId == null || db.Set<TenantAccount>().Any(account =>
                     account.Id == draft.CaptureTenantAccountId && account.PortfolioId == draft.PortfolioId
                     && account.LeaseManagement != null
                     && authorizedProperties.Any(property => property.Id == account.LeaseManagement.PropertyId)))
-                && (draft.CaptureTenantLedgerEntryId == null || persistence.Query<TenantLedgerEntry>().Any(entry =>
+                && (draft.CaptureTenantLedgerEntryId == null || db.Set<TenantLedgerEntry>().Any(entry =>
                     entry.Id == draft.CaptureTenantLedgerEntryId && entry.PortfolioId == draft.PortfolioId
                     && entry.TenantAccount != null && entry.TenantAccount.LeaseManagement != null
                     && authorizedProperties.Any(property =>
                         property.Id == entry.TenantAccount.LeaseManagement.PropertyId)))
-                && (draft.CaptureWorkOrderId == null || persistence.Query<WorkOrder>().Any(order =>
+                && (draft.CaptureWorkOrderId == null || db.Set<WorkOrder>().Any(order =>
                     order.Id == draft.CaptureWorkOrderId && order.PortfolioId == draft.PortfolioId
                     && authorizedProperties.Any(property => property.Id == order.PropertyId)))
-                && (draft.CaptureApplicationId == null || persistence.Query<RentalApplication>().Any(application =>
+                && (draft.CaptureApplicationId == null || db.Set<RentalApplication>().Any(application =>
                     application.Id == draft.CaptureApplicationId && application.PortfolioId == draft.PortfolioId
                     && application.PropertyId != null
                     && authorizedProperties.Any(property => property.Id == application.PropertyId)))
-                && (draft.CaptureRentalListingId == null || persistence.Query<RentalListing>().Any(listing =>
+                && (draft.CaptureRentalListingId == null || db.Set<RentalListing>().Any(listing =>
                     listing.Id == draft.CaptureRentalListingId && listing.PortfolioId == draft.PortfolioId
                     && authorizedProperties.Any(property => property.Id == listing.PropertyId))))
                 || ((draft.CapturePropertyId == null && draft.CaptureUnitId == null
@@ -203,12 +213,12 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
 
     private static async Task<int?> ResolveTargetPropertyIdAsync(
         ConfirmScanDraftCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct) => command.Target.Kind switch
         {
             ScanConfirmationTargetKind.Expense => await ResolveExpensePropertyIdAsync(
-                command, Required(command.Target.Expense), persistence, ct),
-            ScanConfirmationTargetKind.Payment => await persistence.Query<TenantAccount>()
+                command, Required(command.Target.Expense), db, ct),
+            ScanConfirmationTargetKind.Payment => await db.Set<TenantAccount>()
                 .Where(account => account.Id == Required(command.Target.Payment).TenantAccountId
                     && account.PortfolioId == command.PortfolioId && account.LeaseManagement != null)
                 .Select(account => (int?)account.LeaseManagement!.PropertyId)
@@ -216,25 +226,31 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             ScanConfirmationTargetKind.WorkOrder => Required(command.Target.WorkOrder).PropertyId,
             ScanConfirmationTargetKind.Application => await ResolveOptionalPropertyIdAsync(
                 command, Required(command.Target.Application).PropertyId,
-                Required(command.Target.Application).UnitId, persistence, ct),
+                Required(command.Target.Application).UnitId, db, ct),
             ScanConfirmationTargetKind.Loan => Required(command.Target.Loan).PropertyId,
+            ScanConfirmationTargetKind.PropertyAcquisition => Required(command.Target.PropertyAcquisition).PropertyId,
+            ScanConfirmationTargetKind.LeaseEndingNotice => await db.Set<LeaseManagement>()
+                .Where(relationship => relationship.Id == Required(command.Target.LeaseEndingNotice).LeaseManagementId
+                    && relationship.PortfolioId == command.PortfolioId)
+                .Select(relationship => (int?)relationship.PropertyId)
+                .SingleOrDefaultAsync(ct),
             _ => null,
         };
 
     private static async Task<int?> ResolveExpensePropertyIdAsync(
         ConfirmScanDraftCommand command,
         ScanExpenseTargetData target,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (target.PropertyId is int propertyId)
             return propertyId;
         if (target.UnitId is int unitId)
-            return await persistence.Query<Unit>()
+            return await db.Set<Unit>()
                 .Where(unit => unit.Id == unitId && unit.PortfolioId == command.PortfolioId)
                 .Select(unit => (int?)unit.PropertyId).SingleOrDefaultAsync(ct);
         if (target.WorkOrderId is int workOrderId)
-            return await persistence.Query<WorkOrder>()
+            return await db.Set<WorkOrder>()
                 .Where(order => order.Id == workOrderId && order.PortfolioId == command.PortfolioId)
                 .Select(order => (int?)order.PropertyId).SingleOrDefaultAsync(ct);
         return null;
@@ -244,13 +260,13 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ConfirmScanDraftCommand command,
         int? propertyId,
         int? unitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (propertyId is not null)
             return propertyId;
         return unitId is int selectedUnitId
-            ? await persistence.Query<Unit>()
+            ? await db.Set<Unit>()
                 .Where(unit => unit.Id == selectedUnitId && unit.PortfolioId == command.PortfolioId)
                 .Select(unit => (int?)unit.PropertyId).SingleOrDefaultAsync(ct)
             : null;
@@ -260,13 +276,13 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         ConfirmScanDraftCommand command,
         IReadOnlyCollection<string> capabilities,
         int? propertyId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc,
         CancellationToken ct)
     {
-        var assignments = EffectiveAssignments(command, capabilities, persistence, securityNowUtc);
+        var assignments = EffectiveAssignments(command, capabilities, db, securityNowUtc);
         return propertyId is int selectedPropertyId
-            ? AuthorizedProperties(command, capabilities, persistence, securityNowUtc)
+            ? AuthorizedProperties(command, capabilities, db, securityNowUtc)
                 .AnyAsync(property => property.Id == selectedPropertyId, ct)
             : assignments.AnyAsync(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct);
@@ -275,19 +291,19 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static UnauthorizedAccessException Unauthorized() =>
         new("The current session is not authorized to confirm this scan draft.");
 
-    private static async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
+    private async Task<ScanConfirmationTargetWriteResult> WriteExpenseAsync(
         ConfirmScanDraftCommand command,
         ScanExpenseTargetData target,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var receipt = Required(target.Receipt);
         var reviewed = RequireReviewedExpenseFacts(receipt, target);
 
-        var location = await ResolveExpenseLocationAsync(command.PortfolioId, target, attempt.Persistence, ct);
+        var location = await ResolveExpenseLocationAsync(command.PortfolioId, target, _db, ct);
         var vendorId = await ResolveOrCreateVendorAsync(
-            command.PortfolioId, receipt, ToUtc(command.ConfirmedAtUtc), attempt, ct);
+            command.PortfolioId, receipt, ToUtc(command.ConfirmedAtUtc), context, ct);
         var now = ToUtc(command.ConfirmedAtUtc);
         var expense = new Expense
         {
@@ -303,7 +319,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             Subtotal = receipt.Subtotal,
             TaxAmount = receipt.Tax,
             IncurredAt = reviewed.TransactionDate,
-            DueDate = target.IsPaid ? null : ToUtc(receipt.DueDate),
+            DueDate = ToUtc(receipt.DueDate),
             PaidAt = target.IsPaid ? reviewed.TransactionDate : null,
             Status = target.IsPaid ? ExpenseStatus.Paid : ExpenseStatus.Pending,
             BillableToOwner = false,
@@ -330,9 +346,9 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
         AddDefaultExpenseAllocation(command.PortfolioId, expense, location, reviewed.Amount, now);
 
-        attempt.Persistence.Add(expense);
-        var flush = await attempt.FlushBusinessAsync(ct);
-        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, expense);
+        _db.Add(expense);
+        var flush = await context.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, context, flush, expense);
         return new ScanConfirmationTargetWriteResult(expense.Id, expense.UnitId, TargetAuditRecorded: true);
     }
 
@@ -420,11 +436,11 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
     }
 
-    private static async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync(
+    private async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync(
         ConfirmScanDraftCommand command,
         ScanPaymentTargetData target,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var receipt = Required(target.Receipt);
@@ -434,14 +450,14 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             throw new ScanConfirmationValidationException("Confirmed payment amount must be greater than zero.");
         }
 
-        var accountContext = await attempt.Persistence.Query<TenantAccount>()
+        var accountContext = await _db.Set<TenantAccount>()
             .Where(account => account.Id == target.TenantAccountId
                 && account.PortfolioId == command.PortfolioId)
             .Select(account => new
             {
                 UnitId = (int?)account.LeaseManagement!.UnitId,
                 ContextEntryIsValid = target.TenantLedgerEntryId == null
-                    || attempt.Persistence.Query<TenantLedgerEntry>().Any(entry =>
+                    || _db.Set<TenantLedgerEntry>().Any(entry =>
                         entry.Id == target.TenantLedgerEntryId.Value
                         && entry.PortfolioId == command.PortfolioId
                         && entry.TenantAccountId == account.Id),
@@ -468,12 +484,14 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             DateOnly.FromDateTime(paymentDate),
             string.IsNullOrWhiteSpace(notes) ? "Scanned tenant payment" : notes,
             receipt.PaymentMethod ?? "Scanned check",
-            receipt.CheckNumber,
+            string.IsNullOrWhiteSpace(receipt.CheckNumber)
+                ? $"scan:{command.DraftId}"
+                : receipt.CheckNumber.Trim(),
             receipt.PayerName,
             receipt.CheckNumber,
             receipt.BankName,
             command.SourceStoredFileId,
-            true,
+            target.TenantLedgerEntryId,
             command.ConfirmedByUserId,
             command.AuthSessionId,
             command.AccessContextId,
@@ -481,8 +499,11 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             CapabilityKeys.MoneyPaymentsManage,
             $"scan-receipt:{command.DraftId}",
             command.DeliveryIdempotencyKey,
-            ToUtc(command.ConfirmedAtUtc));
-        var result = await new RecordTenantReceiptHandler().HandleAsync(receiptCommand, attempt, ct);
+            ToUtc(command.ConfirmedAtUtc))
+        {
+            AllocateOldestCharges = target.TenantLedgerEntryId is null,
+        };
+        var result = await new RecordTenantReceiptHandler(_db).HandleAsync(receiptCommand, context, ct);
         return new ScanConfirmationTargetWriteResult(
             target.TenantAccountId,
             accountContext.UnitId,
@@ -490,16 +511,16 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             result.LedgerEntryId);
     }
 
-    private static async Task<ScanConfirmationTargetWriteResult> WriteWorkOrderAsync(
+    private async Task<ScanConfirmationTargetWriteResult> WriteWorkOrderAsync(
         ConfirmScanDraftCommand command,
         ScanWorkOrderTargetData target,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var title = RequireText(target.Title, "Work order title");
         var description = RequireText(target.Description, "Work order description");
-        await ValidateWorkOrderReferencesAsync(command.PortfolioId, target, attempt.Persistence, ct);
+        await ValidateWorkOrderReferencesAsync(command.PortfolioId, target, _db, ct);
 
         var workOrder = new WorkOrder
         {
@@ -511,6 +532,17 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             VendorId = target.VendorId,
             Title = title,
             Description = description,
+            TechnicianAccessInstructions = Clean(target.TechnicianAccessInstructions),
+            RequesterName = Clean(target.RequesterName),
+            RequesterPhone = Clean(target.RequesterPhone),
+            RequesterEmail = Clean(target.RequesterEmail),
+            ResidentMustBePresent = target.ResidentMustBePresent,
+            CallBeforeEntry = target.CallBeforeEntry,
+            CallIfNotHome = target.CallIfNotHome,
+            PermissionToEnter = target.PermissionToEnter,
+            EntryNotes = Clean(target.EntryNotes),
+            PetWarnings = Clean(target.PetWarnings),
+            AccessWarnings = Clean(target.AccessWarnings),
             Category = string.IsNullOrWhiteSpace(target.Category) ? "General" : target.Category.Trim(),
             Priority = target.Priority,
             Status = WorkOrderStatus.New,
@@ -530,28 +562,34 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             CreatedAtUtc = ToUtc(command.ConfirmedAtUtc),
         });
 
-        attempt.Persistence.Add(workOrder);
-        var flush = await attempt.FlushBusinessAsync(ct);
-        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, workOrder);
+        _db.Add(workOrder);
+        var flush = await context.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, context, flush, workOrder);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            command.PortfolioId,
+            nameof(WorkOrder),
+            workOrder.Id,
+            $"scan-work-order-create:{command.DeliveryIdempotencyKey}",
+            ToUtc(command.ConfirmedAtUtc)));
         return new ScanConfirmationTargetWriteResult(workOrder.Id, workOrder.UnitId, TargetAuditRecorded: true);
     }
 
-    private static async Task<ScanConfirmationTargetWriteResult> WriteApplicationAsync(
+    private async Task<ScanConfirmationTargetWriteResult> WriteApplicationAsync(
         ConfirmScanDraftCommand command,
         ScanApplicationTargetData target,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var firstName = RequireText(target.FirstName, "Applicant first name");
         var lastName = RequireText(target.LastName, "Applicant last name");
         await ValidateOptionalPropertyUnitAsync(
-            command.PortfolioId, target.PropertyId, target.UnitId, attempt.Persistence, ct);
+            command.PortfolioId, target.PropertyId, target.UnitId, _db, ct);
 
         var normalizedEmail = NormalizeEmail(target.Email);
         if (normalizedEmail is not null)
         {
-            var existingOpenApplicationId = await attempt.Persistence.Query<RentalApplication>()
+            var existingOpenApplicationId = await _db.Set<RentalApplication>()
                 .Where(application => application.PortfolioId == command.PortfolioId
                     && application.Email != null
                     && (application.Status == ApplicationStatus.Submitted
@@ -593,17 +631,17 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             UpdatedAt = ToUtc(command.ConfirmedAtUtc),
         };
 
-        attempt.Persistence.Add(application);
-        var flush = await attempt.FlushBusinessAsync(ct);
-        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, application);
+        _db.Add(application);
+        var flush = await context.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, context, flush, application);
         return new ScanConfirmationTargetWriteResult(application.Id, application.UnitId, TargetAuditRecorded: true);
     }
 
-    private static async Task<ScanConfirmationTargetWriteResult> WriteLoanAsync(
+    private async Task<ScanConfirmationTargetWriteResult> WriteLoanAsync(
         ConfirmScanDraftCommand command,
         ScanLoanTargetData target,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (target.ExistingLoanId.HasValue != target.ExistingLoanPaymentId.HasValue)
@@ -613,14 +651,15 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
         if (target.ExistingLoanId.HasValue)
         {
-            return await MatchExistingLoanPaymentAsync(command, target, attempt, ct);
+            return await MatchExistingLoanPaymentAsync(command, target, context, ct);
         }
 
         if (!await IsPropertyInPortfolioAsync(
-                command.PortfolioId, target.PropertyId, attempt.Persistence, ct))
+                command.PortfolioId, target.PropertyId, _db, ct))
         {
             throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
         }
+        await RejectDuplicateActiveLoanSourceAsync(command, target, _db, ct);
 
         var lender = RequireText(target.Lender, "Lender");
         var originalAmount = NormalizeDecimal(target.OriginalAmount, "Original loan amount", 0m, 999_999_999m, 2) ?? 0m;
@@ -652,16 +691,335 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             UpdatedAt = ToUtc(command.ConfirmedAtUtc),
         };
 
-        attempt.Persistence.Add(loan);
-        var flush = await attempt.FlushBusinessAsync(ct);
-        EnrichCreatedTargetAudit(command, extractedFieldsJson, attempt, flush, loan);
+        _db.Add(loan);
+        var flush = await context.FlushBusinessAsync(ct);
+        EnrichCreatedTargetAudit(command, extractedFieldsJson, context, flush, loan);
         return new ScanConfirmationTargetWriteResult(loan.Id, TargetAuditRecorded: true);
     }
 
-    private static async Task<ScanConfirmationTargetWriteResult> MatchExistingLoanPaymentAsync(
+    private static async Task RejectDuplicateActiveLoanSourceAsync(
         ConfirmScanDraftCommand command,
         ScanLoanTargetData target,
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        var sourceHash = command.SourceContentSha256?.Trim();
+        if (string.IsNullOrWhiteSpace(sourceHash) && command.SourceStoredFileId is int sourceStoredFileId)
+        {
+            sourceHash = await db.Set<StoredFile>()
+                .AsNoTracking()
+                .Where(file => file.Id == sourceStoredFileId
+                    && file.PortfolioId == command.PortfolioId
+                    && file.DeletedAt == null)
+                .Select(file => file.ContentSha256)
+                .SingleOrDefaultAsync(ct);
+        }
+
+        if (string.IsNullOrWhiteSpace(sourceHash))
+            return;
+
+        var duplicateLoanId = await (
+            from draft in db.Set<ScanDraft>().AsNoTracking()
+            join loan in db.Set<Loan>().AsNoTracking()
+                on new { PortfolioId = draft.PortfolioId, LoanId = draft.ConfirmedEntityId }
+                equals new { loan.PortfolioId, LoanId = (int?)loan.Id }
+            where draft.PortfolioId == command.PortfolioId
+                && draft.Id != command.DraftId
+                && draft.Status == "Confirmed"
+                && draft.TargetEntityType == ScanConfirmationTargetKind.Loan.ToString()
+                && draft.ConfirmedEntityId > 0
+                && (draft.SourceContentSha256 == sourceHash
+                    || (draft.SourceContentSha256 == null
+                        && draft.SourceStoredFile != null
+                        && draft.SourceStoredFile.ContentSha256 == sourceHash))
+                && loan.PropertyId == target.PropertyId
+                && loan.Status == LoanStatus.Active
+                && loan.DeletedAt == null
+            orderby draft.ConfirmedAt ?? draft.CreatedAt, draft.Id
+            select (int?)loan.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (duplicateLoanId is int existingLoanId)
+        {
+            throw new ScanConfirmationValidationException(
+                $"This mortgage source is already confirmed as active loan #{existingLoanId} for this property. Open the existing loan instead of creating another active loan.");
+        }
+    }
+
+    private async Task<ScanConfirmationTargetWriteResult> WritePropertyAcquisitionAsync(
+        ConfirmScanDraftCommand command,
+        ScanPropertyAcquisitionTargetData target,
+        string? extractedFieldsJson,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.SourceStoredFileId is not > 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "A reviewed deed source file is required before confirming property acquisition.");
+        }
+        if (command.CaptureContext?.PropertyId is int capturedPropertyId
+            && capturedPropertyId != target.PropertyId)
+        {
+            throw new ScanConfirmationValidationException(
+                "The reviewed deed must be confirmed against the property it was scanned from.");
+        }
+
+        var reviewed = await RequireReviewedPropertyAcquisitionFactsAsync(
+            command, target, _db, ct);
+        var property = await _db.Set<Property>()
+            .Where(row => row.Id == target.PropertyId
+                && row.PortfolioId == command.PortfolioId
+                && row.DeletedAt == null)
+            .SingleOrDefaultAsync(ct);
+        if (property is null)
+        {
+            throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
+        }
+
+        var now = ToUtc(command.ConfirmedAtUtc);
+        property.PurchasePrice = reviewed.PurchasePrice;
+        property.LandValue = reviewed.LandValue;
+        property.InServiceDate = reviewed.InServiceDate;
+        property.Notes = BuildPropertyAcquisitionNotes(property.Notes, target.Notes);
+        property.UpdatedAt = now;
+        context.BindSemanticAudit(property, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(Property),
+            property.Id,
+            AuditLogOperation.Updated,
+            UserId: command.ConfirmedByUserId,
+            OldValues: extractedFieldsJson,
+            ChangeReason: $"Confirmed acquisition/basis from deed scan draft #{command.DraftId}."));
+
+        var currentOwnerships = await _db.Set<PropertyOwnership>()
+            .Where(ownership => ownership.PortfolioId == command.PortfolioId
+                && ownership.PropertyId == property.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
+            .ToListAsync(ct);
+        var requestedByOwner = reviewed.Ownerships.ToDictionary(ownership => ownership.OwnerEntityId);
+        var retained = new List<PropertyOwnership>();
+        var ended = new List<PropertyOwnership>();
+        var created = new List<PropertyOwnership>();
+
+        foreach (var current in currentOwnerships)
+        {
+            if (requestedByOwner.Remove(current.OwnerEntityId, out var requested))
+            {
+                current.EffectiveFromUtc = reviewed.AcquisitionDate;
+                current.OwnershipSharePercent = requested.OwnershipSharePercent;
+                current.StatementRecipientName = requested.StatementRecipientName;
+                current.StatementRecipientEmail = requested.StatementRecipientEmail;
+                current.PayeeName = requested.PayeeName;
+                retained.Add(current);
+            }
+            else
+            {
+                current.EffectiveToUtc = current.EffectiveFromUtc < now ? now : now.AddTicks(1);
+                ended.Add(current);
+            }
+        }
+
+        foreach (var requested in requestedByOwner.Values)
+        {
+            _db.Add(requested);
+            created.Add(requested);
+        }
+
+        await context.FlushBusinessAsync(ct);
+        foreach (var ownership in retained)
+        {
+            context.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(PropertyOwnership),
+                ownership.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Confirmed deed ownership for Property {property.Id} from scan draft #{command.DraftId}."));
+        }
+        foreach (var ownership in ended)
+        {
+            context.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(PropertyOwnership),
+                ownership.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Ended prior ownership for Property {property.Id} during deed scan confirmation #{command.DraftId}."));
+        }
+        foreach (var ownership in created)
+        {
+            context.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(PropertyOwnership),
+                ownership.Id,
+                AuditLogOperation.Created,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Confirmed deed ownership for Property {property.Id} from scan draft #{command.DraftId}."));
+        }
+
+        return new ScanConfirmationTargetWriteResult(
+            property.Id,
+            CanonicalEntityType: nameof(Property),
+            TargetAuditRecorded: true);
+    }
+
+    private async Task<ScanConfirmationTargetWriteResult> WriteLeaseEndingNoticeAsync(
+        ConfirmScanDraftCommand command,
+        ScanLeaseEndingNoticeTargetData target,
+        string? extractedFieldsJson,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.SourceStoredFileId is not > 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "A scanned notice source file is required before confirming a lease-ending notice.");
+        }
+
+        var noticeGivenAtUtc = ToUtc(target.NoticeGivenAtUtc);
+        var plannedMoveOutAtUtc = ToUtc(target.PlannedMoveOutAtUtc);
+        if (target.LeaseManagementId <= 0 || target.UnitId <= 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "Choose the existing rental relationship this notice belongs to.");
+        }
+
+        var noticeType = string.IsNullOrWhiteSpace(target.NoticeType)
+            ? "lease-ending notice"
+            : target.NoticeType.Trim();
+        var reason = string.IsNullOrWhiteSpace(target.Reason)
+            ? $"Scanned {noticeType} from scan draft #{command.DraftId}."
+            : $"Scanned {noticeType} from scan draft #{command.DraftId}: {target.Reason.Trim()}";
+        if (reason.Length > 1000)
+            reason = reason[..1000];
+
+        var result = await new RecordLeaseEndingDispositionHandler(_db).HandleAsync(
+            new RecordLeaseEndingDispositionCommand(
+                command.PortfolioId,
+                target.LeaseManagementId,
+                target.UnitId,
+                LeaseManagementEndingDisposition.NonRenewalMoveOut,
+                noticeGivenAtUtc,
+                plannedMoveOutAtUtc,
+                reason,
+                command.ConfirmedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision,
+                command.DeliveryIdempotencyKey),
+            context,
+            ct);
+        if (result.Outcome != RecordLeaseEndingDispositionOutcome.Recorded)
+        {
+            throw new ScanConfirmationValidationException(
+                result.Error ?? "The selected rental relationship cannot receive this lease-ending notice.");
+        }
+
+        return new ScanConfirmationTargetWriteResult(
+            result.LeaseManagementId,
+            target.UnitId,
+            CanonicalEntityType: nameof(LeaseManagement),
+            LeaseManagementId: result.LeaseManagementId,
+            TargetAuditRecorded: true);
+    }
+
+    private sealed record ReviewedPropertyAcquisitionFacts(
+        DateTime AcquisitionDate,
+        decimal PurchasePrice,
+        decimal LandValue,
+        DateTime InServiceDate,
+        IReadOnlyList<PropertyOwnership> Ownerships);
+
+    private static async Task<ReviewedPropertyAcquisitionFacts> RequireReviewedPropertyAcquisitionFactsAsync(
+        ConfirmScanDraftCommand command,
+        ScanPropertyAcquisitionTargetData target,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        var missing = new List<string>();
+        if (target.PropertyId <= 0)
+            missing.Add("existing property");
+        var acquisitionDate = ToUtc(target.AcquisitionDate);
+        if (acquisitionDate is null)
+            missing.Add("acquisition date");
+        var purchasePrice = NormalizeDecimal(
+            target.PurchasePrice, "Purchase price", 0.01m, 999_999_999m, 2);
+        if (purchasePrice is null)
+            missing.Add("purchase price");
+        var landValue = NormalizeDecimal(
+            target.LandValue ?? 0m, "Land value", 0m, 999_999_999m, 2) ?? 0m;
+        if (purchasePrice is not null && landValue > purchasePrice.Value)
+            throw new ScanConfirmationValidationException("Land value cannot exceed purchase price.");
+        if (target.Ownerships.Count == 0)
+            missing.Add("ownership");
+        if (missing.Count > 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "Review " + string.Join(", ", missing) + " before confirming this property acquisition.");
+        }
+
+        var ownerIds = target.Ownerships.Select(ownership => ownership.OwnerEntityId).ToArray();
+        if (ownerIds.Any(id => id <= 0) || ownerIds.Distinct().Count() != ownerIds.Length)
+        {
+            throw new ScanConfirmationValidationException(
+                "Each deed ownership row must reference one distinct OwnerEntity.");
+        }
+        if (target.Ownerships.Sum(ownership => ownership.OwnershipSharePercent) != 100m)
+        {
+            throw new ScanConfirmationValidationException(
+                "Reviewed deed ownership shares must total exactly 100 percent.");
+        }
+
+        var owners = await db.Set<OwnerEntity>().AsNoTracking()
+            .Where(owner => owner.PortfolioId == command.PortfolioId
+                && ownerIds.Contains(owner.Id)
+                && owner.DeletedAt == null)
+            .Select(owner => new { owner.Id, owner.Name, owner.Email })
+            .ToListAsync(ct);
+        if (owners.Count != ownerIds.Length)
+        {
+            throw new ScanConfirmationValidationException(
+                "One or more deed owners are missing or outside this portfolio.");
+        }
+
+        var ownerById = owners.ToDictionary(owner => owner.Id);
+        var ownerships = target.Ownerships.Select(request =>
+        {
+            var owner = ownerById[request.OwnerEntityId];
+            var share = NormalizeDecimal(
+                request.OwnershipSharePercent, "Ownership share", 0.0001m, 100m, 4)
+                ?? throw new ScanConfirmationValidationException("Ownership share is required.");
+            return new PropertyOwnership
+            {
+                PortfolioId = command.PortfolioId,
+                PropertyId = target.PropertyId,
+                OwnerEntityId = owner.Id,
+                OwnershipSharePercent = share,
+                EffectiveFromUtc = acquisitionDate!.Value,
+                StatementRecipientName = string.IsNullOrWhiteSpace(request.StatementRecipientName)
+                    ? owner.Name
+                    : request.StatementRecipientName.Trim(),
+                StatementRecipientEmail = request.StatementRecipientEmail?.Trim() ?? owner.Email,
+                PayeeName = string.IsNullOrWhiteSpace(request.PayeeName)
+                    ? owner.Name
+                    : request.PayeeName.Trim(),
+            };
+        }).ToArray();
+
+        return new ReviewedPropertyAcquisitionFacts(
+            acquisitionDate!.Value,
+            purchasePrice!.Value,
+            landValue,
+            ToUtc(target.InServiceDate) ?? acquisitionDate.Value,
+            ownerships);
+    }
+
+    private async Task<ScanConfirmationTargetWriteResult> MatchExistingLoanPaymentAsync(
+        ConfirmScanDraftCommand command,
+        ScanLoanTargetData target,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (target.ExistingLoanId is not int loanId || target.ExistingLoanPaymentId is not int paymentId)
@@ -670,21 +1028,35 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 "Select both an existing loan and an existing scheduled payment to match this scan.");
         }
 
-        var payment = await attempt.Persistence.Query<LoanPayment>()
+        var lockedPaymentId = await _db.Database.SqlQuery<int>($"""
+            SELECT payment."Id" AS "Value"
+            FROM "LoanPayments" AS payment
+            JOIN "Loans" AS loan
+              ON loan."Id" = payment."LoanId"
+             AND loan."PortfolioId" = payment."PortfolioId"
+            JOIN "Properties" AS property
+              ON property."Id" = loan."PropertyId"
+             AND property."PortfolioId" = loan."PortfolioId"
+            WHERE payment."Id" = {paymentId}
+              AND payment."LoanId" = {loanId}
+              AND payment."PortfolioId" = {command.PortfolioId}
+              AND loan."PropertyId" = {target.PropertyId}
+              AND loan."DeletedAt" IS NULL
+              AND property."DeletedAt" IS NULL
+            FOR UPDATE OF payment
+            """).SingleOrDefaultAsync(ct);
+        if (lockedPaymentId == 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "Selected loan payment is not in this portfolio or property.");
+        }
+
+        var payment = await _db.Set<LoanPayment>()
             .Include(row => row.Loan)
-            .Where(row =>
-                row.Id == paymentId
+            .SingleOrDefaultAsync(row =>
+                row.Id == lockedPaymentId
                 && row.LoanId == loanId
-                && row.PortfolioId == command.PortfolioId
-                && row.Loan != null
-                && row.Loan.PortfolioId == command.PortfolioId
-                && row.Loan.PropertyId == target.PropertyId
-                && row.Loan.DeletedAt == null
-                && attempt.Persistence.Query<Property>().Any(property =>
-                    property.Id == row.Loan.PropertyId
-                    && property.PortfolioId == command.PortfolioId
-                    && property.DeletedAt == null))
-            .SingleOrDefaultAsync(ct);
+                && row.PortfolioId == command.PortfolioId, ct);
         if (payment?.Loan is null)
         {
             throw new ScanConfirmationValidationException(
@@ -692,10 +1064,14 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
 
         var reviewed = RequireReviewedLoanStatementFacts(command, target);
+        var effective = await LoanPaymentEffectiveQuery.From(_db)
+            .SingleAsync(row =>
+                row.Id == payment.Id
+                && row.PortfolioId == command.PortfolioId, ct);
 
-        if (payment.Status != LoanPaymentStatus.Paid)
+        if (effective.Status != LoanPaymentStatus.Paid)
         {
-            var hasEarlierUnpaid = await attempt.Persistence.Query<LoanPayment>()
+            var hasEarlierUnpaid = await LoanPaymentEffectiveQuery.From(_db)
                 .AnyAsync(row =>
                     row.LoanId == payment.LoanId
                     && row.PortfolioId == command.PortfolioId
@@ -715,100 +1091,122 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             }
 
             var paidAt = reviewed.EffectiveDate;
-            payment.DueDate = reviewed.EffectiveDate;
-            payment.Status = LoanPaymentStatus.Paid;
-            payment.PaidDate = paidAt;
-            payment.PrincipalAmount = reviewed.PrincipalAmount;
-            payment.InterestAmount = reviewed.InterestAmount;
-            payment.EscrowAmount = reviewed.EscrowAmount;
-            payment.TotalAmount = reviewed.TotalAmount;
-            payment.BalanceAfter = reviewed.BalanceAfter;
+            var correction = new LoanPaymentCorrection
+            {
+                PortfolioId = command.PortfolioId,
+                LoanPaymentId = payment.Id,
+                AttemptId = context.AttemptId,
+                SourceScanDraftId = command.DraftId,
+                DueDate = reviewed.EffectiveDate,
+                PaidDate = paidAt,
+                PrincipalAmount = reviewed.PrincipalAmount,
+                InterestAmount = reviewed.InterestAmount,
+                EscrowAmount = reviewed.EscrowAmount,
+                TotalAmount = reviewed.TotalAmount,
+                BalanceAfter = reviewed.BalanceAfter,
+                Status = LoanPaymentStatus.Paid,
+                PaymentDoesNotCoverInterest = false,
+                CreatedAtUtc = ToUtc(command.ConfirmedAtUtc),
+            };
+            _db.Add(correction);
             payment.Loan.CurrentBalance = reviewed.BalanceAfter;
             payment.Loan.UpdatedAt = paidAt;
             if (reviewed.BalanceAfter == 0m)
                 payment.Loan.Status = LoanStatus.PaidOff;
 
-            attempt.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
+            context.BindSemanticAudit(correction, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(LoanPaymentCorrection),
+                0,
+                AuditLogOperation.Created,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Scan draft #{command.DraftId} appended the effective snapshot for loan payment {payment.Id}."));
+            context.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(Loan),
                 payment.Loan.Id,
                 AuditLogOperation.Updated,
                 UserId: command.ConfirmedByUserId,
                 ChangeReason: $"Scan draft #{command.DraftId} matched loan payment {payment.Id} and reduced the live balance."));
-            await attempt.FlushBusinessAsync(ct);
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
-                command.PortfolioId,
-                nameof(LoanPayment),
-                payment.Id,
-                AuditLogOperation.Updated,
-                UserId: command.ConfirmedByUserId,
-                ChangeReason: $"Posted from scan draft #{command.DraftId}."));
+            await context.FlushBusinessAsync(ct);
+            StageLoanPaymentDataUpdate(context, command, nameof(LoanPayment), payment.Id);
+            StageLoanPaymentDataUpdate(context, command, nameof(Loan), payment.Loan.Id);
         }
         else
         {
-            var impliedOpeningBalance = payment.BalanceAfter + payment.PrincipalAmount;
-            if (payment.EscrowAmount != reviewed.EscrowAmount
-                || payment.TotalAmount != reviewed.TotalAmount
+            var impliedOpeningBalance = effective.BalanceAfter + effective.PrincipalAmount;
+            if (effective.EscrowAmount != reviewed.EscrowAmount
+                || effective.TotalAmount != reviewed.TotalAmount
                 || impliedOpeningBalance != reviewed.OpeningBalance)
             {
                 throw new ScanConfirmationValidationException(
                     "Reviewed statement values must match the already-paid loan payment.");
             }
 
-            var principalCorrection = reviewed.PrincipalAmount - payment.PrincipalAmount;
-            var interestCorrection = reviewed.InterestAmount - payment.InterestAmount;
-            var balanceCorrection = reviewed.BalanceAfter - payment.BalanceAfter;
-            var requiresComponentCorrection = principalCorrection != 0m
-                || interestCorrection != 0m
-                || balanceCorrection != 0m;
-            if (requiresComponentCorrection)
+            var principalCorrection = reviewed.PrincipalAmount - effective.PrincipalAmount;
+            var interestCorrection = reviewed.InterestAmount - effective.InterestAmount;
+            if (principalCorrection + interestCorrection != 0m
+                || Math.Abs(principalCorrection) >= PaidStatementComponentCorrectionTolerance
+                || Math.Abs(interestCorrection) >= PaidStatementComponentCorrectionTolerance)
             {
-                if (principalCorrection + interestCorrection != 0m
-                    || Math.Abs(principalCorrection) >= PaidStatementComponentCorrectionTolerance
-                    || Math.Abs(interestCorrection) >= PaidStatementComponentCorrectionTolerance)
-                {
-                    throw new ScanConfirmationValidationException(
-                        "Reviewed statement values must match the already-paid loan payment.");
-                }
-
-                var hasLaterPaid = await attempt.Persistence.Query<LoanPayment>()
-                    .AnyAsync(row =>
-                        row.LoanId == payment.LoanId
-                        && row.PortfolioId == command.PortfolioId
-                        && row.Id != payment.Id
-                        && (row.DueDate > payment.DueDate
-                            || (row.DueDate == payment.DueDate && row.Id > payment.Id))
-                        && row.Status == LoanPaymentStatus.Paid, ct);
-                if (hasLaterPaid || payment.Loan.CurrentBalance != payment.BalanceAfter)
-                {
-                    throw new ScanConfirmationValidationException(
-                        "Already-paid loan payment corrections require the selected payment to be the latest posted payment.");
-                }
-
-                payment.PrincipalAmount = reviewed.PrincipalAmount;
-                payment.InterestAmount = reviewed.InterestAmount;
-                payment.BalanceAfter = reviewed.BalanceAfter;
-                payment.Loan.CurrentBalance = reviewed.BalanceAfter;
-                payment.Loan.UpdatedAt = reviewed.EffectiveDate;
-                if (reviewed.BalanceAfter == 0m)
-                    payment.Loan.Status = LoanStatus.PaidOff;
-
-                attempt.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
-                    command.PortfolioId,
-                    nameof(Loan),
-                    payment.Loan.Id,
-                    AuditLogOperation.Updated,
-                    UserId: command.ConfirmedByUserId,
-                    ChangeReason: $"Scan draft #{command.DraftId} corrected posted loan payment {payment.Id} to the reviewed statement balance."));
-                await attempt.FlushBusinessAsync(ct);
-                attempt.StageSemanticEvent(new AtomicSemanticAudit(
-                    command.PortfolioId,
-                    nameof(LoanPayment),
-                    payment.Id,
-                    AuditLogOperation.Updated,
-                    UserId: command.ConfirmedByUserId,
-                    ChangeReason: $"Corrected posted statement split from scan draft #{command.DraftId}."));
+                throw new ScanConfirmationValidationException(
+                    "Reviewed statement values must match the already-paid loan payment.");
             }
+
+            var hasLaterPaid = await LoanPaymentEffectiveQuery.From(_db)
+                .AnyAsync(row =>
+                    row.LoanId == payment.LoanId
+                    && row.PortfolioId == command.PortfolioId
+                    && row.Id != payment.Id
+                    && (row.DueDate > effective.DueDate
+                        || (row.DueDate == effective.DueDate && row.Id > payment.Id))
+                    && row.Status == LoanPaymentStatus.Paid, ct);
+            if (hasLaterPaid || payment.Loan.CurrentBalance != effective.BalanceAfter)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Already-paid loan payment corrections require the selected payment to be the latest posted payment.");
+            }
+
+            var correction = new LoanPaymentCorrection
+            {
+                PortfolioId = command.PortfolioId,
+                LoanPaymentId = payment.Id,
+                AttemptId = context.AttemptId,
+                SourceScanDraftId = command.DraftId,
+                DueDate = reviewed.EffectiveDate,
+                PaidDate = effective.PaidDate,
+                PrincipalAmount = reviewed.PrincipalAmount,
+                InterestAmount = reviewed.InterestAmount,
+                EscrowAmount = reviewed.EscrowAmount,
+                TotalAmount = reviewed.TotalAmount,
+                BalanceAfter = reviewed.BalanceAfter,
+                Status = LoanPaymentStatus.Paid,
+                PaymentDoesNotCoverInterest = effective.PaymentDoesNotCoverInterest,
+                CreatedAtUtc = ToUtc(command.ConfirmedAtUtc),
+            };
+            _db.Add(correction);
+            payment.Loan.CurrentBalance = reviewed.BalanceAfter;
+            payment.Loan.UpdatedAt = reviewed.EffectiveDate;
+            if (reviewed.BalanceAfter == 0m)
+                payment.Loan.Status = LoanStatus.PaidOff;
+
+            context.BindSemanticAudit(correction, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(LoanPaymentCorrection),
+                0,
+                AuditLogOperation.Created,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Scan draft #{command.DraftId} appended the effective snapshot for paid loan payment {payment.Id}."));
+            context.BindSemanticAudit(payment.Loan, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(Loan),
+                payment.Loan.Id,
+                AuditLogOperation.Updated,
+                UserId: command.ConfirmedByUserId,
+                ChangeReason: $"Scan draft #{command.DraftId} reconciled paid loan payment {payment.Id} to the reviewed statement balance."));
+            await context.FlushBusinessAsync(ct);
+            StageLoanPaymentDataUpdate(context, command, nameof(LoanPayment), payment.Id);
+            StageLoanPaymentDataUpdate(context, command, nameof(Loan), payment.Loan.Id);
         }
 
         return new ScanConfirmationTargetWriteResult(
@@ -816,6 +1214,31 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             CanonicalEntityType: nameof(Loan),
             LoanPaymentId: payment.Id,
             TargetAuditRecorded: true);
+    }
+
+    private static void StageLoanPaymentDataUpdate(
+        IAtomicCommandContext context,
+        ConfirmScanDraftCommand command,
+        string entityType,
+        int entityId)
+    {
+        var now = ToUtc(command.ConfirmedAtUtc);
+        context.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType,
+                entityId,
+                operation = "update",
+                data = new { },
+            }),
+            IdempotencyKey =
+                $"{command.DeliveryIdempotencyKey}:{entityType}:{entityId}:data-update",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
     }
 
     private static ReviewedLoanStatementFacts RequireReviewedLoanStatementFacts(
@@ -880,14 +1303,14 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static void EnrichCreatedTargetAudit(
         ConfirmScanDraftCommand command,
         string? claimExtractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         AtomicBusinessFlush flush,
         object target)
     {
         var mutation = flush.Mutations.Single(row =>
             ReferenceEquals(row.EntityReference, target)
             && row.Operation == AuditLogOperation.Created);
-        attempt.EnrichMutation(
+        context.EnrichMutation(
             mutation,
             new AtomicSemanticAudit(
                 command.PortfolioId,
@@ -902,12 +1325,12 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     private static async Task<ExpenseLocationContext> ResolveExpenseLocationAsync(
         int portfolioId,
         ScanExpenseTargetData target,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (target.WorkOrderId is int workOrderId)
         {
-            var workOrderLocation = await persistence.Query<WorkOrder>()
+            var workOrderLocation = await db.Set<WorkOrder>()
                 .Where(order => order.Id == workOrderId
                     && order.PortfolioId == portfolioId
                     && (target.PropertyId == null || order.PropertyId == target.PropertyId)
@@ -924,7 +1347,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
 
         if (target.UnitId is int unitId)
         {
-            var unitLocation = await persistence.Query<Unit>()
+            var unitLocation = await db.Set<Unit>()
                 .Where(unit => unit.Id == unitId
                     && unit.PortfolioId == portfolioId
                     && (target.PropertyId == null || unit.PropertyId == target.PropertyId))
@@ -940,7 +1363,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
 
         if (target.PropertyId is int propertyId)
         {
-            var propertyLocation = await persistence.Query<Property>()
+            var propertyLocation = await db.Set<Property>()
                 .Where(property => property.Id == propertyId && property.PortfolioId == portfolioId)
                 .Select(property => new ExpenseLocationContext(
                     ExpenseOperationalScope.Property,
@@ -961,19 +1384,19 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         int? UnitId,
         int? WorkOrderId);
 
-    private static async Task ValidateOptionalPropertyUnitAsync(
+    private async Task ValidateOptionalPropertyUnitAsync(
         int portfolioId,
         int? propertyId,
         int? unitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (propertyId is int selectedPropertyId &&
-            !await IsPropertyInPortfolioAsync(portfolioId, selectedPropertyId, persistence, ct))
+            !await IsPropertyInPortfolioAsync(portfolioId, selectedPropertyId, _db, ct))
         {
             throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
         }
-        if (unitId is int selectedUnitId && !await persistence.Query<Unit>()
+        if (unitId is int selectedUnitId && !await db.Set<Unit>()
                 .AnyAsync(unit => unit.Id == selectedUnitId
                     && unit.Property != null
                     && unit.Property.PortfolioId == portfolioId
@@ -983,17 +1406,17 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
     }
 
-    private static async Task ValidateWorkOrderReferencesAsync(
+    private async Task ValidateWorkOrderReferencesAsync(
         int portfolioId,
         ScanWorkOrderTargetData target,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        if (!await IsPropertyInPortfolioAsync(portfolioId, target.PropertyId, persistence, ct))
+        if (!await IsPropertyInPortfolioAsync(portfolioId, target.PropertyId, _db, ct))
         {
             throw new ScanConfirmationValidationException("Selected property is not in this portfolio.");
         }
-        if (target.UnitId is int unitId && !await persistence.Query<Unit>()
+        if (target.UnitId is int unitId && !await db.Set<Unit>()
                 .AnyAsync(unit => unit.Id == unitId
                     && unit.PropertyId == target.PropertyId
                     && unit.Property != null
@@ -1001,12 +1424,12 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         {
             throw new ScanConfirmationValidationException("Selected unit is not in this portfolio or property.");
         }
-        if (target.VendorId is int vendorId && !await persistence.Query<Vendor>()
+        if (target.VendorId is int vendorId && !await db.Set<Vendor>()
                 .AnyAsync(vendor => vendor.Id == vendorId && vendor.PortfolioId == portfolioId, ct))
         {
             throw new ScanConfirmationValidationException("Selected vendor is not in this portfolio.");
         }
-        if (target.LeaseManagementId is int leaseManagementId && !await persistence.Query<LeaseManagement>()
+        if (target.LeaseManagementId is int leaseManagementId && !await db.Set<LeaseManagement>()
                 .AnyAsync(relationship => relationship.Id == leaseManagementId
                     && relationship.PortfolioId == portfolioId
                     && relationship.PropertyId == target.PropertyId
@@ -1015,7 +1438,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             throw new ScanConfirmationValidationException("Selected lease relationship is not in this portfolio or location.");
         }
         if (target.TenantId is int tenantId && !await TenantMatchesLocationAsync(
-                portfolioId, tenantId, target.PropertyId, target.UnitId, persistence, ct))
+                portfolioId, tenantId, target.PropertyId, target.UnitId, _db, ct))
         {
             throw new ScanConfirmationValidationException("Selected tenant does not belong to this location.");
         }
@@ -1026,12 +1449,12 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         int tenantId,
         int propertyId,
         int? unitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         var currentParties =
-            from party in persistence.Query<LeaseManagementParty>()
-            join lifecycle in persistence.Query<LeaseManagementLifecycleProjection>()
+            from party in db.Set<LeaseManagementParty>()
+            join lifecycle in db.Set<LeaseManagementLifecycleProjection>()
                 on new { party.PortfolioId, party.LeaseManagementId }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
             where party.PortfolioId == portfolioId
@@ -1046,11 +1469,11 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         return currentParties.AnyAsync(ct);
     }
 
-    private static async Task<int?> ResolveOrCreateVendorAsync(
+    private async Task<int?> ResolveOrCreateVendorAsync(
         int portfolioId,
         ScanReceiptData receipt,
         DateTime now,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var name = receipt.VendorName?.Trim();
@@ -1060,7 +1483,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         }
 
         var normalizedName = name.ToLowerInvariant();
-        var matchSummary = await attempt.Persistence.Query<Vendor>()
+        var matchSummary = await _db.Set<Vendor>()
             .Where(vendor => vendor.PortfolioId == portfolioId
                 && vendor.Name.Trim().ToLower() == normalizedName)
             .GroupBy(_ => 1)
@@ -1091,16 +1514,16 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             CreatedAt = now,
             UpdatedAt = now,
         };
-        attempt.Persistence.Add(vendor);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(vendor);
+        await context.FlushBusinessAsync(ct);
         return vendor.Id;
     }
 
     private static Task<bool> IsPropertyInPortfolioAsync(
         int portfolioId,
         int propertyId,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) => persistence.Query<Property>()
+        RentalCommandDbContext db,
+        CancellationToken ct) => db.Set<Property>()
             .AnyAsync(property => property.Id == propertyId && property.PortfolioId == portfolioId, ct);
 
     private static string SerializeReceipt(ScanReceiptData receipt) => JsonSerializer.Serialize(new
@@ -1174,6 +1597,19 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         return Truncate(result, 2000)!;
     }
 
+    private static string? BuildPropertyAcquisitionNotes(string? existingNotes, string? reviewedNotes)
+    {
+        const string provenance = "Acquisition and basis confirmed from scanned deed.";
+        var parts = new[]
+        {
+            existingNotes?.Trim(),
+            string.IsNullOrWhiteSpace(reviewedNotes)
+                ? provenance
+                : $"{reviewedNotes.Trim()} ({provenance})",
+        }.Where(part => !string.IsNullOrWhiteSpace(part));
+        return Truncate(string.Join(Environment.NewLine, parts), 2000);
+    }
+
     private static decimal? NormalizeDecimal(
         decimal? raw,
         string label,
@@ -1220,4 +1656,10 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         string.IsNullOrWhiteSpace(value)
             ? null
             : value.Length <= maxLength ? value : value[..maxLength];
+
+    private static string? Clean(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 }

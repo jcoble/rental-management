@@ -107,6 +107,7 @@ public class PropertyServiceTests : IAsyncLifetime
     {
         SeedProperties("Alpha", "Bravo", "Charlie", "Delta", "Echo");
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var result = await _sut.ListPageAsync(_scope, new PropertyListQuery
         {
@@ -140,6 +141,7 @@ public class PropertyServiceTests : IAsyncLifetime
         _ctx.Db.AddRange(single, duplex, singleUnit, NewUnit(duplex, "A", now));
         _ctx.Db.SaveChanges();
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
         {
@@ -221,6 +223,7 @@ public class PropertyServiceTests : IAsyncLifetime
         _ctx.Db.Properties.Add(property);
         _ctx.Db.SaveChanges();
 
+        await _ctx.ActivateApiScopeAsync(_scope);
         _commands.Clear();
         var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
         {
@@ -249,7 +252,7 @@ public class PropertyServiceTests : IAsyncLifetime
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
         new[] { countSql, pageSql }.Should().OnlyContain(sql =>
-            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("public.rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
@@ -278,7 +281,7 @@ public class PropertyServiceTests : IAsyncLifetime
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
         new[] { formerCountSql, formerPageSql }.Should().OnlyContain(sql =>
-            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("public.rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
@@ -297,6 +300,52 @@ public class PropertyServiceTests : IAsyncLifetime
         detail.Ownerships.Should().NotContain(item => item.OwnerEntityId == formerOwner.Id);
         _commands.Should().ContainSingle();
         _commands[0].Should().Contain("PropertyOwnerships");
+    }
+
+    [Fact]
+    public async Task PropertyGetAndList_ProjectTypeAndUnitAggregates()
+    {
+        var now = DateTime.UtcNow;
+        var property = NewProperty("Willow Run", RentalStructure.MultiRental, now);
+        property.PropertyType = PropertyType.MultiFamily;
+        var occupiedA = NewUnit(property, "A", now);
+        var occupiedB = NewUnit(property, "B", now);
+        var vacant = NewUnit(property, "C", now);
+        _ctx.Db.AddRange(property, occupiedA, occupiedB, vacant);
+        _ctx.Db.SaveChanges();
+        SeedCurrentPossession(property, occupiedA, now);
+        SeedCurrentPossession(property, occupiedB, now);
+
+        await _ctx.ActivateApiScopeAsync(_scope);
+        var detail = await _sut.GetAsync(_scope, property.Id);
+        detail.Should().NotBeNull();
+        detail!.PropertyType.Should().Be(PropertyType.MultiFamily);
+        detail.UnitCount.Should().Be(3);
+        detail.OccupiedUnits.Should().Be(2);
+
+        var list = await _sut.ListAsync(_scope, new ListQuery());
+        var row = list.Single(item => item.Id == property.Id);
+        row.UnitCount.Should().Be(3);
+        row.OccupiedUnits.Should().Be(2);
+    }
+
+    private void SeedCurrentPossession(Property property, Unit unit, DateTime now)
+    {
+        _ctx.Db.LeaseManagements.Add(new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"OCC-{unit.Id}",
+            PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = _scope.UserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        });
+        _ctx.Db.SaveChanges();
     }
 
     private static Property NewProperty(string name, RentalStructure structure, DateTime now) => new()

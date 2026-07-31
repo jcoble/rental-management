@@ -4,7 +4,7 @@ namespace RentalCommand.Core.Interfaces;
 /// Swappable adapter for a provider-hosted applicant screening flow. Rental Command supplies only
 /// reconciliation and invitation data; the provider collects sensitive identity data directly.
 /// </summary>
-public interface IScreeningProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface IScreeningProvider
 {
     ScreeningProviderDescriptor Descriptor { get; }
 

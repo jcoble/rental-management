@@ -10,7 +10,7 @@ public sealed record DispatchWorkOrderToVendorCommand(
     string DestinationPhone,
     string Message,
     int? ChangedByUserId,
-    DateTime DispatchedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime DispatchedAtUtc,
     DispatchManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record DispatchManagementAccess(
@@ -34,4 +34,31 @@ public sealed record DispatchWorkOrderToVendorResult(
     int VendorId,
     VendorDispatchStatus Status,
     DateTime DispatchedAtUtc,
-    string? Message) : IAtomicResultData;
+    string? Message);
+
+public sealed record CancelVendorDispatchCommand(
+    int PortfolioId,
+    int WorkOrderId,
+    int DispatchId,
+    int? ChangedByUserId,
+    string Reason,
+    [property: AtomicFingerprintIgnore] DateTime CancelledAtUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey,
+    DispatchManagementAccess? ManagementAccess = null) : IAtomicCommandData;
+
+public enum CancelVendorDispatchOutcome
+{
+    Cancelled,
+    NotFound,
+    AlreadyClosed,
+}
+
+public sealed record CancelVendorDispatchResult(
+    CancelVendorDispatchOutcome Outcome,
+    int DispatchId,
+    int PortfolioId,
+    int WorkOrderId,
+    int VendorId,
+    VendorDispatchStatus Status,
+    DateTime CancelledAtUtc,
+    string? Reason);

@@ -84,23 +84,66 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final confirmButton = tester.widget<FilledButton>(
+      expect(
         find.widgetWithText(FilledButton, 'Confirm & Create Expense'),
+        findsNothing,
+        reason: status,
       );
-      expect(confirmButton.onPressed, isNull, reason: status);
-
-      final rejectButton = tester.widget<OutlinedButton>(
+      expect(
         find.widgetWithText(OutlinedButton, 'Reject'),
+        findsNothing,
+        reason: status,
       );
-      expect(rejectButton.onPressed, isNull, reason: status);
       expect(
         find.widgetWithText(OutlinedButton, 'Retry extraction'),
         findsNothing,
+      );
+      expect(find.text('Result'), findsOneWidget, reason: status);
+      expect(find.text(status), findsWidgets, reason: status);
+      expect(find.text('Save command'), findsNothing, reason: status);
+      expect(
+        find.text('This result is final and read-only.'),
+        findsOneWidget,
+        reason: status,
+      );
+      expect(
+        find.textContaining('Nothing is created until'),
+        findsNothing,
+        reason: status,
       );
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 11));
     }
+  });
+
+  testWidgets('confirmed loan scan is read-only and exposes no loan actions', (
+    tester,
+  ) async {
+    final scanRepo = _FakeFailedScanRepository(
+      status: 'Confirmed',
+      targetEntityType: 'Loan',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [scanRepositoryProvider.overrideWithValue(scanRepo)],
+        child: const MaterialApp(home: ScanReviewScreen(draftId: 109)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('This scan has already been confirmed.'), findsOneWidget);
+    expect(find.text('Create Loan'), findsNothing);
+    expect(find.text('Match & record payment'), findsNothing);
+    expect(find.text('Which property does this loan belong to?'), findsNothing);
+    expect(find.text('Add new loan'), findsNothing);
+    expect(find.text('Match existing payment'), findsNothing);
+    expect(find.byType(DropdownButtonFormField<int>), findsNothing);
+    expect(find.byType(TextFormField), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 11));
   });
 
   test('repository retry posts to the retry endpoint', () async {
@@ -141,14 +184,22 @@ void main() {
 }
 
 class _FakeFailedScanRepository extends ScanRepository {
-  _FakeFailedScanRepository({required this.status}) : super(dio: Dio());
+  _FakeFailedScanRepository({
+    required this.status,
+    this.targetEntityType = 'Expense',
+  }) : super(dio: Dio());
 
   final String status;
+  final String targetEntityType;
   int retryCount = 0;
   int? lastRetryId;
 
   @override
-  Future<ScanDraft> getDraft(int id) async => _draft(id, status);
+  Future<ScanDraft> getDraft(int id) async => _draft(
+    id,
+    status,
+    targetEntityType: targetEntityType,
+  );
 
   @override
   Future<Uint8List> downloadFile(int id) async {
@@ -161,7 +212,7 @@ class _FakeFailedScanRepository extends ScanRepository {
   Future<ScanDraft> retry(int id) async {
     retryCount += 1;
     lastRetryId = id;
-    return _draft(id, 'Pending');
+    return _draft(id, 'Pending', targetEntityType: targetEntityType);
   }
 }
 
@@ -208,11 +259,15 @@ class _RetryAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-ScanDraft _draft(int id, String status) {
+ScanDraft _draft(
+  int id,
+  String status, {
+  String targetEntityType = 'Expense',
+}) {
   return ScanDraft(
     id: id,
     portfolioId: 1,
-    targetEntityType: 'Expense',
+    targetEntityType: targetEntityType,
     status: status,
     fileUrl: '/api/v1/scans/$id/file',
     fields: const [],

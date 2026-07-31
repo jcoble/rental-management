@@ -16,10 +16,10 @@ public sealed record RecordLeaseEndingDispositionCommand(
     DateTime? PlannedMoveOutAtUtc,
     string DecisionReason,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
 
 public enum RecordLeaseEndingDispositionOutcome
 {
@@ -36,4 +36,4 @@ public sealed record RecordLeaseEndingDispositionResult(
     int? EndingDispositionDecidedByUserId,
     DateTime? NoticeGivenAtUtc,
     DateTime? PlannedMoveOutAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);

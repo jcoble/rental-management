@@ -2,26 +2,72 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Banking;
 using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Banking;
 
 /// <summary>
-/// PostgreSQL-only, kernel-owned banking merge boundary. Each method executes one statement that
+/// PostgreSQL-only, domain-owned banking merge boundary. Each method executes one statement that
 /// deduplicates, joins, filters, mutates, counts, and shapes its returned audit/result payload in SQL.
 /// </summary>
-internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
+public static class AtomicBankingPersistence
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly AtomicAuditScope _scope;
-
-    public AtomicBankingPersistence(RentalCommandDbContext db, AtomicAuditScope scope)
+    public static async Task<AtomicBankTransactionMergeResult> ApplyPlaidSyncAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        int portfolioId,
+        int connectionId,
+        IReadOnlyList<BankTransactionInput> added,
+        int addedInputCount,
+        IReadOnlyList<BankTransactionInput> modified,
+        int modifiedInputCount,
+        IReadOnlyList<string> removedProviderTransactionIds,
+        DateTime appliedAtUtc,
+        CancellationToken ct = default)
     {
-        _db = db;
-        _scope = scope;
+        var scope = RequireAuditScope(db, context);
+        using var permit = scope.BeginInternalRawDml(
+            "BankTransactions", AtomicRawDmlOperation.Insert);
+        return await new BankingAtomicSqlMerge(db).ApplyPlaidSyncAsync(
+            portfolioId, connectionId, added, addedInputCount, modified,
+            modifiedInputCount, removedProviderTransactionIds, appliedAtUtc, ct);
     }
 
+    public static async Task<AtomicBankTransactionMergeResult> ImportAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        int portfolioId,
+        int connectionId,
+        IReadOnlyList<BankTransactionInput> transactions,
+        int inputCount,
+        DateTime importedAtUtc,
+        CancellationToken ct = default)
+    {
+        var scope = RequireAuditScope(db, context);
+        using var permit = scope.BeginInternalRawDml(
+            "BankTransactions", AtomicRawDmlOperation.Insert);
+        return await new BankingAtomicSqlMerge(db).ImportAsync(
+            portfolioId, connectionId, transactions, inputCount, importedAtUtc, ct);
+    }
+
+    private static AtomicAuditScope RequireAuditScope(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context)
+    {
+        if (context is not AtomicCommandContext owner || !owner.Owns(db))
+        {
+            throw new AtomicArchitectureException(
+                "Atomic helper requires the exact scoped DbContext and active command context.");
+        }
+
+        return owner.AuditScope;
+    }
+}
+
+internal sealed class BankingAtomicSqlMerge(RentalCommandDbContext db)
+{
     public Task<AtomicBankTransactionMergeResult> ApplyPlaidSyncAsync(
         int portfolioId,
         int connectionId,
@@ -67,8 +113,8 @@ internal sealed class AtomicBankingPersistence : IAtomicBankingPersistence
         NpgsqlParameter[] parameters,
         CancellationToken ct)
     {
-        using var lease = _scope.BeginInternalRawDml("BankTransactions", AtomicRawDmlOperation.Insert);
-        var rows = await _db.Database.SqlQueryRaw<MergeSummaryRow>(sql, parameters).ToListAsync(ct);
+        var rows = await db.Database.SqlQueryRaw<MergeSummaryRow>(
+            sql, parameters).ToListAsync(ct);
         if (rows.Count != 1)
         {
             throw new InvalidOperationException($"The banking merge returned {rows.Count} summary rows instead of one.");

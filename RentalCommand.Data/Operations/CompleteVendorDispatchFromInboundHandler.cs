@@ -16,12 +16,16 @@ namespace RentalCommand.Data.Operations;
 public sealed class CompleteVendorDispatchFromInboundHandler
     : IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CompleteVendorDispatchFromInboundHandler(RentalCommandDbContext db) => _db = db;
+
     private static readonly VendorDispatchStatus[] OpenStatuses =
         [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
     public async Task<CompleteVendorDispatchFromInboundResult> HandleAsync(
         CompleteVendorDispatchFromInboundCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderEventId);
@@ -35,14 +39,14 @@ public sealed class CompleteVendorDispatchFromInboundHandler
 
         // Different provider event ids from the same number must serialize before deciding which
         // open dispatch is eligible. A hash collision only over-serializes unrelated numbers.
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.VendorDispatch,
+        await context.AcquireLockAsync(
+            "VendorDispatch",
             PhoneLockKey(command.NormalizedFromPhone),
             ct);
 
         // The complete match, portfolio integrity checks, ordering, and limiting stay in one SQL
         // query. No free-form phone rows are materialized for in-memory normalization.
-        var matches = await attempt.Persistence.Query<VendorDispatch>()
+        var matches = await _db.Set<VendorDispatch>()
             .AsNoTracking()
             .TagWith("InboundVendorPhoneMatch: bounded top-two")
             .Where(candidate => OpenStatuses.Contains(candidate.Status)
@@ -70,8 +74,8 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         // serializes sibling dispatches from different vendor phones. Load tracked state only after
         // that aggregate lock so the first real completion transition is decided from fresh rows.
         var match = matches[0];
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, match.WorkOrderId, ct);
-        var dispatch = await attempt.Persistence.Query<VendorDispatch>()
+        await context.AcquireLockAsync("WorkOrder", match.WorkOrderId, ct);
+        var dispatch = await _db.Set<VendorDispatch>()
             .Include(candidate => candidate.Vendor)
             .Include(candidate => candidate.WorkOrder)
             .SingleOrDefaultAsync(candidate =>
@@ -106,7 +110,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             workOrder.Status = WorkOrderStatus.Completed;
             workOrder.CompletedAt = receivedAt;
             workOrder.UpdatedAt = receivedAt;
-            attempt.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
+            context.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
                 portfolioId,
                 nameof(WorkOrder),
                 workOrder.Id,
@@ -131,7 +135,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 ChangedByLabel = "Vendor",
                 CreatedAtUtc = receivedAt,
             };
-            attempt.Persistence.Add(statusEvent);
+            _db.Add(statusEvent);
         }
 
         if (completedWorkOrder)
@@ -140,7 +144,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             // but scorecard credit belongs only to the first actual WorkOrder -> Completed transition.
             vendor.JobsCompleted += 1;
             vendor.UpdatedAt = receivedAt;
-            attempt.BindSemanticAudit(vendor, new AtomicSemanticAudit(
+            context.BindSemanticAudit(vendor, new AtomicSemanticAudit(
                 portfolioId,
                 nameof(Vendor),
                 vendor.Id,
@@ -151,15 +155,15 @@ public sealed class CompleteVendorDispatchFromInboundHandler
 
         List<Notification> notifications = completedWorkOrder
             ? await CreateNotificationsAsync(
-                attempt, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct)
+                context, portfolioId, dispatch, workOrder, vendor.Name, receivedAt, ct)
             : [];
         if (notifications.Count > 0)
         {
-            attempt.Persistence.AddRange(notifications);
+            _db.AddRange(notifications);
         }
 
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             portfolioId,
             nameof(VendorDispatch),
             dispatch.Id,
@@ -175,7 +179,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 : $"Verified inbound provider event {command.ProviderEventId} closed a sibling dispatch for already-completed work order #{workOrder.Id}."));
         if (statusEvent is not null)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 portfolioId,
                 nameof(WorkOrderStatusEvent),
                 statusEvent.Id,
@@ -191,7 +195,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         }
         foreach (var notification in notifications)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 portfolioId,
                 nameof(Notification),
                 notification.Id,
@@ -215,8 +219,25 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             notifications.Select(notification => notification.Id).ToArray());
     }
 
-    private static async Task<List<Notification>> CreateNotificationsAsync(
-        IAtomicWriteAttempt attempt,
+    public Task AuthorizeReplayAsync(
+        CompleteVendorDispatchFromInboundCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ProviderEventId);
+        if (command.ProviderEventId.Length > 200)
+            throw new ArgumentOutOfRangeException(
+                nameof(command),
+                "Provider event id exceeds the inbound SMS provider metadata limit.");
+
+        // SmsWebhookController verifies the SMS provider signature before every request reaches
+        // this command. Replays must validate only the immutable delivery shape and preserve the
+        // exact stored receipt, including NoOpenDispatch, even if phone/dispatch rows later change.
+        return Task.CompletedTask;
+    }
+
+    private async Task<List<Notification>> CreateNotificationsAsync(
+        IAtomicCommandContext commandContext,
         int portfolioId,
         VendorDispatch dispatch,
         WorkOrder workOrder,
@@ -230,15 +251,15 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         // applies when neither branch resolves anybody.
         var staffUserIds = ScopedNotificationRecipientQuery
             .ForTeamTopic(
-                attempt,
+                _db,
                 portfolioId,
                 TeamRoutingTopic.WorkOrders,
                 workOrder.PropertyId,
                 workOrder.Id,
                 now);
         var recipients = await (
-                from context in attempt.Persistence.Query<WorkspaceAccessContext>()
-                join membership in attempt.Persistence.Query<WorkspaceMembership>()
+                from context in _db.Set<WorkspaceAccessContext>()
+                join membership in _db.Set<WorkspaceMembership>()
                     on new { AccessContextId = context.Id, context.PortfolioId }
                     equals new { membership.AccessContextId, membership.PortfolioId }
                 where context.PortfolioId == portfolioId

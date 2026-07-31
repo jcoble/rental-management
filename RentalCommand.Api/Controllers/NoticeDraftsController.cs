@@ -87,6 +87,7 @@ public class NoticeDraftsController : ManagementControllerBase
     [HttpPost("{id:int}/approve")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<NoticeDraftResponse>> Approve(
         int id,
@@ -104,13 +105,21 @@ public class NoticeDraftsController : ManagementControllerBase
         }
 
         var scope = GetWorkspaceReadScope();
-        await _foundation.ApproveAndQueueAsync(
-            NoticeApprovalExecutionContext.ForWorkspace(scope),
-            id,
-            new ApproveAndQueueNoticeRequest(channels),
-            null,
-            operationKey,
-            ct);
+        try
+        {
+            await _foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                id,
+                new ApproveAndQueueNoticeRequest(channels),
+                null,
+                operationKey,
+                ct);
+        }
+        catch (NoticeApprovalAuthorizationException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+
         var approved = await _service.GetAsync(scope, id, ct);
         return approved is null
             ? NotFound(new { error = "Approved notice could not be read in the current scope" })

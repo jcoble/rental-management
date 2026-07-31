@@ -2,7 +2,6 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
@@ -21,43 +20,40 @@ using RentalCommand.TestCommon;
 namespace RentalCommand.Api.Tests.Scanning;
 
 /// <summary>
-/// Tests for the bulk-scan batch endpoints on <see cref="ScanController"/>. Uses SQLite in-memory
-/// so the translated conditional-count, paging, and projection SQL is exercised by a relational provider.
+/// Tests for the bulk-scan batch endpoints on <see cref="ScanController"/>. Uses migrated PostgreSQL
+/// so authorization, conditional-count, paging, and projection SQL run under the production runtime role.
 /// </summary>
-public class ScanBatchControllerTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ScanBatchControllerTests : IAsyncLifetime
 {
     private const int PortfolioId = 42;
     private static readonly Guid SessionId =
         Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
     private readonly IAtomicUnitOfWork _atomic = Mock.Of<IAtomicUnitOfWork>();
     private readonly List<string> _executedSql = [];
-    private readonly CanonicalScanTestAuthorization _authorization;
+    private CanonicalScanTestAuthorization _authorization = null!;
 
-    public ScanBatchControllerTests()
+    public ScanBatchControllerTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new RentalCommandTestDbContext(options);
-        _db.Database.EnsureCreated();
-
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
         SeedPortfolio(PortfolioId);
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, PortfolioId, userId: 7, sessionId: SessionId);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _ctx.DisposeAsync();
     }
 
     // -------------------------------------------------------------------------
@@ -69,7 +65,7 @@ public class ScanBatchControllerTests : IDisposable
     {
         // A recording scan service that persists a Pending draft per call (mirrors production
         // ScanService.CreateBatchDraftAsync) so we can assert the rows it created.
-        var controller = CreateController(
+        var controller = await CreateControllerAsync(
             Mock.Of<IScanService>(), new RecordingBatchScanUploadService(_db));
 
         var files = new List<IFormFile>
@@ -107,7 +103,7 @@ public class ScanBatchControllerTests : IDisposable
     [Fact]
     public async Task UploadBatch_WithNoFiles_ReturnsBadRequest()
     {
-        var controller = CreateController(
+        var controller = await CreateControllerAsync(
             Mock.Of<IScanService>(), new RecordingBatchScanUploadService(_db));
 
         var result = await controller.UploadBatch(
@@ -120,7 +116,7 @@ public class ScanBatchControllerTests : IDisposable
     [Fact]
     public async Task UploadBatch_WithInvalidTarget_ReturnsBadRequest()
     {
-        var controller = CreateController(
+        var controller = await CreateControllerAsync(
             Mock.Of<IScanService>(), new RecordingBatchScanUploadService(_db));
         var files = new List<IFormFile> { FakeFile("doc.pdf", [1]) };
 
@@ -136,7 +132,8 @@ public class ScanBatchControllerTests : IDisposable
     [Fact]
     public async Task UploadBatch_WhenDraftCreationFails_RollsBackBatchAndDraftRows()
     {
-        var controller = CreateController(Mock.Of<IScanService>(), new FailingBatchScanUploadService());
+        var controller = await CreateControllerAsync(
+            Mock.Of<IScanService>(), new FailingBatchScanUploadService());
         var files = new List<IFormFile>
         {
             FakeFile("lease-1.pdf", [1, 2, 3]),
@@ -164,7 +161,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedDraft(batch.Id, "Confirmed");
         SeedDraft(batch.Id, "Rejected");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         _executedSql.Clear();
         var result = await controller.ListBatches(skip: 0, take: 50, CancellationToken.None);
@@ -215,7 +212,7 @@ public class ScanBatchControllerTests : IDisposable
         forbiddenDraft.CapturePropertyId = forbiddenProperty.Id;
         await _db.SaveChangesAsync();
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
         _executedSql.Clear();
 
         var result = await controller.ListBatches(skip: 0, take: 50, CancellationToken.None);
@@ -231,7 +228,7 @@ public class ScanBatchControllerTests : IDisposable
 
         _executedSql.Should().ContainSingle(
             "batch visibility and every rollup count stay in one authorized SQL statement");
-        _executedSql[0].Should().ContainEquivalentOf("MembershipRoleAssignmentProperties");
+        _executedSql[0].Should().ContainEquivalentOf("public.rc_api_effective_capability_scopes");
         _executedSql[0].Should().ContainEquivalentOf("COUNT");
     }
 
@@ -245,7 +242,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedDraft(batch.Id, "Reviewing", targetEntityType: "Payment");
         SeedDraft(batch.Id, "Failed", targetEntityType: "WorkOrder");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         _executedSql.Clear();
         var result = await controller.ListPage(
@@ -280,7 +277,7 @@ public class ScanBatchControllerTests : IDisposable
             confirmedEntityId: 731);
         SeedDraft(batch.Id, "Rejected");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         var result = await controller.GetBatch(batch.Id, CancellationToken.None);
 
@@ -311,7 +308,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedDraft(batch.Id, "Confirmed");
         SeedDraft(batch.Id, "Failed");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         _executedSql.Clear();
         var result = await controller.GetBatch(batch.Id, CancellationToken.None);
@@ -345,7 +342,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedDraft(batch.Id, "Reviewing",
             extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9},"unit_number":{"value":"1A","confidence":0.9},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2027-01-01","confidence":0.9}}""");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         var result = await controller.GetBatch(batch.Id, CancellationToken.None);
 
@@ -362,7 +359,7 @@ public class ScanBatchControllerTests : IDisposable
             targetEntityType: "Expense",
             failureReason: "extraction interrupted (timeout or shutdown)");
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         var result = await controller.Get(draft.Id, CancellationToken.None);
 
@@ -386,7 +383,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedDraft(foreignBatch.Id, "Reviewing", portfolioId: otherPortfolioId);
 
         // Caller is portfolio 42; the batch belongs to portfolio 99.
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         var result = await controller.GetBatch(foreignBatch.Id, CancellationToken.None);
 
@@ -400,7 +397,7 @@ public class ScanBatchControllerTests : IDisposable
         SeedPortfolio(otherPortfolioId);
         SeedBatch(otherPortfolioId, fileCount: 1);
 
-        var controller = CreateController(Mock.Of<IScanService>());
+        var controller = await CreateControllerAsync(Mock.Of<IScanService>());
 
         var result = await controller.ListBatches(skip: 0, take: 50, CancellationToken.None);
 
@@ -414,10 +411,11 @@ public class ScanBatchControllerTests : IDisposable
     // Helpers
     // -------------------------------------------------------------------------
 
-    private ScanController CreateController(
+    private async Task<ScanController> CreateControllerAsync(
         IScanService scan,
         IScanUploadService? uploads = null)
     {
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
         var files = Mock.Of<IFileStorage>();
         var controller = new ScanController(
             scan, uploads ?? Mock.Of<IScanUploadService>(),

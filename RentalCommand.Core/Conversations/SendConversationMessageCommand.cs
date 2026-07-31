@@ -15,7 +15,7 @@ public sealed record SendConversationMessageCommand(
     string Body,
     ConversationSenderRole SenderRole,
     IReadOnlyList<string> RequestedChannels,
-    DateTime CreatedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime CreatedAtUtc,
     int? PropertyId = null,
     ConversationManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
@@ -42,4 +42,4 @@ public sealed record SendConversationMessageResult(
     SendConversationMessageOutcome Outcome,
     int ConversationId,
     int MessageId,
-    IReadOnlyList<int> NotificationIds) : IAtomicResultData;
+    IReadOnlyList<int> NotificationIds);

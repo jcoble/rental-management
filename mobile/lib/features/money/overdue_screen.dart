@@ -6,7 +6,6 @@ import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
 import '../payments/payments_screen.dart';
 import '../units/unit_command_center_screen.dart';
-import '../units/unit_command_center_tabs.dart';
 import 'money_format.dart';
 
 /// "Who's behind" — one row per canonical tenant account behind on rent, with
@@ -51,7 +50,8 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
               .whereType<String>()
               .where((value) => value.trim().isNotEmpty)
               .join(' · '),
-      initialAmount: account.pastDueAmount,
+      initialAmount: account.oldestLedgerEntryOpenAmount,
+      targetChargeEntryId: account.oldestLedgerEntryId,
     );
     if (result == null || !mounted) return;
     ref.invalidate(moneySnapshotProvider);

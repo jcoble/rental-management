@@ -62,7 +62,7 @@ describe('idempotentMutation', () => {
 	it('sends the retained operation key as Idempotency-Key from every money endpoint', () => {
 		for (const [path, source] of endpointSources) {
 			assert.match(source, /idempotentMutation\(/, path);
-			assert.match(source, /headers:\s*\{\s*'Idempotency-Key':\s*key\s*\}/, path);
+			assert.match(source, /headers:\s*\{\s*["']Idempotency-Key["']:\s*key\s*\}/, path);
 		}
 	});
 });

@@ -28,6 +28,9 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.party.access.revoke.v1");
     private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
         new("lease-management.give-possession.v1");
+    private static readonly AtomicJsonResultCodec<ReconcileHistoricalPossessionResult>
+        ReconcileHistoricalPossessionCodec =
+            new("lease-management.reconcile-historical-possession.v1");
     private static readonly AtomicJsonResultCodec<ConfirmMoveInResult> ConfirmMoveInCodec =
         new("lease-management.confirm-move-in.v1");
     private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
@@ -42,17 +45,20 @@ public sealed class LeaseManagementController : ManagementControllerBase
     private readonly IAtomicUnitOfWork _atomic;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly ILeaseQaService _qa;
+    private readonly TimeProvider _timeProvider;
     private readonly string _webBaseUrl;
 
     public LeaseManagementController(
         IAtomicUnitOfWork atomic,
         ILeaseManagementQueryService queryService,
         ILeaseQaService qa,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        TimeProvider timeProvider)
     {
         _atomic = atomic;
         _queryService = queryService;
         _qa = qa;
+        _timeProvider = timeProvider;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
     }
 
@@ -655,13 +661,14 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var portfolioId = GetPortfolioId();
         var userId = GetUserId();
         var digest = Digest(normalizedKey!);
+        var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("lease-management.give-possession",
                     $"{portfolioId}:{leaseManagementId}:{digest}"),
                 new GivePossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
-                    sessionId, accessContextId, accessRevision,
+                    sessionId, accessContextId, accessRevision, businessNowUtc,
                     $"give-possession:{portfolioId}:{leaseManagementId}:{digest}"),
                 GivePossessionCodec, ct);
             return outcome.Value.Outcome switch
@@ -675,6 +682,73 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 GivePossessionOutcome.RelationshipNotEligible
                     or GivePossessionOutcome.AgreementNotExecuted
                     or GivePossessionOutcome.AccountNotOpen =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/reconcile-historical-possession")]
+    [ProducesResponseType(typeof(ReconcileHistoricalPossessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ReconcileHistoricalPossession(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReconcileHistoricalPossessionRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-management.reconcile-historical-possession",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new ReconcileHistoricalPossessionCommand(
+                    portfolioId,
+                    leaseManagementId,
+                    request.UnitId,
+                    request.PossessionGivenOn,
+                    userId,
+                    sessionId,
+                    accessContextId,
+                    accessRevision,
+                    businessNowUtc,
+                    $"reconcile-historical-possession:{portfolioId}:{leaseManagementId}:{digest}"),
+                ReconcileHistoricalPossessionCodec,
+                ct);
+
+            return outcome.Value.Outcome switch
+            {
+                ReconcileHistoricalPossessionOutcome.Reconciled
+                    or ReconcileHistoricalPossessionOutcome.AlreadyReconciled
+                    when outcome.Value.PossessionGivenAtUtc.HasValue =>
+                    Ok(new ReconcileHistoricalPossessionResponse(
+                        outcome.Value.LeaseManagementId,
+                        outcome.Value.UnitId,
+                        outcome.Value.PossessionGivenAtUtc.Value,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                ReconcileHistoricalPossessionOutcome.UnitUnavailable =>
+                    Conflict(new { error = outcome.Value.Error }),
+                ReconcileHistoricalPossessionOutcome.RelationshipNotEligible
+                    or ReconcileHistoricalPossessionOutcome.AgreementNotExecuted
+                    or ReconcileHistoricalPossessionOutcome.AccountNotOpen
+                    or ReconcileHistoricalPossessionOutcome.DateOutsideAgreementTerm
+                    or ReconcileHistoricalPossessionOutcome.DateAfterBusinessDate =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 _ => StatusCode(StatusCodes.Status500InternalServerError),
             };
@@ -704,6 +778,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var portfolioId = GetPortfolioId();
         var userId = GetUserId();
         var digest = Digest(normalizedKey!);
+        var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
             var outcome = await _atomic.ExecuteAsync(
@@ -722,6 +797,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     sessionId,
                     accessContextId,
                     accessRevision,
+                    businessNowUtc,
                     $"confirm-move-in:{portfolioId}:{leaseManagementId}:{digest}"),
                 ConfirmMoveInCodec,
                 ct);
@@ -781,13 +857,14 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var portfolioId = GetPortfolioId();
         var userId = GetUserId();
         var digest = Digest(normalizedKey!);
+        var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("lease-management.return-possession",
                     $"{portfolioId}:{leaseManagementId}:{digest}"),
                 new ReturnPossessionCommand(portfolioId, leaseManagementId, request.UnitId, userId,
-                    sessionId, accessContextId, accessRevision,
+                    sessionId, accessContextId, accessRevision, businessNowUtc,
                     request.Parties.Select(item => new ReturnPossessionParty(
                         item.LeaseManagementPartyId, item.Disposition!.Value)).ToArray(),
                     request.Accesses.Select(item => new ReturnPossessionAccess(
@@ -936,6 +1013,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     sessionId,
                     accessContextId,
                     accessRevision,
+                    _timeProvider.GetUtcNow().UtcDateTime,
                     request.CancellationReasonCode,
                     request.CancellationNote,
                     request.DraftCancellationReason,
@@ -1027,6 +1105,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     sessionId,
                     accessContextId,
                     accessRevision,
+                    _timeProvider.GetUtcNow().UtcDateTime,
                     transferPublicId,
                     request.EffectiveOn,
                     request.PlannedDestinationPossessionAtUtc,

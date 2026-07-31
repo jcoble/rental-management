@@ -88,7 +88,7 @@ public class StripeCheckoutTests : IDisposable
     {
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity, TCommand command,
-            IAtomicResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData where TResult : notnull
         {
             object result = command switch

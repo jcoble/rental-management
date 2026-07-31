@@ -27,6 +27,25 @@ public sealed class PossessionContractTests
     }
 
     [Fact]
+    public void Historical_possession_reconciliation_is_a_distinct_atomic_route_and_ui_projection()
+    {
+        var route = typeof(LeaseManagementController)
+            .GetMethod(nameof(LeaseManagementController.ReconcileHistoricalPossession))!
+            .GetCustomAttribute<HttpPostAttribute>();
+
+        route.Should().NotBeNull();
+        route!.Template.Should().Be("{leaseManagementId:int}/reconcile-historical-possession");
+        typeof(ReconcileHistoricalPossessionHandler)
+            .Should().Implement<IAtomicCommandHandler<ReconcileHistoricalPossessionCommand,
+                ReconcileHistoricalPossessionResult>>();
+        typeof(ReconcileHistoricalPossessionRequest).GetProperty("PossessionGivenOn")
+            .Should().NotBeNull();
+        typeof(LeaseManagementSummaryResponse)
+            .GetProperty("HasGoverningAgreementWithoutPossession")
+            .Should().NotBeNull();
+    }
+
+    [Fact]
     public void Confirm_move_in_is_one_atomic_command_and_derives_money_identity_server_side()
     {
         var route = typeof(LeaseManagementController)
@@ -37,8 +56,6 @@ public sealed class PossessionContractTests
         route!.Template.Should().Be("{leaseManagementId:int}/confirm-move-in");
         typeof(ConfirmMoveInHandler)
             .Should().Implement<IAtomicCommandHandler<ConfirmMoveInCommand, ConfirmMoveInResult>>();
-        typeof(ConfirmMoveInHandler)
-            .Should().Implement<IAtomicReplayAuthorizer<ConfirmMoveInCommand>>();
         typeof(ConfirmMoveInRequest).GetProperty("TenantAccountId").Should().BeNull();
         typeof(ConfirmMoveInRequest).GetProperty("SecurityDepositAccountId").Should().BeNull();
         typeof(ConfirmMoveInRequest).GetProperty("Amount").Should().BeNull();

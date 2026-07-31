@@ -1,4 +1,8 @@
-import { appendScanContext, type ScanContext, type ScanDocType } from './scan-context.ts';
+import {
+	appendScanContext,
+	type ScanContext,
+	type ScanDocType,
+} from './scan-context.ts';
 
 const CONTEXTUAL_TITLES: Record<ScanDocType, string> = {
 	Expense: 'Scan an expense',
@@ -6,7 +10,8 @@ const CONTEXTUAL_TITLES: Record<ScanDocType, string> = {
 	WorkOrder: 'Scan a work order',
 	LeaseAgreement: 'Scan a lease agreement',
 	Application: 'Scan an application',
-	Loan: 'Scan a loan document'
+	Loan: 'Scan a loan document',
+	LeaseEndingNotice: 'Scan a move-out notice',
 };
 
 export type ScanLauncherMode = 'global' | 'contextual';
@@ -23,6 +28,9 @@ export function contextualScanTitle(context: ScanContext): string {
 	return context.type ? CONTEXTUAL_TITLES[context.type] : 'Scan a document';
 }
 
-export function buildScanReviewTarget(draftId: number, context: ScanContext): string {
+export function buildScanReviewTarget(
+	draftId: number,
+	context: ScanContext
+): string {
 	return appendScanContext(`/scan/${draftId}`, context);
 }

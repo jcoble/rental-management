@@ -56,6 +56,9 @@ public sealed class LeaseAgreementDraftDetailResponse
     public int DocumentSourceVersionId { get; init; }
     public int? DocumentTemplateId { get; init; }
     public int? DocumentTemplateVersion { get; init; }
+    public int? SourceStoredFileId { get; init; }
+    public string? SourceFileName { get; init; }
+    public string? SourceContentType { get; init; }
     /// <summary>The exact immutable Agreement this successor was copied from, when applicable.</summary>
     public LeaseAgreementSourceComparisonResponse? SourceAgreement { get; init; }
     public IReadOnlyList<LeaseAgreementDraftSignerResponse> Signers { get; init; } = [];

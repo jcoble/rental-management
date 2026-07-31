@@ -104,6 +104,9 @@ public sealed class PortalServiceBalanceTests
             sql.Should().Contain("LIMIT");
             sql.Should().Contain("OFFSET");
         }
+        entrySql.Should().Contain("LEFT JOIN");
+        entrySql.Should().Contain("RentTrackingStartOn");
+        entrySql.Should().Contain("ReversesEntryId");
         chargeSql.Should().Contain("vw_tenant_charge_balances");
         chargeSql.Should().Contain("\"OpenAmount\" > 0.0");
         chargeSql.Should().NotContain("\"DueOn\" <= ");
@@ -221,13 +224,18 @@ public sealed class PortalServiceBalanceTests
             .ToArray();
 
         getRoutes.Should().Contain([
+            "access-state",
             "tenant-accounts/page",
             "tenant-accounts/{id:int}",
             "tenant-accounts/{id:int}/entries/page",
+            "tenant-accounts/{id:int}/history",
             "tenant-accounts/{id:int}/charges/page",
             "tenant-accounts/{id:int}/deposit",
             "tenant-accounts/{tenantAccountId:int}/autopay",
         ]);
+        typeof(PortalAccessStateResponse).GetProperties()
+            .Select(property => property.Name)
+            .Should().Equal(nameof(PortalAccessStateResponse.HasActiveTenantAccess));
         getRoutes.Should().NotContain("balance");
         getRoutes.Should().NotContain("payments");
     }
@@ -310,7 +318,7 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ChargePage_ReturnsAuthorizedOpenChargesIncludingFutureDue_AndCountsAndPagesInSql()
+    public async Task ChargePage_ReturnsOnlyEffectiveAuthorizedOpenCharges_AndCountsAndPagesInSql()
     {
         var scenario = await SeedScenarioAsync();
         _commands.Clear();
@@ -323,12 +331,11 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
                 new PortalTenantChargeListQuery { Take = 20 });
 
         page.Should().NotBeNull();
-        page!.TotalCount.Should().Be(2);
-        page.Items.Select(item => item.TenantLedgerEntryId).Should().Equal(
-            scenario.DueOpenRentId,
-            scenario.FutureOpenRentId);
-        page.Items.Single(item => item.TenantLedgerEntryId == scenario.FutureOpenRentId)
-            .OpenAmount.Should().Be(1000m);
+        page!.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle(item =>
+            item.TenantLedgerEntryId == scenario.DueOpenRentId);
+        page.Items.Should().NotContain(item =>
+            item.TenantLedgerEntryId == scenario.FutureOpenRentId);
 
         _commands.Should().HaveCount(3,
             "the endpoint uses one identity query, one count query, and one bounded page query");
@@ -359,8 +366,8 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
                 });
 
         focusedLedgerPage.Should().NotBeNull();
-        focusedLedgerPage!.Items.Should().ContainSingle(item =>
-            item.TenantLedgerEntryId == scenario.FutureOpenRentId);
+        focusedLedgerPage!.Items.Should().BeEmpty(
+            "future-effective immutable ledger rows must not appear before the portfolio business date reaches them");
         _commands.Should().HaveCount(3,
             "the focused ledger entry read keeps identity, count, and page work DB-side");
         _commands.Should().Contain(sql =>
@@ -379,6 +386,190 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
 
         deniedPage.Should().BeNull();
         _commands.Should().ContainSingle("unauthorized account lookup stops before charge queries");
+    }
+
+    [Fact]
+    public async Task EntryPage_HidesBackfillBeforeRentTrackingStartAndOrphanedBackfillReversalInSql()
+    {
+        var scenario = await SeedScenarioAsync();
+        _commands.Clear();
+
+        var page = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .ListTenantAccountEntriesPageAsync(
+                scenario.Scope,
+                scenario.TenantAccountId,
+                new PortalTenantLedgerEntryListQuery
+                {
+                    Take = 20,
+                });
+
+        page.Should().NotBeNull();
+        page!.Items.Select(item => item.TenantLedgerEntryId).Should().Contain([
+            scenario.DueOpenRentId,
+            scenario.VisibleReversalId,
+        ]);
+        page.Items.Select(item => item.TenantLedgerEntryId).Should().NotContain([
+            scenario.FutureOpenRentId,
+            scenario.PreStartChargeId,
+            scenario.PreStartReversalId,
+        ]);
+        page.Items.Single(item => item.TenantLedgerEntryId == scenario.VisibleReversalId)
+            .ReversesEntryId.Should().Be(scenario.ReversedManualChargeId);
+
+        _commands.Should().HaveCount(3,
+            "the endpoint uses one identity query, one count query, and one bounded page query");
+        var entryCommands = _commands
+            .Where(sql => sql.Contains("TenantLedgerEntries", StringComparison.Ordinal))
+            .ToArray();
+        entryCommands.Should().HaveCount(2);
+        entryCommands.Should().OnlyContain(sql =>
+            sql.Contains("RentTrackingStartOn", StringComparison.Ordinal)
+            && sql.Contains("ReversesEntryId", StringComparison.Ordinal)
+            && sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase));
+        entryCommands.Should().ContainSingle(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase));
+        entryCommands.Should().ContainSingle(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AccountHistory_UsesOneStatementAndKeepsLegitimatePreMarkerCharge()
+    {
+        var scenario = await SeedScenarioAsync();
+        var businessDate = await _context.Db.Database
+            .SqlQuery<DateOnly>($"SELECT rc_business_date({scenario.Scope.PortfolioId}) AS \"Value\"")
+            .SingleAsync();
+        var account = await _context.Db.TenantAccounts
+            .SingleAsync(item => item.Id == scenario.TenantAccountId);
+        account.RentTrackingStartOn = businessDate.AddDays(-1);
+
+        var legitimatePreMarkerCharge = Charge(
+            scenario.TenantAccountId,
+            scenario.LeaseAgreementId,
+            TenantLedgerEntryType.RentCharge,
+            1650m,
+            businessDate.AddDays(-3),
+            "legitimate-pre-marker-rent");
+        legitimatePreMarkerCharge.PostedAtUtc = DateTime.UtcNow.AddMinutes(2);
+        var laterReceipt = Receipt(
+            scenario.TenantAccountId,
+            1650m,
+            businessDate,
+            "later-full-payment");
+        laterReceipt.PostedAtUtc = DateTime.UtcNow.AddMinutes(-2);
+        var sameDayCharge = Charge(
+            scenario.TenantAccountId,
+            null,
+            TenantLedgerEntryType.ManualCharge,
+            25m,
+            businessDate,
+            "same-day-charge");
+        sameDayCharge.PostedAtUtc = DateTime.UtcNow.AddMinutes(2);
+        var accountCredit = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = scenario.Scope.PortfolioId,
+            TenantAccountId = scenario.TenantAccountId,
+            EntryType = TenantLedgerEntryType.Credit,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 5000m,
+            Currency = "USD",
+            EffectiveOn = businessDate,
+            PostedAtUtc = DateTime.UtcNow,
+            Description = "account-credit",
+            BusinessKey = "portal-history:account-credit",
+            CreatedByUserId = scenario.Scope.UserId,
+        };
+        _context.Db.TenantLedgerEntries.AddRange(
+            legitimatePreMarkerCharge, laterReceipt, sameDayCharge, accountCredit);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+        _commands.Clear();
+
+        var history = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .GetTenantAccountHistoryAsync(
+                scenario.Scope,
+                scenario.TenantAccountId,
+                new PortalTenantAccountHistoryQuery
+                {
+                    Period = "all",
+                    Take = 200,
+                    FocusedEntryId = legitimatePreMarkerCharge.Id,
+                });
+
+        history.Should().NotBeNull();
+        history!.Items.Should().Contain(item =>
+            item.TenantLedgerEntryId == legitimatePreMarkerCharge.Id
+            && item.SignedAmount == 1650m
+            && item.IsFocused);
+        history.Items.Should().NotContain(item =>
+            item.TenantLedgerEntryId == scenario.PreStartChargeId
+            || item.TenantLedgerEntryId == scenario.PreStartReversalId);
+        var sameDayDirectionOrder = history.Items
+            .Where(item => item.EffectiveOn == businessDate)
+            .Select(item => item.Direction == TenantLedgerDirection.Debit ? 0 : 1)
+            .ToArray();
+        sameDayDirectionOrder.Should().Equal(
+            sameDayDirectionOrder.OrderBy(value => value),
+            "same-day debits must precede credits regardless of posting timestamp");
+        history.ClosingBalance.Should().Be(
+            history.BeginningBalance + history.Items.Sum(item => item.SignedAmount));
+        var historyCommands = _commands.ToArray();
+        var canonicalBalance = await _context.Db.TenantAccountBalanceProjections
+            .Where(row => row.TenantAccountId == scenario.TenantAccountId)
+            .Select(row => row.ReceivableBalance)
+            .SingleAsync();
+        history.CurrentDue.Should().Be(canonicalBalance);
+        history.CurrentDue.Should().BeNegative("an account credit is a negative amount owed");
+        historyCommands.Should().ContainSingle(
+            "summary, authorization, period calculations, windows, paging, and focus are one DB statement");
+        historyCommands[0].Should().Contain("rc_portal_tenant_account_history");
+    }
+
+    [Fact]
+    public async Task AccountHistory_WithoutFocusedEntry_SerializesEveryItemAsNotFocused()
+    {
+        var scenario = await SeedScenarioAsync();
+        _commands.Clear();
+
+        var history = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .GetTenantAccountHistoryAsync(
+                scenario.Scope,
+                scenario.TenantAccountId,
+                new PortalTenantAccountHistoryQuery
+                {
+                    Period = "all",
+                    Take = 200,
+                });
+
+        history.Should().NotBeNull();
+        history!.Items.Should().NotBeEmpty();
+        history.Items.Should().OnlyContain(item => !item.IsFocused,
+            "a missing focused-entry parameter is false, never JSON null");
+        _commands.Should().ContainSingle(
+            "the no-focus account history still executes as one database statement");
+    }
+
+    [Fact]
+    public async Task AccountHistory_UnauthorizedAccountFailsClosedInOneStatement()
+    {
+        var scenario = await SeedScenarioAsync();
+        _commands.Clear();
+
+        var history = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .GetTenantAccountHistoryAsync(
+                scenario.Scope,
+                scenario.UnauthorizedTenantAccountId,
+                new PortalTenantAccountHistoryQuery());
+
+        history.Should().BeNull();
+        _commands.Should().ContainSingle();
+        _commands[0].Should().Contain("rc_portal_tenant_account_history");
     }
 
     private async Task<Scenario> SeedScenarioAsync()
@@ -466,6 +657,7 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             LeaseManagementId = management.Id,
             AccountNumber = "TA-PAYABLE-CHARGES",
             Currency = "USD",
+            RentTrackingStartOn = businessDate,
             OpenedAtUtc = now,
             CreatedAtUtc = now,
             CreatedByUserId = userId,
@@ -564,6 +756,9 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         var reversedManualCharge = Charge(
             account.Id, agreement.Id, TenantLedgerEntryType.ManualCharge, 750m,
             businessDate, "reversed-manual-charge");
+        var preStartCharge = Charge(
+            account.Id, agreement.Id, TenantLedgerEntryType.RentCharge, 650m,
+            businessDate.AddDays(-2), "pre-start-rent");
         var unauthorizedFutureOpenRent = Charge(
             unauthorizedAccount.Id, null, TenantLedgerEntryType.ManualCharge, 1200m,
             businessDate.AddDays(1), "unauthorized-future-open-rent");
@@ -571,12 +766,15 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         var rentReceipt = Receipt(account.Id, 900m, businessDate, "rent-receipt");
         _context.Db.TenantLedgerEntries.AddRange(
             settledDeposit, settledRent, futureOpenRent, dueOpenRent,
-            reversedManualCharge, unauthorizedFutureOpenRent, depositReceipt, rentReceipt);
+            reversedManualCharge, preStartCharge, unauthorizedFutureOpenRent,
+            depositReceipt, rentReceipt);
         await _context.Db.SaveChangesAsync();
 
         var reversal = Reversal(account.Id, reversedManualCharge.Id, 750m, businessDate,
             "reversed-manual-charge");
-        _context.Db.TenantLedgerEntries.Add(reversal);
+        var preStartReversal = Reversal(account.Id, preStartCharge.Id, 650m, businessDate,
+            "pre-start-rent");
+        _context.Db.TenantLedgerEntries.AddRange(reversal, preStartReversal);
         await _context.Db.SaveChangesAsync();
 
         _context.Db.TenantLedgerAllocations.AddRange(
@@ -591,6 +789,11 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             account.Id,
             dueOpenRent.Id,
             futureOpenRent.Id,
+            reversedManualCharge.Id,
+            reversal.Id,
+            preStartCharge.Id,
+            preStartReversal.Id,
+            agreement.Id,
             unauthorizedAccount.Id);
     }
 
@@ -705,5 +908,10 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
         int TenantAccountId,
         long DueOpenRentId,
         long FutureOpenRentId,
+        long ReversedManualChargeId,
+        long VisibleReversalId,
+        long PreStartChargeId,
+        long PreStartReversalId,
+        int LeaseAgreementId,
         int UnauthorizedTenantAccountId);
 }

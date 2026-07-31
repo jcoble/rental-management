@@ -373,7 +373,7 @@
 	}
 
 	function invalidateUnits() {
-		queryClient.invalidateQueries({ queryKey: ['units', id] });
+		queryClient.invalidateQueries({ queryKey: ['property-workspace', id, 'rentals'] });
 		queryClient.invalidateQueries({ queryKey: ['property', id] });
 		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 	}
@@ -400,7 +400,7 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	let deleteUnitTarget = $state<Unit | null>(null);
+	let deleteUnitTarget = $state<UnitHealth | null>(null);
 
 	const deleteUnitMutation = createMutation(() => ({
 		mutationFn: (unitId: number) => properties.deleteUnit(unitId),
@@ -414,6 +414,14 @@
 
 	// ── Unit columns ───────────────────────────────────────────────────────────
 	const unitColumns: ColumnDef<UnitHealth>[] = [
+		{
+			key: 'actions',
+			title: '',
+			align: 'right',
+			mobileRole: 'hidden',
+			isAction: true,
+			cell: unitActionsCell,
+		},
 		{
 			key: 'unitNumber',
 			title: 'Unit #',
@@ -505,6 +513,23 @@
 
 {#snippet unitStatusCell(u: UnitHealth)}
 	<StatusBadge status={u.status} />
+{/snippet}
+
+{#snippet unitActionsCell(unit: UnitHealth)}
+	{#if canManageRentals}
+		<Button
+			variant="ghost"
+			size="icon"
+			data-testid="unit-delete-{unit.id}"
+			aria-label={`Remove unit ${unit.unitNumber}`}
+			onclick={(event) => {
+				event.stopPropagation();
+				deleteUnitTarget = unit;
+			}}
+		>
+			<Trash2 class="h-4 w-4 text-destructive" />
+		</Button>
+	{/if}
 {/snippet}
 
 {#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
@@ -764,6 +789,22 @@
 				onPageChange={(next) => (rentalsPage = next)}
 				data-testid="property-units-grid"
 			>
+				{#snippet mobileActions(unit)}
+					{#if canManageRentals}
+						<Button
+							variant="ghost"
+							size="icon"
+							data-testid="unit-delete-mobile-{unit.id}"
+							aria-label={`Remove unit ${unit.unitNumber}`}
+							onclick={(event) => {
+								event.stopPropagation();
+								deleteUnitTarget = unit;
+							}}
+						>
+							<Trash2 class="h-4 w-4 text-destructive" />
+						</Button>
+					{/if}
+				{/snippet}
 				{#snippet toolbar()}
 					<div class="flex flex-1"></div>
 					{#if canManageRentals}

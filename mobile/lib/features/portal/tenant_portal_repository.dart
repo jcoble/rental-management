@@ -8,6 +8,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
+import '../maintenance/work_orders_repository.dart';
 
 class PortalTenantAccount {
   const PortalTenantAccount({
@@ -201,6 +202,7 @@ class PortalTenantLedgerEntry {
     required this.effectiveOn,
     required this.description,
     this.dueOn,
+    this.reversesEntryId,
   });
 
   final int tenantAccountId;
@@ -213,6 +215,7 @@ class PortalTenantLedgerEntry {
   final DateTime effectiveOn;
   final DateTime? dueOn;
   final String description;
+  final int? reversesEntryId;
 
   factory PortalTenantLedgerEntry.fromJson(Map<String, dynamic> json) {
     return PortalTenantLedgerEntry(
@@ -228,6 +231,7 @@ class PortalTenantLedgerEntry {
           ? null
           : DateTime.parse(json['dueOn'] as String),
       description: json['description'] as String,
+      reversesEntryId: (json['reversesEntryId'] as num?)?.toInt(),
     );
   }
 }
@@ -256,6 +260,133 @@ class PortalTenantLedgerEntryPage {
       items: List<Map<String, dynamic>>.from(
         json['items'] as List<dynamic>,
       ).map(PortalTenantLedgerEntry.fromJson).toList(growable: false),
+      totalCount: (json['totalCount'] as num).toInt(),
+      skip: (json['skip'] as num).toInt(),
+      take: (json['take'] as num).toInt(),
+    );
+  }
+}
+
+enum TenantAccountHistoryPeriod {
+  currentMonth('currentMonth', 'Current month'),
+  previousMonth('previousMonth', 'Previous month'),
+  last3Months('last3Months', 'Last 3 months'),
+  thisYear('thisYear', 'This year'),
+  all('all', 'All history');
+
+  const TenantAccountHistoryPeriod(this.apiValue, this.label);
+  final String apiValue;
+  final String label;
+}
+
+class PortalTenantAccountHistoryItem {
+  const PortalTenantAccountHistoryItem({
+    required this.tenantLedgerEntryId,
+    required this.entryType,
+    required this.direction,
+    required this.displayType,
+    required this.description,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.signedAmount,
+    required this.runningBalance,
+    required this.openAmount,
+    required this.payable,
+    required this.isFocused,
+    this.dueOn,
+    this.reversesEntryId,
+    this.reversedByEntryId,
+  });
+
+  final int tenantLedgerEntryId;
+  final String entryType;
+  final String direction;
+  final String displayType;
+  final String description;
+  final DateTime effectiveOn;
+  final DateTime? dueOn;
+  final DateTime postedAtUtc;
+  final double signedAmount;
+  final double runningBalance;
+  final double openAmount;
+  final bool payable;
+  final int? reversesEntryId;
+  final int? reversedByEntryId;
+  final bool isFocused;
+
+  factory PortalTenantAccountHistoryItem.fromJson(Map<String, dynamic> json) {
+    return PortalTenantAccountHistoryItem(
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+      entryType: json['entryType'] as String,
+      direction: json['direction'] as String,
+      displayType: json['displayType'] as String,
+      description: json['description'] as String? ?? '',
+      effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      dueOn: json['dueOn'] == null
+          ? null
+          : DateTime.parse(json['dueOn'] as String),
+      postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+      signedAmount: (json['signedAmount'] as num).toDouble(),
+      runningBalance: (json['runningBalance'] as num).toDouble(),
+      openAmount: (json['openAmount'] as num).toDouble(),
+      payable: json['payable'] as bool,
+      reversesEntryId: (json['reversesEntryId'] as num?)?.toInt(),
+      reversedByEntryId: (json['reversedByEntryId'] as num?)?.toInt(),
+      isFocused: json['isFocused'] as bool? ?? false,
+    );
+  }
+}
+
+class PortalTenantAccountHistory {
+  const PortalTenantAccountHistory({
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    required this.currency,
+    required this.businessDate,
+    required this.period,
+    required this.periodTo,
+    required this.currentDue,
+    required this.beginningBalance,
+    required this.closingBalance,
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+    this.periodFrom,
+  });
+
+  final int tenantAccountId;
+  final int leaseManagementId;
+  final String currency;
+  final DateTime businessDate;
+  final String period;
+  final DateTime? periodFrom;
+  final DateTime periodTo;
+  final double currentDue;
+  final double beginningBalance;
+  final double closingBalance;
+  final List<PortalTenantAccountHistoryItem> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  factory PortalTenantAccountHistory.fromJson(Map<String, dynamic> json) {
+    return PortalTenantAccountHistory(
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      currency: json['currency'] as String,
+      businessDate: DateTime.parse(json['businessDate'] as String),
+      period: json['period'] as String,
+      periodFrom: json['periodFrom'] == null
+          ? null
+          : DateTime.parse(json['periodFrom'] as String),
+      periodTo: DateTime.parse(json['periodTo'] as String),
+      currentDue: (json['currentDue'] as num).toDouble(),
+      beginningBalance: (json['beginningBalance'] as num).toDouble(),
+      closingBalance: (json['closingBalance'] as num).toDouble(),
+      items: List<Map<String, dynamic>>.from(
+        json['items'] as List<dynamic>? ?? const [],
+      ).map(PortalTenantAccountHistoryItem.fromJson).toList(growable: false),
       totalCount: (json['totalCount'] as num).toInt(),
       skip: (json['skip'] as num).toInt(),
       take: (json['take'] as num).toInt(),
@@ -531,6 +662,29 @@ class TenantPortalRepository {
     }
   }
 
+  Future<PortalTenantAccountHistory> tenantAccountHistory(
+    int tenantAccountId, {
+    TenantAccountHistoryPeriod period = TenantAccountHistoryPeriod.currentMonth,
+    int skip = 0,
+    int take = 20,
+    int? focusedEntryId,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/portal/tenant-accounts/$tenantAccountId/history',
+        queryParameters: {
+          'period': period.apiValue,
+          'skip': skip,
+          'take': take,
+          'entry': ?focusedEntryId,
+        },
+      );
+      return PortalTenantAccountHistory.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<PortalTenantAccountDeposit> tenantAccountDeposit(
     int tenantAccountId,
   ) async {
@@ -564,8 +718,8 @@ class TenantPortalRepository {
           'openOnly': openOnly,
           if (search.trim().isNotEmpty) 'search': search.trim(),
           if (status != null && status.isNotEmpty) 'status': status,
-          if (requestedFrom != null) 'from': requestedFrom,
-          if (requestedTo != null) 'to': requestedTo,
+          'from': ?requestedFrom,
+          'to': ?requestedTo,
         },
       );
       return PortalTenantWorkOrderPage.fromJson(response.data ?? const {});
@@ -622,7 +776,56 @@ class TenantPortalRepository {
           message: 'Empty response from server.',
         );
       }
-      return WorkOrderDetail.fromJson(data);
+      return RoleAwareWorkOrderDetail.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> updateWorkOrder(int id, Map<String, dynamic> data) async {
+    try {
+      await IdempotentMutation.run(
+        'portal:work-order:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/portal/work-orders/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> commentWorkOrder(int id, {required String body}) async {
+    final payload = {'body': body, 'isPrivate': false};
+    try {
+      await IdempotentMutation.run(
+        'portal:work-order:comment:$id:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/portal/work-orders/$id/comments',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> cancelWorkOrder(int id, {String? note}) async {
+    final payload = {
+      if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+    };
+    try {
+      await IdempotentMutation.run(
+        'portal:work-order:cancel:$id:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/portal/work-orders/$id/cancel',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -765,7 +968,31 @@ final tenantPortalAccountProvider = FutureProvider.autoDispose
           .tenantAccount(tenantAccountId);
     });
 
+typedef TenantAccountListPageRequest = ({int skip, int take, String sort});
+
+final tenantPortalAccountsPageProvider = FutureProvider.autoDispose
+    .family<PortalTenantAccountPage, TenantAccountListPageRequest>((
+      ref,
+      request,
+    ) {
+      return ref
+          .watch(tenantPortalRepositoryProvider)
+          .tenantAccountsPage(
+            skip: request.skip,
+            take: request.take,
+            sort: request.sort,
+          );
+    });
+
 typedef TenantAccountPageRequest = ({int tenantAccountId, int skip, int take});
+
+typedef TenantAccountHistoryRequest = ({
+  int tenantAccountId,
+  TenantAccountHistoryPeriod period,
+  int skip,
+  int take,
+  int? focusedEntryId,
+});
 
 final tenantPortalChargesPageProvider = FutureProvider.autoDispose
     .family<PortalTenantChargePage, TenantAccountPageRequest>((ref, request) {
@@ -789,6 +1016,22 @@ final tenantPortalEntriesPageProvider = FutureProvider.autoDispose
             request.tenantAccountId,
             skip: request.skip,
             take: request.take,
+          );
+    });
+
+final tenantPortalAccountHistoryProvider = FutureProvider.autoDispose
+    .family<PortalTenantAccountHistory, TenantAccountHistoryRequest>((
+      ref,
+      request,
+    ) {
+      return ref
+          .watch(tenantPortalRepositoryProvider)
+          .tenantAccountHistory(
+            request.tenantAccountId,
+            period: request.period,
+            skip: request.skip,
+            take: request.take,
+            focusedEntryId: request.focusedEntryId,
           );
     });
 

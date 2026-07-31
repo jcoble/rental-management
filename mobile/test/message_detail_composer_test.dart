@@ -42,6 +42,7 @@ class _FakeMessagesRepository extends MessagesRepository {
     id: 42,
     tenantId: 7,
     tenantName: 'Avery Tenant',
+    counterpartyName: 'North Star Management',
     subject: 'Lease question',
     lastMessageAt: DateTime(2026, 7, 8, 17, 42),
     unreadCount: 0,
@@ -96,6 +97,28 @@ void main() {
     expect(fieldRect.left, 8);
     expect(screenWidth - fieldRect.right, 8);
     expect(fieldRect.width, screenWidth - 16);
+  });
+
+  testWidgets('message detail title uses counterparty instead of tenant name', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          messagesRepositoryProvider.overrideWithValue(
+            _FakeMessagesRepository(),
+          ),
+        ],
+        child: const MaterialApp(home: MessageDetailScreen(conversationId: 42)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('North Star Management'), findsOneWidget);
+    expect(find.text('Avery Tenant'), findsNothing);
   });
 
   testWidgets('message retry reuses one non-null operation key', (

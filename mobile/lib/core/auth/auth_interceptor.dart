@@ -47,10 +47,10 @@ String? extractRefreshTokenFromCookies(Response<dynamic> response) {
 /// Dio interceptor that:
 ///  1. Attaches `Authorization: Bearer <accessToken>` to every request.
 ///  2. On 401, refreshes the access token once (single-flight) and retries.
-///  3. Logs out ONLY when the refresh itself fails. If the refresh succeeds but
-///     the retried original request then errors (a non-token 401, a transient
-///     network error, a timeout, a 5xx, …), that error is propagated — the
-///     session is still valid, so we must not log the user out.
+///  3. Logs out ONLY when the refresh endpoint definitively rejects the stored
+///     refresh token. Transport, timeout, 5xx, and malformed-response failures
+///     are propagated without clearing the session because they do not prove
+///     its credentials are invalid.
 ///
 /// The refresh endpoint accepts the refresh token either from the httpOnly
 /// `rc_refresh_token` cookie (web) or from a JSON body `{ refreshToken }`. The
@@ -72,8 +72,8 @@ class AuthInterceptor extends Interceptor {
   /// calls to avoid infinite interceptor recursion.
   final Dio dio;
 
-  /// Called when a token refresh fails — implementors should clear auth state
-  /// and navigate to the login screen.
+  /// Called when the refresh endpoint definitively rejects the saved session —
+  /// implementors should clear auth state and navigate to the login screen.
   final void Function() onLogout;
 
   /// Called after refresh returns a new canonical access envelope. The auth
@@ -82,7 +82,7 @@ class AuthInterceptor extends Interceptor {
   final void Function(Map<String, dynamic> access) onAccessChanged;
 
   /// Single-flight guard: ensures only one refresh is in-flight at a time.
-  Completer<_RefreshResult?>? _refreshCompleter;
+  Completer<_RefreshAttempt>? _refreshCompleter;
 
   @override
   Future<void> onRequest(
@@ -124,15 +124,21 @@ class AuthInterceptor extends Interceptor {
       return;
     }
 
-    // Refresh the access token (single-flight). Only a FAILED refresh means the
-    // session is dead — that is the sole condition under which we log out.
-    final refresh = await _singleFlightRefresh();
-    if (refresh == null) {
+    // Refresh the access token (single-flight). Only a definitive refresh-token
+    // rejection means the session is dead. Availability failures are surfaced
+    // to the caller while the saved session remains intact.
+    final refreshAttempt = await _singleFlightRefresh();
+    if (refreshAttempt is _RefreshTransientFailure) {
+      handler.next(refreshAttempt.error);
+      return;
+    }
+    if (refreshAttempt is _RefreshRejected) {
       await tokenStore.clearTokens();
       onLogout();
       handler.next(err);
       return;
     }
+    final refresh = (refreshAttempt as _RefreshSucceeded).result;
 
     // Refresh succeeded; retry the original request with the new access token.
     // If THIS retry throws (a non-token 401, a transient network error, a
@@ -263,19 +269,17 @@ class AuthInterceptor extends Interceptor {
 
   /// Ensures only one refresh call happens even when multiple 401s arrive
   /// concurrently. All callers await the same [Completer].
-  Future<_RefreshResult?> _singleFlightRefresh() async {
+  Future<_RefreshAttempt> _singleFlightRefresh() async {
     if (_refreshCompleter != null) {
       return _refreshCompleter!.future;
     }
 
-    _refreshCompleter = Completer<_RefreshResult?>();
+    final completer = Completer<_RefreshAttempt>();
+    _refreshCompleter = completer;
     try {
       final refreshToken = await tokenStore.getRefreshToken();
       if (refreshToken == null) {
-        final c = _refreshCompleter!;
-        _refreshCompleter = null;
-        c.complete(null);
-        return null;
+        return _completeRefreshAttempt(const _RefreshRejected(), completer);
       }
 
       // Send the stored refresh token in the request body. The API resolves it
@@ -294,10 +298,17 @@ class AuthInterceptor extends Interceptor {
 
       final data = response.data;
       if (data == null) {
-        final c = _refreshCompleter!;
-        _refreshCompleter = null;
-        c.complete(null);
-        return null;
+        return _completeRefreshAttempt(
+          _RefreshTransientFailure(
+            DioException(
+              requestOptions: response.requestOptions,
+              response: response,
+              type: DioExceptionType.unknown,
+              message: 'The refresh endpoint returned an empty response.',
+            ),
+          ),
+          completer,
+        );
       }
 
       final newAccessToken = data['accessToken'] as String?;
@@ -306,10 +317,17 @@ class AuthInterceptor extends Interceptor {
       final newRefreshToken = resolveRefreshToken(response);
 
       if (newAccessToken == null || access is! Map) {
-        final c = _refreshCompleter!;
-        _refreshCompleter = null;
-        c.complete(null);
-        return null;
+        return _completeRefreshAttempt(
+          _RefreshTransientFailure(
+            DioException(
+              requestOptions: response.requestOptions,
+              response: response,
+              type: DioExceptionType.unknown,
+              message: 'The refresh endpoint returned an invalid response.',
+            ),
+          ),
+          completer,
+        );
       }
 
       await tokenStore.saveTokens(
@@ -319,18 +337,58 @@ class AuthInterceptor extends Interceptor {
       final accessJson = Map<String, dynamic>.from(access);
       await tokenStore.saveAccessEnvelope(accessJson);
 
-      final c = _refreshCompleter!;
-      _refreshCompleter = null;
       final result = _RefreshResult(newAccessToken, accessJson);
-      c.complete(result);
-      return result;
-    } catch (e) {
-      final c = _refreshCompleter;
-      _refreshCompleter = null;
-      c?.complete(null);
-      return null;
+      return _completeRefreshAttempt(_RefreshSucceeded(result), completer);
+    } on DioException catch (error) {
+      final attempt = error.response?.statusCode == 401
+          ? const _RefreshRejected()
+          : _RefreshTransientFailure(error);
+      return _completeRefreshAttempt(attempt, completer);
+    } catch (error) {
+      return _completeRefreshAttempt(
+        _RefreshTransientFailure(
+          DioException(
+            requestOptions: RequestOptions(path: '/auth/refresh'),
+            type: DioExceptionType.unknown,
+            error: error,
+            message: 'Token refresh could not be completed.',
+          ),
+        ),
+        completer,
+      );
     }
   }
+
+  _RefreshAttempt _completeRefreshAttempt(
+    _RefreshAttempt attempt,
+    Completer<_RefreshAttempt> completer,
+  ) {
+    if (identical(_refreshCompleter, completer)) {
+      _refreshCompleter = null;
+    }
+    completer.complete(attempt);
+    return attempt;
+  }
+}
+
+sealed class _RefreshAttempt {
+  const _RefreshAttempt();
+}
+
+final class _RefreshSucceeded extends _RefreshAttempt {
+  const _RefreshSucceeded(this.result);
+
+  final _RefreshResult result;
+}
+
+final class _RefreshRejected extends _RefreshAttempt {
+  const _RefreshRejected();
+}
+
+final class _RefreshTransientFailure extends _RefreshAttempt {
+  const _RefreshTransientFailure(this.error);
+
+  final DioException error;
 }
 
 final class _RefreshResult {

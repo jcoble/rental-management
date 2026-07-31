@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Reflection;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +19,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
+using RentalCommand.Engine;
 using RentalCommand.Engine.Extensions;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
@@ -31,6 +33,8 @@ using RentalCommand.Engine.Workers;
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
 var builder = Host.CreateApplicationBuilder(args);
+var simulationEnabled = SimulationGate.IsEnabled(builder.Configuration, builder.Environment);
+var commandBridgeOnly = builder.Configuration.GetValue<bool>("Simulation:CommandBridgeOnly");
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("RentalCommand");
 var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
@@ -61,75 +65,13 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
 // The Engine's direct restricted database identity is the sole cross-workspace authority. It never
 // receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
-builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: false);
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.RecordNativeSignatureCommand,
-    RentalCommand.Core.Esign.NativeSignerActionResult,
-    RentalCommand.Data.Esign.RecordNativeSignatureHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.RecordNativeDeclineCommand,
-    RentalCommand.Core.Esign.NativeSignerActionResult,
-    RentalCommand.Data.Esign.RecordNativeDeclineHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
-    RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
-    RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsCommand,
-    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsResult,
-    RentalCommand.Data.Esign.ReconcileNativeEsignAgreementFinancialsHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsBatchCommand,
-    RentalCommand.Core.Esign.ReconcileNativeEsignAgreementFinancialsBatchResult,
-    RentalCommand.Data.Esign.ReconcileNativeEsignAgreementFinancialsBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Conversations.SendConversationMessageCommand,
-    RentalCommand.Core.Conversations.SendConversationMessageResult,
-    RentalCommand.Data.Conversations.SendConversationMessageHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventCommand,
-    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventResult,
-    RentalCommand.Data.Payments.ReconcileClaimedProviderPaymentEventHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
-    RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
-    RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateCommand,
-    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
-    RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Payments.FailProviderPaymentCreateCommand,
-    RentalCommand.Core.Payments.FailProviderPaymentCreateResult,
-    RentalCommand.Data.Payments.FailProviderPaymentCreateHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Automation.ApplyClaimedDebtServiceBatchCommand,
-    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
-    RentalCommand.Data.Automation.ApplyClaimedDebtServiceBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Automation.ApplyClaimedRecurringExpenseBatchCommand,
-    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
-    RentalCommand.Data.Automation.ApplyClaimedRecurringExpenseBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Automation.ApplyClaimedRecurringMaintenanceBatchCommand,
-    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
-    RentalCommand.Data.Automation.ApplyClaimedRecurringMaintenanceBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchCommand,
-    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchResult,
-    RentalCommand.Data.Payments.ApplyScheduledTenantChargeBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryCommand,
-    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryResult,
-    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchCommand,
-    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchResult,
-    RentalCommand.Data.Notifications.ApplyClaimedTenantNoticeDraftBatchHandler>();
-builder.Services.AddAtomicCommandHandler<
-    RentalCommand.Engine.Services.EnqueueMorningBriefingsCommand,
-    RentalCommand.Engine.Services.EnqueueMorningBriefingsResult,
-    RentalCommand.Engine.Services.EnqueueMorningBriefingsHandler>();
+builder.Services.AddAtomicPersistenceKernel();
+builder.Services.AddAtomicCommandHandlersFrom(
+    typeof(RentalCommandDbContext).Assembly,
+    typeof(RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler).Assembly,
+    Assembly.GetExecutingAssembly());
+builder.Services.AddGeneratedInfrastructureStores();
+builder.Services.AddPendingFileUploadStore();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
@@ -146,9 +88,11 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 // config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
-builder.Services.AddScoped<RentalCommand.Data.Notifications.ITenantNoticeWorkClaimStore, RentalCommand.Data.Notifications.TenantNoticeWorkClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore,
     RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
+builder.Services.AddScoped<
+    RentalCommand.Core.Scanning.IScanConfirmationTargetWriter,
+    RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
 builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,
     RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
@@ -221,8 +165,6 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
-builder.Services.AddScoped<RentalCommand.Data.Documents.IPendingFileUploadStore,
-    RentalCommand.Data.Documents.PendingFileUploadStore>();
 builder.Services.AddScoped<PendingFileUploadCleanupService>();
 // Native e-sign execution is shared with the API. Signatures are committed before PDF/blob work;
 // this service lets the Engine finish any durable ExecutionPending request after a transient failure.
@@ -244,6 +186,9 @@ builder.Services.AddScoped<RentalCommand.Data.Automation.IScheduledAutomationCla
 // reuse a dedicated pool rather than opening a raw connection per event.
 builder.Services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddSingleton<IDataUpdateService, NotifyDataUpdateService>();
+builder.Services.AddSingleton<RentalCommand.Api.Services.RealtimeInvalidationQueue>();
+builder.Services.AddSingleton<IRealtimeInvalidationQueue>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Services.RealtimeInvalidationQueue>());
 
 // Phase 4 automation services (gated by Notifications flags; financial ones default OFF).
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
@@ -283,40 +228,10 @@ builder.Services.AddAccountingProviders();
 // Scoped (it opens its own scope per call to isolate DB access).
 builder.Services.AddScoped<EngineStatusReporter>();
 
-// Workers (each is its own BackgroundService).
-builder.Services.AddHostedService<OutboxDispatchWorker>();
-builder.Services.AddHostedService<ScanProcessingWorker>();
-builder.Services.AddHostedService<RentChargeWorker>();
-builder.Services.AddHostedService<DebtServiceWorker>();
-builder.Services.AddHostedService<RecurringExpenseWorker>();
-builder.Services.AddHostedService<AutopayChargeWorker>();
-builder.Services.AddHostedService<RecurringMaintenanceWorker>();
-builder.Services.AddHostedService<LateFeeWorker>();
-builder.Services.AddHostedService<TenantNoticeCandidateWorker>();
-builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
-builder.Services.AddHostedService<NoticeDraftWorker>();
-builder.Services.AddHostedService<NativeEsignReconciliationWorker>();
-builder.Services.AddHostedService<ProviderInboxReconciliationWorker>();
-builder.Services.AddHostedService<PendingFileUploadCleanupWorker>();
-
-// Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
-// at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.
-if (SimulationGate.IsEnabled(builder.Configuration, builder.Environment))
-{
-    builder.Services.AddSingleton<SimWorkerRegistry>();
-    builder.Services.AddHostedService<SimWorkerCommandWorker>();
-}
-
-// Continuous accounting pull: imports each Connected + PullEnabled connection's deltas into the domain.
-builder.Services.AddHostedService<AccountingPullWorker>();
-// Proactive token refresh: rotates access tokens before expiry so the continuous pull never dies on a stale token.
-builder.Services.AddHostedService<AccountingTokenRefreshWorker>();
-
-// Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
-builder.Services.AddHostedService<AdvisoryLockWatcherService>();
-
-// Watchdog: monitors worker heartbeats; warns (and ultimately restarts) if any worker is stuck.
-builder.Services.AddHostedService<WorkerWatchdogService>();
+// Command-bridge-only mode is a dev/simulation safety surface: it retains the clock refresher
+// registered by AddSimulationClock, the command bridge, its status reporting, and the single-instance
+// advisory-lock watcher. Every autonomous worker and dispatcher remains unstarted.
+builder.Services.AddEngineHostedServices(simulationEnabled, commandBridgeOnly);
 
 // Health check over the heartbeat table. The Engine has no HTTP port, so there is no
 // endpoint to scrape — the registration keeps parity with EdiPlatform and lets the check

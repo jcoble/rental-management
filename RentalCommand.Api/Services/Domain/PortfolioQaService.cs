@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.AiIntegrations;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
@@ -18,11 +19,12 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
     private readonly IAccountingService _accounting;
-    private readonly IMessagePublisher _publisher;
     private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
+    private readonly IAtomicUnitOfWork _atomic;
+    private static readonly AtomicJsonResultCodec<PortfolioQaDeliveryResult> DeliveryCodec =
+        new("portfolio.qa.delivery.v1");
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -129,20 +131,18 @@ public class PortfolioQaService : IPortfolioQaService
         RentalCommandDbContext db,
         ILlmProvider llm,
         IAccountingService accounting,
-        IMessagePublisher publisher,
         IKnowledgeBaseService kb,
         ILogger<PortfolioQaService> logger,
         TimeProvider timeProvider,
-        IAtomicInfrastructureUnitOfWork infrastructure)
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _llm = llm;
         _accounting = accounting;
-        _publisher = publisher;
         _kb = kb;
         _logger = logger;
         _timeProvider = timeProvider;
-        _infrastructure = infrastructure;
+        _atomic = atomic;
     }
 
     // ---------------------------------------------------------------------------
@@ -154,6 +154,7 @@ public class PortfolioQaService : IPortfolioQaService
         string question,
         IReadOnlyList<QaTurn>? history,
         QaDeliveryOptions? delivery = null,
+        string? deliveryOperationId = null,
         CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
@@ -162,7 +163,7 @@ public class PortfolioQaService : IPortfolioQaService
         // The heuristic is intentionally conservative — when in doubt, answer from data.
         if (LooksLikeHowTo(question))
         {
-            var kbAnswer = await TryAnswerFromDocsAsync(scope, question, delivery, ct);
+            var kbAnswer = await TryAnswerFromDocsAsync(scope, question, delivery, deliveryOperationId, ct);
             if (kbAnswer is not null) return kbAnswer;
             // No relevant docs matched — fall through to the data path so we still try to help.
         }
@@ -260,7 +261,7 @@ public class PortfolioQaService : IPortfolioQaService
 
             // Final answer path.
             var answer = result.Text ?? "(The assistant returned no text.)";
-            var delivered = await DeliverAsync(scope, question, answer, delivery, ct);
+            var delivered = await DeliverAsync(scope, question, answer, delivery, deliveryOperationId, ct);
             return new AskResponse(
                 Answer: answer,
                 ToolsUsed: toolsUsed.Distinct().ToList(),
@@ -277,7 +278,13 @@ public class PortfolioQaService : IPortfolioQaService
             ?? "The assistant did not produce a final answer within the allowed number of steps.";
 
         var incompleteAnswer = lastText + " (Note: response may be incomplete.)";
-        var deliveredIncomplete = await DeliverAsync(scope, question, incompleteAnswer, delivery, ct);
+        var deliveredIncomplete = await DeliverAsync(
+            scope,
+            question,
+            incompleteAnswer,
+            delivery,
+            deliveryOperationId,
+            ct);
         return new AskResponse(
             Answer: incompleteAnswer,
             ToolsUsed: toolsUsed.Distinct().ToList(),
@@ -350,6 +357,7 @@ public class PortfolioQaService : IPortfolioQaService
         WorkspaceReadScope scope,
         string question,
         QaDeliveryOptions? delivery,
+        string? deliveryOperationId,
         CancellationToken ct)
     {
         var portfolioId = scope.PortfolioId;
@@ -419,7 +427,7 @@ public class PortfolioQaService : IPortfolioQaService
         }
 
         var answer = result.Text!.Trim();
-        var delivered = await DeliverAsync(scope, question, answer, delivery, ct);
+        var delivered = await DeliverAsync(scope, question, answer, delivery, deliveryOperationId, ct);
         return new AskResponse(
             Answer: answer,
             ToolsUsed: [],
@@ -470,74 +478,67 @@ public class PortfolioQaService : IPortfolioQaService
         string question,
         string answer,
         QaDeliveryOptions? delivery,
+        string? deliveryOperationId,
         CancellationToken ct)
     {
         var portfolioId = scope.PortfolioId;
         if (delivery is not { AnyRequested: true })
             return null;
 
-        var subject = "Your Rental Command answer";
-        var body = $"You asked:\n{question}\n\nAnswer:\n{answer}";
-
         try
         {
-            var delivered = await _infrastructure.ExecuteAsync(
-                AtomicInfrastructureOperation.PortfolioQaDelivery,
-                async innerCt =>
-                {
-                    var queued = new List<string>();
-                    if (delivery.ViaEmail)
-                    {
-                        var to = string.IsNullOrWhiteSpace(delivery.ToEmail)
-                            ? null
-                            : delivery.ToEmail!.Trim();
-                        if (to is not null)
-                        {
-                            await _publisher.PublishAsync(
-                                portfolioId,
-                                "email",
-                                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                                    "portfolio-qa", portfolioId, "email", to, question, answer),
-                                new { to, subject, body },
-                                innerCt);
-                            queued.Add("Email");
-                        }
-                        else
-                        {
-                            _logger.LogInformation(
-                                "Q&A email delivery requested for portfolio {PortfolioId} but no recipient was available; skipped.",
-                                portfolioId);
-                        }
-                    }
+            var operationId = RequiredDeliveryOperationId(deliveryOperationId);
+            var emailTo = delivery.ViaEmail && !string.IsNullOrWhiteSpace(delivery.ToEmail)
+                ? delivery.ToEmail!.Trim()
+                : null;
+            var smsTo = delivery.ViaSms && !string.IsNullOrWhiteSpace(delivery.ToSms)
+                ? delivery.ToSms!.Trim()
+                : null;
+            if (delivery.ViaEmail && emailTo is null)
+            {
+                _logger.LogInformation(
+                    "Q&A email delivery requested for portfolio {PortfolioId} but no recipient was available; skipped.",
+                    portfolioId);
+            }
+            if (delivery.ViaSms && smsTo is null)
+            {
+                _logger.LogInformation(
+                    "Q&A SMS delivery requested for portfolio {PortfolioId} but no phone was available; skipped.",
+                    portfolioId);
+            }
 
-                    if (delivery.ViaSms)
-                    {
-                        var to = string.IsNullOrWhiteSpace(delivery.ToSms)
-                            ? null
-                            : delivery.ToSms!.Trim();
-                        if (!string.IsNullOrWhiteSpace(to))
-                        {
-                            await _publisher.PublishAsync(
-                                portfolioId,
-                                "sms",
-                                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                                    "portfolio-qa", portfolioId, "sms", to, question, answer),
-                                new { to, message = body },
-                                innerCt);
-                            queued.Add("Sms");
-                        }
-                        else
-                        {
-                            _logger.LogInformation(
-                                "Q&A SMS delivery requested for portfolio {PortfolioId} but no phone was available; skipped.",
-                                portfolioId);
-                        }
-                    }
-
-                    return queued;
-                },
+            var command = new PortfolioQaDeliveryCommand(
+                portfolioId,
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
+                question,
+                answer,
+                emailTo,
+                smsTo,
+                $"portfolio-qa:{portfolioId}:{operationId}:email",
+                $"portfolio-qa:{portfolioId}:{operationId}:sms",
+                _timeProvider.GetUtcNow().UtcDateTime);
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("portfolio.qa.delivery", $"{portfolioId}:{operationId}"),
+                command,
+                DeliveryCodec,
                 ct);
+            var delivered = outcome.Value.DeliveredChannels.ToList();
             return delivered.Count == 0 ? null : delivered;
+        }
+        catch (AtomicIdempotencyConflictException)
+        {
+            throw;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (ArgumentException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -545,6 +546,18 @@ public class PortfolioQaService : IPortfolioQaService
             _logger.LogError(ex, "Q&A answer delivery failed for portfolio {PortfolioId}", portfolioId);
             return null;
         }
+    }
+
+    private static string RequiredDeliveryOperationId(string? deliveryOperationId)
+    {
+        var value = deliveryOperationId?.Trim() ?? string.Empty;
+        if (value.Length is 0 or > 128)
+        {
+            throw new ArgumentException(
+                "Idempotency-Key is required for Q&A delivery and must be at most 128 characters.",
+                nameof(deliveryOperationId));
+        }
+        return value;
     }
 
     // ---------------------------------------------------------------------------

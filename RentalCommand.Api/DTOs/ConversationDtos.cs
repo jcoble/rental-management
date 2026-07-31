@@ -11,6 +11,7 @@ public class ConversationSummary
     public int Id { get; set; }
     public int TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
+    public string CounterpartyName { get; set; } = string.Empty;
 
     /// <summary>The conversation topic (e.g. "Rent", "Maintenance").</summary>
     public string Subject { get; set; } = string.Empty;

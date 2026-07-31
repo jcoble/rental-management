@@ -72,6 +72,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddGeneratedInfrastructureStores();
         services.AddAtomicCommandHandler<
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
@@ -448,9 +449,10 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             overdueRentId = overdueRent.Id;
         }
 
-        await using (var command = NewContext())
+        await using (var generationScope = _services!.CreateAsyncScope())
         {
-            var service = new TenantNoticeCandidateGenerationService(command, InfrastructureWrites);
+            var store = generationScope.ServiceProvider.GetRequiredService<ITenantNoticeCandidateStore>();
+            var service = new TenantNoticeCandidateGenerationService(store);
             (await service.GenerateDueAsync()).Should().Be(2);
             (await service.GenerateDueAsync()).Should().Be(0);
         }
@@ -479,6 +481,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL tenant-notice delivery proof skipped.");
 
         var now = DateTime.UtcNow;
+        var frozenApprovalNow = new DateTime(2027, 1, 29, 14, 0, 0, DateTimeKind.Utc);
         int portfolioId;
         int draftId;
         long workItemId;
@@ -678,6 +681,25 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             workItemId = workItem.Id;
             baselineOutboxCount = await setup.OutboxMessages.CountAsync(row =>
                 row.PortfolioId == portfolio.Id);
+
+            var clock = await setup.SimulationClocks.SingleOrDefaultAsync(row => row.Id == 1);
+            if (clock is null)
+            {
+                clock = new SimulationClock { Id = 1 };
+                setup.SimulationClocks.Add(clock);
+            }
+            clock.Mode = ClockMode.Frozen;
+            clock.SimAnchorUtc = frozenApprovalNow;
+            clock.RealAnchorUtc = now;
+            clock.TimeZoneId = "UTC";
+            clock.UpdatedAtRealUtc = now;
+            var membership = await setup.WorkspaceMemberships.SingleAsync(row =>
+                row.AccessContextId == scope.AccessContextId);
+            membership.EffectiveToUtc = now.AddHours(1);
+            var assignment = await setup.MembershipRoleAssignments.SingleAsync(row =>
+                row.WorkspaceMembershipId == membership.Id);
+            assignment.EffectiveToUtc = now.AddHours(1);
+            await setup.SaveChangesAsync();
         }
 
         await using (var unsafeContent = NewContext())
@@ -758,6 +780,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 .Should().Be(TenantNoticeWorkStatus.Claimed);
         }
 
+        var approvalOperationKey = $"integration:tenant-notice-work:{workItemId}:approve";
+        var approvalAuditStartedAtUtc = DateTime.UtcNow;
         await using (var command = NewContext())
         {
             var foundation = new NotificationFoundationService(command, TimeProvider.System, Atomic);
@@ -770,8 +794,337 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                     NoticeDeliveryChannel.Sms,
                 ]),
                 new RentalCommand.Api.DTOs.TenantNoticeWorkFence(workItemId, claimToken),
-                $"integration:tenant-notice-work:{workItemId}:approve",
+                approvalOperationKey,
                 CancellationToken.None);
+        }
+        var approvalAuditCompletedAtUtc = DateTime.UtcNow;
+
+        long renderedNoticeId;
+        int renderedCount;
+        int evidenceCount;
+        int outboxCount;
+        int conversationCount;
+        int notificationCount;
+        await using (var inconsistent = NewContext())
+        {
+            var draft = await inconsistent.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            renderedNoticeId = draft.RenderedNoticeId!.Value;
+            draft.Status.Should().Be("Approved");
+            draft.ApprovedAt.Should().Be(frozenApprovalNow);
+            draft.UpdatedAt.Should().Be(frozenApprovalNow);
+            renderedCount = await inconsistent.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId);
+            evidenceCount = await inconsistent.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId);
+            outboxCount = await inconsistent.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId);
+            conversationCount = await inconsistent.Conversations.CountAsync(row => row.PortfolioId == portfolioId);
+            notificationCount = await inconsistent.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            var rendered = await inconsistent.RenderedNotices.SingleAsync(row => row.Id == renderedNoticeId);
+            rendered.RenderedAtUtc.Should().Be(frozenApprovalNow);
+            rendered.ApprovedAtUtc.Should().Be(frozenApprovalNow);
+            var conversation = await inconsistent.Conversations.SingleAsync(row => row.PortfolioId == portfolioId);
+            conversation.CreatedAt.Should().Be(frozenApprovalNow);
+            conversation.LastMessageAt.Should().Be(frozenApprovalNow);
+            (await inconsistent.ConversationMessages.SingleAsync(row => row.ConversationId == conversation.Id))
+                .CreatedAt.Should().Be(frozenApprovalNow);
+            var notification = await inconsistent.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.CreatedAt.Should().Be(frozenApprovalNow);
+            notification.NavigationExpiresAtUtc.Should().Be(frozenApprovalNow.AddDays(7));
+            (await inconsistent.OutboxMessages
+                    .Where(row => row.PortfolioId == portfolioId && row.IdempotencyKey!.StartsWith("notice:"))
+                    .Select(row => new { row.CreatedAtUtc, row.NextAttemptAtUtc })
+                    .ToListAsync())
+                .Should().OnlyContain(row =>
+                    row.CreatedAtUtc == frozenApprovalNow && row.NextAttemptAtUtc == frozenApprovalNow);
+            (await inconsistent.NoticeDeliveryEvidence
+                    .Where(row => row.PortfolioId == portfolioId)
+                    .Select(row => row.CreatedAtUtc)
+                    .ToListAsync())
+                .Should().OnlyContain(timestamp => timestamp == frozenApprovalNow);
+            var auditTimestamps = await inconsistent.AtomicAuditLogs
+                .Where(row =>
+                    row.PortfolioId == portfolioId &&
+                    row.CommandIdempotencyKey.EndsWith($":{approvalOperationKey}"))
+                .Select(row => row.Timestamp)
+                .ToListAsync();
+            auditTimestamps.Should().NotBeEmpty();
+            auditTimestamps.Should().OnlyContain(timestamp =>
+                timestamp != frozenApprovalNow
+                && timestamp >= approvalAuditStartedAtUtc.AddSeconds(-1)
+                && timestamp <= approvalAuditCompletedAtUtc.AddSeconds(1));
+
+            draft.Status = "Draft";
+            draft.ApprovedAt = null;
+            draft.ApprovedChannels = null;
+            draft.RenderedNoticeId = null;
+            draft.ConversationId = null;
+            draft.Body = "Your rent amount changed.";
+            await inconsistent.SaveChangesAsync();
+        }
+
+        await using (var mismatch = NewContext())
+        {
+            var foundation = new NotificationFoundationService(mismatch, TimeProvider.System, Atomic);
+            var act = () => foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                $"integration:tenant-notice-work:{workItemId}:mismatched-recovery",
+                CancellationToken.None);
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Existing rendered notice does not match this approval request.");
+        }
+
+        await using (var notificationMismatch = NewContext())
+        {
+            var draft = await notificationMismatch.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Body = "Your rent is due soon.";
+            var notification = await notificationMismatch.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.Message = "Corrupted portal notification";
+            await notificationMismatch.SaveChangesAsync();
+
+            var foundation = new NotificationFoundationService(notificationMismatch, TimeProvider.System, Atomic);
+            var act = () => foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                $"integration:tenant-notice-work:{workItemId}:notification-mismatched-recovery",
+                CancellationToken.None);
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Approved tenant notice persisted an incomplete delivery graph.");
+        }
+
+        await using (var notificationFailedClosed = NewContext())
+        {
+            (await notificationFailedClosed.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(renderedCount);
+            (await notificationFailedClosed.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(evidenceCount);
+            (await notificationFailedClosed.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(outboxCount);
+            (await notificationFailedClosed.Conversations.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(conversationCount);
+            (await notificationFailedClosed.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice"))
+                .Should().Be(notificationCount);
+            var draft = await notificationFailedClosed.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status.Should().Be("Draft");
+            draft.ApprovedAt.Should().BeNull();
+            draft.RenderedNoticeId.Should().BeNull();
+        }
+
+        await using (var notificationExpiryMismatch = NewContext())
+        {
+            var notification = await notificationExpiryMismatch.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.Message = "Your rent is due soon.";
+            notification.NavigationExpiresAtUtc = notification.NavigationExpiresAtUtc!.Value.AddSeconds(1);
+            await notificationExpiryMismatch.SaveChangesAsync();
+
+            var foundation = new NotificationFoundationService(notificationExpiryMismatch, TimeProvider.System, Atomic);
+            var act = () => foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                $"integration:tenant-notice-work:{workItemId}:notification-expiry-mismatched-recovery",
+                CancellationToken.None);
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Approved tenant notice persisted an incomplete delivery graph.");
+        }
+
+        await using (var notificationExpiryFailedClosed = NewContext())
+        {
+            (await notificationExpiryFailedClosed.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(renderedCount);
+            (await notificationExpiryFailedClosed.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(evidenceCount);
+            (await notificationExpiryFailedClosed.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(outboxCount);
+            (await notificationExpiryFailedClosed.Conversations.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(conversationCount);
+            (await notificationExpiryFailedClosed.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice"))
+                .Should().Be(notificationCount);
+            var draft = await notificationExpiryFailedClosed.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status.Should().Be("Draft");
+            draft.ApprovedAt.Should().BeNull();
+            draft.RenderedNoticeId.Should().BeNull();
+        }
+
+        await using (var notificationParentChildMismatch = NewContext())
+        {
+            var notification = await notificationParentChildMismatch.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.NavigationExpiresAtUtc = notification.CreatedAt.AddDays(7);
+            notification.NavigationParentResourceKind = nameof(RenderedNotice);
+            notification.NavigationParentResourceId = checked((int)renderedNoticeId);
+            notification.NavigationChildResourceKind = nameof(NoticeDraft);
+            notification.NavigationChildResourceId = draftId;
+            await notificationParentChildMismatch.SaveChangesAsync();
+
+            var foundation = new NotificationFoundationService(notificationParentChildMismatch, TimeProvider.System, Atomic);
+            var act = () => foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                $"integration:tenant-notice-work:{workItemId}:notification-parent-child-mismatched-recovery",
+                CancellationToken.None);
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("Approved tenant notice persisted an incomplete delivery graph.");
+        }
+
+        await using (var notificationParentChildFailedClosed = NewContext())
+        {
+            (await notificationParentChildFailedClosed.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(renderedCount);
+            (await notificationParentChildFailedClosed.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(evidenceCount);
+            (await notificationParentChildFailedClosed.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(outboxCount);
+            (await notificationParentChildFailedClosed.Conversations.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(conversationCount);
+            (await notificationParentChildFailedClosed.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice"))
+                .Should().Be(notificationCount);
+            var draft = await notificationParentChildFailedClosed.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status.Should().Be("Draft");
+            draft.ApprovedAt.Should().BeNull();
+            draft.RenderedNoticeId.Should().BeNull();
+        }
+
+        await using (var recoverable = NewContext())
+        {
+            var draft = await recoverable.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Body = "Your rent is due soon.";
+            var notification = await recoverable.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.Message = "Your rent is due soon.";
+            notification.NavigationExpiresAtUtc = notification.CreatedAt.AddDays(7);
+            notification.NavigationParentResourceKind = null;
+            notification.NavigationParentResourceId = null;
+            notification.NavigationChildResourceKind = null;
+            notification.NavigationChildResourceId = null;
+            await recoverable.SaveChangesAsync();
+
+            var foundation = new NotificationFoundationService(recoverable, TimeProvider.System, Atomic);
+            var recoveredId = await foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                $"integration:tenant-notice-work:{workItemId}:recover-existing-graph",
+                CancellationToken.None);
+            recoveredId.Should().Be(renderedNoticeId);
+        }
+
+        await using (var recovered = NewContext())
+        {
+            (await recovered.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(renderedCount);
+            (await recovered.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(evidenceCount);
+            (await recovered.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(outboxCount);
+            (await recovered.Conversations.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(conversationCount);
+            (await recovered.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice"))
+                .Should().Be(notificationCount);
+            var draft = await recovered.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status.Should().Be("Approved");
+            draft.ApprovedAt.Should().NotBeNull();
+            draft.ApprovedChannels.Should().Be("TenantPortal,Email,Sms");
+            draft.RenderedNoticeId.Should().Be(renderedNoticeId);
+            draft.ConversationId.Should().NotBeNull();
+        }
+
+        var preFixApprovalWallTime = new DateTime(2026, 7, 28, 16, 30, 57, DateTimeKind.Utc);
+        await using (var preFixChronology = NewContext())
+        {
+            var draft = await preFixChronology.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.ApprovedAt = preFixApprovalWallTime;
+            draft.UpdatedAt = preFixApprovalWallTime;
+            var rendered = await preFixChronology.RenderedNotices.SingleAsync(row => row.Id == renderedNoticeId);
+            rendered.RenderedAtUtc = preFixApprovalWallTime;
+            rendered.ApprovedAtUtc = preFixApprovalWallTime;
+            var notification = await preFixChronology.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.CreatedAt = preFixApprovalWallTime;
+            notification.NavigationExpiresAtUtc = preFixApprovalWallTime.AddDays(7);
+            await preFixChronology.SaveChangesAsync();
+        }
+
+        var chronologyReconcileOperationKey =
+            $"integration:tenant-notice-work:{workItemId}:approved-chronology-reconcile";
+        var chronologyAuditStartedAtUtc = DateTime.UtcNow;
+        await using (var chronologyReconcile = NewContext())
+        {
+            var foundation = new NotificationFoundationService(chronologyReconcile, TimeProvider.System, Atomic);
+            var reconciledId = await foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForWorkspace(scope),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                null,
+                chronologyReconcileOperationKey,
+                CancellationToken.None);
+            reconciledId.Should().Be(renderedNoticeId);
+        }
+        var chronologyAuditCompletedAtUtc = DateTime.UtcNow;
+
+        await using (var chronologyCorrected = NewContext())
+        {
+            var draft = await chronologyCorrected.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status.Should().Be("Approved");
+            draft.ApprovedAt.Should().Be(frozenApprovalNow);
+            draft.UpdatedAt.Should().Be(frozenApprovalNow);
+            var rendered = await chronologyCorrected.RenderedNotices.SingleAsync(row => row.Id == renderedNoticeId);
+            rendered.RenderedAtUtc.Should().Be(frozenApprovalNow);
+            rendered.ApprovedAtUtc.Should().Be(frozenApprovalNow);
+            var notification = await chronologyCorrected.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.CreatedAt.Should().Be(frozenApprovalNow);
+            notification.NavigationExpiresAtUtc.Should().Be(frozenApprovalNow.AddDays(7));
+            (await chronologyCorrected.AtomicAuditLogs
+                    .Where(row =>
+                        row.PortfolioId == portfolioId &&
+                        row.CommandIdempotencyKey.EndsWith($":{chronologyReconcileOperationKey}") &&
+                        row.EntityType == nameof(NoticeDraft) &&
+                        row.ChangeReason == "Corrected tenant notice approval business chronology after exact graph reconciliation")
+                    .Select(row => row.Timestamp)
+                    .ToListAsync())
+                .Should().ContainSingle(timestamp =>
+                    timestamp != frozenApprovalNow
+                    && timestamp >= chronologyAuditStartedAtUtc.AddSeconds(-1)
+                    && timestamp <= chronologyAuditCompletedAtUtc.AddSeconds(1));
         }
 
         await using (var mutate = NewContext())
@@ -899,8 +1252,6 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
-    private IAtomicInfrastructureWriteGate InfrastructureWrites =>
-        _services!.GetRequiredService<IAtomicInfrastructureWriteGate>();
 
     private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
         RentalCommandDbContext db,

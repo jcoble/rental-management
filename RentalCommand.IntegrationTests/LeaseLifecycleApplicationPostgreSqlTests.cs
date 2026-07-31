@@ -315,6 +315,7 @@ public sealed class LeaseLifecycleApplicationPostgreSqlTests : IAsyncLifetime
             scenario.SessionId,
             scenario.AccessContextId,
             scenario.AccessRevision,
+            DateTime.UtcNow,
             Guid.NewGuid(),
             scenario.BusinessDate,
             null,

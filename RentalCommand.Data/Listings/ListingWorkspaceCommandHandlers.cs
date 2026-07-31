@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core;
@@ -7,18 +9,23 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Listings;
+using RentalCommand.Core.Documents;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Listings;
 
 public sealed class GenerateListingWorkspaceHandler
-    : IAtomicCommandHandler<GenerateListingWorkspaceCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<GenerateListingWorkspaceCommand>
+    : IAtomicCommandHandler<GenerateListingWorkspaceCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public GenerateListingWorkspaceHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        GenerateListingWorkspaceCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        GenerateListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var seed = await ListingWorkspaceCommandSupport.AuthorizedUnits(command, attempt.Persistence, now)
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var seed = await ListingWorkspaceCommandSupport.AuthorizedUnits(command, _db, now)
             .Select(unit => new ListingSeed(
                 unit.PortfolioId, unit.PropertyId, unit.Id, unit.Property!.Name,
                 unit.Property.AddressLine1, unit.Property.AddressLine2, unit.Property.City,
@@ -27,13 +34,13 @@ public sealed class GenerateListingWorkspaceHandler
             .SingleOrDefaultAsync(ct);
         if (seed is null) return ListingWorkspaceCommandSupport.NotFound(command);
 
-        var listing = await attempt.Persistence.Query<RentalListing>()
+        var listing = await _db.Set<RentalListing>()
             .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId && item.UnitId == command.UnitId, ct);
         var created = listing is null;
         if (listing is null)
         {
             listing = ListingWorkspaceCommandSupport.CreateListing(seed, now);
-            attempt.Persistence.Add(listing);
+            _db.Add(listing);
         }
         else
         {
@@ -49,31 +56,33 @@ public sealed class GenerateListingWorkspaceHandler
             listing.UpdatedAt = now;
         }
 
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
             command, nameof(RentalListing), created ? AuditLogOperation.Created : AuditLogOperation.Updated,
             created
                 ? "Prepared provider-neutral rental listing workspace"
                 : "Synchronized non-editable unit details without replacing customized listing content"));
-        await attempt.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, listing.Id, now, "generate");
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "generate");
         return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(GenerateListingWorkspaceCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(GenerateListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class SaveListingWorkspaceHandler
-    : IAtomicCommandHandler<SaveListingWorkspaceCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<SaveListingWorkspaceCommand>
+    : IAtomicCommandHandler<SaveListingWorkspaceCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SaveListingWorkspaceHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        SaveListingWorkspaceCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        SaveListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
             .SingleOrDefaultAsync(ct);
         if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
 
@@ -82,51 +91,53 @@ public sealed class SaveListingWorkspaceHandler
         listing.UpdatedAt = now;
         var guided = command.ZillowGuided is null
             ? null
-            : await attempt.Persistence.Query<ListingPublication>().SingleOrDefaultAsync(publication =>
+            : await _db.Set<ListingPublication>().SingleOrDefaultAsync(publication =>
                 publication.RentalListingId == listing.Id
                 && publication.PortfolioId == command.PortfolioId
                 && publication.ProviderKey == ListingProviderKeys.Zillow
                 && publication.Mode == ListingPublicationMode.Guided, ct);
         ListingWorkspaceCommandSupport.Apply(command.ZillowGuided, listing, guided, now);
 
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
             command, nameof(RentalListing), AuditLogOperation.Updated,
             "Updated rental listing and Zillow Guided workspace"));
         if (guided is not null)
         {
-            attempt.BindSemanticAudit(guided, ListingWorkspaceCommandSupport.Audit(
+            context.BindSemanticAudit(guided, ListingWorkspaceCommandSupport.Audit(
                 command, nameof(ListingPublication), AuditLogOperation.Updated,
                 "Updated Zillow Guided workspace", guided.Id));
         }
-        await attempt.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, listing.Id, now, "save");
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "save");
         return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(SaveListingWorkspaceCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(SaveListingWorkspaceCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class FinalizeListingPhotoUploadHandler
-    : IAtomicCommandHandler<FinalizeListingPhotoUploadCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<FinalizeListingPhotoUploadCommand>
+    : IAtomicCommandHandler<FinalizeListingPhotoUploadCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeListingPhotoUploadHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        FinalizeListingPhotoUploadCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        FinalizeListingPhotoUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var photo = await (from authorizedListing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
-                           join item in attempt.Persistence.Query<ListingPhoto>() on authorizedListing.Id equals item.RentalListingId
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var photo = await (from authorizedListing in ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+                           join item in _db.Set<ListingPhoto>() on authorizedListing.Id equals item.RentalListingId
                            where item.Id == command.PhotoId && item.PortfolioId == command.PortfolioId
                            select item).SingleOrDefaultAsync(ct);
         if (photo is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        var listing = await attempt.Persistence.Query<RentalListing>()
+        var listing = await _db.Set<RentalListing>()
             .SingleAsync(item => item.Id == photo.RentalListingId && item.PortfolioId == command.PortfolioId, ct);
 
-        var pending = (await attempt.PendingFileUploads.LockPreparedSetAsync(
-            command.PortfolioId,
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(_db,
+            context, command.PortfolioId,
             command.ActorUserId,
             [new AtomicPendingFileUploadExpectation(
                 command.PendingUploadId, command.Purpose, command.OperationKeyHash,
@@ -136,10 +147,10 @@ public sealed class FinalizeListingPhotoUploadHandler
 
         if (photo.StoredFileId is int oldFileId)
         {
-            var old = await attempt.Persistence.Query<StoredFile>()
+            var old = await _db.Set<StoredFile>()
                 .SingleAsync(file => file.Id == oldFileId && file.PortfolioId == command.PortfolioId, ct);
             old.DeletedAt = now;
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "blob-delete",
@@ -161,8 +172,8 @@ public sealed class FinalizeListingPhotoUploadHandler
             EntityId = photo.Id,
             UploadedAt = now,
         };
-        attempt.Persistence.Add(stored);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(stored);
+        await context.FlushBusinessAsync(ct);
 
         photo.StoredFileId = stored.Id;
         photo.FileName = command.FileName;
@@ -172,11 +183,11 @@ public sealed class FinalizeListingPhotoUploadHandler
         pending.UpdatedAtUtc = now;
         listing.ContentVersion++;
         listing.UpdatedAt = now;
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
             command, nameof(RentalListing), AuditLogOperation.Updated, "Attached listing photo"));
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId, nameof(ListingPhoto), photo.Id, AuditLogOperation.Updated,
             command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new
@@ -184,24 +195,26 @@ public sealed class FinalizeListingPhotoUploadHandler
                 photo.Position, photo.Category, photo.Caption, command.FileName, command.Sha256,
             }),
             ChangeReason: "Attached listing photo"), now);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, listing.Id, now, "photo-attach");
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "photo-attach");
         return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(FinalizeListingPhotoUploadCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(FinalizeListingPhotoUploadCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class UpdateListingPhotoHandler
-    : IAtomicCommandHandler<UpdateListingPhotoCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<UpdateListingPhotoCommand>
+    : IAtomicCommandHandler<UpdateListingPhotoCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateListingPhotoHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        UpdateListingPhotoCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, attempt.Persistence, now, ct);
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
         if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
         if (target.Photo.Category == command.Category && target.Photo.Caption == command.Caption)
             return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
@@ -210,31 +223,33 @@ public sealed class UpdateListingPhotoHandler
         target.Photo.Caption = command.Caption;
         target.Listing.ContentVersion++;
         target.Listing.UpdatedAt = now;
-        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, attempt, target, now, "Updated listing photo details");
-        await attempt.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, target.Listing.Id, now, "photo-update");
+        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, context, target, now, "Updated listing photo details");
+        await context.FlushBusinessAsync(ct);
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, target.Listing.Id, now, "photo-update");
         return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(UpdateListingPhotoCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(UpdateListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class RemoveListingPhotoHandler
-    : IAtomicCommandHandler<RemoveListingPhotoCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<RemoveListingPhotoCommand>
+    : IAtomicCommandHandler<RemoveListingPhotoCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RemoveListingPhotoHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        RemoveListingPhotoCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        RemoveListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, attempt.Persistence, now, ct);
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var target = await ListingWorkspaceCommandSupport.LoadPhotoTargetAsync(command, _db, now, ct);
         if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
         if (target.Photo.StoredFileId is not int fileId)
             return ListingWorkspaceCommandSupport.NoChange(command, target.Listing.Id);
 
-        var stored = await attempt.Persistence.Query<StoredFile>()
+        var stored = await _db.Set<StoredFile>()
             .SingleAsync(file => file.Id == fileId && file.PortfolioId == command.PortfolioId, ct);
         stored.DeletedAt = now;
         target.Photo.StoredFileId = null;
@@ -242,9 +257,9 @@ public sealed class RemoveListingPhotoHandler
         target.Photo.Sha256 = null;
         target.Listing.ContentVersion++;
         target.Listing.UpdatedAt = now;
-        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, attempt, target, now, "Removed listing photo attachment");
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageOutbox(new OutboxMessage
+        ListingWorkspaceCommandSupport.AuditPhotoMutation(command, context, target, now, "Removed listing photo attachment");
+        await context.FlushBusinessAsync(ct);
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "blob-delete",
@@ -253,62 +268,66 @@ public sealed class RemoveListingPhotoHandler
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, target.Listing.Id, now, "photo-remove");
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, target.Listing.Id, now, "photo-remove");
         return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(RemoveListingPhotoCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(RemoveListingPhotoCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class ReorderListingPhotosHandler
-    : IAtomicCommandHandler<ReorderListingPhotosCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<ReorderListingPhotosCommand>
+    : IAtomicCommandHandler<ReorderListingPhotosCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ReorderListingPhotosHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        ReorderListingPhotosCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        ReorderListingPhotosCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var listing = await ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
             .SingleOrDefaultAsync(ct);
         if (listing is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        var order = await attempt.Listings.ReorderPhotosAsync(
-            command.PortfolioId, listing.Id, command.PhotoIds, ct);
+        var order = await AtomicListingPersistence.ReorderPhotosAsync(_db,
+            context, command.PortfolioId, listing.Id, command.PhotoIds, ct);
         if (!order.IsValid)
             throw new DomainValidationException("Photo order must include every photo exactly once.");
         if (!order.HasChanges) return ListingWorkspaceCommandSupport.NoChange(command, listing.Id);
 
         listing.ContentVersion++;
         listing.UpdatedAt = now;
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(listing, ListingWorkspaceCommandSupport.Audit(
             command, nameof(RentalListing), AuditLogOperation.Updated, "Reordered listing photo package"));
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId, nameof(ListingPhoto), listing.Id, AuditLogOperation.Updated,
             command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { command.PhotoIds }),
             ChangeReason: "Reordered listing photo package"), now);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, listing.Id, now, "photo-reorder");
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, listing.Id, now, "photo-reorder");
         return ListingWorkspaceCommandSupport.Applied(command, listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(ReorderListingPhotosCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(ReorderListingPhotosCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class AdmitConnectedListingIntentHandler
-    : IAtomicCommandHandler<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult>,
-      IAtomicReplayAuthorizer<AdmitConnectedListingIntentCommand>
+    : IAtomicCommandHandler<AdmitConnectedListingIntentCommand, ConnectedListingIntentResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AdmitConnectedListingIntentHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConnectedListingIntentResult> HandleAsync(
-        AdmitConnectedListingIntentCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var target = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
-                            join publication in attempt.Persistence.Query<ListingPublication>()
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var target = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+                            join publication in _db.Set<ListingPublication>()
                                 on listing.Id equals publication.RentalListingId
                             where listing.Id == command.RentalListingId
                                 && listing.ContentVersion == command.ExpectedContentVersion
@@ -325,19 +344,21 @@ public sealed class AdmitConnectedListingIntentHandler
                 target.Id, target.PublicationId, target.ContentVersion);
     }
 
-    public Task AuthorizeReplayAsync(AdmitConnectedListingIntentCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(AdmitConnectedListingIntentCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class PersistConnectedListingResultHandler
-    : IAtomicCommandHandler<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult>,
-      IAtomicReplayAuthorizer<PersistConnectedListingResultCommand>
+    : IAtomicCommandHandler<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PersistConnectedListingResultHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConnectedListingPersistenceResult> HandleAsync(
-        PersistConnectedListingResultCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        await ValidateAdmissionAsync(command, attempt.Persistence, ct);
+        await ValidateAdmissionAsync(command, _db, ct);
         return new ConnectedListingPersistenceResult(
             ListingWorkspaceMutationOutcome.Applied,
             command.PortfolioId, command.PropertyId, command.UnitId, command.RentalListingId,
@@ -347,20 +368,19 @@ public sealed class PersistConnectedListingResultHandler
             command.DeliveryStatus, command.DeliveryError, command.ExternalListingId, command.ListingUrl);
     }
 
-    public Task AuthorizeReplayAsync(PersistConnectedListingResultCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ValidateAdmissionAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(PersistConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ValidateAdmissionAsync(command, _db, ct);
 
     internal static async Task ValidateAdmissionAsync(
         PersistConnectedListingResultCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         var expectedResult = JsonSerializer.Serialize(new ConnectedListingIntentResult(
             ListingWorkspaceMutationOutcome.Applied, command.PortfolioId, command.PropertyId,
             command.UnitId, command.RentalListingId, command.PublicationId,
             command.ExpectedContentVersion));
-        var admitted = await persistence.Query<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
+        var admitted = await db.Set<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
             receipt.AttemptId == command.AdmissionAttemptId
             && receipt.CommandType == command.AdmissionCommandType
             && receipt.IdempotencyKey == command.AdmissionIdempotencyKey
@@ -374,18 +394,21 @@ public sealed class PersistConnectedListingResultHandler
 }
 
 public sealed class ApplyConnectedListingResultHandler
-    : IAtomicCommandHandler<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult>,
-      IAtomicReplayAuthorizer<ApplyConnectedListingResultCommand>
+    : IAtomicCommandHandler<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyConnectedListingResultHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConnectedListingPersistenceResult> HandleAsync(
-        ApplyConnectedListingResultCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        await ValidateProviderResultAsync(command, attempt.Persistence, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await ValidateProviderResultAsync(command, _db, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         var provider = command.ProviderResult;
-        var target = await (from listing in attempt.Persistence.Query<RentalListing>()
-                            join publication in attempt.Persistence.Query<ListingPublication>()
+        var target = await (from listing in _db.Set<RentalListing>()
+                            join publication in _db.Set<ListingPublication>()
                                 on listing.Id equals publication.RentalListingId
                             where listing.Id == provider.RentalListingId
                                 && listing.PortfolioId == command.PortfolioId
@@ -415,7 +438,7 @@ public sealed class ApplyConnectedListingResultHandler
             }
             else if (provider.ProviderStatus == ListingPublicationStatus.Removed)
             {
-                var anotherPublished = await attempt.Persistence.Query<ListingPublication>().AsNoTracking().AnyAsync(item =>
+                var anotherPublished = await _db.Set<ListingPublication>().AsNoTracking().AnyAsync(item =>
                     item.RentalListingId == target.Listing.Id && item.PortfolioId == command.PortfolioId
                     && item.Id != target.Publication.Id && item.Status == ListingPublicationStatus.Published, ct);
                 target.Listing.Status = anotherPublished
@@ -423,22 +446,22 @@ public sealed class ApplyConnectedListingResultHandler
                     : RentalListingStatus.ReadyToPublish;
             }
             target.Listing.UpdatedAt = now;
-            BindAudit(attempt, command, target.Publication, target.Listing, now, command.Reason);
-            await attempt.FlushBusinessAsync(ct);
-            StageUpdate(attempt, command, target.Listing.Id, now, "connected-result");
+            BindAudit(context, command, target.Publication, target.Listing, now, command.Reason);
+            await context.FlushBusinessAsync(ct);
+            StageUpdate(context, command, target.Listing.Id, now, "connected-result");
         }
         else if (target is not null)
         {
             target.Publication.Status = ListingPublicationStatus.ReconciliationRequired;
             target.Publication.UpdatedAt = now;
-            attempt.UseDatabaseWallClockForAudit(now);
-            attempt.BindSemanticAudit(target.Publication, new AtomicSemanticAudit(
+            context.UseDatabaseWallClockForAudit(now);
+            context.BindSemanticAudit(target.Publication, new AtomicSemanticAudit(
                 command.PortfolioId, nameof(ListingPublication), target.Publication.Id,
                 AuditLogOperation.Updated, command.AdmittedActorUserId,
                 ActorLabel: "system:listing-provider-reconciler",
                 ChangeReason: "Provider outcome requires reconciliation with newer listing content"));
-            await attempt.FlushBusinessAsync(ct);
-            StageUpdate(attempt, command, target.Listing.Id, now, "connected-reconciliation-required");
+            await context.FlushBusinessAsync(ct);
+            StageUpdate(context, command, target.Listing.Id, now, "connected-reconciliation-required");
         }
 
         return provider with
@@ -449,17 +472,16 @@ public sealed class ApplyConnectedListingResultHandler
         };
     }
 
-    public Task AuthorizeReplayAsync(ApplyConnectedListingResultCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ValidateProviderResultAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(ApplyConnectedListingResultCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ValidateProviderResultAsync(command, _db, ct);
 
     private static async Task ValidateProviderResultAsync(
         ApplyConnectedListingResultCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         var expectedResult = JsonSerializer.Serialize(command.ProviderResult);
-        var recorded = await persistence.Query<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
+        var recorded = await db.Set<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
             receipt.AttemptId == command.ProviderResultAttemptId
             && receipt.CommandType == command.ProviderResultCommandType
             && receipt.IdempotencyKey == command.ProviderResultIdempotencyKey
@@ -472,32 +494,32 @@ public sealed class ApplyConnectedListingResultHandler
     }
 
     private static void BindAudit(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         ApplyConnectedListingResultCommand command,
         ListingPublication publication,
         RentalListing listing,
         DateTime now,
         string reason)
     {
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(publication, new AtomicSemanticAudit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(publication, new AtomicSemanticAudit(
             command.PortfolioId, nameof(ListingPublication), publication.Id,
             AuditLogOperation.Updated, command.AdmittedActorUserId,
             ActorLabel: "system:listing-provider-reconciler", ChangeReason: reason));
-        attempt.BindSemanticAudit(listing, new AtomicSemanticAudit(
+        context.BindSemanticAudit(listing, new AtomicSemanticAudit(
             command.PortfolioId, nameof(RentalListing), listing.Id,
             AuditLogOperation.Updated, command.AdmittedActorUserId,
             ActorLabel: "system:listing-provider-reconciler", ChangeReason: reason));
     }
 
     private static void StageUpdate(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         ApplyConnectedListingResultCommand command,
         int listingId,
         DateTime now,
         string operation)
     {
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -507,7 +529,7 @@ public sealed class ApplyConnectedListingResultHandler
                 entityId = listingId,
                 data = new { unitId = command.UnitId, operation },
             }),
-            IdempotencyKey = $"listing-workspace:{operation}:{attempt.AttemptId:N}",
+            IdempotencyKey = $"listing-workspace:{operation}:{context.AttemptId:N}",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });
@@ -515,17 +537,20 @@ public sealed class ApplyConnectedListingResultHandler
 }
 
 public sealed class ConfirmExternalListingSignalHandler
-    : IAtomicCommandHandler<ConfirmExternalListingSignalCommand, ListingWorkspaceMutationResult>,
-      IAtomicReplayAuthorizer<ConfirmExternalListingSignalCommand>
+    : IAtomicCommandHandler<ConfirmExternalListingSignalCommand, ListingWorkspaceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ConfirmExternalListingSignalHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ListingWorkspaceMutationResult> HandleAsync(
-        ConfirmExternalListingSignalCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var target = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
-                            join publication in attempt.Persistence.Query<ListingPublication>()
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var target = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, _db, now)
+                            join publication in _db.Set<ListingPublication>()
                                 on listing.Id equals publication.RentalListingId
-                            join signal in attempt.Persistence.Query<ExternalListingSignal>()
+                            join signal in _db.Set<ExternalListingSignal>()
                                 on publication.Id equals signal.ListingPublicationId
                             where signal.Id == command.SignalId && signal.PortfolioId == command.PortfolioId
                             select new { Listing = listing, Publication = publication, Signal = signal })
@@ -548,74 +573,181 @@ public sealed class ConfirmExternalListingSignalHandler
                 ?? target.Publication.LastConfirmedExternalStatus;
             target.Publication.LastConfirmedAtUtc = now;
             target.Publication.UpdatedAt = now;
-            attempt.UseDatabaseWallClockForAudit(now);
-            attempt.BindSemanticAudit(target.Publication, ListingWorkspaceCommandSupport.Audit(
+            context.UseDatabaseWallClockForAudit(now);
+            context.BindSemanticAudit(target.Publication, ListingWorkspaceCommandSupport.Audit(
                 command, nameof(ListingPublication), AuditLogOperation.Updated,
                 "Applied confirmed external listing hint", target.Publication.Id));
         }
-        await attempt.FlushBusinessAsync(ct);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId, nameof(ExternalListingSignal), target.Signal.Id,
             AuditLogOperation.Updated, command.ActorUserId,
             ChangeReason: command.Accept ? "Confirmed external listing hint" : "Rejected external listing hint"), now);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, target.Listing.Id, now, "signal-confirm");
+        ListingWorkspaceCommandSupport.StageUpdate(context, command, target.Listing.Id, now, "signal-confirm");
         return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
     }
 
-    public Task AuthorizeReplayAsync(ConfirmExternalListingSignalCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(ConfirmExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+}
+
+public sealed class IngestExternalListingSignalHandler
+    : IAtomicCommandHandler<IngestExternalListingSignalCommand, IngestExternalListingSignalResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public IngestExternalListingSignalHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<IngestExternalListingSignalResult> HandleAsync(
+        IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        Validate(command);
+        await context.AcquireLockAsync(
+            "ExternalListingSignal",
+            StableProviderMessageKey(command.PortfolioId, command.ProviderMessageKey),
+            ct);
+        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, _db, context, ct);
+        var publicationExists = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(
+                                           command, _db, now)
+                                       join publication in _db.Set<ListingPublication>()
+                                           on listing.Id equals publication.RentalListingId
+                                       where publication.Id == command.PublicationId
+                                           && publication.PortfolioId == command.PortfolioId
+                                       select publication.Id)
+            .AnyAsync(ct);
+        if (!publicationExists) return Missing(command);
+
+        var signal = await _db.Set<ExternalListingSignal>()
+            .SingleOrDefaultAsync(item =>
+                item.PortfolioId == command.PortfolioId
+                && item.ProviderMessageKey == command.ProviderMessageKey, ct);
+        if (signal is not null)
+        {
+            if (signal.ListingPublicationId != command.PublicationId)
+            {
+                throw new DomainValidationException(
+                    "Provider message key is already assigned to another listing publication.");
+            }
+
+            return Result(signal);
+        }
+
+        signal = new ExternalListingSignal
+        {
+            PortfolioId = command.PortfolioId,
+            ListingPublicationId = command.PublicationId,
+            ProviderMessageKey = command.ProviderMessageKey,
+            SignalType = command.SignalType,
+            SuggestedExternalListingId = command.SuggestedExternalListingId,
+            SuggestedListingUrl = command.SuggestedListingUrl,
+            SuggestedExternalStatus = command.SuggestedExternalStatus,
+            Disposition = ExternalListingSignalDisposition.Unconfirmed,
+            ReceivedAtUtc = now,
+        };
+        _db.Add(signal);
+        await context.FlushBusinessAsync(ct);
+        context.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(ExternalListingSignal),
+            signal.Id,
+            AuditLogOperation.Created,
+            command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                command.PublicationId,
+                command.ProviderMessageKey,
+                command.SignalType,
+                command.SuggestedExternalListingId,
+                command.SuggestedListingUrl,
+                command.SuggestedExternalStatus,
+            }),
+            ChangeReason: "Ingested external listing signal"), now);
+        return Result(signal);
+    }
+
+    public Task AuthorizeReplayAsync(
+        IngestExternalListingSignalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, _db, ct);
+
+    private static void Validate(IngestExternalListingSignalCommand command)
+    {
+        if (command.PublicationId <= 0)
+            throw new DomainValidationException("Listing publication is required.");
+        if (string.IsNullOrWhiteSpace(command.ProviderMessageKey))
+            throw new DomainValidationException("Provider message key is required.");
+        if (string.IsNullOrWhiteSpace(command.SignalType))
+            throw new DomainValidationException("Signal type is required.");
+    }
+
+    private static IngestExternalListingSignalResult Missing(
+        IngestExternalListingSignalCommand command) =>
+        new(false, 0, command.SignalType, command.SuggestedExternalListingId,
+            command.SuggestedListingUrl, command.SuggestedExternalStatus,
+            ExternalListingSignalDisposition.Unconfirmed, default);
+
+    private static IngestExternalListingSignalResult Result(ExternalListingSignal signal) =>
+        new(true, signal.Id, signal.SignalType, signal.SuggestedExternalListingId,
+            signal.SuggestedListingUrl, signal.SuggestedExternalStatus,
+            signal.Disposition, signal.ReceivedAtUtc);
+
+    private static Guid StableProviderMessageKey(int portfolioId, string providerMessageKey)
+    {
+        var bytes = SHA256.HashData(
+            Encoding.UTF8.GetBytes($"{portfolioId}:{providerMessageKey}"));
+        return new Guid(bytes.AsSpan(0, 16));
+    }
 }
 
 internal static class ListingWorkspaceCommandSupport
 {
     internal static async Task<DateTime> AuthorizeAndLockAsync(
-        IListingWorkspaceAtomicCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db,
+        IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedUnits(command, attempt.Persistence, now).AnyAsync(ct))
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await AuthorizedUnits(command, db, now).AnyAsync(ct))
             throw new UnauthorizedAccessException("The listing is outside the caller's current property scope.");
         return now;
     }
 
     internal static async Task AuthorizeReplayAsync(
-        IListingWorkspaceAtomicCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedUnits(command, persistence, now).AnyAsync(ct))
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedUnits(command, db, now).AnyAsync(ct))
             throw new UnauthorizedAccessException("The listing is outside the caller's current property scope.");
     }
 
     internal static IQueryable<Unit> AuthorizedUnits(
-        IListingWorkspaceAtomicCommand command, IAtomicPersistenceSession persistence, DateTime now)
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
 
-        return persistence.Query<Unit>().Where(unit =>
+        return db.Set<Unit>().Where(unit =>
             unit.Id == command.UnitId && unit.PortfolioId == command.PortfolioId
             && unit.Property != null && unit.Property.PortfolioId == command.PortfolioId
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.AccessRevision
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -636,14 +768,14 @@ internal static class ListingWorkspaceCommandSupport
     }
 
     internal static IQueryable<RentalListing> AuthorizedListings(
-        IListingWorkspaceAtomicCommand command, IAtomicPersistenceSession persistence, DateTime now) =>
-        from unit in AuthorizedUnits(command, persistence, now)
-        join listing in persistence.Query<RentalListing>() on unit.Id equals listing.UnitId
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now) =>
+        from unit in AuthorizedUnits(command, db, now)
+        join listing in db.Set<RentalListing>() on unit.Id equals listing.UnitId
         where listing.PortfolioId == command.PortfolioId
         select listing;
 
     internal static async Task<ListingPhotoTarget?> LoadPhotoTargetAsync(
-        IListingWorkspaceAtomicCommand command, IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+        IListingWorkspaceAtomicCommand command, RentalCommandDbContext db, DateTime now, CancellationToken ct)
     {
         var photoId = command switch
         {
@@ -651,20 +783,20 @@ internal static class ListingWorkspaceCommandSupport
             RemoveListingPhotoCommand remove => remove.PhotoId,
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
-        return await (from listing in AuthorizedListings(command, persistence, now)
-                      join photo in persistence.Query<ListingPhoto>() on listing.Id equals photo.RentalListingId
+        return await (from listing in AuthorizedListings(command, db, now)
+                      join photo in db.Set<ListingPhoto>() on listing.Id equals photo.RentalListingId
                       where photo.Id == photoId && photo.PortfolioId == command.PortfolioId
                       select new ListingPhotoTarget(listing, photo)).SingleOrDefaultAsync(ct);
     }
 
     internal static void AuditPhotoMutation(
-        IListingWorkspaceAtomicCommand command, IAtomicWriteAttempt attempt,
+        IListingWorkspaceAtomicCommand command, IAtomicCommandContext context,
         ListingPhotoTarget target, DateTime now, string reason)
     {
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(target.Listing, Audit(
+        context.UseDatabaseWallClockForAudit(now);
+        context.BindSemanticAudit(target.Listing, Audit(
             command, nameof(RentalListing), AuditLogOperation.Updated, reason));
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId, nameof(ListingPhoto), target.Photo.Id,
             AuditLogOperation.Updated, command.ActorUserId, ChangeReason: reason), now);
     }
@@ -676,10 +808,10 @@ internal static class ListingWorkspaceCommandSupport
             UserId: command.ActorUserId, ChangeReason: reason);
 
     internal static void StageUpdate(
-        IAtomicWriteAttempt attempt, IListingWorkspaceAtomicCommand command,
+        IAtomicCommandContext context, IListingWorkspaceAtomicCommand command,
         int listingId, DateTime now, string operation)
     {
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -689,7 +821,7 @@ internal static class ListingWorkspaceCommandSupport
                 entityId = listingId,
                 data = new { unitId = command.UnitId, operation },
             }),
-            IdempotencyKey = $"listing-workspace:{operation}:{attempt.AttemptId:N}",
+            IdempotencyKey = $"listing-workspace:{operation}:{context.AttemptId:N}",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });

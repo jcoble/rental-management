@@ -230,12 +230,12 @@ public sealed class LeasingExperienceContractTests
             "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
 
         var sessionLock = handler.IndexOf(
-            "AtomicLockResource.AuthSession, managementAccess.SessionId", StringComparison.Ordinal);
+            "\"AuthSession\", managementAccess.SessionId", StringComparison.Ordinal);
         var contextLock = handler.IndexOf(
-            "AtomicLockResource.WorkspaceAccessContext, managementAccess.AccessContextId",
+            "\"WorkspaceAccessContext\", managementAccess.AccessContextId",
             StringComparison.Ordinal);
         var conversationLock = handler.IndexOf(
-            "AtomicLockResource.Conversation, conversationId", StringComparison.Ordinal);
+            "\"Conversation\", conversationId", StringComparison.Ordinal);
 
         sessionLock.Should().BeGreaterThan(0);
         contextLock.Should().BeGreaterThan(sessionLock);

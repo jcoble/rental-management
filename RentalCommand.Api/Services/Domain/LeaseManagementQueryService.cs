@@ -266,6 +266,9 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DocumentSourceVersionId = row.DocumentSourceVersionId,
             DocumentTemplateId = row.DocumentTemplateId,
             DocumentTemplateVersion = row.DocumentTemplateVersion,
+            SourceStoredFileId = row.SourceStoredFileId,
+            SourceFileName = row.SourceFileName,
+            SourceContentType = row.SourceContentType,
             SourceAgreement = row.SourceAgreement,
             Signers = row.Signers,
             CreatedAtUtc = row.CreatedAtUtc,
@@ -636,6 +639,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             CurrentResidentCount = lifecycle.CurrentResidentCount,
             CurrentFinanciallyResponsiblePartyCount = lifecycle.CurrentFinanciallyResponsiblePartyCount,
             HasReconciliationException = lifecycle.HasReconciliationException,
+            HasGoverningAgreementWithoutPossession = lifecycle.HasGoverningAgreementWithoutPossession,
             PlannedPossessionAtUtc = management.PlannedPossessionAtUtc,
             PossessionGivenAtUtc = management.PossessionGivenAtUtc,
             PlannedMoveOutAtUtc = management.PlannedMoveOutAtUtc,
@@ -778,6 +782,11 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         join sourceVersion in _db.LegalDocumentSourceVersions.AsNoTracking()
             on new { agreement.PortfolioId, SourceVersionId = agreement.DocumentSourceVersionId }
             equals new { sourceVersion.PortfolioId, SourceVersionId = sourceVersion.Id }
+        from sourceFile in _db.StoredFiles.AsNoTracking()
+            .Where(file => file.PortfolioId == sourceVersion.PortfolioId
+                && file.Id == sourceVersion.SourceStoredFileId
+                && file.DeletedAt == null)
+            .DefaultIfEmpty()
         let sourceAgreementId = agreement.ReplacesAgreementId
             ?? agreement.RenewsAgreementId
             ?? agreement.ReissuesAgreementId
@@ -820,6 +829,9 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DocumentSourceVersionId = agreement.DocumentSourceVersionId,
             DocumentTemplateId = sourceVersion.DocumentTemplateId,
             DocumentTemplateVersion = sourceVersion.DocumentTemplateVersion,
+            SourceStoredFileId = sourceFile == null ? null : sourceFile.Id,
+            SourceFileName = sourceFile == null ? null : sourceFile.FileName,
+            SourceContentType = sourceFile == null ? null : sourceFile.ContentType,
             SourceAgreement = sourceAgreement == null
                 ? null
                 : new LeaseAgreementSourceComparisonResponse
@@ -1691,6 +1703,9 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         public int DocumentSourceVersionId { get; init; }
         public int? DocumentTemplateId { get; init; }
         public int? DocumentTemplateVersion { get; init; }
+        public int? SourceStoredFileId { get; init; }
+        public string? SourceFileName { get; init; }
+        public string? SourceContentType { get; init; }
         public LeaseAgreementSourceComparisonResponse? SourceAgreement { get; init; }
         public IReadOnlyList<LeaseAgreementDraftSignerResponse> Signers { get; init; } = [];
         public DateTime CreatedAtUtc { get; init; }

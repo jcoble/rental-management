@@ -1,9 +1,12 @@
 using System.Data.Common;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
@@ -29,6 +32,7 @@ public class ScanControllerTests : IAsyncLifetime
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
     private readonly List<string> _executedSql = [];
+    private readonly List<RecordedCommand> _executedCommands = [];
     private CanonicalScanTestAuthorization _authorization = null!;
 
     public ScanControllerTests(MigratedPostgreSqlFixture fixture)
@@ -38,7 +42,8 @@ public class ScanControllerTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(_executedSql, _executedCommands)]);
         _db = _ctx.Db;
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, portfolioId: 42, userId: 7, sessionId: SessionId);
@@ -374,6 +379,51 @@ public class ScanControllerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task List_DoesNotExecuteDiscardedTotalCountQuery()
+    {
+        SeedAuthorizedDraft(23);
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+        var controller = CreateController(Mock.Of<IScanService>());
+
+        _executedSql.Clear();
+        _executedCommands.Clear();
+        var result = await controller.List(null, skip: 0, take: 20, CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var body = ok.Value.Should().BeAssignableTo<IReadOnlyList<ScanDraftResponse>>().Subject;
+        body.Should().ContainSingle(item => item.Id == 23);
+        _executedSql.Should().ContainSingle(
+            "the array endpoint must execute only its authorized, sorted, DB-paged item query");
+        _executedSql[0].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[0].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[0].Should().NotContainEquivalentOf("COUNT(*)");
+        _executedSql[0].Length.Should().BeLessThan(
+            150_000,
+            "scan authorization must not re-expand its permission graph for every captured relationship");
+        Regex.Matches(
+            _executedSql[0],
+            @"FROM public\.rc_api_effective_capability_scopes\(",
+            RegexOptions.IgnoreCase).Count.Should().BeLessThanOrEqualTo(
+            12,
+            "each scan target should evaluate one cohesive property scope, with assigned-work scope only where supported");
+
+        var itemCommand = _executedCommands.Should().ContainSingle().Subject;
+        await using var explain = _db.Database.GetDbConnection().CreateCommand();
+        explain.CommandText = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + itemCommand.CommandText;
+        explain.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        foreach (var parameter in itemCommand.Parameters)
+            explain.Parameters.Add(CloneParameter(parameter));
+
+        var planJson = (string)(await explain.ExecuteScalarAsync())!;
+        using var plan = JsonDocument.Parse(planJson);
+        var planningMs = plan.RootElement[0].GetProperty("Planning Time").GetDouble();
+        var executionMs = plan.RootElement[0].GetProperty("Execution Time").GetDouble();
+        (planningMs + executionMs).Should().BeLessThan(
+            5_000,
+            "the canonical PostgreSQL plan must remain comfortably inside the mobile request timeout");
+    }
+
+    [Fact]
     public async Task Confirm_WithoutStableOperationId_IsRejectedBeforePreparationOrAtomicAdmission()
     {
         var scan = new Mock<IScanService>(MockBehavior.Strict);
@@ -673,7 +723,7 @@ public class ScanControllerTests : IAsyncLifetime
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
@@ -687,14 +737,32 @@ public class ScanControllerTests : IAsyncLifetime
         }
     }
 
-    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    private sealed record RecordedCommand(
+        string CommandText,
+        IReadOnlyList<DbParameter> Parameters);
+
+    private static DbParameter CloneParameter(DbParameter parameter) =>
+        parameter is ICloneable cloneable
+            ? (DbParameter)cloneable.Clone()
+            : throw new InvalidOperationException(
+                $"Database parameter type {parameter.GetType().Name} cannot be cloned for EXPLAIN.");
+
+    private sealed class RecordingCommandInterceptor(
+        List<string> commands,
+        List<RecordedCommand> recordedCommands) : DbCommandInterceptor
     {
+        private static RecordedCommand Snapshot(DbCommand command) =>
+            new(
+                command.CommandText,
+                command.Parameters.Cast<DbParameter>().Select(CloneParameter).ToArray());
+
         public override InterceptionResult<DbDataReader> ReaderExecuting(
             DbCommand command,
             CommandEventData eventData,
             InterceptionResult<DbDataReader> result)
         {
             commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
             return base.ReaderExecuting(command, eventData, result);
         }
 
@@ -705,6 +773,7 @@ public class ScanControllerTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }

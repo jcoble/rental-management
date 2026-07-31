@@ -13,7 +13,7 @@ import shutil
 import textwrap
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -56,6 +56,41 @@ class Asset:
     edge_case: str
     paired_manual_action: str
     confidentiality: str
+    opening_unpaid_principal_cents: str | None = None
+
+
+@dataclass(frozen=True)
+class BankTransaction:
+    event_id: str
+    posted_at: str
+    description: str
+    merchant_name: str
+    category: str
+    reference: str
+    amount_cents: int
+    provider_transaction_id: str
+    property_id: str
+    unit_id: str
+    lease_id: str
+
+
+@dataclass(frozen=True)
+class BankAccountStatement:
+    account_name: str
+    account_mask: str
+    account_type: str
+    account_subtype: str
+    opening_balance_cents: int
+    closing_balance_cents: int
+    transactions: list[BankTransaction]
+
+    @property
+    def deposits_cents(self) -> int:
+        return sum(item.amount_cents for item in self.transactions if item.amount_cents > 0)
+
+    @property
+    def withdrawals_cents(self) -> int:
+        return -sum(item.amount_cents for item in self.transactions if item.amount_cents < 0)
 
 
 def read_csv(name: str) -> list[dict[str, str]]:
@@ -63,9 +98,53 @@ def read_csv(name: str) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def read_live_context(path: Path | None) -> dict[str, dict[str, str]]:
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    units = payload.get("units", {})
+    if not isinstance(units, dict):
+        raise ValueError("live context must contain an object at units")
+    normalized: dict[str, dict[str, str]] = {}
+    for unit_id, values in units.items():
+        if not isinstance(values, dict):
+            raise ValueError(f"live context unit {unit_id} must be an object")
+        normalized[str(unit_id)] = {str(key): str(value) for key, value in values.items() if value is not None}
+    return normalized
+
+
 def money(cents: str | int | None) -> str:
     value = int(cents or 0)
     return f"${value / 100:,.2f}"
+
+
+def signed_money(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    return f"{sign}${abs(cents) / 100:,.2f}"
+
+
+def parse_day(value: str) -> date:
+    return date.fromisoformat(value)
+
+
+def month_key(value: str) -> str:
+    return value[:7]
+
+
+def month_start(value: str) -> date:
+    year, month = map(int, value.split("-"))
+    return date(year, month, 1)
+
+
+def next_month(value: str) -> str:
+    start = month_start(value)
+    if start.month == 12:
+        return f"{start.year + 1}-01"
+    return f"{start.year}-{start.month + 1:02d}"
+
+
+def month_end(value: str) -> date:
+    return month_start(next_month(value)) - timedelta(days=1)
 
 
 def asset_number(asset_id: str) -> int:
@@ -110,6 +189,7 @@ def data_context(
     leases: dict[str, dict[str, str]],
     events: dict[str, dict[str, str]],
     schedules: dict[str, dict[str, str]],
+    live_units: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, str]:
     prop = properties.get(asset.property_id, {})
     unit = units.get(asset.unit_id, {})
@@ -131,6 +211,25 @@ def data_context(
         )
     event = events.get(asset.financial_event_id, {})
     schedule = schedules.get(asset.asset_id, {})
+    live_unit = (live_units or {}).get(asset.unit_id, {})
+    if live_unit:
+        unit = {**unit, **{key: value for key, value in live_unit.items() if key in {"label"}}}
+        lease = {
+            **lease,
+            **{
+                key: value
+                for key, value in live_unit.items()
+                if key
+                in {
+                    "tenant_name",
+                    "tenant_email",
+                    "start_date",
+                    "end_date",
+                    "monthly_rent_cents",
+                    "deposit_cents",
+                }
+            },
+        }
     issue_match = re.search(
         r"\breview (.*?); confirm;",
         schedule.get("exact_actions", ""),
@@ -145,6 +244,28 @@ def data_context(
     work_order_match = re.search(r"\bWO-\d{4}-\d+\b", memo)
     principal_cents = int(prop.get("monthly_principal_cents") or 0)
     interest_cents = int(prop.get("monthly_interest_cents") or 0)
+    escrow_cents = int(prop.get("monthly_escrow_cents") or 0)
+    if event.get("event_type") == "LoanPayment":
+        principal_cents = -int(event.get("loan_liability_delta_cents") or 0)
+        interest_cents = int(event.get("expense_cents") or 0)
+        component_total_cents = principal_cents + interest_cents + escrow_cents
+        event_total_cents = int(event.get("amount_cents") or 0)
+        if event_total_cents != component_total_cents:
+            raise ValueError(
+                f"{asset.asset_id} {event.get('event_id')}: mortgage amount "
+                f"{event_total_cents} != principal + interest + escrow "
+                f"{component_total_cents}"
+            )
+    opening_unpaid_principal_cents = (
+        int(asset.opening_unpaid_principal_cents)
+        if asset.opening_unpaid_principal_cents
+        else None
+    )
+    ending_unpaid_principal_cents = (
+        opening_unpaid_principal_cents - principal_cents
+        if opening_unpaid_principal_cents is not None
+        else None
+    )
     return {
         "property_name": prop.get("property_name", "Portfolio-level record"),
         "address": " ".join(
@@ -172,9 +293,20 @@ def data_context(
         or "Synthetic QA Counterparty",
         "original_cost": money(prop.get("original_cost_cents")),
         "opening_loan_balance": money(prop.get("opening_loan_balance_cents")),
+        "opening_unpaid_principal": (
+            money(opening_unpaid_principal_cents)
+            if opening_unpaid_principal_cents is not None
+            else ""
+        ),
+        "ending_unpaid_principal": (
+            money(ending_unpaid_principal_cents)
+            if ending_unpaid_principal_cents is not None
+            else ""
+        ),
         "principal": money(principal_cents),
         "interest": money(interest_cents),
-        "mortgage_due": money(principal_cents + interest_cents),
+        "escrow": money(escrow_cents),
+        "mortgage_due": money(principal_cents + interest_cents + escrow_cents),
         "reference": event.get("reference", asset.asset_id),
         "event_type": event.get("event_type", asset.intended_target),
         "category": event.get("category", asset.document_family),
@@ -183,6 +315,170 @@ def data_context(
         "effective_date": event.get("effective_date", asset.planned_date),
         "maintenance_issue": maintenance_issue,
     }
+
+
+BANK_ACCOUNTS = {
+    "operating": {
+        "journal_account": "1000 Operating Cash",
+        "control_delta": "operating_cash_delta_cents",
+        "oracle_delta": "operating_cash_delta_cents",
+        "opening_delta": "operating_cash_delta_cents",
+        "statement_name": "Operating checking",
+        "account_mask": "4242",
+        "account_type": "depository",
+        "account_subtype": "checking",
+    },
+    "trust": {
+        "journal_account": "1010 Security Deposit Trust Cash",
+        "control_delta": "deposit_cash_delta_cents",
+        "oracle_delta": "deposit_cash_delta_cents",
+        "opening_delta": "deposit_cash_delta_cents",
+        "statement_name": "Security deposit trust",
+        "account_mask": "1818",
+        "account_type": "depository",
+        "account_subtype": "checking",
+    },
+    "reserve": {
+        "journal_account": "1020 Reserve Cash",
+        "control_delta": "reserve_cash_delta_cents",
+        "oracle_delta": "reserve_cash_delta_cents",
+        "opening_delta": "reserve_cash_delta_cents",
+        "statement_name": "Capital reserve savings",
+        "account_mask": "7070",
+        "account_type": "depository",
+        "account_subtype": "savings",
+    },
+}
+
+
+def journal_cash_by_event(
+    journal_rows: list[dict[str, str]],
+) -> dict[tuple[str, str], int]:
+    result: dict[tuple[str, str], int] = {}
+    account_names = {
+        config["journal_account"]
+        for config in BANK_ACCOUNTS.values()
+    }
+    for row in journal_rows:
+        account = row["account"]
+        if account not in account_names:
+            continue
+        key = (row["event_id"], account)
+        result[key] = result.get(key, 0) + int(row["debit_cents"] or 0) - int(row["credit_cents"] or 0)
+    return result
+
+
+def cumulative_opening_balance(
+    month: str,
+    account_key: str,
+    events: list[dict[str, str]],
+    monthly_controls: dict[str, dict[str, str]],
+) -> int:
+    config = BANK_ACCOUNTS[account_key]
+    opening = sum(
+        int(row[config["opening_delta"]] or 0)
+        for row in events
+        if row["event_type"] == "OpeningBalance"
+    )
+    for control_month in sorted(monthly_controls):
+        if control_month >= month:
+            break
+        opening += int(monthly_controls[control_month][config["control_delta"]] or 0)
+    return opening
+
+
+def build_bank_account_statement(
+    asset: Asset,
+    account_key: str,
+    events: list[dict[str, str]],
+    journal_cash: dict[tuple[str, str], int],
+    monthly_controls: dict[str, dict[str, str]],
+) -> BankAccountStatement:
+    month = month_key(asset.planned_date)
+    config = BANK_ACCOUNTS[account_key]
+    account_name = config["statement_name"]
+    account_mask = config["account_mask"]
+    journal_account = config["journal_account"]
+    oracle_delta_column = config["oracle_delta"]
+    month_events = [
+        row
+        for row in events
+        if month_key(row["effective_date"]) == month and row["event_type"] != "OpeningBalance"
+    ]
+    transactions: list[BankTransaction] = []
+    for row in month_events:
+        oracle_delta = int(row[oracle_delta_column] or 0)
+        journal_delta = journal_cash.get((row["event_id"], journal_account), 0)
+        if journal_delta != oracle_delta:
+            raise ValueError(
+                f"{asset.asset_id} {account_name}: {row['event_id']} journal delta "
+                f"{journal_delta} != oracle delta {oracle_delta}"
+            )
+        if oracle_delta == 0:
+            continue
+        reference = row["reference"] or row["event_id"]
+        merchant = row["counterparty"] or "Blue Door Property Management"
+        description = " | ".join(
+            part
+            for part in [
+                row["event_type"],
+                row["category"],
+                reference,
+                row["memo"],
+            ]
+            if part
+        )
+        transactions.append(
+            BankTransaction(
+                event_id=row["event_id"],
+                posted_at=row["effective_date"],
+                description=description,
+                merchant_name=merchant,
+                category=row["category"],
+                reference=reference,
+                amount_cents=oracle_delta,
+                provider_transaction_id=f"ys2027-{account_mask}-{row['event_id']}",
+                property_id=row["property_id"],
+                unit_id=row["unit_id"],
+                lease_id=row["lease_id"],
+            )
+        )
+    transactions.sort(key=lambda item: (parse_day(item.posted_at), item.event_id, item.provider_transaction_id))
+    opening = cumulative_opening_balance(month, account_key, events, monthly_controls)
+    month_delta = sum(item.amount_cents for item in transactions)
+    control_delta = int(monthly_controls[month][config["control_delta"]] or 0)
+    if month_delta != control_delta:
+        raise ValueError(
+            f"{asset.asset_id} {account_name}: transaction delta {month_delta} "
+            f"!= monthly control {control_delta}"
+        )
+    return BankAccountStatement(
+        account_name=account_name,
+        account_mask=account_mask,
+        account_type=config["account_type"],
+        account_subtype=config["account_subtype"],
+        opening_balance_cents=opening,
+        closing_balance_cents=opening + month_delta,
+        transactions=transactions,
+    )
+
+
+def build_bank_statement_packet(
+    asset: Asset,
+    events: list[dict[str, str]],
+    journal_cash: dict[tuple[str, str], int],
+    monthly_controls: dict[str, dict[str, str]],
+) -> dict[str, BankAccountStatement]:
+    if asset.document_family != "Operating bank statement":
+        return {}
+    statements = {
+        key: build_bank_account_statement(asset, key, events, journal_cash, monthly_controls)
+        for key in BANK_ACCOUNTS
+    }
+    operating = statements["operating"]
+    if operating.account_mask != "4242":
+        raise ValueError(f"{asset.asset_id}: operating statement must use account 4242")
+    return statements
 
 
 def family_title(asset: Asset) -> str:
@@ -245,15 +541,23 @@ def field_rows(asset: Asset, ctx: dict[str, str]) -> list[tuple[str, str]]:
             ("Status", "For QA upload only - VOID"),
         ]
     if "mortgage" in family.lower():
+        principal_rows = (
+            [
+                ("Opening unpaid principal", ctx["opening_unpaid_principal"]),
+                ("Ending unpaid principal", ctx["ending_unpaid_principal"]),
+            ]
+            if asset.opening_unpaid_principal_cents
+            else [("Unpaid principal balance", ctx["opening_loan_balance"])]
+        )
         return common + [
             ("Borrower", ctx["owner"]),
             ("Property address", ctx["address"]),
             ("Payment due", ctx["effective_date"]),
-            ("Amount due", ctx["amount"] if ctx["amount"] != "$0.00" else ctx["mortgage_due"]),
+            ("Amount due", ctx["mortgage_due"]),
             ("Principal", ctx["principal"]),
             ("Interest", ctx["interest"]),
-            ("Escrow", "$318.00"),
-            ("Unpaid principal balance", ctx["opening_loan_balance"]),
+            ("Escrow", ctx["escrow"]),
+            *principal_rows,
             ("Synthetic account", "XXXX-4242"),
         ]
     if family == "Operating bank statement":
@@ -502,6 +806,165 @@ def draw_terms(c: canvas.Canvas, asset: Asset, ctx: dict[str, str], y: float, pa
     return y
 
 
+def draw_bank_summary(
+    c: canvas.Canvas,
+    statement: BankAccountStatement,
+    period_label: str,
+    y: float,
+) -> float:
+    c.setFillColor(colors.HexColor("#E8F1F3"))
+    c.roundRect(42, y - 112, PAGE_WIDTH - 84, 104, 6, fill=1, stroke=0)
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(58, y - 30, "Statement summary")
+    c.setFillColor(INK)
+    c.setFont("Helvetica", 9)
+    left = [
+        ("Statement period", period_label),
+        ("Account owner", "Blue Door Property Management"),
+        ("Account", f"{statement.account_name} ending {statement.account_mask}"),
+    ]
+    right = [
+        ("Opening balance", money(statement.opening_balance_cents)),
+        ("Deposits and credits", money(statement.deposits_cents)),
+        ("Withdrawals and debits", money(statement.withdrawals_cents)),
+        ("Closing balance", money(statement.closing_balance_cents)),
+    ]
+    row_y = y - 52
+    for label, value in left:
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(58, row_y, label.upper())
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 9)
+        c.drawString(170, row_y, value)
+        row_y -= 17
+    row_y = y - 35
+    for label, value in right:
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica-Bold", 7.5)
+        c.drawString(348, row_y, label.upper())
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold" if label == "Closing balance" else "Helvetica", 9)
+        c.drawRightString(PAGE_WIDTH - 58, row_y, value)
+        row_y -= 17
+    return y - 132
+
+
+def draw_bank_transactions(
+    c: canvas.Canvas,
+    transactions: list[BankTransaction],
+    y: float,
+) -> float:
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(42, y, "Posted transactions")
+    y -= 18
+    header_y = y
+    c.setFillColor(colors.HexColor("#DCE7EA"))
+    c.rect(42, header_y - 18, PAGE_WIDTH - 84, 20, fill=1, stroke=0)
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 7)
+    columns = [
+        (50, "DATE"),
+        (101, "REF"),
+        (183, "COUNTERPARTY / DESCRIPTION"),
+        (432, "PROVIDER ID"),
+        (PAGE_WIDTH - 54, "AMOUNT"),
+    ]
+    for x, label in columns:
+        if label == "AMOUNT":
+            c.drawRightString(x, header_y - 11, label)
+        else:
+            c.drawString(x, header_y - 11, label)
+    y -= 28
+    row_height = 32
+    c.setFont("Helvetica", 7.2)
+    for index, item in enumerate(transactions):
+        if y < 84:
+            break
+        c.setFillColor(colors.HexColor("#F3F6F6") if index % 2 == 0 else colors.white)
+        c.rect(42, y - row_height + 8, PAGE_WIDTH - 84, row_height, fill=1, stroke=0)
+        c.setFillColor(INK)
+        c.setFont("Helvetica", 7.3)
+        c.drawString(50, y - 6, item.posted_at)
+        c.drawString(101, y - 6, item.reference[:17])
+        c.drawString(432, y - 6, item.provider_transaction_id)
+        c.setFont("Helvetica-Bold", 7.8)
+        c.drawRightString(PAGE_WIDTH - 54, y - 6, signed_money(item.amount_cents))
+        c.setFont("Helvetica", 7.1)
+        desc = f"{item.merchant_name} - {item.category}"
+        for offset, line in enumerate(wrap(desc, 52)[:2]):
+            c.drawString(183, y - 6 - offset * 9, line)
+        y -= row_height
+    return y
+
+
+def render_bank_statement_pdf(
+    asset: Asset,
+    path: Path,
+    ctx: dict[str, str],
+    statements: dict[str, BankAccountStatement],
+) -> None:
+    statement = statements["operating"]
+    total_pages = page_count(asset)
+    rows_per_page = 17
+    transaction_pages = max(1, total_pages - 1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pdf = canvas.Canvas(str(path), pagesize=letter, pageCompression=1)
+    pdf.setTitle(f"{asset.asset_id} - Operating account 4242 statement")
+    pdf.setAuthor("Rental Command Synthetic QA Corpus")
+    pdf.setSubject("Itemized synthetic bank statement for Banking import testing")
+    period = f"{month_start(month_key(asset.planned_date)).isoformat()} through {month_end(month_key(asset.planned_date)).isoformat()}"
+    for page_no in range(1, total_pages + 1):
+        pdf.setFillColor(PAPER)
+        pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, fill=1, stroke=0)
+        y = draw_header(pdf, asset, page_no, total_pages)
+        draw_watermark(pdf, "SYNTHETIC BANK DATA - QA ONLY")
+        if page_no == 1:
+            y = draw_bank_summary(pdf, statement, period, y)
+            overview_rows = [
+                ("Import sidecar", f"{Path(asset.filename).with_suffix('.import.json').name}"),
+                ("CSV sidecar", f"{Path(asset.filename).with_suffix('.transactions.csv').name}"),
+                ("Oracle control", f"Operating cash delta {signed_money(statement.closing_balance_cents - statement.opening_balance_cents)}"),
+                ("Journal source", "1000 Operating Cash debit minus credit by FIN reference"),
+                ("Companion accounts", "Trust 1818 and reserve 7070 are included in statement-data sidecar JSON"),
+                ("Transaction count", str(len(statement.transactions))),
+                ("Provider ID pattern", f"ys2027-4242-{statement.transactions[0].event_id if statement.transactions else 'FIN-00000'}"),
+            ]
+            y = draw_table(pdf, overview_rows, y)
+            y -= 4
+            first_rows = statement.transactions[:12]
+            y = draw_bank_transactions(pdf, first_rows, y)
+        else:
+            start = 12 + (page_no - 2) * rows_per_page
+            end = start + rows_per_page
+            page_rows = statement.transactions[start:end]
+            if page_rows:
+                y = draw_bank_transactions(pdf, page_rows, y)
+            else:
+                trust = statements["trust"]
+                reserve = statements["reserve"]
+                y = draw_table(
+                    pdf,
+                    [
+                        ("Statement period", period),
+                        ("Operating reconciliation", "All operating-account transactions are listed on prior pages."),
+                        ("Opening balance", money(statement.opening_balance_cents)),
+                        ("Deposits and credits", money(statement.deposits_cents)),
+                        ("Withdrawals and debits", money(statement.withdrawals_cents)),
+                        ("Closing balance", money(statement.closing_balance_cents)),
+                        ("Trust 1818 closing", money(trust.closing_balance_cents)),
+                        ("Reserve 7070 closing", money(reserve.closing_balance_cents)),
+                        ("Source assertion", "Statement-data JSON reconciles operating, trust, and reserve deltas to Monthly Controls and journal cash lines."),
+                    ],
+                    y,
+                )
+        draw_footer(pdf, asset)
+        pdf.showPage()
+    pdf.save()
+
+
 def render_pdf(
     asset: Asset,
     path: Path,
@@ -698,6 +1161,118 @@ def render_jpeg(asset: Asset, path: Path, ctx: dict[str, str]) -> None:
     image.save(path, "JPEG", quality=82, optimize=True, progressive=True, dpi=(150, 150))
 
 
+def transaction_to_import_item(item: BankTransaction) -> dict[str, object]:
+    raw = {
+        "eventId": item.event_id,
+        "reference": item.reference,
+        "propertyId": item.property_id,
+        "unitId": item.unit_id,
+        "leaseId": item.lease_id,
+        "source": "Docs/Testing/YearSimulation2027/financial-oracle.csv",
+    }
+    return {
+        "providerTransactionId": item.provider_transaction_id,
+        "postedAt": f"{item.posted_at}T00:00:00Z",
+        "authorizedAt": f"{item.posted_at}T00:00:00Z",
+        "description": item.description,
+        "merchantName": item.merchant_name,
+        "amount": item.amount_cents / 100,
+        "isoCurrencyCode": "USD",
+        "category": item.category,
+        "rawData": json.dumps(raw, separators=(",", ":"), sort_keys=True),
+    }
+
+
+def write_bank_statement_sidecars(
+    asset: Asset,
+    pdf_path: Path,
+    statements: dict[str, BankAccountStatement],
+) -> list[Path]:
+    month = month_key(asset.planned_date)
+    operating = statements["operating"]
+    import_path = pdf_path.with_suffix(".import.json")
+    csv_path = pdf_path.with_suffix(".transactions.csv")
+    statement_data_path = pdf_path.with_suffix(".statement-data.json")
+    import_payload = {
+        "provider": "Manual",
+        "institutionName": "Blue Door Synthetic Bank",
+        "accountName": operating.account_name,
+        "accountMask": operating.account_mask,
+        "accountType": operating.account_type,
+        "accountSubtype": operating.account_subtype,
+        "transactions": [transaction_to_import_item(item) for item in operating.transactions],
+    }
+    import_path.write_text(json.dumps(import_payload, indent=2, sort_keys=True) + "\n")
+    csv_rows = [
+        {
+            "providerTransactionId": item.provider_transaction_id,
+            "postedAt": item.posted_at,
+            "description": item.description,
+            "merchantName": item.merchant_name,
+            "amount": f"{item.amount_cents / 100:.2f}",
+            "isoCurrencyCode": "USD",
+            "category": item.category,
+            "eventId": item.event_id,
+            "reference": item.reference,
+            "propertyId": item.property_id,
+            "unitId": item.unit_id,
+            "leaseId": item.lease_id,
+        }
+        for item in operating.transactions
+    ]
+    write_csv(csv_path, csv_rows)
+    account_payloads = []
+    for key, statement in statements.items():
+        account_payloads.append(
+            {
+                "key": key,
+                "accountName": statement.account_name,
+                "accountMask": statement.account_mask,
+                "accountType": statement.account_type,
+                "accountSubtype": statement.account_subtype,
+                "statementPeriodStart": month_start(month).isoformat(),
+                "statementPeriodEnd": month_end(month).isoformat(),
+                "openingBalanceCents": statement.opening_balance_cents,
+                "depositsCents": statement.deposits_cents,
+                "withdrawalsCents": statement.withdrawals_cents,
+                "closingBalanceCents": statement.closing_balance_cents,
+                "transactionCount": len(statement.transactions),
+                "transactions": [
+                    {
+                        "providerTransactionId": item.provider_transaction_id,
+                        "postedAt": item.posted_at,
+                        "description": item.description,
+                        "merchantName": item.merchant_name,
+                        "amountCents": item.amount_cents,
+                        "category": item.category,
+                        "eventId": item.event_id,
+                        "reference": item.reference,
+                        "propertyId": item.property_id,
+                        "unitId": item.unit_id,
+                        "leaseId": item.lease_id,
+                    }
+                    for item in statement.transactions
+                ],
+            }
+        )
+    statement_data_path.write_text(
+        json.dumps(
+            {
+                "assetId": asset.asset_id,
+                "sourcePdf": str(pdf_path.name),
+                "sourceOracle": "Docs/Testing/YearSimulation2027/financial-oracle.csv",
+                "sourceJournal": "Docs/Testing/YearSimulation2027/journal.csv",
+                "sourceMonthlyControls": "Docs/Testing/YearSimulation2027/monthly-controls.csv",
+                "accounts": account_payloads,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return [import_path, csv_path, statement_data_path]
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -889,12 +1464,27 @@ def build_visual_review_evidence(output: Path) -> list[str]:
     ]
 
 
-def render_all(output: Path, clean: bool) -> dict[str, object]:
+def render_all(
+    output: Path,
+    clean: bool,
+    asset_ids: set[str] | None = None,
+    live_context_path: Path | None = None,
+) -> dict[str, object]:
     assets = [Asset(**row) for row in read_csv("scan-assets.csv")]
+    if asset_ids:
+        assets = [asset for asset in assets if asset.asset_id in asset_ids]
+        missing = sorted(asset_ids - {asset.asset_id for asset in assets})
+        if missing:
+            raise ValueError(f"Unknown asset id(s): {', '.join(missing)}")
     properties = {row["property_id"]: row for row in read_csv("portfolio.csv")}
     units = {row["unit_id"]: row for row in read_csv("units.csv")}
     leases = {row["lease_id"]: row for row in read_csv("leases.csv")}
-    events = {row["event_id"]: row for row in read_csv("financial-oracle.csv")}
+    live_units = read_live_context(live_context_path)
+    event_rows = read_csv("financial-oracle.csv")
+    events = {row["event_id"]: row for row in event_rows}
+    journal_rows = read_csv("journal.csv")
+    journal_cash = journal_cash_by_event(journal_rows)
+    monthly_controls = {row["month"]: row for row in read_csv("monthly-controls.csv")}
     schedules = {
         asset_id.strip(): row
         for row in read_csv("schedule.csv")
@@ -908,18 +1498,36 @@ def render_all(output: Path, clean: bool) -> dict[str, object]:
     documents.mkdir(parents=True, exist_ok=True)
 
     validation_rows: list[dict[str, str | int]] = []
+    sidecar_paths: list[Path] = []
     family_preview_source: dict[str, Path] = {}
     for index, asset in enumerate(assets, start=1):
         target = documents / asset.planned_date / asset.filename
-        ctx = data_context(asset, properties, units, leases, events, schedules)
+        ctx = data_context(asset, properties, units, leases, events, schedules, live_units)
         if asset.format == "PDF":
-            render_pdf(asset, target, ctx)
+            if asset.document_family == "Operating bank statement":
+                statements = build_bank_statement_packet(asset, event_rows, journal_cash, monthly_controls)
+                render_bank_statement_pdf(asset, target, ctx, statements)
+                sidecar_paths.extend(write_bank_statement_sidecars(asset, target, statements))
+            else:
+                render_pdf(asset, target, ctx)
             family_preview_source.setdefault(asset.document_family, target)
         else:
             render_jpeg(asset, target, ctx)
         validation_rows.append(validate_file(asset, target))
         if index % 100 == 0 or index == len(assets):
             print(f"Rendered and validated {index}/{len(assets)}")
+
+    if asset_ids:
+        return {
+            "generated_at": datetime.now().astimezone().isoformat(),
+            "source_manifest": str((PLAN / "scan-assets.csv").resolve()),
+            "output_root": str(output.resolve()),
+            "asset_count": len(assets),
+            "validated_count": len(validation_rows),
+            "selected_asset_ids": sorted(asset.asset_id for asset in assets),
+            "files": validation_rows,
+            "status": "SELECTED_FILES_VALIDATED",
+        }
 
     preview_rows: list[dict[str, str | int]] = []
     for family, source in sorted(family_preview_source.items()):
@@ -954,6 +1562,8 @@ def render_all(output: Path, clean: bool) -> dict[str, object]:
         "family_counts": dict(sorted(counts.items())),
         "date_folder_count": len({asset.planned_date for asset in assets}),
         "preview_count": len(preview_rows),
+        "sidecar_count": len(sidecar_paths),
+        "bank_statement_sidecar_count": len(sidecar_paths),
         "total_bytes": total_bytes,
         "manifest_asset_ids_sha256": hashlib.sha256(
             "\n".join(asset.asset_id for asset in assets).encode()
@@ -974,9 +1584,11 @@ def render_all(output: Path, clean: bool) -> dict[str, object]:
                 f"- Native camera JPEGs: {formats['Camera JPEG']}",
                 f"- PDF-derived PNG previews: {len(preview_rows)}",
                 f"- Date folders: {report['date_folder_count']}",
+                f"- Banking sidecars: {len(sidecar_paths)}",
                 "",
                 "`corpus-index.csv` contains the SHA-256 checksum and validation result for every upload file.",
                 "`preview-index.csv` maps representative PDFs to PNG previews for visual inspection.",
+                "Operating bank statement PDFs have adjacent `.import.json`, `.transactions.csv`, and `.statement-data.json` sidecars.",
                 "",
             ]
         )
@@ -1032,12 +1644,19 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--asset-id", action="append", default=[])
+    parser.add_argument("--live-context", type=Path)
     parser.add_argument("--record-visual-review", action="store_true")
     args = parser.parse_args()
     if args.record_visual_review:
         report = record_visual_review(args.output.resolve())
     else:
-        report = render_all(args.output.resolve(), args.clean)
+        report = render_all(
+            args.output.resolve(),
+            args.clean,
+            set(args.asset_id) if args.asset_id else None,
+            args.live_context.resolve() if args.live_context else None,
+        )
     print(json.dumps(report, indent=2))
 
 

@@ -21,6 +21,7 @@ void main() {
           'overduePaymentCount': 2,
           'oldestDueOn': '2026-06-01',
           'oldestLedgerEntryId': 901,
+          'oldestLedgerEntryOpenAmount': 475.50,
         },
       ],
       'totalCount': 25,
@@ -42,6 +43,7 @@ void main() {
     expect(account.relationshipNumber, 'LM-12');
     expect(account.oldestDueOn, DateTime(2026, 6, 1));
     expect(account.oldestLedgerEntryId, 901);
+    expect(account.oldestLedgerEntryOpenAmount, 475.50);
     expect(account.displayName, 'Jordan Lee');
   });
 
@@ -52,6 +54,7 @@ void main() {
         'overduePaymentCount': 1,
         'oldestDueOn': '2026-06-01',
         'oldestLedgerEntryId': 9,
+        'oldestLedgerEntryOpenAmount': 100,
       }),
       throwsA(anything),
     );
@@ -64,7 +67,14 @@ void main() {
 
     expect(source, contains('UnitCommandCenterTab.money'));
     expect(source, contains('showRecordTenantReceiptSheet('));
-    expect(source, contains('initialAmount: account.pastDueAmount'));
+    expect(
+      source,
+      contains('initialAmount: account.oldestLedgerEntryOpenAmount'),
+    );
+    expect(
+      source,
+      contains('targetChargeEntryId: account.oldestLedgerEntryId'),
+    );
     expect(
       source,
       contains("'Load more (\${state.items.length} of \${state.totalCount})'"),

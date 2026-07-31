@@ -34,8 +34,15 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     private int _connectionId;
     private int _tenantId;
     private int _tenantAccountId;
+    private long _existingChargeEntryId;
     private int _secondTenantId;
     private int _otherTenantId;
+    private Guid _authSessionId;
+    private int _accessContextId;
+    private long _accessRevision;
+    private Guid _secondAuthSessionId;
+    private int _secondAccessContextId;
+    private long _secondAccessRevision;
 
     public async Task InitializeAsync()
     {
@@ -97,7 +104,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Confirm_CommitsMappingPromotionsAuditOutboxReceipt_AndConcurrentReplayIsCanonical()
+    public async Task Confirm_ImportsReceiptAsUnapplied_PreservesOlderCharge_AndConcurrentReplayIsCanonical()
     {
         SkipIfNoDocker();
         await SeedParkedPaymentAndExpenseAsync("customer-main", "payment-main", "expense-main");
@@ -106,8 +113,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         Recorder.Clear();
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, Codec),
-            Atomic.ExecuteAsync(identity, command, Codec));
+            ExecuteAtomicAsync(identity, command, Codec),
+            ExecuteAtomicAsync(identity, command, Codec));
 
         outcomes.Select(outcome => outcome.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -122,10 +129,23 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             && mapping.ExternalId == "customer-main")).Should().Be(1);
         (await db.TenantLedgerEntries.CountAsync(entry => entry.PortfolioId == _portfolioId
             && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
-        (await db.TenantPaymentAttempts.CountAsync(payment => payment.PortfolioId == _portfolioId
-            && payment.State == TenantPaymentAttemptState.Succeeded)).Should().Be(1);
+        var paymentAttempt = await db.TenantPaymentAttempts.SingleAsync(payment =>
+            payment.PortfolioId == _portfolioId
+            && payment.State == TenantPaymentAttemptState.Succeeded);
+        paymentAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.ImportedReceipt);
+        paymentAttempt.ChargeLedgerEntryId.Should().BeNull(
+            "the reviewed accounting mapping does not identify a tenant-selected charge");
         (await db.TenantLedgerAllocations.CountAsync(allocation =>
-            allocation.TenantAccountId == _tenantAccountId)).Should().Be(1);
+            allocation.TenantAccountId == _tenantAccountId)).Should().Be(0,
+            "accounting imports must remain unapplied instead of guessing the oldest open charge");
+        (await db.SecurityDepositEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId)).Should().Be(0,
+            "accounting imports must not create security-deposit subledger applications");
+        var existingCharge = await db.TenantLedgerEntries.SingleAsync(entry =>
+            entry.Id == _existingChargeEntryId);
+        existingCharge.Amount.Should().Be(1500m);
+        existingCharge.Direction.Should().Be(TenantLedgerDirection.Debit);
+        existingCharge.EntryType.Should().Be(TenantLedgerEntryType.ManualCharge);
         (await db.Expenses.CountAsync(expense => expense.PortfolioId == _portfolioId)).Should().Be(1);
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.PortfolioId == _portfolioId
@@ -167,13 +187,40 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Confirm_ReplayAfterSessionRevocation_IsDeniedBeforeReturningGlobalReceipt()
+    {
+        SkipIfNoDocker();
+        const string externalId = "customer-revoked-replay";
+        var identity = Identity(externalId, _tenantId, "revoked-replay");
+        var command = Command(externalId, _tenantId, "revoked-replay");
+        await ExecuteAtomicAsync(identity, command, Codec);
+        await using (var revoke = NewContext())
+        {
+            var session = await revoke.AuthSessions.SingleAsync(row => row.Id == _authSessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = DateTime.UtcNow;
+            await revoke.SaveChangesAsync();
+        }
+        Recorder.Clear();
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, Codec))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        var authorizationSql = Recorder.Commands.Where(sql =>
+            sql.Contains("MembershipRoleAssignments", StringComparison.Ordinal)).ToArray();
+        authorizationSql.Should().ContainSingle("replay authorization is one EF-translated policy query");
+        authorizationSql[0].Should().Contain("AuthSessions");
+        authorizationSql[0].Should().Contain("WorkspaceAccessContexts");
+        Recorder.ParameterValues.Should().Contain(CapabilityKeys.IntegrationsManage);
+    }
+
+    [SkippableFact]
     public async Task FinalCompanionFailure_RollsBackMappingNotificationOutboxAuditAndReceipt()
     {
         SkipIfNoDocker();
         var identity = Identity("customer-rollback", _tenantId);
         Failure.FailOutboxInsert = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             identity,
             Command("customer-rollback", _tenantId),
             Codec);
@@ -197,7 +244,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             receipt.CommandType == identity.CommandType
             && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
 
-        var recovered = await Atomic.ExecuteAsync(
+        var recovered = await ExecuteAtomicAsync(
             identity,
             Command("customer-rollback", _tenantId),
             Codec);
@@ -218,7 +265,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         await SeedParkedPaymentAndExpenseAsync("customer-cross", "payment-cross", "expense-cross");
         var identity = Identity("customer-cross", _otherTenantId);
 
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             identity,
             Command("customer-cross", _otherTenantId),
             Codec);
@@ -244,15 +291,15 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         var firstIdentity = Identity("customer-correction", _tenantId, "first");
         var secondIdentity = Identity("customer-correction", _tenantId, "corrected");
 
-        var first = await Atomic.ExecuteAsync(
+        var first = await ExecuteAtomicAsync(
             firstIdentity,
             Command("customer-correction", _tenantId, "first"),
             Codec);
-        var corrected = await Atomic.ExecuteAsync(
+        var corrected = await ExecuteAtomicAsync(
             secondIdentity,
             Command("customer-correction", _tenantId, "corrected", expectedRevision: 1),
             Codec);
-        var replay = await Atomic.ExecuteAsync(
+        var replay = await ExecuteAtomicAsync(
             secondIdentity,
             Command("customer-correction", _tenantId, "corrected", expectedRevision: 1),
             Codec);
@@ -269,6 +316,15 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         (await db.AccountingSyncMaps.CountAsync(ledger =>
             ledger.AccountingConnectionId == _connectionId
             && ledger.Status == LedgerStatus.Imported)).Should().Be(2);
+        (await db.TenantLedgerAllocations.CountAsync(allocation =>
+            allocation.TenantAccountId == _tenantAccountId)).Should().Be(0);
+        (await db.SecurityDepositEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId)).Should().Be(0);
+        (await db.TenantLedgerEntries.CountAsync(entry =>
+            entry.Id == _existingChargeEntryId
+            && entry.Amount == 1500m
+            && entry.Direction == TenantLedgerDirection.Debit
+            && entry.EntryType == TenantLedgerEntryType.ManualCharge)).Should().Be(1);
         (await db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == firstIdentity.CommandType
             && (receipt.IdempotencyKey == firstIdentity.IdempotencyKey
@@ -301,7 +357,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         await SeedParkedPaymentsAsync("customer-large", 300);
-        var confirmed = await Atomic.ExecuteAsync(
+        var confirmed = await ExecuteAtomicAsync(
             Identity("customer-large", _tenantId, "large-confirm"),
             Command("customer-large", _tenantId, "large-confirm"),
             Codec);
@@ -315,6 +371,10 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             _connectionId,
             continuationId,
             701,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            CapabilityKeys.IntegrationsManage,
             "large-batch-2",
             _now.AddMinutes(6));
         var identity = new AtomicCommandIdentity(
@@ -323,8 +383,8 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         var codec = new AtomicJsonResultCodec<ContinueAccountingMappingPromotionResult>(
             "accounting.mapping.promote.continue.result.v1");
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, codec),
-            Atomic.ExecuteAsync(identity, command, codec));
+            ExecuteAtomicAsync(identity, command, codec),
+            ExecuteAtomicAsync(identity, command, codec));
 
         outcomes.Select(row => row.Disposition).Should()
             .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
@@ -341,19 +401,59 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Continue_ReplayAfterAccessRevisionChanges_IsDeniedBeforeReturningGlobalReceipt()
+    {
+        SkipIfNoDocker();
+        await SeedParkedPaymentsAsync("customer-stale-continuation", 300);
+        var confirmed = await ExecuteAtomicAsync(
+            Identity("customer-stale-continuation", _tenantId, "stale-continuation-confirm"),
+            Command("customer-stale-continuation", _tenantId, "stale-continuation-confirm"),
+            Codec);
+        var continuationId = confirmed.Value.ContinuationId!.Value;
+        var command = new ContinueAccountingMappingPromotionCommand(
+            _portfolioId,
+            _connectionId,
+            continuationId,
+            701,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            CapabilityKeys.IntegrationsManage,
+            "stale-continuation-batch",
+            _now.AddMinutes(6));
+        var identity = new AtomicCommandIdentity(
+            "accounting.mapping.promote.continue",
+            $"{_portfolioId}:{_connectionId}:{continuationId:N}:stale-continuation-batch");
+        var codec = new AtomicJsonResultCodec<ContinueAccountingMappingPromotionResult>(
+            "accounting.mapping.promote.continue.result.v1");
+        await ExecuteAtomicAsync(identity, command, codec);
+        await using (var change = NewContext())
+        {
+            var context = await change.WorkspaceAccessContexts.SingleAsync(row => row.Id == _accessContextId);
+            context.Status = WorkspaceAccessContextStatus.Suspended;
+            context.SuspendedAtUtc = DateTime.UtcNow;
+            context.AdvanceRevision(_accessRevision);
+            await change.SaveChangesAsync();
+        }
+
+        await FluentActions.Invoking(() => ExecuteAtomicAsync(identity, command, codec))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
+    [SkippableFact]
     public async Task AToBToA_CorrectionsRequireSuccessiveRevisions_AndRetainActorOperationAudit()
     {
         SkipIfNoDocker();
         const string externalId = "customer-a-b-a";
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity(externalId, _tenantId, "operation-a1"),
             Command(externalId, _tenantId, "operation-a1", expectedRevision: 0, confirmedByUserId: 701),
             Codec);
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity(externalId, _secondTenantId, "operation-b"),
             Command(externalId, _secondTenantId, "operation-b", expectedRevision: 1, confirmedByUserId: 702),
             Codec);
-        var returned = await Atomic.ExecuteAsync(
+        var returned = await ExecuteAtomicAsync(
             Identity(externalId, _tenantId, "operation-a2"),
             Command(externalId, _tenantId, "operation-a2", expectedRevision: 2, confirmedByUserId: 701),
             Codec);
@@ -379,17 +479,17 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         const string externalId = "customer-concurrent-revision";
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity(externalId, _tenantId, "seed"),
             Command(externalId, _tenantId, "seed"),
             Codec);
 
         var corrections = await Task.WhenAll(
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 Identity(externalId, _tenantId, "correction-a"),
                 Command(externalId, _tenantId, "correction-a", expectedRevision: 1, confirmedByUserId: 701),
                 Codec),
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 Identity(externalId, _secondTenantId, "correction-b"),
                 Command(externalId, _secondTenantId, "correction-b", expectedRevision: 1, confirmedByUserId: 702),
                 Codec));
@@ -407,7 +507,19 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             row.EntityType == nameof(AccountingEntityMapping) && row.EntityId == mapping.Id)).Should().Be(2);
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
+
     private CommandRecorder Recorder => _services!.GetRequiredService<CommandRecorder>();
     private OutboxFailureInterceptor Failure => _services!.GetRequiredService<OutboxFailureInterceptor>();
 
@@ -441,11 +553,20 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         int tenantId,
         string requestIdentity = "canonical",
         long expectedRevision = 0,
-        int confirmedByUserId = 701) => new(
+        int confirmedByUserId = 701)
+    {
+        var authSessionId = confirmedByUserId == 701 ? _authSessionId : _secondAuthSessionId;
+        var accessContextId = confirmedByUserId == 701 ? _accessContextId : _secondAccessContextId;
+        var accessRevision = confirmedByUserId == 701 ? _accessRevision : _secondAccessRevision;
+        return new ConfirmAccountingMappingCommand(
             _portfolioId,
             _connectionId,
             AccountingProvider.QuickBooks,
             confirmedByUserId,
+            authSessionId,
+            accessContextId,
+            accessRevision,
+            CapabilityKeys.IntegrationsManage,
             ExternalKind.Customer,
             externalId,
             "Mapped tenant",
@@ -455,6 +576,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             requestIdentity,
             expectedRevision,
             _now.AddMinutes(5));
+    }
 
     private async Task SeedAsync(RentalCommandDbContext db)
     {
@@ -476,18 +598,31 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
         _otherPortfolioId = other.Id;
-        db.Users.Add(new ApplicationUser
-        {
-            Id = 701,
-            UserName = "accounting-test@rentalcommand.local",
-            NormalizedUserName = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
-            Email = "accounting-test@rentalcommand.local",
-            NormalizedEmail = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
-            DisplayName = "Accounting test actor",
-            SecurityStamp = Guid.NewGuid().ToString("N"),
-            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
-            CreatedAt = _now,
-        });
+        db.Users.AddRange(
+            new ApplicationUser
+            {
+                Id = 701,
+                UserName = "accounting-test@rentalcommand.local",
+                NormalizedUserName = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
+                Email = "accounting-test@rentalcommand.local",
+                NormalizedEmail = "ACCOUNTING-TEST@RENTALCOMMAND.LOCAL",
+                DisplayName = "Accounting test actor",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = _now,
+            },
+            new ApplicationUser
+            {
+                Id = 702,
+                UserName = "accounting-second@rentalcommand.local",
+                NormalizedUserName = "ACCOUNTING-SECOND@RENTALCOMMAND.LOCAL",
+                Email = "accounting-second@rentalcommand.local",
+                NormalizedEmail = "ACCOUNTING-SECOND@RENTALCOMMAND.LOCAL",
+                DisplayName = "Accounting second actor",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = _now,
+            });
         await db.SaveChangesAsync();
 
         var accessContext = new WorkspaceAccessContext
@@ -520,6 +655,67 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             EffectiveFromUtc = _now.AddDays(-1),
             CreatedAtUtc = _now,
             UpdatedAtUtc = _now,
+        });
+        await db.SaveChangesAsync();
+        _accessContextId = accessContext.Id;
+        _accessRevision = accessContext.AccessRevision;
+        _authSessionId = Guid.NewGuid();
+        db.AuthSessions.Add(new AuthSession
+        {
+            Id = _authSessionId,
+            UserId = 701,
+            ActiveAccessContextId = _accessContextId,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = _now,
+            LastSeenAtUtc = _now,
+            ExpiresAtUtc = _now.AddYears(10),
+        });
+        await db.SaveChangesAsync();
+
+        var secondAccessContext = new WorkspaceAccessContext
+        {
+            UserId = 702,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var secondMembership = new WorkspaceMembership
+        {
+            AccessContext = secondAccessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        db.MembershipRoleAssignments.Add(new MembershipRoleAssignment
+        {
+            WorkspaceMembership = secondMembership,
+            PortfolioId = _portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        });
+        await db.SaveChangesAsync();
+        _secondAccessContextId = secondAccessContext.Id;
+        _secondAccessRevision = secondAccessContext.AccessRevision;
+        _secondAuthSessionId = Guid.NewGuid();
+        db.AuthSessions.Add(new AuthSession
+        {
+            Id = _secondAuthSessionId,
+            UserId = 702,
+            ActiveAccessContextId = _secondAccessContextId,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = _now,
+            LastSeenAtUtc = _now,
+            ExpiresAtUtc = _now.AddYears(10),
         });
         await db.SaveChangesAsync();
 
@@ -589,7 +785,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         db.TenantAccounts.Add(account);
         await db.SaveChangesAsync();
         _tenantAccountId = account.Id;
-        db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        var existingCharge = new TenantLedgerEntry
         {
             PortfolioId = _portfolioId,
             TenantAccountId = account.Id,
@@ -597,13 +793,14 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             Direction = TenantLedgerDirection.Debit,
             Amount = 1500m,
             Currency = "USD",
-            EffectiveOn = DateOnly.FromDateTime(_now),
-            DueOn = DateOnly.FromDateTime(_now),
-            PostedAtUtc = _now,
+            EffectiveOn = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            DueOn = DateOnly.FromDateTime(_now.AddMonths(-1)),
+            PostedAtUtc = _now.AddMonths(-1),
             Description = "Test rent charge",
             BusinessKey = "test:accounting-charge",
             CreatedByUserId = 701,
-        });
+        };
+        db.TenantLedgerEntries.Add(existingCharge);
         var connection = new AccountingConnection
         {
             PortfolioId = _portfolioId,
@@ -638,6 +835,7 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             LastSeenAt = _now,
         });
         await db.SaveChangesAsync();
+        _existingChargeEntryId = existingCharge.Id;
     }
 
     private async Task SeedParkedPaymentAndExpenseAsync(
@@ -755,10 +953,15 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
     private sealed class CommandRecorder : DbCommandInterceptor
     {
         private readonly ConcurrentQueue<string> _commands = new();
+        private readonly ConcurrentQueue<object?> _parameterValues = new();
         public IReadOnlyCollection<string> Commands => _commands.ToArray();
+        public IReadOnlyCollection<object?> ParameterValues => _parameterValues.ToArray();
         public void Clear()
         {
             while (_commands.TryDequeue(out _))
+            {
+            }
+            while (_parameterValues.TryDequeue(out _))
             {
             }
         }
@@ -770,6 +973,10 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             _commands.Enqueue(command.CommandText);
+            foreach (DbParameter parameter in command.Parameters)
+            {
+                _parameterValues.Enqueue(parameter.Value);
+            }
             return ValueTask.FromResult(result);
         }
     }

@@ -16,9 +16,9 @@ public sealed record RecordApplicationFeeCommand(
     string? SourceReference,
     string IdempotencyKey,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision) : IAtomicCommandData;
 
 public sealed record RefundApplicationFeeCommand(
     int PortfolioId,
@@ -34,9 +34,9 @@ public sealed record RefundApplicationFeeCommand(
     string Reason,
     string IdempotencyKey,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision) : IAtomicCommandData;
 
 public enum ApplicationFinanceMutationOutcome
 {
@@ -60,4 +60,4 @@ public sealed record ApplicationFinanceMutationResult(
     DateOnly? EffectiveOn,
     DateTime? OccurredAtUtc,
     bool AccountCreated,
-    string? Error) : IAtomicResultData;
+    string? Error);

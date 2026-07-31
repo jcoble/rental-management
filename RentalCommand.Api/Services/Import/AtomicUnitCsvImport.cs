@@ -1,17 +1,24 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Import;
+using RentalCommand.Data.Import;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Import;
 
 public sealed record AtomicUnitCsvImportCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     string ImportOperationDigest,
     AtomicUnitImportRow[] Rows) : IAtomicCommandData;
@@ -21,7 +28,7 @@ public sealed record AtomicUnitCsvImportResult(
     int TotalRows,
     int ValidRows,
     int CreatedRows,
-    int DuplicateRows) : IAtomicResultData;
+    int DuplicateRows);
 
 public static class AtomicUnitCsvImport
 {
@@ -35,25 +42,28 @@ public static class AtomicUnitCsvImport
 
 /// <summary>One receipt-backed Unit CSV command; PostgreSQL owns the whole row set.</summary>
 public sealed class AtomicUnitCsvImportHandler
-    : IAtomicCommandHandler<AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult>,
-      IAtomicReplayAuthorizer<AtomicUnitCsvImportCommand>
+    : IAtomicCommandHandler<AtomicUnitCsvImportCommand, AtomicUnitCsvImportResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicUnitCsvImportHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicUnitCsvImportResult> HandleAsync(
         AtomicUnitCsvImportCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         var scope = new WorkspaceReadScope(
             command.PortfolioId, command.ActorUserId, command.AuthSessionId,
             command.AccessContextId, command.ExpectedAccessRevision);
-        var batch = await attempt.UnitImports.ImportAsync(
-            scope, command.Rows, now, ct);
+        var batch = await AtomicUnitImportPersistence.ImportAsync(_db,
+            attempt, scope, command.Rows, now, ct);
         if (!batch.Authorized)
             throw new UnauthorizedAccessException(
                 "At least one Unit row is outside your assigned property scope.");
@@ -98,30 +108,30 @@ public sealed class AtomicUnitCsvImportHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicUnitCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         AtomicUnitCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking();
-        return persistence.Query<AuthSession>().AsNoTracking().AnyAsync(session =>
+        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking();
+        return db.Set<AuthSession>().AsNoTracking().AnyAsync(session =>
             session.Id == command.AuthSessionId
             && session.UserId == command.ActorUserId
             && session.ActiveAccessContextId == command.AccessContextId
             && session.Status == AuthSessionStatus.Active
             && session.RevokedAtUtc == null
             && session.ExpiresAtUtc > now
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -129,7 +139,7 @@ public sealed class AtomicUnitCsvImportHandler
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -151,7 +161,7 @@ public sealed class AtomicUnitCsvImportHandler
                            CapabilityAuthorizationTargetKind.Property))), ct);
     }
 
-    private static void Validate(AtomicUnitCsvImportCommand command)
+    private void Validate(AtomicUnitCsvImportCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0

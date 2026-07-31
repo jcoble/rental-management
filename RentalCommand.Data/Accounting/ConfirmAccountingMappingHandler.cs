@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
@@ -23,6 +24,10 @@ internal sealed record AccountingPromotionBatchResult(int PromotedCount, bool Ha
 public sealed class ConfirmAccountingMappingHandler
     : IAtomicCommandHandler<ConfirmAccountingMappingCommand, ConfirmAccountingMappingResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ConfirmAccountingMappingHandler(RentalCommandDbContext db) => _db = db;
+
     internal const int PromotionBatchSize = 256;
     private const int MaxPushDevices = 32;
     private static readonly string[] ImportableCategoryNames = Enum.GetNames<ScheduleECategory>()
@@ -31,23 +36,35 @@ public sealed class ConfirmAccountingMappingHandler
 
     public async Task<ConfirmAccountingMappingResult> HandleAsync(
         ConfirmAccountingMappingCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.AccountingConnection,
+        AccountingMappingAuthorizationSupport.Validate(
+            command.PortfolioId, command.AccountingConnectionId, command.ConfirmedByUserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+            command.RequiredCapability);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync(
+            "AccountingConnection",
             command.AccountingConnectionId,
             ct);
+        var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
+                command.PortfolioId, command.ConfirmedByUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, authorizationNow, ct))
+            throw new UnauthorizedAccessException();
 
-        var connection = await attempt.Persistence.Query<AccountingConnection>()
+        var connection = await _db.Set<AccountingConnection>()
             .SingleOrDefaultAsync(row => row.Id == command.AccountingConnectionId
                 && row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider, ct);
         if (connection is null) return Empty(ConfirmAccountingMappingOutcome.ConnectionNotFound);
-        if (!await IsValidTargetAsync(command, attempt, ct))
+        if (!await IsValidTargetAsync(command, context, ct))
             return Empty(ConfirmAccountingMappingOutcome.InvalidTarget);
 
-        var mapping = await attempt.Persistence.Query<AccountingEntityMapping>()
+        var mapping = await _db.Set<AccountingEntityMapping>()
             .SingleOrDefaultAsync(row => row.PortfolioId == command.PortfolioId
                 && row.AccountingConnectionId == command.AccountingConnectionId
                 && row.ExternalType == command.ExternalType
@@ -64,7 +81,7 @@ public sealed class ConfirmAccountingMappingHandler
             ExternalId = command.ExternalId,
             CreatedAt = command.ConfirmedAtUtc,
         };
-        if (created) attempt.Persistence.Add(mapping);
+        if (created) _db.Add(mapping);
 
         var confirmationTimestamp = created
             ? command.ConfirmedAtUtc
@@ -78,19 +95,19 @@ public sealed class ConfirmAccountingMappingHandler
         mapping.UpdatedAt = confirmationTimestamp;
         mapping.Revision++;
         var mappingAudit = MappingAudit(command, created ? 0 : mapping.Id, mapping.Revision, confirmationTimestamp);
-        attempt.BindSemanticAudit(mapping, created
+        context.BindSemanticAudit(mapping, created
             ? mappingAudit with { Operation = AuditLogOperation.Created }
             : mappingAudit);
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
-        var context = new AccountingPromotionContext(
+        var promotionContext = new AccountingPromotionContext(
             command.PortfolioId,
             command.AccountingConnectionId,
             command.ConfirmedByUserId,
             command.ClientOperationId,
             command.ConfirmedAtUtc);
-        var promotion = await PromoteOneBatchAsync(context, attempt, ct);
+        var promotion = await PromoteOneBatchAsync(promotionContext, context, _db, ct);
         var promoted = promotion.PromotedCount;
         var hasMore = promotion.HasMore;
         AccountingMappingPromotionJob? continuation = null;
@@ -106,11 +123,11 @@ public sealed class ConfirmAccountingMappingHandler
                 PromotedCount = promoted,
                 CreatedAtUtc = command.ConfirmedAtUtc,
             };
-            attempt.Persistence.Add(continuation);
+            _db.Add(continuation);
         }
 
         connection.UpdatedAt = NextMutationTimestamp(command.ConfirmedAtUtc, connection.UpdatedAt);
-        attempt.BindSemanticAudit(connection, new AtomicSemanticAudit(
+        context.BindSemanticAudit(connection, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(AccountingConnection),
             connection.Id,
@@ -127,7 +144,7 @@ public sealed class ConfirmAccountingMappingHandler
             }),
             ChangeReason: "Accounting mapping confirmation and one bounded parked-transaction batch committed."));
 
-        await StageConfirmationNoticeAsync(command, attempt, mapping.Id, promoted, hasMore, ct);
+        await StageConfirmationNoticeAsync(command, context, _db, mapping.Id, promoted, hasMore, ct);
         return new ConfirmAccountingMappingResult(
             ConfirmAccountingMappingOutcome.Applied,
             mapping.Id,
@@ -137,9 +154,24 @@ public sealed class ConfirmAccountingMappingHandler
             hasMore);
     }
 
-    private static async Task<bool> IsValidTargetAsync(
+    public async Task AuthorizeReplayAsync(
+        ConfirmAccountingMappingCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        AccountingMappingAuthorizationSupport.Validate(
+            command.PortfolioId, command.AccountingConnectionId, command.ConfirmedByUserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+            command.RequiredCapability);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
+                command.PortfolioId, command.ConfirmedByUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, now, ct))
+            throw new UnauthorizedAccessException();
+    }
+
+    private async Task<bool> IsValidTargetAsync(
         ConfirmAccountingMappingCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.ExternalType == ExternalKind.Customer
@@ -147,7 +179,7 @@ public sealed class ConfirmAccountingMappingHandler
             && command.LocalEntityId is { } tenantId
             && command.LocalEnumValue is null)
         {
-            return await attempt.Persistence.Query<Tenant>()
+            return await _db.Set<Tenant>()
                 .AnyAsync(row => row.Id == tenantId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
         }
         if (command.ExternalType == ExternalKind.Vendor
@@ -155,7 +187,7 @@ public sealed class ConfirmAccountingMappingHandler
             && command.LocalEntityId is { } vendorId
             && command.LocalEnumValue is null)
         {
-            return await attempt.Persistence.Query<Vendor>()
+            return await _db.Set<Vendor>()
                 .AnyAsync(row => row.Id == vendorId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
         }
         if (command.ExternalType == ExternalKind.Class
@@ -163,7 +195,7 @@ public sealed class ConfirmAccountingMappingHandler
             && command.LocalEntityId is { } propertyId
             && command.LocalEnumValue is null)
         {
-            return await attempt.Persistence.Query<Property>()
+            return await _db.Set<Property>()
                 .AnyAsync(row => row.Id == propertyId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
         }
         return command.ExternalType == ExternalKind.Account
@@ -175,12 +207,13 @@ public sealed class ConfirmAccountingMappingHandler
 
     internal static async Task<AccountingPromotionBatchResult> PromoteOneBatchAsync(
         AccountingPromotionContext command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var payments = await PromotePaymentBatchAsync(command, attempt, PromotionBatchSize, ct);
+        var payments = await PromotePaymentBatchAsync(command, context, db, PromotionBatchSize, ct);
         var remaining = PromotionBatchSize - payments.PromotedCount;
-        var expenses = await PromoteExpenseBatchAsync(command, attempt, remaining, ct);
+        var expenses = await PromoteExpenseBatchAsync(command, context, db, remaining, ct);
         return new AccountingPromotionBatchResult(
             payments.PromotedCount + expenses.PromotedCount,
             payments.HasMore || expenses.HasMore);
@@ -188,18 +221,17 @@ public sealed class ConfirmAccountingMappingHandler
 
     private static async Task<AccountingPromotionBatchResult> PromotePaymentBatchAsync(
         AccountingPromotionContext command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         int take,
         CancellationToken ct)
     {
-        var ledgers = attempt.Persistence.Query<AccountingSyncMap>();
-        var parked = attempt.Persistence.Query<AccountingParkedTransaction>();
-        var mappings = attempt.Persistence.Query<AccountingEntityMapping>();
-        var parties = attempt.Persistence.Query<LeaseManagementParty>();
-        var managements = attempt.Persistence.Query<LeaseManagement>();
-        var accounts = attempt.Persistence.Query<TenantAccount>();
-        var depositAccounts = attempt.Persistence.Query<SecurityDepositAccount>();
-        var chargeBalances = attempt.Persistence.Query<TenantChargeBalanceProjection>();
+        var ledgers = db.Set<AccountingSyncMap>();
+        var parked = db.Set<AccountingParkedTransaction>();
+        var mappings = db.Set<AccountingEntityMapping>();
+        var parties = db.Set<LeaseManagementParty>();
+        var managements = db.Set<LeaseManagement>();
+        var accounts = db.Set<TenantAccount>();
         var openAccountLinks = (
             from party in parties
             join management in managements
@@ -255,29 +287,8 @@ public sealed class ConfirmAccountingMappingHandler
                 payload.PaymentMethod,
                 payload.ReferenceNumber,
                 payload.ExternalId,
-                IsDeposit = mappings.Any(account => account.PortfolioId == command.PortfolioId
-                    && account.AccountingConnectionId == command.AccountingConnectionId
-                    && account.ExternalType == ExternalKind.Account
-                    && account.ExternalId == payload.DepositAccountExternalId
-                    && account.ExternalDisplayName != null
-                    && (account.ExternalDisplayName.ToLower().Contains("security deposit")
-                        || account.ExternalDisplayName.ToLower().Contains("deposit held")
-                        || account.ExternalDisplayName.ToLower().Contains("tenant deposit"))),
-                SecurityDepositAccountId = depositAccounts
-                    .Where(deposit => deposit.PortfolioId == command.PortfolioId
-                        && deposit.TenantAccountId == account.AccountId)
-                    .Select(deposit => (int?)deposit.Id)
-                    .SingleOrDefault(),
-                OpenDepositAmount = chargeBalances
-                    .Where(balance => balance.PortfolioId == command.PortfolioId
-                        && balance.TenantAccountId == account.AccountId
-                        && balance.EntryType == nameof(TenantLedgerEntryType.DepositCharge)
-                        && balance.OpenAmount > 0)
-                    .Sum(balance => (decimal?)balance.OpenAmount) ?? 0m,
             };
-        var eligible = candidates.Where(row => !row.IsDeposit
-            || (row.SecurityDepositAccountId != null && row.OpenDepositAmount >= row.Amount));
-        var batch = await eligible
+        var batch = await candidates
             .OrderBy(row => row.Ledger.Id)
             .Select(row => new
             {
@@ -289,9 +300,7 @@ public sealed class ConfirmAccountingMappingHandler
                 row.PaymentMethod,
                 row.ReferenceNumber,
                 row.ExternalId,
-                row.IsDeposit,
-                row.SecurityDepositAccountId,
-                HasFollowing = eligible.Any(other => other.Ledger.Id > row.Ledger.Id),
+                HasFollowing = candidates.Any(other => other.Ledger.Id > row.Ledger.Id),
             })
             .Take(take)
             .ToListAsync(ct);
@@ -307,7 +316,7 @@ public sealed class ConfirmAccountingMappingHandler
                 Provider = $"Accounting:{command.AccountingConnectionId}",
                 ProviderObjectId = row.ExternalId,
                 IdempotencyKey = businessKey,
-                AttemptType = TenantPaymentAttemptType.Charge,
+                AttemptType = TenantPaymentAttemptType.ImportedReceipt,
                 State = TenantPaymentAttemptState.Succeeded,
                 Amount = row.Amount,
                 Currency = row.Currency,
@@ -333,58 +342,33 @@ public sealed class ConfirmAccountingMappingHandler
                 ProviderPaymentAttempt = paymentAttempt,
                 CreatedByUserId = command.UserId,
             };
-            SecurityDepositEntry? deposit = null;
-            if (row.IsDeposit && row.SecurityDepositAccountId is { } depositAccountId)
-            {
-                deposit = new SecurityDepositEntry
-                {
-                    PortfolioId = command.PortfolioId,
-                    SecurityDepositAccountId = depositAccountId,
-                    EntryType = SecurityDepositEntryType.Receipt,
-                    Direction = SecurityDepositDirection.Increase,
-                    Amount = row.Amount,
-                    Currency = row.Currency,
-                    EffectiveOn = receipt.EffectiveOn,
-                    PostedAtUtc = command.OccurredAtUtc,
-                    BusinessKey = $"{businessKey}:deposit",
-                    Description = receipt.Description,
-                    TenantLedgerEntry = receipt,
-                    CreatedByUserId = command.UserId,
-                };
-            }
-            return new { row.Ledger, Receipt = receipt, PaymentAttempt = paymentAttempt, Deposit = deposit };
+            return new { row.Ledger, Receipt = receipt, PaymentAttempt = paymentAttempt };
         }).ToList();
-        attempt.Persistence.AddRange(pairs.Select(pair => pair.PaymentAttempt));
-        attempt.Persistence.AddRange(pairs.Select(pair => pair.Receipt));
-        attempt.Persistence.AddRange(pairs.Where(pair => pair.Deposit is not null)
-            .Select(pair => pair.Deposit!));
-        if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
-        if (pairs.Count != 0)
-        {
-            await attempt.TenantMoney.AllocateImportedReceiptsAsync(
-                pairs.Select(pair => pair.Receipt.Id).ToArray(), command.OccurredAtUtc, ct);
-        }
+        db.AddRange(pairs.Select(pair => pair.PaymentAttempt));
+        db.AddRange(pairs.Select(pair => pair.Receipt));
+        if (pairs.Count != 0) await context.FlushBusinessAsync(ct);
         foreach (var pair in pairs)
         {
             MarkImported(pair.Ledger, LocalEntityKind.TenantLedgerEntry, pair.Receipt.Id, command.OccurredAtUtc);
-            attempt.StageSemanticEvent(PromotionAudit(
+            context.StageSemanticEvent(PromotionAudit(
                 command, pair.Ledger, LocalEntityKind.TenantLedgerEntry, pair.Receipt.Id));
         }
-        if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
+        if (pairs.Count != 0) await context.FlushBusinessAsync(ct);
         return new AccountingPromotionBatchResult(pairs.Count, hasMore);
     }
 
     private static async Task<AccountingPromotionBatchResult> PromoteExpenseBatchAsync(
         AccountingPromotionContext command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         int take,
         CancellationToken ct)
     {
-        var ledgers = attempt.Persistence.Query<AccountingSyncMap>();
-        var parked = attempt.Persistence.Query<AccountingParkedTransaction>();
-        var mappings = attempt.Persistence.Query<AccountingEntityMapping>();
-        var vendors = attempt.Persistence.Query<Vendor>();
-        var properties = attempt.Persistence.Query<Property>();
+        var ledgers = db.Set<AccountingSyncMap>();
+        var parked = db.Set<AccountingParkedTransaction>();
+        var mappings = db.Set<AccountingEntityMapping>();
+        var vendors = db.Set<Vendor>();
+        var properties = db.Set<Property>();
         var candidates =
             from ledger in ledgers
             join payload in parked on ledger.Id equals payload.Id
@@ -473,26 +457,27 @@ public sealed class ConfirmAccountingMappingHandler
                 UpdatedAt = command.OccurredAtUtc,
             },
         }).ToList();
-        attempt.Persistence.AddRange(pairs.Select(pair => pair.Expense));
-        if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
+        db.AddRange(pairs.Select(pair => pair.Expense));
+        if (pairs.Count != 0) await context.FlushBusinessAsync(ct);
         foreach (var pair in pairs)
         {
             MarkImported(pair.Ledger, LocalEntityKind.Expense, pair.Expense.Id, command.OccurredAtUtc);
-            attempt.StageSemanticEvent(PromotionAudit(command, pair.Ledger, LocalEntityKind.Expense, pair.Expense.Id));
+            context.StageSemanticEvent(PromotionAudit(command, pair.Ledger, LocalEntityKind.Expense, pair.Expense.Id));
         }
-        if (pairs.Count != 0) await attempt.FlushBusinessAsync(ct);
+        if (pairs.Count != 0) await context.FlushBusinessAsync(ct);
         return new AccountingPromotionBatchResult(pairs.Count, hasMore);
     }
 
     private static async Task StageConfirmationNoticeAsync(
         ConfirmAccountingMappingCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         int mappingId,
         int promotedCount,
         bool hasMore,
         CancellationToken ct)
     {
-        var accessContext = await attempt.Persistence.Query<WorkspaceAccessContext>()
+        var accessContext = await db.Set<WorkspaceAccessContext>()
             .AsNoTracking()
             .Where(context => context.PortfolioId == command.PortfolioId
                 && context.UserId == command.ConfirmedByUserId
@@ -526,9 +511,9 @@ public sealed class ConfirmAccountingMappingHandler
             notification.NavigationExpiresAtUtc = command.ConfirmedAtUtc.AddDays(7);
             notification.NavigationFallbackDestination = NavigationDestination.Home;
         }
-        attempt.Persistence.Add(notification);
-        await attempt.FlushBusinessAsync(ct);
-        var devices = await attempt.Persistence.Query<DeviceToken>()
+        db.Add(notification);
+        await context.FlushBusinessAsync(ct);
+        var devices = await db.Set<DeviceToken>()
             .Where(device => device.PortfolioId == command.PortfolioId && device.UserId == command.ConfirmedByUserId)
             .OrderBy(device => device.Id)
             .Select(device => new { device.Id, device.Token })
@@ -536,7 +521,7 @@ public sealed class ConfirmAccountingMappingHandler
             .ToListAsync(ct);
         foreach (var device in devices)
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "push",
@@ -655,16 +640,32 @@ public sealed class ConfirmAccountingMappingHandler
 public sealed class ContinueAccountingMappingPromotionHandler
     : IAtomicCommandHandler<ContinueAccountingMappingPromotionCommand, ContinueAccountingMappingPromotionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ContinueAccountingMappingPromotionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ContinueAccountingMappingPromotionResult> HandleAsync(
         ContinueAccountingMappingPromotionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.AccountingConnection,
+        AccountingMappingAuthorizationSupport.Validate(
+            command.PortfolioId, command.AccountingConnectionId, command.RequestedByUserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+            command.RequiredCapability);
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync("WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync(
+            "AccountingConnection",
             command.AccountingConnectionId,
             ct);
-        var job = await attempt.Persistence.Query<AccountingMappingPromotionJob>()
+        var authorizationNow = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
+                command.PortfolioId, command.RequestedByUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, authorizationNow, ct))
+            throw new UnauthorizedAccessException();
+        var job = await _db.Set<AccountingMappingPromotionJob>()
             .SingleOrDefaultAsync(row => row.Id == command.ContinuationId
                 && row.PortfolioId == command.PortfolioId
                 && row.AccountingConnectionId == command.AccountingConnectionId, ct);
@@ -672,7 +673,7 @@ public sealed class ContinueAccountingMappingPromotionHandler
         if (job.CompletedAtUtc is not null)
             return Result(ContinueAccountingMappingPromotionOutcome.Completed, command, 0, job.PromotedCount, false);
 
-        var currentRevision = await attempt.Persistence.Query<AccountingEntityMapping>()
+        var currentRevision = await _db.Set<AccountingEntityMapping>()
             .Where(row => row.Id == job.AccountingEntityMappingId && row.PortfolioId == command.PortfolioId)
             .Select(row => (long?)row.Revision)
             .SingleOrDefaultAsync(ct);
@@ -682,18 +683,34 @@ public sealed class ContinueAccountingMappingPromotionHandler
             return Result(ContinueAccountingMappingPromotionOutcome.Superseded, command, 0, job.PromotedCount, false);
         }
 
-        var context = new AccountingPromotionContext(
+        var promotionContext = new AccountingPromotionContext(
             command.PortfolioId,
             command.AccountingConnectionId,
             command.RequestedByUserId,
             command.ClientOperationId,
             command.AppliedAtUtc);
-        var promotion = await ConfirmAccountingMappingHandler.PromoteOneBatchAsync(context, attempt, ct);
+        var promotion = await ConfirmAccountingMappingHandler.PromoteOneBatchAsync(
+            promotionContext, context, _db, ct);
         var promoted = promotion.PromotedCount;
         job.PromotedCount += promoted;
         var hasMore = promotion.HasMore;
         if (!hasMore) job.CompletedAtUtc = command.AppliedAtUtc;
         return Result(ContinueAccountingMappingPromotionOutcome.Applied, command, promoted, job.PromotedCount, hasMore);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ContinueAccountingMappingPromotionCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        AccountingMappingAuthorizationSupport.Validate(
+            command.PortfolioId, command.AccountingConnectionId, command.RequestedByUserId,
+            command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+            command.RequiredCapability);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AccountingMappingAuthorizationSupport.HasAuthorityAsync(
+                command.PortfolioId, command.RequestedByUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, _db, now, ct))
+            throw new UnauthorizedAccessException();
     }
 
     private static ContinueAccountingMappingPromotionResult Result(
@@ -702,4 +719,65 @@ public sealed class ContinueAccountingMappingPromotionHandler
         int promoted,
         int total,
         bool hasMore) => new(outcome, command.ContinuationId, promoted, total, hasMore);
+}
+
+internal static class AccountingMappingAuthorizationSupport
+{
+    internal static void Validate(
+        int portfolioId,
+        int accountingConnectionId,
+        int actorUserId,
+        Guid authSessionId,
+        int accessContextId,
+        long expectedAccessRevision,
+        string requiredCapability)
+    {
+        if (portfolioId <= 0 || accountingConnectionId <= 0 || actorUserId <= 0
+            || authSessionId == Guid.Empty || accessContextId <= 0 || expectedAccessRevision <= 0
+            || requiredCapability != CapabilityKeys.IntegrationsManage)
+            throw new UnauthorizedAccessException("An active accounting-integration workspace context is required.");
+    }
+
+    internal static Task<bool> HasAuthorityAsync(
+        int portfolioId,
+        int actorUserId,
+        Guid authSessionId,
+        int accessContextId,
+        long expectedAccessRevision,
+        string requiredCapability,
+        RentalCommandDbContext db,
+        DateTime now,
+        CancellationToken ct) =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+            assignment.PortfolioId == portfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null
+            && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership!.AccessContextId == accessContextId
+            && assignment.WorkspaceMembership.PortfolioId == portfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership.AccessContext!.UserId == actorUserId
+            && assignment.WorkspaceMembership.AccessContext.PortfolioId == portfolioId
+            && assignment.WorkspaceMembership.AccessContext.AccessRevision == expectedAccessRevision
+            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
+            && db.Set<AuthSession>().Any(session =>
+                session.Id == authSessionId
+                && session.UserId == actorUserId
+                && session.ActiveAccessContextId == accessContextId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                grant.CapabilityDefinition!.Key == requiredCapability
+                && grant.CapabilityDefinition.AuthorizationTargetKind
+                    == CapabilityAuthorizationTargetKind.Workspace), ct);
 }

@@ -180,13 +180,18 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
     {
         await using var db = NewContext();
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        commandContext.BeginAttempt(attemptId);
         using var attempt = auditScope.BeginAttempt(
             new AtomicCommandIdentity("test.renewal-reissue-transition", Guid.NewGuid().ToString("N")),
-            Guid.NewGuid());
-        var persistence = new AtomicLeaseMutationPersistence(db, auditScope);
+            attemptId,
+            db);
 
-        var result = await persistence.ExecuteLegalArtifactTransitionAsync(
+        var result = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
+            db,
+            commandContext,
             scenario.PortfolioId,
             scenario.LeaseManagementId,
             leaseAgreementId,
@@ -194,6 +199,7 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
             executedArtifactId,
             executedAtUtc);
         await transaction.CommitAsync();
+        commandContext.EndAttempt();
         return result;
     }
 

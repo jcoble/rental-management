@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -190,10 +191,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         var sql = service.BuildCanonicalLedgerHeaderQuery(ReadAccess(), 42)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("money.balances.read");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("LeaseManagements");
         sql.Should().NotContain("LeaseManagementParties",
@@ -279,9 +278,8 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(query.NormalizedTake)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseManagementParties");
         sql.Should().Contain("vw_lease_management_lifecycle");
@@ -311,7 +309,7 @@ public sealed class CanonicalLeaseReaderSqlTests
 
         foreach (var sql in new[] { headerSql, partySql })
         {
-            sql.Should().Contain("AuthSessions");
+            AssertCanonicalPropertyAuthorization(sql);
             sql.Should().Contain("rentals.read");
             sql.Should().Contain("LeaseManagements");
             sql.Should().NotContain("\"Leases\"");
@@ -370,7 +368,7 @@ public sealed class CanonicalLeaseReaderSqlTests
         var sql = service.BuildAgreementDraftDetailQuery(ReadAccess(), 42, 73)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAgreements");
@@ -394,6 +392,25 @@ public sealed class CanonicalLeaseReaderSqlTests
     }
 
     [Fact]
+    public void Agreement_draft_detail_projects_source_scan_file_in_one_sql_statement()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildAgreementDraftDetailQuery(ReadAccess(), 42, 73)
+            .ToQueryString();
+
+        sql.Should().Contain("LegalDocumentSourceVersions");
+        sql.Should().Contain("SourceStoredFileId");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().Contain("FileName");
+        sql.Should().Contain("ContentType");
+        sql.Should().Contain("DeletedAt");
+        sql.TrimEnd().Should().NotEndWith(";");
+        sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
     public void Agreement_signature_progress_authorizes_and_projects_packet_signers_and_artifact_readiness_in_one_sql_statement()
     {
         using var db = NewContext();
@@ -402,7 +419,7 @@ public sealed class CanonicalLeaseReaderSqlTests
         var sql = service.BuildAgreementSignatureProgressQuery(ReadAccess(), 42, 73)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAgreements");
@@ -439,7 +456,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(20)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.manage");
         sql.Should().Contain("leasing.agreements.prepare");
         sql.Should().Contain("LeaseAgreements");
@@ -460,9 +477,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         var sql = service.BuildEffectiveAddendumSeriesQuery(ReadAccess(), 42, 73)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("vw_lease_agreement_status");
@@ -494,7 +510,7 @@ public sealed class CanonicalLeaseReaderSqlTests
         var sql = service.BuildAddendumDraftDetailQuery(ReadAccess(), 42, 74)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAddenda");
@@ -538,7 +554,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(query.NormalizedTake)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAgreements");
@@ -576,7 +592,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(query.NormalizedTake)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAddenda");
@@ -605,7 +621,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(20)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("FullyExecutedAtUtc");
@@ -630,7 +646,7 @@ public sealed class CanonicalLeaseReaderSqlTests
 
         foreach (var sql in new[] { agreementSql, addendumSql })
         {
-            sql.Should().Contain("AuthSessions");
+            AssertCanonicalPropertyAuthorization(sql);
             sql.Should().Contain("rentals.read");
             sql.Should().Contain("LeaseManagements");
             sql.Should().Contain("LegalDocumentArtifacts");
@@ -650,10 +666,8 @@ public sealed class CanonicalLeaseReaderSqlTests
 
         var sql = service.BuildLeaseQaAgreementQuery(ReadAccess(), 42).ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
-        sql.Should().Contain("AccessRevision");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("vw_lease_agreement_status");
         sql.Should().Contain("LeaseAgreements");
@@ -677,11 +691,9 @@ public sealed class CanonicalLeaseReaderSqlTests
 
         foreach (var sql in new[] { agreementSql, addendumSql })
         {
-            sql.Should().Contain("AuthSessions");
-            sql.Should().Contain("AccessRevision");
+            AssertCanonicalPropertyAuthorization(sql);
             sql.Should().Contain("rentals.manage");
             sql.Should().Contain("leasing.agreements.prepare");
-            sql.Should().Contain("MembershipRoleAssignmentProperties");
             sql.Should().Contain("LeaseManagements");
             sql.Should().Contain("ORDER BY");
             sql.Should().NotContain("ClientEvaluation");
@@ -704,7 +716,7 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Take(1)
             .ToQueryString();
 
-        sql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(sql);
         sql.Should().Contain("rentals.read");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("LeaseAgreements");
@@ -749,7 +761,7 @@ public sealed class CanonicalLeaseReaderSqlTests
         }
 
         dashboardSql.Should().Contain("AtomicAuditLogs");
-        dashboardSql.Should().Contain("AuthSessions");
+        AssertCanonicalPropertyAuthorization(dashboardSql, expectedCallCount: null);
         dashboardSql.Should().Contain("reports.read");
         dashboardSql.Should().Contain("AccountNumber");
         auditSql.Should().Contain("AtomicAuditLogs");
@@ -764,6 +776,76 @@ public sealed class CanonicalLeaseReaderSqlTests
 
     private static RentalCommand.Core.Authorization.WorkspaceReadScope ReadScope() =>
         new(17, 5, Guid.Parse("77777777-7777-7777-7777-777777777777"), 12, 3);
+
+    private static void AssertCanonicalPropertyAuthorization(
+        string sql,
+        int? expectedCallCount = 1)
+    {
+        var calls = Regex.Matches(
+            sql,
+            """
+            FROM\s+public\.rc_api_effective_capability_scopes\(\s*
+                (?<portfolio>@[A-Za-z0-9_]+),\s*
+                (?<session>@[A-Za-z0-9_]+),\s*
+                (?<user>@[A-Za-z0-9_]+),\s*
+                (?<context>@[A-Za-z0-9_]+),\s*
+                (?<revision>@[A-Za-z0-9_]+),\s*
+                (?<capabilities>@[A-Za-z0-9_]+),\s*
+                (?<targetKind>@[A-Za-z0-9_]+)\)
+            """,
+            RegexOptions.IgnorePatternWhitespace);
+
+        calls.Count.Should().BeGreaterThan(0,
+            "authorization must use the canonical PostgreSQL effective-capability scope");
+        if (expectedCallCount is not null)
+        {
+            calls.Count.Should().Be(
+                expectedCallCount.Value,
+                "this reader should evaluate its capability set through the expected canonical scope calls");
+        }
+
+        foreach (System.Text.RegularExpressions.Match call in calls)
+        {
+            AssertParameterReferenceValue(sql, call.Groups["portfolio"].Value, 17);
+            AssertParameterReferenceValue(
+                sql,
+                call.Groups["session"].Value,
+                Guid.Parse("77777777-7777-7777-7777-777777777777"));
+            AssertParameterReferenceValue(sql, call.Groups["user"].Value, 5);
+            AssertParameterReferenceValue(sql, call.Groups["context"].Value, 12);
+            AssertParameterReferenceValue(sql, call.Groups["revision"].Value, 3L);
+            AssertParameterReferenceValue(sql, call.Groups["targetKind"].Value, "Property");
+        }
+        sql.Should().Contain("\"ScopeKind\"");
+        sql.Should().Contain("\"PropertyId\"");
+        sql.Should().Contain("'AllProperties'");
+        sql.Should().Contain("'SelectedProperties'");
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("MembershipRoleAssignments");
+        sql.Should().NotContain("MembershipRoleAssignmentProperties");
+        sql.Should().NotContain("ClientEvaluation");
+        SqlWithoutParameterDeclarations(sql).TrimStart().Should()
+            .StartWith("SELECT")
+            .And.NotContain(";",
+                "the complete authorization and property filter must translate to one PostgreSQL statement");
+    }
+
+    private static void AssertParameterReferenceValue(
+        string sql,
+        string parameterReference,
+        object value)
+    {
+        var expectedValue = Regex.Escape(
+            Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!);
+        sql.Should().MatchRegex(
+            $"-- {Regex.Escape(parameterReference.TrimStart('@'))}='?{expectedValue}'?",
+            $"{parameterReference} must bind the canonical authorization input");
+    }
+
+    private static string SqlWithoutParameterDeclarations(string sql) => string.Join(
+        '\n',
+        sql.Split('\n').Where(line => !line.StartsWith("-- ", StringComparison.Ordinal)));
 
     private static RentalCommandDbContext NewContext() =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>()

@@ -387,6 +387,18 @@ export interface GivePossessionResponse {
   replayed: boolean;
 }
 
+export interface ReconcileHistoricalPossessionRequest {
+  unitId: number;
+  possessionGivenOn: string;
+}
+
+export interface ReconcileHistoricalPossessionResponse {
+  leaseManagementId: number;
+  unitId: number;
+  possessionGivenAtUtc: string;
+  replayed: boolean;
+}
+
 export interface ConfirmMoveInRequest {
   unitId: number;
   depositEffectiveOn: string | null;
@@ -691,6 +703,17 @@ export const leaseManagements = {
   ) =>
     idempotentJson<GivePossessionResponse>(
       `/lease-managements/${leaseManagementId}/give-possession`,
+      "POST",
+      request,
+      operationKey
+    ),
+  reconcileHistoricalPossession: (
+    leaseManagementId: number,
+    request: ReconcileHistoricalPossessionRequest,
+    operationKey: string
+  ) =>
+    idempotentJson<ReconcileHistoricalPossessionResponse>(
+      `/lease-managements/${leaseManagementId}/reconcile-historical-possession`,
       "POST",
       request,
       operationKey

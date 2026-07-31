@@ -7,6 +7,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Reporting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -110,15 +111,14 @@ public class DashboardService : IDashboardService
         CancellationToken ct)
     {
         var portfolioId = scope.PortfolioId;
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
         var monthStartOn = DateOnly.FromDateTime(monthStart);
         var nextMonthStartOn = DateOnly.FromDateTime(nextMonthStart);
 
-        // One PostgreSQL statement derives the entire tenant-money portion of the dashboard from
-        // canonical facts. Current receivable attention is lifecycle-scoped; billed charges and
-        // allocations are immutable; partial payment is reflected by the balance views; and cash
-        // collected remains historical even after move-out. Security-deposit receipts are excluded
-        // through their typed subledger provenance because held deposits are liabilities, not income.
+        // One PostgreSQL statement derives the current receivable portion of the dashboard from
+        // canonical facts. Billed charges and allocations are immutable; partial payment is reflected
+        // by the balance views; and lifecycle scope determines which current accounts need attention.
         var tenantMoney = await _db.Portfolios
             .AsNoTracking()
             .Where(portfolio => portfolio.Id == portfolioId)
@@ -147,68 +147,44 @@ public class DashboardService : IDashboardService
                         && charge.DueOn >= monthStartOn
                         && charge.DueOn < nextMonthStartOn
                     select (decimal?)(charge.OriginalAmount - charge.ReversedAmount)).Sum() ?? 0m,
-                PaidThisMonth = (
-                    from entry in _db.TenantLedgerEntries.AsNoTracking()
-                    join account in _db.TenantAccounts.AsNoTracking()
-                        on new { entry.PortfolioId, Id = entry.TenantAccountId }
-                        equals new { account.PortfolioId, account.Id }
-                    join management in _db.LeaseManagements.AsNoTracking()
-                        on new { account.PortfolioId, Id = account.LeaseManagementId }
-                        equals new { management.PortfolioId, management.Id }
-                    where entry.PortfolioId == portfolio.Id
-                        && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && entry.EffectiveOn >= monthStartOn
-                        && entry.EffectiveOn < nextMonthStartOn
-                        && authorizedProperties.Any(property => property.Id == management.PropertyId)
-                        && !_db.SecurityDepositEntries.Any(deposit =>
-                            deposit.PortfolioId == portfolio.Id
-                            && deposit.TenantLedgerEntryId == entry.Id
-                            && deposit.EntryType == SecurityDepositEntryType.Receipt)
-                    select (decimal?)entry.Amount).Sum() ?? 0m,
             })
             .SingleAsync(ct);
 
-        var bankCash = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId
-                && t.MatchStatus != "Removed"
-                && t.PostedAt >= monthStart
-                && t.PostedAt < nextMonthStart
-                && ((t.MatchedTenantAccountId != null &&
-                     _db.TenantAccounts.Any(account =>
-                         account.PortfolioId == t.PortfolioId &&
-                         account.Id == t.MatchedTenantAccountId &&
-                         authorizedProperties.Any(property =>
-                             property.Id == account.LeaseManagement!.PropertyId))) ||
-                    (t.MatchedExpenseId != null &&
-                     _db.Expenses.Any(expense =>
-                         expense.PortfolioId == t.PortfolioId &&
-                         expense.Id == t.MatchedExpenseId &&
-                         expense.PropertyId != null &&
-                         authorizedProperties.Any(property => property.Id == expense.PropertyId.Value)))))
-            .GroupBy(_ => 1)
-            .Select(g => new
+        var cashFlowTo = nextMonthStart.AddTicks(-1);
+        var accountingIncomeQuery = FinancialReportProjections.BuildAuthorizedCashFlowIncomeProjection(
+            _db,
+            scope,
+            CapabilityKeys.MoneyBalancesRead,
+            utcNow,
+            monthStart,
+            cashFlowTo,
+            []);
+        var accountingExpenseQuery = FinancialReportProjections.BuildAuthorizedCashFlowExpenseProjection(
+            _db,
+            scope,
+            CapabilityKeys.MoneyBalancesRead,
+            utcNow,
+            monthStart,
+            cashFlowTo,
+            []);
+        var accountingAnchor = FinancialReportProjections.BuildAuthorizedCashFlowAnchor(
+            _db,
+            scope,
+            CapabilityKeys.MoneyBalancesRead,
+            utcNow,
+            []);
+        var cashFlowTotals = await accountingAnchor
+            .Select(_ => new
             {
-                UnmatchedDeposits = g.Sum(t => t.Amount > 0 && t.MatchedTenantLedgerEntryId == null ? t.Amount : 0m),
-                UnmatchedWithdrawals = g.Sum(t => t.Amount < 0 && t.MatchedExpenseId == null ? -t.Amount : 0m),
+                Income = accountingIncomeQuery.Sum(row => (decimal?)row.Amount) ?? 0m,
+                Expense = accountingExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m,
             })
-            .FirstOrDefaultAsync(ct);
+            .SingleOrDefaultAsync(ct);
 
         var overdue = tenantMoney.Overdue;
         var dueThisMonth = tenantMoney.DueThisMonth;
-        var paidThisMonth = tenantMoney.PaidThisMonth + (bankCash?.UnmatchedDeposits ?? 0m);
-
-        // Expenses spent this month (paid date when present, else incurred date), matching the
-        // dashboard money snapshot so the summary KPI and the detailed money card cannot diverge.
-        var expenseRowsThisMonth = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId
-                && e.PropertyId != null
-                && authorizedProperties.Any(property => property.Id == e.PropertyId.Value)
-                && (e.PaidAt ?? e.IncurredAt) >= monthStart
-                && (e.PaidAt ?? e.IncurredAt) < nextMonthStart)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-        var expensesThisMonth = expenseRowsThisMonth + (bankCash?.UnmatchedWithdrawals ?? 0m);
+        var paidThisMonth = cashFlowTotals?.Income ?? 0m;
+        var expensesThisMonth = cashFlowTotals?.Expense ?? 0m;
 
         return new DashboardAccounting
         {

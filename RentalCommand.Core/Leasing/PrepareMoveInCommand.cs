@@ -31,9 +31,9 @@ public sealed record PrepareMoveInCommand(
     int? ApplicationId,
     int UnitId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     DateTime? PlannedPossessionAtUtc,
     DateOnly PartyEffectiveFrom,
     IReadOnlyList<PrepareMoveInParty> Parties,
@@ -52,7 +52,7 @@ public sealed record PrepareMoveInCommand(
     decimal? OpeningBalanceAmount,
     DateOnly? OpeningBalanceEffectiveOn,
     string? OpeningBalanceNote,
-    string DeliveryIdempotencyKey,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey,
     RentTrackingStartMode RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
     DateOnly? RentTrackingStartOn = null) : IAtomicCommandData;
 
@@ -79,4 +79,4 @@ public sealed record PrepareMoveInResult(
     IReadOnlyList<int> TenantIds,
     IReadOnlyList<int> LeaseManagementPartyIds,
     IReadOnlyList<int> LeaseAgreementSignerIds,
-    string? Error) : IAtomicResultData;
+    string? Error);

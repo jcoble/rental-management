@@ -5,18 +5,22 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Documents;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Scanning;
 
 public sealed class FinalizeScanUploadHandler
-    : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>,
-      IAtomicReplayAuthorizer<FinalizeScanUploadCommand>
+    : IAtomicCommandHandler<FinalizeScanUploadCommand, FinalizeScanUploadResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeScanUploadHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<FinalizeScanUploadResult> HandleAsync(
         FinalizeScanUploadCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.Files is not { Count: > 0 and <= 100 })
@@ -24,8 +28,8 @@ public sealed class FinalizeScanUploadHandler
 
         var captureContext = command.CaptureContext
             ?? throw new InvalidOperationException("A canonical scan capture context is required.");
-        await AuthorizeCaptureContextAsync(command, captureContext, attempt.Persistence, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await AuthorizeCaptureContextAsync(command, captureContext, _db, ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
         var expectations = new List<AtomicPendingFileUploadExpectation>(command.Files.Count * 2);
         for (var index = 0; index < command.Files.Count; index++)
@@ -78,8 +82,8 @@ public sealed class FinalizeScanUploadHandler
         // One PostgreSQL statement matches every security/integrity field and locks the complete
         // set in UUID order. Cleanup uses FOR UPDATE SKIP LOCKED, so it cannot claim or abandon any
         // admission while this transaction is finalizing the set.
-        var pendingRows = await attempt.PendingFileUploads.LockPreparedSetAsync(
-            command.PortfolioId,
+        var pendingRows = await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(_db,
+            context, command.PortfolioId,
             command.UploadedByUserId,
             expectations,
             ct);
@@ -94,7 +98,7 @@ public sealed class FinalizeScanUploadHandler
         var pendingById = pendingRows.ToDictionary(upload => upload.Id);
         var activeStatusNames = new[] { "Pending", "Processing", "Reviewing" };
         var sourceHashes = command.Files.Select(file => file.SourceSha256).Distinct().ToArray();
-        var duplicateMatchesByHash = await attempt.Persistence.Query<ScanDraft>()
+        var duplicateMatchesByHash = await _db.Set<ScanDraft>()
             .Where(draft => draft.PortfolioId == command.PortfolioId
                 && draft.TargetEntityType == command.TargetEntityType
                 && draft.SourceContentSha256 != null
@@ -141,7 +145,7 @@ public sealed class FinalizeScanUploadHandler
                 FileCount = command.Files.Count,
                 CreatedAtUtc = command.UploadedAtUtc,
             };
-            attempt.Persistence.Add(batch);
+            _db.Add(batch);
         }
 
         var sourceRows = new List<StoredFile?>(command.Files.Count);
@@ -159,16 +163,16 @@ public sealed class FinalizeScanUploadHandler
             var source = CreateStoredFile(command, file.SourceFileName, file.SourceStoragePath,
                 file.SourceContentType, file.SourceSizeBytes);
             sourceRows.Add(source);
-            attempt.Persistence.Add(source);
-            BindFileAudit(attempt, command, source, file.SourceSha256, "source", index);
+            _db.Add(source);
+            BindFileAudit(context, command, source, file.SourceSha256, "source", index);
 
             StoredFile? thumbnail = null;
             if (file.ThumbnailPendingUploadId.HasValue)
             {
                 thumbnail = CreateStoredFile(command, file.ThumbnailFileName!, file.ThumbnailStoragePath!,
                     "image/jpeg", file.ThumbnailSizeBytes!.Value);
-                attempt.Persistence.Add(thumbnail);
-                BindFileAudit(attempt, command, thumbnail, file.ThumbnailSha256!, "thumbnail", index);
+                _db.Add(thumbnail);
+                BindFileAudit(context, command, thumbnail, file.ThumbnailSha256!, "thumbnail", index);
             }
             thumbnailRows.Add(thumbnail);
         }
@@ -176,11 +180,11 @@ public sealed class FinalizeScanUploadHandler
         // Database-generated file/batch ids are needed by ScanDraft and PendingFileUpload.
         if (sourceRows.Any(row => row is not null) || batch is not null)
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
         if (batch is not null)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(ScanBatch),
                 batch.Id,
@@ -231,8 +235,8 @@ public sealed class FinalizeScanUploadHandler
                 CreatedAt = command.UploadedAtUtc,
             };
             drafts.Add(draft);
-            attempt.Persistence.Add(draft);
-            attempt.BindSemanticAudit(draft, new AtomicSemanticAudit(
+            _db.Add(draft);
+            context.BindSemanticAudit(draft, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(ScanDraft),
                 0,
@@ -250,7 +254,7 @@ public sealed class FinalizeScanUploadHandler
         }
         if (drafts.Any(draft => draft is not null))
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
 
         for (var index = 0; index < command.Files.Count; index++)
@@ -259,13 +263,13 @@ public sealed class FinalizeScanUploadHandler
             if (duplicateMatches[index] is { } duplicate)
             {
                 FinalizePending(sourcePending, duplicate.SourceStoredFileId, command.UploadedAtUtc);
-                StageDuplicateBlobCleanup(attempt, command, sourcePending.Id, sourcePending.StoragePath);
+                StageDuplicateBlobCleanup(context, command, sourcePending.Id, sourcePending.StoragePath);
 
                 if (command.Files[index].ThumbnailPendingUploadId is Guid duplicateThumbnailPendingId)
                 {
                     var thumbnailPending = pendingById[duplicateThumbnailPendingId];
                     FinalizeDuplicatePending(thumbnailPending, command.UploadedAtUtc);
-                    StageDuplicateBlobCleanup(attempt, command, thumbnailPending.Id, thumbnailPending.StoragePath);
+                    StageDuplicateBlobCleanup(context, command, thumbnailPending.Id, thumbnailPending.StoragePath);
                 }
 
                 continue;
@@ -274,17 +278,17 @@ public sealed class FinalizeScanUploadHandler
             var draft = drafts[index]!;
             var source = sourceRows[index]!;
             FinalizePending(sourcePending, source.Id, command.UploadedAtUtc);
-            LinkFileToDraft(attempt, command, source, draft.Id);
+            LinkFileToDraft(context, command, source, draft.Id);
 
             if (thumbnailRows[index] is { } thumbnail
                 && command.Files[index].ThumbnailPendingUploadId is Guid thumbnailPendingId)
             {
                 FinalizePending(pendingById[thumbnailPendingId], thumbnail.Id, command.UploadedAtUtc);
-                LinkFileToDraft(attempt, command, thumbnail, draft.Id);
+                LinkFileToDraft(context, command, thumbnail, draft.Id);
             }
 
             // Realtime invalidation is a durable destination: it must not be emitted before commit.
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "data-update",
@@ -311,19 +315,17 @@ public sealed class FinalizeScanUploadHandler
     }
 
     public Task AuthorizeReplayAsync(
-        FinalizeScanUploadCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        FinalizeScanUploadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         var captureContext = command.CaptureContext
             ?? throw new InvalidOperationException("A canonical scan capture context is required.");
-        return AuthorizeCaptureContextAsync(command, captureContext, persistence, ct);
+        return AuthorizeCaptureContextAsync(command, captureContext, _db, ct);
     }
 
     private static async Task AuthorizeCaptureContextAsync(
         FinalizeScanUploadCommand command,
         ScanCaptureContextData context,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
         if (command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
@@ -336,9 +338,9 @@ public sealed class FinalizeScanUploadHandler
         if (capabilities.Count == 0)
             throw Unauthorized();
 
-        var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var capabilityKeys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -357,7 +359,7 @@ public sealed class FinalizeScanUploadHandler
             && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
             && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId && session.UserId == command.UploadedByUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -370,7 +372,7 @@ public sealed class FinalizeScanUploadHandler
                     && profileCapability.CapabilityDefinition.AuthorizationTargetKind
                         == CapabilityAuthorizationTargetKind.WorkOrder)));
 
-        var authorizedWorkOrders = persistence.Query<WorkOrder>().Where(workOrder =>
+        var authorizedWorkOrders = db.Set<WorkOrder>().Where(workOrder =>
             workOrder.PortfolioId == command.PortfolioId && assignments.Any(assignment =>
                 (assignment.RoleProfile!.Capabilities.Any(item =>
                      item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage) &&
@@ -380,7 +382,7 @@ public sealed class FinalizeScanUploadHandler
                 (assignment.RoleProfile.Capabilities.Any(item =>
                      item.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate) &&
                  assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
-                 persistence.Query<WorkOrderResponsibility>().Any(responsibility =>
+                 db.Set<WorkOrderResponsibility>().Any(responsibility =>
                      responsibility.WorkOrderId == workOrder.Id &&
                      responsibility.PortfolioId == command.PortfolioId &&
                      responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
@@ -388,7 +390,7 @@ public sealed class FinalizeScanUploadHandler
                      responsibility.EffectiveFromUtc <= securityNowUtc &&
                      (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > securityNowUtc)))));
 
-        var properties = persistence.Query<Property>();
+        var properties = db.Set<Property>();
         var authorizedProperties = properties.Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
             && (assignments.Any(assignment =>
@@ -399,19 +401,19 @@ public sealed class FinalizeScanUploadHandler
                         && selected.PropertyId == property.Id)))
                 || context.WorkOrderId != null && authorizedWorkOrders.Any(workOrder =>
                     workOrder.Id == context.WorkOrderId && workOrder.PropertyId == property.Id)));
-        var units = persistence.Query<Unit>();
-        var relationships = persistence.Query<LeaseManagement>();
-        var agreements = persistence.Query<LeaseAgreement>();
-        var accounts = persistence.Query<TenantAccount>();
-        var ledgerEntries = persistence.Query<TenantLedgerEntry>();
-        var workOrders = persistence.Query<WorkOrder>();
-        var applications = persistence.Query<RentalApplication>();
-        var listings = persistence.Query<RentalListing>();
+        var units = db.Set<Unit>();
+        var relationships = db.Set<LeaseManagement>();
+        var agreements = db.Set<LeaseAgreement>();
+        var accounts = db.Set<TenantAccount>();
+        var ledgerEntries = db.Set<TenantLedgerEntry>();
+        var workOrders = db.Set<WorkOrder>();
+        var applications = db.Set<RentalApplication>();
+        var listings = db.Set<RentalListing>();
 
         // One translated predicate validates current authority and the complete capture graph before
         // any StoredFile, ScanBatch, or ScanDraft row is added. Every nested Any becomes a correlated
         // EXISTS in this SQL statement; no candidate business rows are materialized in memory.
-        var valid = await persistence.Query<Portfolio>()
+        var valid = await db.Set<Portfolio>()
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(_ =>
                 assignments.Any()
@@ -544,12 +546,12 @@ public sealed class FinalizeScanUploadHandler
         };
 
     private static void BindFileAudit(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         FinalizeScanUploadCommand command,
         StoredFile row,
         string contentSha256,
         string role,
-        int ordinal) => attempt.BindSemanticAudit(row, new AtomicSemanticAudit(
+        int ordinal) => context.BindSemanticAudit(row, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(StoredFile),
             0,
@@ -568,13 +570,13 @@ public sealed class FinalizeScanUploadHandler
             ChangeReason: $"Scan {role} uploaded"));
 
     private static void LinkFileToDraft(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         FinalizeScanUploadCommand command,
         StoredFile row,
         int draftId)
     {
         row.EntityId = draftId;
-        attempt.BindSemanticAudit(row, new AtomicSemanticAudit(
+        context.BindSemanticAudit(row, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(StoredFile),
             row.Id,
@@ -599,12 +601,12 @@ public sealed class FinalizeScanUploadHandler
     }
 
     private static void StageDuplicateBlobCleanup(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         FinalizeScanUploadCommand command,
         Guid pendingUploadId,
         string storagePath)
     {
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "blob-delete",

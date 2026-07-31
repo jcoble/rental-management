@@ -207,6 +207,38 @@ void main() {
         canOpenMobilePath(
           experience: WorkspaceExperience.tenant,
           capabilities: capabilities,
+          path: '/portal/tenant-accounts/7/entries/9',
+        ),
+        isTrue,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.tenant,
+          capabilities: capabilities,
+          path: '/portal/tenant-accounts/7',
+        ),
+        isTrue,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.tenant,
+          capabilities: capabilities,
+          path: '/portal/tenant-accounts/7/entries/0',
+        ),
+        isFalse,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.tenant,
+          capabilities: capabilities,
+          path: '/portal/tenant-accounts/page',
+        ),
+        isFalse,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.tenant,
+          capabilities: capabilities,
           path: '/messages/12',
         ),
         isTrue,
@@ -261,10 +293,7 @@ void main() {
         contains("We couldn't complete that right now. Please try again."),
       );
       expect(tenantShell, contains("const Text('Try again')"));
-      expect(
-        repairsSource,
-        contains("We couldn't load maintenance requests."),
-      );
+      expect(repairsSource, contains("We couldn't load maintenance requests."));
       expect(repairsSource, contains('onRetry: _refresh'));
       expect(
         repairsSource,
@@ -322,6 +351,14 @@ void main() {
           path: '/units/42',
         ),
         isTrue,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.management,
+          capabilities: capabilities,
+          path: '/portal/tenant-accounts/7/entries/9',
+        ),
+        isFalse,
       );
     });
   });

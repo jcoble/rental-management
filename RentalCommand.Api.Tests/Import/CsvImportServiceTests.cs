@@ -6,6 +6,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Import;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -440,7 +441,7 @@ public class CsvImportServiceTests : IDisposable
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull

@@ -14,6 +14,10 @@ const paymentDetailSource = readFileSync(
 	new URL('../records/PaymentDetail.svelte', import.meta.url),
 	'utf8'
 );
+const portalServiceSource = readFileSync(
+	new URL('../../../../../RentalCommand.Api/Services/Domain/PortalService.cs', import.meta.url),
+	'utf8'
+);
 
 describe('unit rent canonical receipt and charge commands', () => {
 	it('captures receipt metadata and posts with an idempotency key', () => {
@@ -21,6 +25,19 @@ describe('unit rent canonical receipt and charge commands', () => {
 		assert.match(source, /reference: ''/);
 		assert.match(source, /operationKey \?\?= crypto\.randomUUID\(\)/);
 		assert.match(source, /payments\.recordReceipt\(tenantAccountId, operationKey/);
+		assert.match(source, /targetChargeEntryId: receiptTargetChargeEntryId\(\)/);
+		assert.match(source, /Leave unapplied\/advance receipt/);
+		assert.doesNotMatch(source, /allocateOldestCharges/);
+	});
+
+	it('receives receipt targets from the server-side open-charge query without client filtering', () => {
+		assert.match(source, /tenantAccounts\.chargesPage\(tenantAccountId as number/);
+		assert.match(source, /\{#each chargesQuery\.data\?\.items \?\? \[\] as charge/);
+		assert.doesNotMatch(source, /chargesQuery\.data\?\.items\.filter/);
+		assert.match(
+			portalServiceSource,
+			/BuildTenantChargeQuery[\s\S]*balance\.OpenAmount > 0m[\s\S]*return ApplyTenantChargeFilters/
+		);
 	});
 
 	it('offers a manual charge only from tenant-account context', () => {

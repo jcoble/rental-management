@@ -301,9 +301,10 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719,
             FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724,
             FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725,
-            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
+            FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727,
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
         FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260727);
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
         FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
     }
@@ -804,7 +805,23 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             .Which.Should().BeSameAs(
                 FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
 
-        var sql = l15Sql.Append(laterSql[0]).Concat(optimizedSql).Concat(businessClockSql).ToArray();
+        var resourceClockMigration = new UseBusinessClockForResourceScopes();
+        var resourceClockBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(UseBusinessClockForResourceScopes).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(resourceClockMigration, [resourceClockBuilder]);
+        var resourceClockSql = resourceClockBuilder.Operations.OfType<SqlOperation>()
+            .Select(operation => operation.Sql)
+            .ToArray();
+        resourceClockSql.Should().ContainSingle()
+            .Which.Should().BeSameAs(
+                FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
+
+        var sql = l15Sql.Append(laterSql[0])
+            .Concat(optimizedSql)
+            .Concat(businessClockSql)
+            .Concat(resourceClockSql)
+            .ToArray();
         foreach (var statement in sql) await ExecuteOwnerSqlAsync(statement);
         return sql;
     }

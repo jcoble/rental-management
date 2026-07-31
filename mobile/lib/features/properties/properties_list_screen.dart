@@ -136,11 +136,9 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
-        canUseMobileCapabilityAction(
-          experience: auth.activeExperience,
-          capabilities: auth.capabilities,
-          capability: 'rentals.manage',
-          experiences: const {WorkspaceExperience.management},
+        hasAllPropertiesRentalsManageAuthority(
+          access: auth.access,
+          activeExperience: auth.activeExperience,
         );
 
     return Scaffold(
@@ -263,20 +261,23 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
                     },
                     itemBuilder: (context, index) {
                       if (index == page.items.length) {
-                        return MobileGridPagingBar(
-                          totalCount: page.totalCount,
-                          skip: page.skip,
-                          itemCount: page.items.length,
-                          previousTooltip: 'Previous properties page',
-                          nextTooltip: 'Next properties page',
-                          onPrevious: page.hasPrevious
-                              ? () => setState(() {
-                                  _skip = (_skip - _pageSize).clamp(0, _skip);
-                                })
-                              : null,
-                          onNext: page.hasNext
-                              ? () => setState(() => _skip += _pageSize)
-                              : null,
+                        return Padding(
+                          padding: const EdgeInsetsDirectional.only(end: 72),
+                          child: MobileGridPagingBar(
+                            totalCount: page.totalCount,
+                            skip: page.skip,
+                            itemCount: page.items.length,
+                            previousTooltip: 'Previous properties page',
+                            nextTooltip: 'Next properties page',
+                            onPrevious: page.hasPrevious
+                                ? () => setState(() {
+                                    _skip = (_skip - _pageSize).clamp(0, _skip);
+                                  })
+                                : null,
+                            onNext: page.hasNext
+                                ? () => setState(() => _skip += _pageSize)
+                                : null,
+                          ),
                         );
                       }
                       final property = page.items[index];

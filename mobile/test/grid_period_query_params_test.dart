@@ -77,6 +77,26 @@ void main() {
     expect(detail.paymentMethodSummary, 'Check');
   });
 
+  test('tenant charges page uses canonical server-paged endpoint', () async {
+    final adapter = _RecordingPageAdapter(_chargePageJson());
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = PaymentsRepository(dio);
+
+    final page = await repo.listTenantChargesPage(
+      42,
+      const TenantChargeListQuery(skip: 20, take: 10, sort: 'dueOn'),
+    );
+
+    expect(adapter.path, '/tenant-accounts/42/charges/page');
+    expect(adapter.queryParameters, containsPair('skip', 20));
+    expect(adapter.queryParameters, containsPair('take', 10));
+    expect(adapter.queryParameters, containsPair('sort', 'dueOn'));
+    expect(page.tenantAccountId, 42);
+    expect(page.items.single.tenantLedgerEntryId, 9001);
+    expect(page.items.single.openAmount, 875);
+  });
+
   test(
     'record receipt uses the tenant-account command and idempotency key',
     () async {
@@ -102,6 +122,7 @@ void main() {
           effectiveOn: DateTime(2026, 7, 8),
           description: 'July rent',
           paymentMethodSummary: 'Check',
+          targetChargeEntryId: 9001,
         ),
         operationKey: 'receipt-key-42',
       );
@@ -109,6 +130,8 @@ void main() {
       expect(adapter.method, 'POST');
       expect(adapter.path, '/tenant-accounts/42/receipts');
       expect(adapter.data, containsPair('effectiveOn', '2026-07-08'));
+      expect(adapter.data, containsPair('targetChargeEntryId', 9001));
+      expect(adapter.data, isNot(contains('allocateOldestCharges')));
       expect(
         adapter.headers,
         containsPair('Idempotency-Key', 'receipt-key-42'),
@@ -246,6 +269,34 @@ Map<String, dynamic> _paymentPageJson() => {
   'totalCount': 1,
   'skip': 0,
   'take': 20,
+};
+
+Map<String, dynamic> _chargePageJson() => {
+  'tenantAccountId': 42,
+  'leaseManagementId': 7,
+  'items': [
+    {
+      'tenantAccountId': 42,
+      'leaseManagementId': 7,
+      'tenantLedgerEntryId': 9001,
+      'publicId': '7b5b31ec-a3ea-4d87-b515-01b76f42a34c',
+      'entryType': 'RentCharge',
+      'direction': 'Debit',
+      'currency': 'USD',
+      'effectiveOn': '2026-07-01',
+      'dueOn': '2026-07-01',
+      'postedAtUtc': '2026-07-01T00:00:00Z',
+      'description': 'July rent',
+      'originalAmount': 1200,
+      'reversedAmount': 0,
+      'netAllocations': 325,
+      'openAmount': 875,
+      'isPastDue': true,
+    },
+  ],
+  'totalCount': 1,
+  'skip': 0,
+  'take': 10,
 };
 
 Map<String, dynamic> _expensePageJson() => {

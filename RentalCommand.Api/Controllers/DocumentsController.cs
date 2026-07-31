@@ -147,6 +147,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
+        if (!isStaff && !await TenantMayAccessEntityAsync(target.ToString(), entityId, portfolioId, ct))
+            return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
         string contentSha256;
         await using (var hashStream = file.OpenReadStream())
@@ -371,14 +373,13 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         WorkspaceReadScope? staffScope = null;
         if (isStaff)
         {
-            var row = await _documents.FindAsync(portfolioId, id, ct);
-            if (row is null || !TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
-                !TryReadWorkspaceScope(out var scope) ||
-                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: true, ct))
+            if (!TryReadWorkspaceScope(out var scope))
                 return NotFound(new { error = "Document not found." });
             staffScope = scope;
         }
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
+        if (!isStaff)
+            return NotFound(new { error = "Document not found." });
         var deleted = await _documents.DeleteAsync(
             portfolioId,
             id,

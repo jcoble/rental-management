@@ -10,7 +10,7 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RentChargeService : IRentChargeService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledTenantChargeBatchResult> ResultCodec =
+    private static readonly AtomicJsonResultCodec<ApplyScheduledRentChargeBatchResult> ResultCodec =
         new("scheduled-tenant-charges.rent.apply.v1");
     private const int BatchSize = 200;
 
@@ -37,13 +37,10 @@ public sealed class RentChargeService : IRentChargeService
                 new AtomicCommandIdentity(
                     "scheduled-tenant-charges.rent.apply",
                     runToken.ToString("N")),
-                new ApplyScheduledTenantChargeBatchCommand(
+                new ApplyScheduledRentChargeBatchCommand(
                     runToken,
                     _timeProvider.GetUtcNow().UtcDateTime,
-                    BatchSize,
-                    IncludeRentCharges: true,
-                    IncludeLateFeeCharges: false,
-                    StateLateFeeCapsJson: "[]"),
+                    BatchSize),
                 ResultCodec,
                 ct);
 
@@ -61,7 +58,7 @@ public sealed class RentChargeService : IRentChargeService
             _logger.LogError(ex,
                 "Canonical scheduled-rent atomic batch {RunToken} failed; deterministic business keys make retry safe",
                 runToken);
-            return 0;
+            throw;
         }
     }
 }

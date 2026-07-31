@@ -14,25 +14,28 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class AddEffectivePartyHandler
-    : IAtomicCommandHandler<AddEffectivePartyCommand, LeasePartyMutationResult>,
-      IAtomicReplayAuthorizer<AddEffectivePartyCommand>
+    : IAtomicCommandHandler<AddEffectivePartyCommand, LeasePartyMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AddEffectivePartyHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         AddEffectivePartyCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
 
-        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
+        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, _db, nowUtc)
             .Select(relationship => new AddPartyTarget(
                 relationship,
-                attempt.Persistence.Query<Tenant>().Any(tenant =>
+                _db.Set<Tenant>().Any(tenant =>
                     tenant.Id == command.TenantId && tenant.PortfolioId == command.PortfolioId),
                 relationship.Parties.Any(party =>
                     party.TenantId == command.TenantId
@@ -112,13 +115,13 @@ public sealed class AddEffectivePartyHandler
             command.ChangeReason,
             nowUtc,
             command.ActorUserId);
-        attempt.Persistence.Add(party);
+        _db.Add(party);
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
-        LeasePartyAccessCommandSupport.BindCreated(attempt, party, command, "Added effective relationship party.");
+        LeasePartyAccessCommandSupport.BindCreated(context, party, command, "Added effective relationship party.");
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
-            attempt, target.Relationship, command, "Relationship party added.");
-        await attempt.FlushBusinessAsync(ct);
-        LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, party.Id, "party-added");
+            context, target.Relationship, command, "Relationship party added.");
+        await context.FlushBusinessAsync(ct);
+        LeasePartyAccessCommandSupport.StageOutbox(context, command, nowUtc, party.Id, "party-added");
 
         return new LeasePartyMutationResult(
             LeasePartyMutationOutcome.Applied,
@@ -131,10 +134,8 @@ public sealed class AddEffectivePartyHandler
     }
 
     public Task AuthorizeReplayAsync(
-        AddEffectivePartyCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        AddEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private sealed record AddPartyTarget(
         LeaseManagement Relationship,
@@ -145,23 +146,26 @@ public sealed class AddEffectivePartyHandler
 }
 
 public sealed class EndEffectivePartyHandler
-    : IAtomicCommandHandler<EndEffectivePartyCommand, LeasePartyMutationResult>,
-      IAtomicReplayAuthorizer<EndEffectivePartyCommand>
+    : IAtomicCommandHandler<EndEffectivePartyCommand, LeasePartyMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public EndEffectivePartyHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         EndEffectivePartyCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
         var successorStart = command.EffectiveThrough.AddDays(1);
 
-        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
+        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, _db, nowUtc)
             .Select(relationship => new EndPartyTarget(
                 relationship,
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId),
@@ -277,7 +281,7 @@ public sealed class EndEffectivePartyHandler
 
         target.Party.EffectiveThrough = command.EffectiveThrough;
         target.Party.ChangeReason = command.ChangeReason.Trim();
-        LeasePartyAccessCommandSupport.BindUpdated(attempt, target.Party, command, "Ended relationship party membership.");
+        LeasePartyAccessCommandSupport.BindUpdated(context, target.Party, command, "Ended relationship party membership.");
 
         if (target.Successor is not null)
         {
@@ -293,16 +297,16 @@ public sealed class EndEffectivePartyHandler
                 command.ChangeReason,
                 nowUtc,
                 command.ActorUserId);
-            attempt.Persistence.Add(successorReplacement);
+            _db.Add(successorReplacement);
             LeasePartyAccessCommandSupport.BindUpdated(
-                attempt, target.Successor, command, "Ended prior role for primary succession.");
+                context, target.Successor, command, "Ended prior role for primary succession.");
             LeasePartyAccessCommandSupport.BindCreated(
-                attempt, successorReplacement, command, "Promoted successor to primary tenant.");
+                context, successorReplacement, command, "Promoted successor to primary tenant.");
         }
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
-            attempt, target.Relationship, command, "Relationship party ended.");
-        await attempt.FlushBusinessAsync(ct);
+            context, target.Relationship, command, "Relationship party ended.");
+        await context.FlushBusinessAsync(ct);
         var accessTransitions = new List<AtomicTenantAccessTransition>
         {
             new(target.Party.Id, null,
@@ -315,11 +319,11 @@ public sealed class EndEffectivePartyHandler
             accessTransitions.Add(new(target.Successor.Id, successorReplacement.Id,
                 AtomicTenantAccessTransitionKind.ContinueOnReplacement));
         }
-        var accessResult = await attempt.Leasing.TransitionTenantAccessAsync(
-            command.PortfolioId, command.LeaseManagementId, accessTransitions,
+        var accessResult = await AtomicLeaseMutationPersistence.TransitionTenantAccessAsync(_db,
+            context, command.PortfolioId, command.LeaseManagementId, accessTransitions,
             command.ActorUserId, nowUtc, command.ChangeReason, ct);
-        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(attempt, command, accessResult, nowUtc);
-        LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, target.Party.Id, "party-ended");
+        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(context, command, accessResult, nowUtc);
+        LeasePartyAccessCommandSupport.StageOutbox(context, command, nowUtc, target.Party.Id, "party-ended");
 
         return new LeasePartyMutationResult(
             LeasePartyMutationOutcome.Applied,
@@ -332,10 +336,8 @@ public sealed class EndEffectivePartyHandler
     }
 
     public Task AuthorizeReplayAsync(
-        EndEffectivePartyCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        EndEffectivePartyCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private sealed record EndPartyTarget(
         LeaseManagement Relationship,
@@ -346,22 +348,25 @@ public sealed class EndEffectivePartyHandler
 }
 
 public sealed class ChangeEffectivePartyRoleHandler
-    : IAtomicCommandHandler<ChangeEffectivePartyRoleCommand, LeasePartyMutationResult>,
-      IAtomicReplayAuthorizer<ChangeEffectivePartyRoleCommand>
+    : IAtomicCommandHandler<ChangeEffectivePartyRoleCommand, LeasePartyMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ChangeEffectivePartyRoleHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         ChangeEffectivePartyRoleCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
 
-        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
+        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, _db, nowUtc)
             .Select(relationship => new ChangeRoleTarget(
                 relationship,
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId),
@@ -497,9 +502,9 @@ public sealed class ChangeEffectivePartyRoleHandler
             command.ChangeReason,
             nowUtc,
             command.ActorUserId);
-        attempt.Persistence.Add(replacement);
-        LeasePartyAccessCommandSupport.BindUpdated(attempt, target.Party, command, "Ended prior relationship role.");
-        LeasePartyAccessCommandSupport.BindCreated(attempt, replacement, command, "Started replacement relationship role.");
+        _db.Add(replacement);
+        LeasePartyAccessCommandSupport.BindUpdated(context, target.Party, command, "Ended prior relationship role.");
+        LeasePartyAccessCommandSupport.BindCreated(context, replacement, command, "Started replacement relationship role.");
 
         LeaseManagementParty? companionReplacement = null;
         if (target.Companion is not null)
@@ -516,15 +521,15 @@ public sealed class ChangeEffectivePartyRoleHandler
                 command.ChangeReason,
                 nowUtc,
                 command.ActorUserId);
-            attempt.Persistence.Add(companionReplacement);
-            LeasePartyAccessCommandSupport.BindUpdated(attempt, target.Companion, command, "Ended companion role for primary swap.");
-            LeasePartyAccessCommandSupport.BindCreated(attempt, companionReplacement, command, "Started companion role for primary swap.");
+            _db.Add(companionReplacement);
+            LeasePartyAccessCommandSupport.BindUpdated(context, target.Companion, command, "Ended companion role for primary swap.");
+            LeasePartyAccessCommandSupport.BindCreated(context, companionReplacement, command, "Started companion role for primary swap.");
         }
 
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
-            attempt, target.Relationship, command, "Relationship party role changed.");
-        await attempt.FlushBusinessAsync(ct);
+            context, target.Relationship, command, "Relationship party role changed.");
+        await context.FlushBusinessAsync(ct);
         var accessTransitions = new List<AtomicTenantAccessTransition>
         {
             new(target.Party.Id,
@@ -545,11 +550,11 @@ public sealed class ChangeEffectivePartyRoleHandler
             accessTransitions.Add(new(target.Companion.Id, companionReplacement.Id,
                 AtomicTenantAccessTransitionKind.ContinueOnReplacement));
         }
-        var accessResult = await attempt.Leasing.TransitionTenantAccessAsync(
-            command.PortfolioId, command.LeaseManagementId, accessTransitions,
+        var accessResult = await AtomicLeaseMutationPersistence.TransitionTenantAccessAsync(_db,
+            context, command.PortfolioId, command.LeaseManagementId, accessTransitions,
             command.ActorUserId, nowUtc, command.ChangeReason, ct);
-        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(attempt, command, accessResult, nowUtc);
-        LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, replacement.Id, "party-role-changed");
+        LeasePartyAccessCommandSupport.StageAccessTransitionAudits(context, command, accessResult, nowUtc);
+        LeasePartyAccessCommandSupport.StageOutbox(context, command, nowUtc, replacement.Id, "party-role-changed");
 
         return new LeasePartyMutationResult(
             LeasePartyMutationOutcome.Applied,
@@ -562,10 +567,8 @@ public sealed class ChangeEffectivePartyRoleHandler
     }
 
     public Task AuthorizeReplayAsync(
-        ChangeEffectivePartyRoleCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        ChangeEffectivePartyRoleCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private sealed record ChangeRoleTarget(
         LeaseManagement Relationship,
@@ -576,23 +579,26 @@ public sealed class ChangeEffectivePartyRoleHandler
 }
 
 public sealed class GrantTenantUserAccessHandler
-    : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>,
-      IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>
+    : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public GrantTenantUserAccessHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         GrantTenantUserAccessCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var changedAtUtc = times.EffectiveNowUtc;
         var currentDate = times.BusinessDate;
-        attempt.UseDatabaseWallClockForAudit(changedAtUtc);
-        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, securityNowUtc)
+        context.UseDatabaseWallClockForAudit(changedAtUtc);
+        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, _db, securityNowUtc)
             .Select(relationship => new GrantAccessTarget(
                 relationship,
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId
@@ -628,14 +634,14 @@ public sealed class GrantTenantUserAccessHandler
         // A relationship lock cannot serialize grants for the same person across two different
         // relationships. Use the Identity-normalized email as the global aggregate key before
         // reading or creating the ApplicationUser so the unique Identity row, workspace context,
-        // relationship grant, audit, and invitation converge in one atomic attempt.
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.TenantIdentityEmail,
+        // relationship grant, audit, and invitation converge in one atomic context.
+        await context.AcquireLockAsync(
+            "TenantIdentityEmail",
             TenantIdentityEmailLockKey(normalizedEmail),
             ct);
-        var tenantSecurityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var tenantSecurityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
 
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
         var createdIdentity = false;
         if (user is null)
@@ -652,32 +658,34 @@ public sealed class GrantTenantUserAccessHandler
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),
                 CreatedAt = changedAtUtc,
             };
-            attempt.Persistence.Add(user);
-            await attempt.FlushBusinessAsync(ct);
+            _db.Add(user);
+            await context.FlushBusinessAsync(ct);
             createdIdentity = true;
         }
 
-        var targetContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
-            .Where(context => context.UserId == user.Id && context.PortfolioId == command.PortfolioId)
-            .Select(context => (int?)context.Id)
+        var targetContextId = await _db.Set<WorkspaceAccessContext>()
+            .Where(accessContext => accessContext.UserId == user.Id
+                && accessContext.PortfolioId == command.PortfolioId)
+            .Select(accessContext => (int?)accessContext.Id)
             .SingleOrDefaultAsync(ct);
-        WorkspaceAccessContext context;
+        WorkspaceAccessContext tenantAccessContext;
         if (targetContextId is > 0)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.WorkspaceAccessContext, targetContextId.Value, ct);
-            context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            await context.AcquireLockAsync(
+                "WorkspaceAccessContext", targetContextId.Value, ct);
+            tenantAccessContext = await _db.Set<WorkspaceAccessContext>()
                 .Include(candidate => candidate.Membership)
                 .SingleAsync(candidate => candidate.Id == targetContextId.Value, ct);
-            if (context.Status != WorkspaceAccessContextStatus.Active
-                || context.SuspendedAtUtc is not null || context.RevokedAtUtc is not null)
+            if (tenantAccessContext.Status != WorkspaceAccessContextStatus.Active
+                || tenantAccessContext.SuspendedAtUtc is not null
+                || tenantAccessContext.RevokedAtUtc is not null)
             {
                 return LeasePartyAccessCommandSupport.Error(
                     LeasePartyMutationOutcome.InvalidParty, command,
                     "The household member's existing workspace access is not active.", command.PartyId);
             }
-            if (context.Membership is not null &&
-                context.Membership.DefaultExperience != WorkspaceExperience.Tenant)
+            if (tenantAccessContext.Membership is not null &&
+                tenantAccessContext.Membership.DefaultExperience != WorkspaceExperience.Tenant)
             {
                 return LeasePartyAccessCommandSupport.Error(
                     LeasePartyMutationOutcome.InvalidParty, command,
@@ -686,7 +694,7 @@ public sealed class GrantTenantUserAccessHandler
         }
         else
         {
-            context = new WorkspaceAccessContext
+            tenantAccessContext = new WorkspaceAccessContext
             {
                 User = user,
                 UserId = user.Id,
@@ -696,12 +704,12 @@ public sealed class GrantTenantUserAccessHandler
                 CreatedAtUtc = changedAtUtc,
                 UpdatedAtUtc = changedAtUtc,
             };
-            attempt.Persistence.Add(context);
+            _db.Add(tenantAccessContext);
         }
 
-        WorkspaceMembership tenantMembership = context.Membership ?? new WorkspaceMembership
+        WorkspaceMembership tenantMembership = tenantAccessContext.Membership ?? new WorkspaceMembership
         {
-            AccessContext = context,
+            AccessContext = tenantAccessContext,
             PortfolioId = command.PortfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = WorkspaceExperience.Tenant,
@@ -709,10 +717,10 @@ public sealed class GrantTenantUserAccessHandler
             CreatedAtUtc = changedAtUtc,
             UpdatedAtUtc = changedAtUtc,
         };
-        if (context.Membership is null)
+        if (tenantAccessContext.Membership is null)
         {
-            attempt.Persistence.Add(tenantMembership);
-            await attempt.FlushBusinessAsync(ct);
+            _db.Add(tenantMembership);
+            await context.FlushBusinessAsync(ct);
         }
         else if (tenantMembership.Status != WorkspaceMembershipStatus.Active ||
                  tenantMembership.SuspendedAtUtc is not null ||
@@ -724,7 +732,8 @@ public sealed class GrantTenantUserAccessHandler
         }
 
         var tenantAssignmentCreated = await EnsureTenantPortalRoleAssignmentAsync(
-            attempt,
+            _db,
+            context,
             tenantMembership,
             command.PortfolioId,
             tenantSecurityNowUtc,
@@ -732,10 +741,10 @@ public sealed class GrantTenantUserAccessHandler
             ct);
         if (tenantAssignmentCreated)
         {
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
         }
 
-        var hasActiveGrant = await attempt.Persistence.Query<TenantUserAccess>()
+        var hasActiveGrant = await _db.Set<TenantUserAccess>()
             .AnyAsync(access => access.PortfolioId == command.PortfolioId
                 && access.ApplicationUserId == user.Id
                 && access.LeaseManagementPartyId == command.PartyId
@@ -744,32 +753,32 @@ public sealed class GrantTenantUserAccessHandler
         {
             if (tenantAssignmentCreated)
             {
-                context.AdvanceRevision(context.AccessRevision);
-                context.UpdatedAtUtc = changedAtUtc;
-                await attempt.FlushBusinessAsync(ct);
+                tenantAccessContext.AdvanceRevision(tenantAccessContext.AccessRevision);
+                tenantAccessContext.UpdatedAtUtc = changedAtUtc;
+                await context.FlushBusinessAsync(ct);
             }
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.AlreadyActive, command, "This user already has active access through the party.", command.PartyId);
         }
 
         var pendingInvitation = await FindPendingInvitationAsync(
-            attempt, command.PortfolioId, tenantMembership, user.Id, changedAtUtc, ct);
+            _db, context, command.PortfolioId, tenantMembership, user.Id, changedAtUtc, ct);
         var access = LeasePartyAccessCommandSupport.NewAccess(
-            command.PortfolioId, context, target.Party,
+            command.PortfolioId, tenantAccessContext, target.Party,
             changedAtUtc,
             command.ActorUserId,
             command.Reason);
-        attempt.Persistence.Add(access);
+        _db.Add(access);
         if (targetContextId is > 0)
         {
-            context.AdvanceRevision(context.AccessRevision);
+            tenantAccessContext.AdvanceRevision(tenantAccessContext.AccessRevision);
         }
-        context.UpdatedAtUtc = changedAtUtc;
+        tenantAccessContext.UpdatedAtUtc = changedAtUtc;
         LeasePartyAccessCommandSupport.Touch(target.Relationship, changedAtUtc);
-        LeasePartyAccessCommandSupport.BindCreated(attempt, access, command, "Granted tenant portal access.");
+        LeasePartyAccessCommandSupport.BindCreated(context, access, command, "Granted tenant portal access.");
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
-            attempt, target.Relationship, command, "Tenant portal access granted.");
-        await attempt.FlushBusinessAsync(ct);
+            context, target.Relationship, command, "Tenant portal access granted.");
+        await context.FlushBusinessAsync(ct);
         if (string.IsNullOrEmpty(user.PasswordHash) && pendingInvitation is null)
         {
             var rawToken = CreateInvitationToken();
@@ -783,11 +792,11 @@ public sealed class GrantTenantUserAccessHandler
                 CreatedAtUtc = changedAtUtc,
                 ExpiresAtUtc = changedAtUtc.AddDays(7),
             };
-            attempt.Persistence.Add(invitation);
-            attempt.StageOutbox(BuildPortalInvitation(
+            _db.Add(invitation);
+            context.StageOutbox(BuildPortalInvitation(
                 command, tenantMembership, user, access.Id, rawToken, changedAtUtc));
-            await attempt.FlushBusinessAsync(ct);
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            await context.FlushBusinessAsync(ct);
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(WorkspaceInvitation),
                 checked((int)invitation.Id),
@@ -806,7 +815,7 @@ public sealed class GrantTenantUserAccessHandler
         }
         if (createdIdentity)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(ApplicationUser),
                 user.Id,
@@ -816,12 +825,12 @@ public sealed class GrantTenantUserAccessHandler
                 {
                     command.LeaseManagementId,
                     command.PartyId,
-                    AccessContextId = context.Id,
+                    AccessContextId = tenantAccessContext.Id,
                     RequiresAccountActivation = true,
                 }),
                 ChangeReason: "Tenant portal account invited"), changedAtUtc);
         }
-        LeasePartyAccessCommandSupport.StageOutbox(attempt, command, changedAtUtc, access.Id, "tenant-access-granted");
+        LeasePartyAccessCommandSupport.StageOutbox(context, command, changedAtUtc, access.Id, "tenant-access-granted");
 
         return new LeasePartyMutationResult(
             LeasePartyMutationOutcome.Applied,
@@ -834,29 +843,28 @@ public sealed class GrantTenantUserAccessHandler
     }
 
     public Task AuthorizeReplayAsync(
-        GrantTenantUserAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        GrantTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private static Guid TenantIdentityEmailLockKey(string normalizedEmail) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedEmail)).AsSpan(0, 16));
 
     private static async Task<bool> EnsureTenantPortalRoleAssignmentAsync(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         WorkspaceMembership membership,
         int portfolioId,
         DateTime effectiveFromUtc,
         DateTime changedAtUtc,
         CancellationToken ct)
     {
-        var roleProfileId = await attempt.Persistence.Query<RoleProfile>()
+        var roleProfileId = await db.Set<RoleProfile>()
             .AsNoTracking()
             .Where(role => role.Key == RoleProfileKeys.TenantPortal)
             .Select(role => (int?)role.Id)
             .SingleOrDefaultAsync(ct)
             ?? throw new DomainValidationException("The canonical Tenant Portal role profile is unavailable.");
-        if (membership.Id > 0 && await attempt.Persistence.Query<MembershipRoleAssignment>().AnyAsync(assignment =>
+        if (membership.Id > 0 && await db.Set<MembershipRoleAssignment>().AnyAsync(assignment =>
                 assignment.WorkspaceMembershipId == membership.Id &&
                 assignment.PortfolioId == portfolioId &&
                 assignment.RoleProfileId == roleProfileId &&
@@ -870,7 +878,7 @@ public sealed class GrantTenantUserAccessHandler
             return false;
         }
 
-        attempt.Persistence.Add(new MembershipRoleAssignment
+        db.Add(new MembershipRoleAssignment
         {
             WorkspaceMembership = membership,
             PortfolioId = portfolioId,
@@ -885,7 +893,8 @@ public sealed class GrantTenantUserAccessHandler
     }
 
     private static Task<PendingInvitation?> FindPendingInvitationAsync(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         WorkspaceMembership membership,
         int userId,
@@ -897,7 +906,7 @@ public sealed class GrantTenantUserAccessHandler
             return Task.FromResult<PendingInvitation?>(null);
         }
 
-        return attempt.Persistence.Query<WorkspaceInvitation>()
+        return db.Set<WorkspaceInvitation>()
             .AsNoTracking()
             .Where(invitation =>
                 invitation.PortfolioId == portfolioId &&
@@ -965,22 +974,25 @@ public sealed class GrantTenantUserAccessHandler
 }
 
 public sealed class RevokeTenantUserAccessHandler
-    : IAtomicCommandHandler<RevokeTenantUserAccessCommand, LeasePartyMutationResult>,
-      IAtomicReplayAuthorizer<RevokeTenantUserAccessCommand>
+    : IAtomicCommandHandler<RevokeTenantUserAccessCommand, LeasePartyMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RevokeTenantUserAccessHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         RevokeTenantUserAccessCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         LeasePartyAccessCommandSupport.ValidateAuthorizationShape(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var securityNowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var changedAtUtc = times.EffectiveNowUtc;
-        attempt.UseDatabaseWallClockForAudit(changedAtUtc);
-        var targetContextId = await attempt.Persistence.Query<TenantUserAccess>()
+        context.UseDatabaseWallClockForAudit(changedAtUtc);
+        var targetContextId = await _db.Set<TenantUserAccess>()
             .Where(access => access.Id == command.TenantUserAccessId
                 && access.PortfolioId == command.PortfolioId)
             .Select(access => access.AccessContextId)
@@ -991,18 +1003,18 @@ public sealed class RevokeTenantUserAccessHandler
                 LeasePartyMutationOutcome.InvalidParty, command,
                 "The tenant access grant does not exist in this workspace.", command.PartyId);
         }
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, targetContextId, ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", targetContextId, ct);
 
-        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, securityNowUtc)
+        var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, _db, securityNowUtc)
             .Select(relationship => new RevokeAccessTarget(
                 relationship,
-                attempt.Persistence.Query<TenantUserAccess>().FirstOrDefault(access =>
+                _db.Set<TenantUserAccess>().FirstOrDefault(access =>
                     access.Id == command.TenantUserAccessId
                     && access.PortfolioId == command.PortfolioId
                     && access.LeaseManagementPartyId == command.PartyId
                     && access.LeaseManagementParty!.LeaseManagementId == relationship.Id),
-                attempt.Persistence.Query<WorkspaceAccessContext>().FirstOrDefault(context =>
+                _db.Set<WorkspaceAccessContext>().FirstOrDefault(context =>
                     context.Id == targetContextId
                     && context.PortfolioId == command.PortfolioId)))
             .SingleOrDefaultAsync(ct)
@@ -1024,7 +1036,7 @@ public sealed class RevokeTenantUserAccessHandler
         target.Access.RevokedAtUtc = changedAtUtc;
         target.Access.RevokedByUserId = command.ActorUserId;
         target.Access.Reason = command.Reason.Trim();
-        var pendingInvitations = await attempt.Persistence.Query<WorkspaceInvitation>()
+        var pendingInvitations = await _db.Set<WorkspaceInvitation>()
             .Where(invitation =>
                 invitation.PortfolioId == command.PortfolioId &&
                 invitation.InvitedUserId == target.Access.ApplicationUserId &&
@@ -1035,7 +1047,7 @@ public sealed class RevokeTenantUserAccessHandler
         foreach (var invitation in pendingInvitations)
         {
             invitation.RevokedAtUtc = changedAtUtc;
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(WorkspaceInvitation),
                 checked((int)invitation.Id),
@@ -1055,13 +1067,13 @@ public sealed class RevokeTenantUserAccessHandler
         target.TargetContext.AdvanceRevision(target.TargetContext.AccessRevision);
         target.TargetContext.UpdatedAtUtc = changedAtUtc;
         LeasePartyAccessCommandSupport.BindUpdated(
-            attempt, target.Access, command, "Revoked tenant portal access.");
+            context, target.Access, command, "Revoked tenant portal access.");
         LeasePartyAccessCommandSupport.Touch(target.Relationship, changedAtUtc);
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
-            attempt, target.Relationship, command, "Tenant portal access revoked.");
+            context, target.Relationship, command, "Tenant portal access revoked.");
         LeasePartyAccessCommandSupport.StageOutbox(
-            attempt, command, changedAtUtc, target.Access.Id, "tenant-access-revoked");
-        await attempt.FlushBusinessAsync(ct);
+            context, command, changedAtUtc, target.Access.Id, "tenant-access-revoked");
+        await context.FlushBusinessAsync(ct);
 
         return new LeasePartyMutationResult(
             LeasePartyMutationOutcome.Applied,
@@ -1074,10 +1086,8 @@ public sealed class RevokeTenantUserAccessHandler
     }
 
     public Task AuthorizeReplayAsync(
-        RevokeTenantUserAccessCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
-        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        RevokeTenantUserAccessCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 
     private sealed record RevokeAccessTarget(
         LeaseManagement Relationship,
@@ -1089,10 +1099,10 @@ internal static class LeasePartyAccessCommandSupport
 {
     internal static IQueryable<LeaseManagement> AuthorizedRelationships(
         ILeasePartyAccessCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime securityNowUtc)
     {
-        var effectiveAssignments = persistence.Query<MembershipRoleAssignment>()
+        var effectiveAssignments = db.Set<MembershipRoleAssignment>()
             .Where(assignment =>
                 assignment.Status == MembershipRoleAssignmentStatus.Active
                 && assignment.SuspendedAtUtc == null
@@ -1100,7 +1110,7 @@ internal static class LeasePartyAccessCommandSupport
                 && assignment.EffectiveFromUtc <= securityNowUtc
                 && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
 
-        return persistence.Query<LeaseManagement>()
+        return db.Set<LeaseManagement>()
             .Where(relationship =>
                 relationship.Id == command.LeaseManagementId
                 && relationship.PortfolioId == command.PortfolioId
@@ -1109,14 +1119,14 @@ internal static class LeasePartyAccessCommandSupport
                 && relationship.Unit != null
                 && relationship.Unit.PortfolioId == command.PortfolioId
                 && relationship.Unit.PropertyId == relationship.PropertyId
-                && persistence.Query<AuthSession>().Any(session =>
+                && db.Set<AuthSession>().Any(session =>
                     session.Id == command.AuthSessionId
                     && session.UserId == command.ActorUserId
                     && session.ActiveAccessContextId == command.AccessContextId
                     && session.Status == AuthSessionStatus.Active
                     && session.RevokedAtUtc == null
                     && session.ExpiresAtUtc > securityNowUtc)
-                && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                && db.Set<WorkspaceAccessContext>().Any(context =>
                     context.Id == command.AccessContextId
                     && context.UserId == command.ActorUserId
                     && context.PortfolioId == command.PortfolioId
@@ -1124,7 +1134,7 @@ internal static class LeasePartyAccessCommandSupport
                     && context.Status == WorkspaceAccessContextStatus.Active
                     && context.SuspendedAtUtc == null
                     && context.RevokedAtUtc == null)
-                && persistence.Query<WorkspaceMembership>().Any(membership =>
+                && db.Set<WorkspaceMembership>().Any(membership =>
                     membership.AccessContextId == command.AccessContextId
                     && membership.PortfolioId == command.PortfolioId
                     && membership.Status == WorkspaceMembershipStatus.Active
@@ -1152,13 +1162,13 @@ internal static class LeasePartyAccessCommandSupport
 
     internal static async Task AuthorizeReplayAsync<TCommand>(
         TCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
         where TCommand : ILeasePartyAccessCommand
     {
         ValidateAuthorizationShape(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedRelationships(command, persistence, nowUtc).AnyAsync(ct))
+        var nowUtc = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedRelationships(command, db, nowUtc).AnyAsync(ct))
         {
             throw Unauthorized();
         }
@@ -1234,11 +1244,11 @@ internal static class LeasePartyAccessCommandSupport
     }
 
     internal static void BindCreated(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         object entity,
         ILeasePartyAccessCommand command,
         string reason) =>
-        attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
+        context.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId,
             entity.GetType().Name,
             0,
@@ -1247,11 +1257,11 @@ internal static class LeasePartyAccessCommandSupport
             ChangeReason: reason));
 
     internal static void BindUpdated(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         object entity,
         ILeasePartyAccessCommand command,
         string reason) =>
-        attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
+        context.BindSemanticAudit(entity, new AtomicSemanticAudit(
             command.PortfolioId,
             entity.GetType().Name,
             EntityId(entity),
@@ -1260,20 +1270,20 @@ internal static class LeasePartyAccessCommandSupport
             ChangeReason: reason));
 
     internal static void BindRelationshipUpdate(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         LeaseManagement relationship,
         ILeasePartyAccessCommand command,
-        string reason) => BindUpdated(attempt, relationship, command, reason);
+        string reason) => BindUpdated(context, relationship, command, reason);
 
     internal static void StageAccessTransitionAudits(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         ILeasePartyAccessCommand command,
         AtomicTenantAccessTransitionResult result,
         DateTime occurredAtUtc)
     {
         foreach (var id in result.RevokedAccessIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(TenantUserAccess),
                 id,
@@ -1283,7 +1293,7 @@ internal static class LeasePartyAccessCommandSupport
         }
         foreach (var id in result.CreatedAccessIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(TenantUserAccess),
                 id,
@@ -1294,12 +1304,12 @@ internal static class LeasePartyAccessCommandSupport
     }
 
     internal static void StageOutbox(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         ILeasePartyAccessCommand command,
         DateTime nowUtc,
         int entityId,
         string mutation) =>
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",

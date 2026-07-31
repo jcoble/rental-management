@@ -96,6 +96,23 @@
 
 	// --- Request detail / status timeline ---
 	let openId = $state<number | null>(null);
+	let detailComment = $state('');
+	let cancelNote = $state('');
+	let editingDetail = $state(false);
+	let detailForm = $state({
+		title: '',
+		description: '',
+		requesterName: '',
+		requesterPhone: '',
+		requesterEmail: '',
+		entryNotes: '',
+		petWarnings: '',
+		accessWarnings: '',
+		residentMustBePresent: false,
+		callBeforeEntry: false,
+		callIfNotHome: false,
+		permissionToEnter: false
+	});
 
 	const detailQuery = createQuery(() => ({
 		queryKey: ['portal-work-order', openId],
@@ -110,11 +127,111 @@
 	}
 	function closeDetail() {
 		openId = null;
+		editingDetail = false;
+		detailComment = '';
+		cancelNote = '';
 	}
 
 	function isOpen(workOrderStatus: unknown): boolean {
 		return !['Completed', 'Cancelled', 'Archived'].includes(String(workOrderStatus));
 	}
+
+	function workOrderCapabilities(workOrder: typeof detail) {
+		const source = (workOrder?.capabilities ?? {}) as Record<string, unknown>;
+		const transitions = source.allowedStatusTransitions;
+		const bool = (key: string) => typeof source[key] === 'boolean' ? Boolean(source[key]) : false;
+		return {
+			canViewTenantContact: bool('canViewTenantContact'),
+			canViewResidents: bool('canViewResidents'),
+			canViewAccessInstructions: bool('canViewAccessInstructions'),
+			canCommentPublicly: bool('canCommentPublicly'),
+			canUploadPhoto: bool('canUploadPhoto'),
+			canDeletePhoto: bool('canDeletePhoto'),
+			canCancel: bool('canCancel'),
+			canEditRequestFields: bool('canEditRequestFields'),
+			allowedStatusTransitions: Array.isArray(transitions) ? transitions.map(String) : []
+		};
+	}
+
+	function accessRows(workOrder: typeof detail): Array<[string, string]> {
+		if (!workOrder) return [];
+		const rows: Array<[string, string]> = [];
+		if (workOrder.residentMustBePresent != null) rows.push(['Presence', workOrder.residentMustBePresent ? 'Resident must be present' : 'Resident does not need to be present']);
+		if (workOrder.callBeforeEntry) rows.push(['Call before entry', 'Yes']);
+		if (workOrder.callIfNotHome) rows.push(['Call if not home', 'Yes']);
+		if (workOrder.permissionToEnter != null) rows.push(['Permission to enter', workOrder.permissionToEnter ? 'Yes' : 'No']);
+		if (workOrder.entryNotes) rows.push(['Entry notes', workOrder.entryNotes]);
+		if (workOrder.petWarnings) rows.push(['Pets', workOrder.petWarnings]);
+		if (workOrder.accessWarnings) rows.push(['Access warnings', workOrder.accessWarnings]);
+		return rows;
+	}
+
+	function refreshDetail() {
+		queryClient.invalidateQueries({ queryKey: ['portal-work-order', openId] });
+		queryClient.invalidateQueries({ queryKey: ['portal-work-orders'] });
+	}
+
+	const detailCommentMutation = createSvelteMutation(() => ({
+		mutationFn: () => portal.commentTenantWorkOrder(openId as number, { body: detailComment.trim() }),
+		onSuccess: () => {
+			detailComment = '';
+			refreshDetail();
+			showSuccess('Update sent.');
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const cancelMutation = createSvelteMutation(() => ({
+		mutationFn: () => portal.cancelTenantWorkOrder(openId as number, { note: cancelNote.trim() || undefined }),
+		onSuccess: () => {
+			cancelNote = '';
+			refreshDetail();
+			showSuccess('Request cancelled.');
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function startDetailEdit() {
+		if (!detail) return;
+		detailForm = {
+			title: detail.title ?? '',
+			description: detail.description ?? '',
+			requesterName: detail.requesterName ?? '',
+			requesterPhone: detail.requesterPhone ?? '',
+			requesterEmail: detail.requesterEmail ?? '',
+			entryNotes: detail.entryNotes ?? '',
+			petWarnings: detail.petWarnings ?? '',
+			accessWarnings: detail.accessWarnings ?? '',
+			residentMustBePresent: detail.residentMustBePresent ?? false,
+			callBeforeEntry: detail.callBeforeEntry ?? false,
+			callIfNotHome: detail.callIfNotHome ?? false,
+			permissionToEnter: detail.permissionToEnter ?? false
+		};
+		editingDetail = true;
+	}
+
+	const detailUpdateMutation = createSvelteMutation(() => ({
+		mutationFn: () => portal.updateTenantWorkOrder(openId as number, {
+			title: detailForm.title.trim(),
+			description: detailForm.description.trim(),
+			requesterName: detailForm.requesterName.trim() || null,
+			requesterPhone: detailForm.requesterPhone.trim() || null,
+			requesterEmail: detailForm.requesterEmail.trim() || null,
+			residentMustBePresent: detailForm.residentMustBePresent,
+			callBeforeEntry: detailForm.callBeforeEntry,
+			callIfNotHome: detailForm.callIfNotHome,
+			permissionToEnter: detailForm.permissionToEnter,
+			entryNotes: detailForm.entryNotes.trim() || null,
+			petWarnings: detailForm.petWarnings.trim() || null,
+			accessWarnings: detailForm.accessWarnings.trim() || null
+		}),
+		onSuccess: () => {
+			editingDetail = false;
+			refreshDetail();
+			showSuccess('Request updated.');
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
 
 </script>
 
@@ -294,6 +411,7 @@
 				{/if}
 			</div>
 		{:else}
+			{@const detailCaps = workOrderCapabilities(detail)}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-center gap-2">
 					<StatusBadge status={String(detail.status)} />
@@ -307,12 +425,134 @@
 					<p class="whitespace-pre-line text-sm text-foreground">{detail.description}</p>
 				{/if}
 
-				<DocumentsPanel title="Photos & documents" entityType="WorkOrder" entityId={detail.id} />
+				{#if (detailCaps.canViewTenantContact && (detail.requesterName || detail.requesterPhone || detail.requesterEmail)) || (detailCaps.canViewResidents && (detail.residentNames?.length ?? 0) > 0) || (detailCaps.canViewAccessInstructions && accessRows(detail).length > 0)}
+					<div class="grid gap-2 sm:grid-cols-2" data-testid="portal-work-order-job-context">
+						{#if detailCaps.canViewTenantContact && (detail.requesterName || detail.requesterPhone || detail.requesterEmail)}
+							<div class="rounded-md border border-border p-3">
+								<p class="text-xs font-medium text-muted-foreground">Requestor</p>
+								<p class="font-medium">{detail.requesterName ?? 'Resident'}</p>
+								{#if detail.requesterPhone}<p class="text-sm text-muted-foreground">{detail.requesterPhone}</p>{/if}
+								{#if detail.requesterEmail}<p class="text-sm text-muted-foreground">{detail.requesterEmail}</p>{/if}
+							</div>
+						{/if}
+						{#if detailCaps.canViewResidents && (detail.residentNames?.length ?? 0) > 0}
+							<div class="rounded-md border border-border p-3">
+								<p class="text-xs font-medium text-muted-foreground">Residents</p>
+								<p class="font-medium">{detail.residentNames?.join(', ')}</p>
+							</div>
+						{/if}
+						{#if detailCaps.canViewAccessInstructions}
+							{#each accessRows(detail) as [label, value]}
+								<div class="rounded-md border border-border p-3">
+									<p class="text-xs font-medium text-muted-foreground">{label}</p>
+									<p class="font-medium">{value}</p>
+								</div>
+							{/each}
+						{/if}
+					</div>
+				{/if}
+
+				<DocumentsPanel title="Photos & documents" entityType="WorkOrder" entityId={detail.id} canUpload={detailCaps.canUploadPhoto} canDelete={detailCaps.canDeletePhoto} />
+
+				{#if detailCaps.canEditRequestFields}
+					<div class="rounded-md border border-border p-3" data-testid="portal-work-order-edit-actions">
+						{#if editingDetail}
+							<div class="grid gap-3">
+								<Input bind:value={detailForm.title} placeholder="Title" data-testid="portal-work-order-edit-title" />
+								<textarea bind:value={detailForm.description} rows="4" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Description" data-testid="portal-work-order-edit-description"></textarea>
+								<div class="grid gap-2 sm:grid-cols-3">
+									<Input bind:value={detailForm.requesterName} placeholder="Requester name" />
+									<Input bind:value={detailForm.requesterPhone} placeholder="Phone" />
+									<Input bind:value={detailForm.requesterEmail} placeholder="Email" />
+								</div>
+								<div class="grid gap-2 sm:grid-cols-2">
+									<label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={detailForm.residentMustBePresent} /> Resident must be present</label>
+									<label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={detailForm.callBeforeEntry} /> Call before entry</label>
+									<label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={detailForm.callIfNotHome} /> Call if not home</label>
+									<label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={detailForm.permissionToEnter} /> Permission to enter</label>
+								</div>
+								<textarea bind:value={detailForm.entryNotes} rows="2" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Entry notes"></textarea>
+								<textarea bind:value={detailForm.petWarnings} rows="2" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Pets"></textarea>
+								<textarea bind:value={detailForm.accessWarnings} rows="2" class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Access warnings"></textarea>
+								<div class="flex justify-end gap-2">
+									<Button type="button" variant="outline" onclick={() => (editingDetail = false)}>Cancel</Button>
+									<Button type="button" onclick={() => detailUpdateMutation.mutate()} disabled={!detailForm.title.trim() || !detailForm.description.trim() || detailUpdateMutation.isPending} data-testid="portal-work-order-edit-save">
+										{detailUpdateMutation.isPending ? 'Saving...' : 'Save changes'}
+									</Button>
+								</div>
+							</div>
+						{:else}
+							<Button type="button" variant="outline" onclick={startDetailEdit} data-testid="portal-work-order-edit-start">Update request</Button>
+						{/if}
+					</div>
+				{/if}
+
+				{#if detailCaps.canCommentPublicly}
+					<div class="rounded-md border border-border p-3" data-testid="portal-work-order-comment-actions">
+						<label for="portal-work-order-comment" class="text-sm font-medium">Add update</label>
+						<textarea
+							id="portal-work-order-comment"
+							bind:value={detailComment}
+							rows="3"
+							class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+							placeholder="Share details for the maintenance team"
+							data-testid="portal-work-order-comment-body"
+						></textarea>
+						<div class="mt-3 flex justify-end">
+							<Button type="button" size="sm" onclick={() => detailCommentMutation.mutate()} disabled={!detailComment.trim() || detailCommentMutation.isPending} data-testid="portal-work-order-comment-submit">
+								{detailCommentMutation.isPending ? 'Sending...' : 'Send update'}
+							</Button>
+						</div>
+					</div>
+				{/if}
+
+				{#if detailCaps.canCancel}
+					<div class="rounded-md border border-border p-3" data-testid="portal-work-order-cancel-actions">
+						<label for="portal-work-order-cancel-note" class="text-sm font-medium">Cancel request</label>
+						<textarea
+							id="portal-work-order-cancel-note"
+							bind:value={cancelNote}
+							rows="2"
+							class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+							placeholder="Optional note"
+						></textarea>
+						<div class="mt-3 flex justify-end">
+							<Button type="button" variant="destructive" size="sm" onclick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending} data-testid="portal-work-order-cancel-submit">
+								{cancelMutation.isPending ? 'Cancelling...' : 'Cancel request'}
+							</Button>
+						</div>
+					</div>
+				{/if}
+
+				{#if (detail.photos?.length ?? 0) > 0}
+					<div data-testid="portal-work-order-photo-summary">
+						<h3 class="mb-2 text-sm font-semibold">Photo notes</h3>
+						<div class="flex flex-wrap gap-2">
+							{#each detail.photos ?? [] as photo}
+								<span class="rounded-full border border-border px-3 py-1 text-sm">{photo.caption ?? photo.fileName}</span>
+							{/each}
+						</div>
+					</div>
+				{/if}
 
 				<div>
 					<h3 class="mb-2 text-sm font-semibold">Progress</h3>
 					<WorkOrderTimeline timeline={detail.timeline} testid="portal-work-order-timeline" />
 				</div>
+
+				{#if (detail.activity?.length ?? 0) > 0}
+					<div data-testid="portal-work-order-activity">
+						<h3 class="mb-2 text-sm font-semibold">Activity</h3>
+						<div class="space-y-2">
+							{#each detail.activity ?? [] as item}
+								<div class="rounded-md border border-border p-3">
+									<p class="font-medium">{item.label ?? item.kind ?? 'Activity'}</p>
+									{#if item.body || item.note}<p class="mt-1 text-sm text-muted-foreground">{item.body ?? item.note}</p>{/if}
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 

@@ -4,6 +4,12 @@ using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Core.Enums;
 
+/// <summary>Opaque tenant portal shell state; exposes no tenant, lease, unit, or property ids.</summary>
+public sealed class PortalAccessStateResponse
+{
+    public bool HasActiveTenantAccess { get; set; }
+}
+
 /// <summary>
 /// One tenant-visible rental relationship. The relationship survives agreement corrections and
 /// renewals; <see cref="Agreement"/> is the database-selected governing agreement, or the upcoming
@@ -65,6 +71,34 @@ public sealed class PortalTenantLedgerEntryListQuery : ListQuery
 
     [FromQuery(Name = "direction")]
     public TenantLedgerDirection? Direction { get; set; }
+}
+
+public sealed class PortalTenantAccountHistoryQuery : ListQuery
+{
+    /// <summary>
+    /// Database-resolved period: currentMonth, last3Months, thisYear, all, or custom.
+    /// Custom uses the inclusive <see cref="ListQuery.From"/> and <see cref="ListQuery.To"/> days.
+    /// </summary>
+    [FromQuery(Name = "period")]
+    public string Period { get; set; } = "currentMonth";
+
+    /// <summary>
+    /// An entry opened from a notification or deep link is returned with the requested page even
+    /// when it falls outside that page. It must still belong to the selected period and account.
+    /// </summary>
+    [FromQuery(Name = "entry")]
+    public long? FocusedEntryId { get; set; }
+
+    internal string NormalizedPeriod => Period.Trim().ToLowerInvariant() switch
+    {
+        "currentmonth" => "currentMonth",
+        "previousmonth" => "previousMonth",
+        "last3months" => "last3Months",
+        "thisyear" => "thisYear",
+        "all" => "all",
+        "custom" => "custom",
+        _ => "currentMonth",
+    };
 }
 
 public sealed class PortalTenantChargeListQuery : ListQuery
@@ -166,6 +200,45 @@ public sealed class PortalTenantLedgerEntryResponse
     public long? ReversesEntryId { get; init; }
     public long? ProviderPaymentAttemptId { get; init; }
     public int? SourceStoredFileId { get; init; }
+}
+
+public sealed class PortalTenantAccountHistoryResponse
+{
+    public int TenantAccountId { get; init; }
+    public int LeaseManagementId { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateOnly BusinessDate { get; init; }
+    public string Period { get; init; } = string.Empty;
+    public DateOnly? PeriodFrom { get; init; }
+    public DateOnly PeriodTo { get; init; }
+    /// <summary>Positive means owed; negative means the tenant has a credit.</summary>
+    public decimal CurrentDue { get; init; }
+    public decimal BeginningBalance { get; init; }
+    public decimal ClosingBalance { get; init; }
+    public IReadOnlyList<PortalTenantAccountHistoryItemResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class PortalTenantAccountHistoryItemResponse
+{
+    public long TenantLedgerEntryId { get; init; }
+    public TenantLedgerEntryType EntryType { get; init; }
+    public TenantLedgerDirection Direction { get; init; }
+    public string DisplayType { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public DateOnly EffectiveOn { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public DateTime PostedAtUtc { get; init; }
+    /// <summary>Debit is positive and increases amount owed; credit is negative and reduces it.</summary>
+    public decimal SignedAmount { get; init; }
+    public decimal RunningBalance { get; init; }
+    public decimal OpenAmount { get; init; }
+    public bool Payable { get; init; }
+    public long? ReversesEntryId { get; init; }
+    public long? ReversedByEntryId { get; init; }
+    public bool IsFocused { get; init; }
 }
 
 public sealed class PortalTenantChargePageResponse
@@ -279,4 +352,24 @@ public class CreateTenantWorkOrderRequest
     public string Category { get; set; } = "Resident Request";
 
     public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
+
+    [MaxLength(64)]
+    public string? ContactPhone { get; set; }
+
+    [MaxLength(320)]
+    public string? ContactEmail { get; set; }
+
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+
+    [MaxLength(2000)]
+    public string? EntryNotes { get; set; }
+
+    [MaxLength(2000)]
+    public string? PetWarnings { get; set; }
+
+    [MaxLength(2000)]
+    public string? AccessWarnings { get; set; }
 }

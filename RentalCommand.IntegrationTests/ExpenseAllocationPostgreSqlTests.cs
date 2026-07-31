@@ -12,6 +12,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -628,7 +629,8 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             AtomicMoneyOperation.Create,
             0,
             key,
-            request);
+            request,
+            _now);
 
     private async Task SeedAsync(RentalCommandDbContext db)
     {

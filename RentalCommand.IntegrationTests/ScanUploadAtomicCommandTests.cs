@@ -67,7 +67,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             FinalizeScanUploadCommand,
             FinalizeScanUploadResult,
             FinalizeScanUploadHandler>();
-        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        services.AddPendingFileUploadStore();
         services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
@@ -597,8 +597,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         var codec = new AtomicJsonResultCodec<FinalizeScanUploadResult>(
             "scan-upload.finalize.result.v1");
 
-        var rejected = () => _services!.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var rejected = () => ExecuteAtomicAsync(identity, command, codec);
         await rejected.Should().ThrowAsync<InvalidOperationException>();
 
         await using var db = NewContext();
@@ -653,6 +652,19 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     private TestFileStorage Storage => _services!.GetRequiredService<TestFileStorage>();
     private SqlProbe Probe => _services!.GetRequiredService<SqlProbe>();
     private AuditFailureInterceptor Failure => _services!.GetRequiredService<AuditFailureInterceptor>();
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is not available; scan-upload PostgreSQL proof skipped.");

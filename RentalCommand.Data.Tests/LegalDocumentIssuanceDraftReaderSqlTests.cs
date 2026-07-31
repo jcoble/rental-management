@@ -101,23 +101,46 @@ public sealed class LegalDocumentIssuanceDraftReaderSqlTests
     private static void AssertWorkspaceCapabilityAndPropertyScope(string sql)
     {
         sql.Should().Contain("\"Properties\"");
-        sql.Should().Contain("\"AuthSessions\"");
-        sql.Should().Contain("\"WorkspaceAccessContexts\"");
-        sql.Should().Contain("\"WorkspaceMemberships\"");
-        sql.Should().Contain("\"MembershipRoleAssignments\"");
-        sql.Should().Contain("\"RoleProfileCapabilities\"");
-        sql.Should().Contain("\"CapabilityDefinitions\"");
-        sql.Should().Contain("\"MembershipRoleAssignmentProperties\"");
+        Regex.Matches(sql, @"FROM public\.rc_api_effective_capability_scopes\(").Count.Should()
+            .Be(2, "each issuance capability must use the canonical PostgreSQL authorization scope");
+        sql.Should().Contain("\"ScopeKind\"");
+        sql.Should().Contain("\"PropertyId\"");
+        sql.Should().Contain("'AllProperties'");
+        sql.Should().Contain("'SelectedProperties'");
         sql.Should().Contain(CapabilityKeys.RentalsManage);
         sql.Should().Contain(CapabilityKeys.LeasingAgreementsPrepare);
         sql.Should().Contain("UNION",
             "either issuance capability must authorize the same property-scoped SQL read");
         AssertNamedParameterValue(sql, "scope_PortfolioId", Scope.PortfolioId);
         sql.Should().MatchRegex($"\\\"PortfolioId\\\" = {ParameterReferencePattern("scope_PortfolioId")}");
-        AssertNamedParameterValue(sql, "scope_UserId", Scope.UserId);
-        AssertNamedParameterValue(sql, "scope_AccessContextId", Scope.AccessContextId);
-        AssertNamedParameterValue(sql, "scope_AccessRevision", Scope.AccessRevision);
-        sql.Should().Contain(Scope.SessionId.ToString());
+        AssertCanonicalScopeFunctionBindings(sql);
+    }
+
+    private static void AssertCanonicalScopeFunctionBindings(string sql)
+    {
+        var calls = Regex.Matches(
+            sql,
+            """
+            FROM\s+public\.rc_api_effective_capability_scopes\(\s*
+                (?<portfolio>@[A-Za-z0-9_]+),\s*
+                (?<session>@[A-Za-z0-9_]+),\s*
+                (?<user>@[A-Za-z0-9_]+),\s*
+                (?<context>@[A-Za-z0-9_]+),\s*
+                (?<revision>@[A-Za-z0-9_]+),\s*
+                (?<capabilities>@[A-Za-z0-9_]+),\s*
+                (?<targetKind>@[A-Za-z0-9_]+)\)
+            """,
+            RegexOptions.IgnorePatternWhitespace);
+
+        calls.Count.Should().Be(2);
+        foreach (Match call in calls)
+        {
+            AssertParameterReferenceValue(sql, call.Groups["portfolio"].Value, Scope.PortfolioId);
+            AssertParameterReferenceValue(sql, call.Groups["session"].Value, Scope.SessionId);
+            AssertParameterReferenceValue(sql, call.Groups["user"].Value, Scope.UserId);
+            AssertParameterReferenceValue(sql, call.Groups["context"].Value, Scope.AccessContextId);
+            AssertParameterReferenceValue(sql, call.Groups["revision"].Value, Scope.AccessRevision);
+        }
     }
 
     private static void AssertExactLegalFacts(
@@ -161,12 +184,20 @@ public sealed class LegalDocumentIssuanceDraftReaderSqlTests
             $"{parameterName} must be bound into the translated PostgreSQL statement");
     }
 
+    private static void AssertParameterReferenceValue(string sql, string parameterReference, object value)
+    {
+        var expectedValue = Regex.Escape(Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)!);
+        sql.Should().MatchRegex(
+            $"-- {Regex.Escape(parameterReference.TrimStart('@'))}='?{expectedValue}'?",
+            $"{parameterReference} must bind the canonical authorization input");
+    }
+
     private static string ParameterReferencePattern(string parameterName) =>
         $"@(?:__)?{Regex.Escape(parameterName)}(?:_?[0-9]+)?";
 
     private static string SqlWithoutParameterDeclarations(string sql) => string.Join(
         '\n',
-        sql.Split('\n').Where(line => !line.StartsWith("-- @", StringComparison.Ordinal)));
+        sql.Split('\n').Where(line => !line.StartsWith("-- ", StringComparison.Ordinal)));
 
     private static RentalCommandDbContext Context() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()

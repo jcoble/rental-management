@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -22,11 +23,16 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> Codec =
         new("scan-confirm.result.v1");
+    private static readonly AtomicJsonResultCodec<RejectScanDraftResult> RejectCodec =
+        new("scan-draft-reject-result:v1");
+    private static readonly Guid SessionId =
+        Guid.Parse("44444444-4444-4444-4444-444444444444");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
+    private WorkspaceReadScope _scope;
     private readonly ConcurrentDictionary<int, string> _preparedFingerprints = new();
 
     public async Task InitializeAsync()
@@ -50,12 +56,16 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddSingleton<TestWriterProbe>();
         services.AddSingleton<AtomicCompanionFailureInterceptor>();
-        services.AddScoped<TestExpenseTargetWriter>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddScoped<IScanConfirmationTargetWriter, TestExpenseTargetWriter>();
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
-            ConfirmScanDraftHandler<TestExpenseTargetWriter>>();
+            ConfirmScanDraftHandler>();
+        services.AddAtomicCommandHandler<
+            RejectScanDraftCommand,
+            RejectScanDraftResult,
+            RejectScanDraftHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -65,7 +75,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
         await using var scope = _services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
         var portfolio = new Portfolio
         {
             Name = "Atomic scan confirmation",
@@ -77,6 +87,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         db.Portfolios.Add(portfolio);
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
+        _scope = await SeedWorkspaceAdministratorAsync(db, _portfolioId);
     }
 
     public async Task DisposeAsync()
@@ -99,8 +110,8 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         var command = Command(draftId, "duplicate-target");
         var identity = Identity(draftId);
 
-        var first = await UnitOfWork.ExecuteAsync(identity, command, Codec);
-        var replay = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -121,11 +132,12 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         var identity = Identity(draftId);
         await using (var arrange = Scope())
         {
-            await arrange.Db.ScanDrafts.Where(row => row.Id == draftId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.Status, "Processing"));
+            var draft = await arrange.Db.ScanDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status = "Processing";
+            await arrange.Db.SaveChangesAsync();
         }
 
-        var firstAttempt = () => UnitOfWork.ExecuteAsync(
+        var firstAttempt = () => ExecuteAtomicAsync(
             identity, Command(draftId, "not-ready-target"), Codec);
 
         await firstAttempt.Should().ThrowAsync<ScanConfirmationValidationException>();
@@ -134,11 +146,12 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             (await verifyNoReceipt.Db.AtomicCommandReceipts.CountAsync(row =>
                 row.CommandType == identity.CommandType
                 && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
-            await verifyNoReceipt.Db.ScanDrafts.Where(row => row.Id == draftId)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.Status, "Reviewing"));
+            var draft = await verifyNoReceipt.Db.ScanDrafts.SingleAsync(row => row.Id == draftId);
+            draft.Status = "Reviewing";
+            await verifyNoReceipt.Db.SaveChangesAsync();
         }
 
-        var retry = await UnitOfWork.ExecuteAsync(
+        var retry = await ExecuteAtomicAsync(
             identity, Command(draftId, "not-ready-target"), Codec);
 
         retry.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
@@ -176,25 +189,23 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                 replacementSourceId = replacement.Id;
             }
 
-            var draftQuery = arrange.Db.ScanDrafts.Where(row => row.Id == draftId);
+            var trackedDraft = await arrange.Db.ScanDrafts.SingleAsync(row => row.Id == draftId);
             if (changedFact == "extraction")
             {
-                await draftQuery.ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.ExtractedFields, "{\"total\":{\"value\":999}}"));
+                trackedDraft.ExtractedFields = "{\"total\":{\"value\":999}}";
             }
             else if (changedFact == "source")
             {
-                await draftQuery.ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.SourceStoredFileId, replacementSourceId));
+                trackedDraft.SourceStoredFileId = replacementSourceId;
             }
             else
             {
-                await draftQuery.ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.TargetEntityType, "Payment"));
+                trackedDraft.TargetEntityType = "Payment";
             }
+            await arrange.Db.SaveChangesAsync();
         }
 
-        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
 
         (await action.Should().ThrowAsync<ScanConfirmationValidationException>())
             .Which.Message.Should().Contain("Review the latest extraction");
@@ -220,14 +231,14 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
     {
         SkipIfDockerUnavailable();
         var draftId = await SeedReviewingDraftAsync("already-confirmed-stale-fingerprint");
-        var first = await UnitOfWork.ExecuteAsync(
+        var first = await ExecuteAtomicAsync(
             Identity(draftId, "first-confirm"), Command(draftId, "canonical-target"), Codec);
         var staleCommand = Command(draftId, "ignored-target") with
         {
             ExpectedDraftFingerprint = new string('0', 64),
         };
 
-        var recovered = await UnitOfWork.ExecuteAsync(
+        var recovered = await ExecuteAtomicAsync(
             Identity(draftId, "recover-confirmed"), staleCommand, Codec);
 
         recovered.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.AlreadyConfirmed);
@@ -244,10 +255,10 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         var probe = Services.GetRequiredService<TestWriterProbe>();
         probe.PauseDraft(draftId);
 
-        var firstTask = UnitOfWork.ExecuteAsync(
+        var firstTask = ExecuteAtomicAsync(
             Identity(draftId, "first"), Command(draftId, "simultaneous-target"), Codec);
         await probe.WaitUntilEnteredAsync();
-        var secondTask = UnitOfWork.ExecuteAsync(
+        var secondTask = ExecuteAtomicAsync(
             Identity(draftId, "second"), Command(draftId, "simultaneous-target"), Codec);
         probe.Release();
 
@@ -273,12 +284,12 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         var probe = Services.GetRequiredService<TestWriterProbe>();
         probe.PauseDraft(firstDraftId);
 
-        var firstTask = UnitOfWork.ExecuteAsync(
+        var firstTask = ExecuteAtomicAsync(
             Identity(firstDraftId, "same-hash-first"),
             Command(firstDraftId, "same-hash-target"),
             Codec);
         await probe.WaitUntilEnteredAsync();
-        var secondTask = UnitOfWork.ExecuteAsync(
+        var secondTask = ExecuteAtomicAsync(
             Identity(secondDraftId, "same-hash-second"),
             Command(secondDraftId, "same-hash-target"),
             Codec);
@@ -320,13 +331,13 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         var confirmingDraftId = await SeedReviewingDraftAsync("same-hash-legitimate", duplicateHash);
         await using (var arrange = Scope())
         {
-            await arrange.Db.ScanDrafts.Where(draft => draft.Id == rejectedDraftId)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(draft => draft.Status, "Rejected")
-                    .SetProperty(draft => draft.ReviewedAt, CommandTime.AddMinutes(-1)));
+            var draft = await arrange.Db.ScanDrafts.SingleAsync(row => row.Id == rejectedDraftId);
+            draft.Status = "Rejected";
+            draft.ReviewedAt = CommandTime.AddMinutes(-1);
+            await arrange.Db.SaveChangesAsync();
         }
 
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             Identity(confirmingDraftId, "same-hash-after-rejected"),
             Command(confirmingDraftId, "same-hash-legitimate-target"),
             Codec);
@@ -349,7 +360,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         Services.GetRequiredService<AtomicCompanionFailureInterceptor>().Arm();
         var identity = Identity(draftId);
 
-        var action = () => UnitOfWork.ExecuteAsync(
+        var action = () => ExecuteAtomicAsync(
             identity, Command(draftId, "rollback-target"), Codec);
 
         await action.Should().ThrowAsync<InjectedScanWriterFailure>();
@@ -396,7 +407,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             decoyFileId = decoyFile.Id;
         }
 
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             identity, Command(draftId, "source-link-target"), Codec);
 
         outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
@@ -427,7 +438,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         SkipIfDockerUnavailable();
         var draftId = await SeedReviewingDraftWithoutSourceAsync();
 
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             Identity(draftId), Command(draftId, "voice-target"), Codec);
 
         outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
@@ -437,6 +448,95 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         draft.Status.Should().Be("Confirmed");
         draft.ConfirmedEntityId.Should().Be(outcome.Value.TargetEntityId);
         (await verify.Db.StoredFiles.CountAsync(file => file.FilePath == draft.FilePath)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RejectDraft_UsesFrozenBusinessTimeAndReplaysExactCommittedResult()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("reject-business-time");
+        var identity = RejectIdentity(draftId);
+        var command = RejectCommand(draftId, CommandTime);
+        var first = await ExecuteAtomicAsync(
+            identity,
+            command,
+            RejectCodec);
+        var replay = await ExecuteAtomicAsync(
+            identity,
+            command,
+            RejectCodec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        first.Value.Rejected.Should().BeTrue();
+        first.Value.ReviewedAtUtc.Should().Be(CommandTime);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        var draft = await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId);
+        draft.Status.Should().Be("Rejected");
+        draft.ReviewedAt.Should().Be(CommandTime);
+        draft.ReviewedBy.Should().Be(_scope.UserId.ToString());
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .Select(row => row.Timestamp)
+            .Distinct()
+            .SingleAsync()).Should().Be(CommandTime);
+    }
+
+    [SkippableFact]
+    public async Task RejectDraft_ReplayRequiresCurrentAuthorization()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("reject-replay-auth");
+        var identity = RejectIdentity(draftId);
+
+        await ExecuteAtomicAsync(identity, RejectCommand(draftId, CommandTime), RejectCodec);
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.AuthSessions.Where(session => session.Id == _scope.SessionId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                    .SetProperty(session => session.RevokedAtUtc, CommandTime.AddMinutes(1)));
+        }
+
+        var replay = () => ExecuteAtomicAsync(
+            identity,
+            RejectCommand(draftId, CommandTime.AddDays(1)),
+            RejectCodec);
+
+        await replay.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*outside the caller's current review scope*");
+    }
+
+    [SkippableFact]
+    public async Task RejectDraft_CompanionFailureRollsBackDraftAuditAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedReviewingDraftAsync("reject-rollback");
+        Services.GetRequiredService<AtomicCompanionFailureInterceptor>().Arm();
+        var identity = RejectIdentity(draftId);
+
+        var action = () => ExecuteAtomicAsync(
+            identity,
+            RejectCommand(draftId, CommandTime),
+            RejectCodec);
+
+        await action.Should().ThrowAsync<InjectedScanWriterFailure>();
+        await using var verify = Scope();
+        var draft = await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.ReviewedAt.Should().BeNull();
+        draft.FailureReason.Should().BeNull();
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
     }
 
     [SkippableTheory]
@@ -492,7 +592,7 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         }
         var identity = Identity(draftId);
 
-        var action = () => UnitOfWork.ExecuteAsync(
+        var action = () => ExecuteAtomicAsync(
             identity, Command(draftId, "invalid-source-target"), Codec);
 
         await action.Should().ThrowAsync<AtomicReceiptInvariantException>();
@@ -538,6 +638,20 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
         suffix is null
             ? ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, "foundation-default")
             : new AtomicCommandIdentity("scan.confirm", $"{_portfolioId}:{draftId}:{suffix}");
+
+    private RejectScanDraftCommand RejectCommand(int draftId, DateTime reviewedAtUtc) =>
+        new(
+            _portfolioId,
+            draftId,
+            _scope.UserId,
+            reviewedAtUtc,
+            _scope.SessionId,
+            _scope.AccessContextId,
+            _scope.AccessRevision,
+            "Not a valid scan.");
+
+    private AtomicCommandIdentity RejectIdentity(int draftId) =>
+        new("scan-draft.reject", $"{_portfolioId}:{draftId}:not-a-valid-scan");
 
     private async Task<int> SeedReviewingDraftAsync(string marker, string? sourceContentSha256 = null)
     {
@@ -608,7 +722,89 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
             draft.CaptureRentalListingId,
             draft.SourceLabel);
 
-    private IAtomicUnitOfWork UnitOfWork => Services.GetRequiredService<IAtomicUnitOfWork>();
+    private static async Task<WorkspaceReadScope> SeedWorkspaceAdministratorAsync(
+        RentalCommandDbContext db,
+        int portfolioId)
+    {
+        var user = new ApplicationUser
+        {
+            UserName = "scan-reject-user@example.test",
+            NormalizedUserName = "SCAN-REJECT-USER@EXAMPLE.TEST",
+            Email = "scan-reject-user@example.test",
+            NormalizedEmail = "SCAN-REJECT-USER@EXAMPLE.TEST",
+            DisplayName = "Scan Reject User",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = CommandTime,
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = CommandTime.AddMinutes(-1),
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = CommandTime.AddMinutes(-1),
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+        };
+        var session = new AuthSession
+        {
+            Id = SessionId,
+            UserId = user.Id,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = CommandTime,
+            LastSeenAtUtc = CommandTime,
+            ExpiresAtUtc = CommandTime.AddDays(30),
+        };
+
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolioId,
+            user.Id,
+            SessionId,
+            accessContext.Id,
+            accessContext.AccessRevision);
+    }
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = Services.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
+
     private IServiceProvider Services => _services ?? throw new InvalidOperationException();
     private TestScope Scope() => TestScope.Create(Services);
 
@@ -658,14 +854,19 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
 
     private sealed class TestExpenseTargetWriter : IScanConfirmationTargetWriter
     {
+        private readonly RentalCommandDbContext _db;
         private readonly TestWriterProbe _probe;
-        public TestExpenseTargetWriter(TestWriterProbe probe) => _probe = probe;
+        public TestExpenseTargetWriter(RentalCommandDbContext db, TestWriterProbe probe)
+        {
+            _db = db;
+            _probe = probe;
+        }
         public bool Supports(ScanConfirmationTargetKind kind) => kind == ScanConfirmationTargetKind.Expense;
 
         public async Task<ScanConfirmationTargetWriteResult> WriteAsync(
             ConfirmScanDraftCommand command,
             string? extractedFieldsJson,
-            IAtomicWriteAttempt attempt,
+            IAtomicCommandContext context,
             CancellationToken ct)
         {
             await _probe.BeforeWriteAsync(command.DraftId, ct);
@@ -683,20 +884,20 @@ public sealed class ScanConfirmationAtomicFoundationTests : IAsyncLifetime
                 CreatedAt = command.ConfirmedAtUtc,
                 UpdatedAt = command.ConfirmedAtUtc,
             };
-            attempt.Persistence.Add(expense);
-            attempt.BindSemanticAudit(expense, new AtomicSemanticAudit(
+            _db.Expenses.Add(expense);
+            context.BindSemanticAudit(expense, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(Expense),
                 0,
                 AuditLogOperation.Created,
                 UserId: command.ConfirmedByUserId,
                 ChangeReason: $"Test target created from scan draft #{command.DraftId}."));
-            await attempt.FlushBusinessAsync(ct);
+            await context.FlushBusinessAsync(ct);
             return new ScanConfirmationTargetWriteResult(expense.Id, data.UnitId);
         }
     }
 
-    private sealed class TestWriterProbe : IAtomicTransactionSafeDependency
+    private sealed class TestWriterProbe
     {
         private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
