@@ -25,6 +25,9 @@ public sealed class PostTenantChargeRequest
     public DateOnly DueOn { get; set; }
     [Required, MaxLength(500)] public string Description { get; set; } = string.Empty;
     [Range(1, int.MaxValue)] public int? SourceStoredFileId { get; set; }
+    [Range(1, int.MaxValue)] public int? IncomeLedgerAccountId { get; set; }
+    public DateOnly? ServicePeriodStartOn { get; set; }
+    public DateOnly? ServicePeriodEndOn { get; set; }
 }
 
 public sealed class ReverseTenantChargeRequest
@@ -41,6 +44,8 @@ public sealed class PostTenantCreditRequest
     [Required, MaxLength(500)] public string Description { get; set; } = string.Empty;
     [Range(1, int.MaxValue)] public int? SourceStoredFileId { get; set; }
     public bool AllocateOldestCharges { get; set; } = true;
+    [Range(1, long.MaxValue)] public long? TargetChargeEntryId { get; set; }
+    [Range(1, int.MaxValue)] public int? IncomeLedgerAccountId { get; set; }
 }
 
 public sealed class PostTenantAdjustmentRequest

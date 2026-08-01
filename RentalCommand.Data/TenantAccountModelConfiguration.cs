@@ -263,6 +263,8 @@ internal static class TenantAccountModelConfiguration
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(3);
             entity.Property(e => e.EffectiveOn).HasColumnType("date");
             entity.Property(e => e.DueOn).HasColumnType("date");
+            entity.Property(e => e.ServicePeriodStartOn).HasColumnType("date");
+            entity.Property(e => e.ServicePeriodEndOn).HasColumnType("date");
             entity.Property(e => e.PostedAtUtc).HasDefaultValueSql("clock_timestamp()");
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.BusinessKey).IsRequired().HasMaxLength(200);
@@ -270,6 +272,7 @@ internal static class TenantAccountModelConfiguration
             entity.HasIndex(e => e.PublicId).IsUnique();
             entity.HasIndex(e => new { e.TenantAccountId, e.BusinessKey }).IsUnique();
             entity.HasIndex(e => e.ReversesEntryId).IsUnique().HasFilter("\"ReversesEntryId\" IS NOT NULL");
+            entity.HasIndex(e => new { e.PortfolioId, e.TenantAccountId, e.RelatedTenantLedgerEntryId });
             entity.HasIndex(e => e.ProviderPaymentAttemptId)
                 .IsUnique()
                 .HasFilter("\"ProviderPaymentAttemptId\" IS NOT NULL");
@@ -320,6 +323,9 @@ internal static class TenantAccountModelConfiguration
                 table.HasCheckConstraint(
                     "CK_TenantLedgerEntry_ReversalReference",
                     "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "CK_TenantLedgerEntry_ServicePeriod",
+                    "(\"ServicePeriodStartOn\" IS NULL OR \"ServicePeriodEndOn\" IS NULL OR \"ServicePeriodEndOn\" >= \"ServicePeriodStartOn\")");
             });
 
             entity.HasOne(e => e.Portfolio)
@@ -344,6 +350,11 @@ internal static class TenantAccountModelConfiguration
             entity.HasOne(e => e.ReversesEntry)
                 .WithMany(e => e.ReversalEntries)
                 .HasForeignKey(e => new { e.ReversesEntryId, e.TenantAccountId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.RelatedTenantLedgerEntry)
+                .WithMany(e => e.RelatedTenantLedgerEntries)
+                .HasForeignKey(e => new { e.RelatedTenantLedgerEntryId, e.TenantAccountId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.TenantAccountId, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.ProviderPaymentAttempt)

@@ -247,7 +247,8 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.SourceStoredFileId, envelope.UserId, envelope.SessionId,
             envelope.AccessContextId, envelope.AccessRevision, CapabilityKeys.MoneyChargesManage,
             $"tenant-charge:{envelope.KeyDigest}",
-            $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}");
+            $"tenant-charge:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
+            request.IncomeLedgerAccountId, request.ServicePeriodStartOn, request.ServicePeriodEndOn);
         return await ExecuteCharge("tenant-account.charge.post", command.DeliveryIdempotencyKey,
             command, ct);
     }
@@ -283,7 +284,8 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             request.SourceStoredFileId, request.AllocateOldestCharges, e.UserId,
             e.SessionId, e.AccessContextId, e.AccessRevision,
             CapabilityKeys.MoneyChargesManage, $"tenant-credit:{e.KeyDigest}",
-            $"tenant-credit:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}");
+            $"tenant-credit:{e.PortfolioId}:{tenantAccountId}:{e.KeyDigest}",
+            request.TargetChargeEntryId, request.IncomeLedgerAccountId);
         return await ExecuteLedger("tenant-account.credit.post",
             command.DeliveryIdempotencyKey, command, ct);
     }
