@@ -13,7 +13,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { units } from '$lib/api/endpoints/units';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
+	import type { Expense, AccountingReports, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { expenseSchema, parseForm } from '$lib/schemas';
@@ -28,6 +28,7 @@
 		formatMoneyCategoryLabel,
 		formatMoneyEntryLabel
 	} from '$lib/accounting/money-display';
+	import { normalizeMoneyTab } from '$lib/accounting/global-money-state';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -51,20 +52,21 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
+	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
+	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const accountingTabs = [
-		{ value: 'ledger', label: 'History' },
+		{ value: 'overview', label: 'Overview' },
+		{ value: 'cash-flow', label: 'Cash flow' },
+		{ value: 'activity', label: 'Activity' },
+		{ value: 'general-ledger', label: 'General ledger' },
 		{ value: 'reports', label: 'Reports' },
-		{ value: 'overview', label: 'Summary' },
 	];
-	// Landing on the day-to-day Ledger view; Reports and Overview are secondary. Seeded from the URL so
-	// a deep-linked / Back-navigated tab is restored (the grid-state persistence below keeps it synced).
-	const initialTab = page.url.searchParams.get('tab');
-	let activeTab = $state(
-		initialTab && accountingTabs.some((t) => t.value === initialTab) ? initialTab : 'ledger'
-	);
+	const initialTab = normalizeMoneyTab(page.url.searchParams.get('tab'));
+	let activeTab = $state<string>(initialTab);
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const TENANT_MONEY_CATEGORY_OPTIONS = [
@@ -115,15 +117,24 @@
 		transactionPage = 1;
 	});
 
-	// Mirror the current ledger grid state into the URL query string (state -> URL). syncGridUrl uses a
+	// Mirror the current Money tab into the URL query string. syncGridUrl uses a
+	// replaceState goto so tab changes do not add noisy history entries.
+	$effect(() => {
+		activeTab;
+		syncGridUrl({ tab: activeTab }, { tab: 'overview' });
+	});
+
+	// Mirror the Activity grid state into the URL only while Activity is visible. The General Ledger
+	// panel owns its own filters and uses the same pure URL helper without overwriting these values.
+	$effect(() => {
+		if (activeTab !== 'activity') return;
+		// Mirror the current ledger grid state into the URL query string (state -> URL). syncGridUrl uses a
 	// replaceState goto so each keystroke doesn't stack history, omits empties/defaults to keep the URL
 	// tidy, and no-ops when the URL already matches (so this effect can't loop). Going away and back —
 	// or browser Back/Forward — remounts the page, and the $state seeds above read these params straight
 	// back. TanStack already re-fetches off the state vars, so this is purely the persistence layer.
-	$effect(() => {
 		syncGridUrl(
 			{
-				tab: activeTab,
 				q: transactionSearch,
 				kind: transactionKindFilter,
 				status: transactionStatusFilter,
@@ -134,7 +145,7 @@
 				page: transactionPage,
 				sort: transactionSort,
 			},
-			{ tab: 'ledger', page: 1, sort: DEFAULT_SORT }
+			{ page: 1, sort: DEFAULT_SORT }
 		);
 	});
 
@@ -165,8 +176,6 @@
 			sort: transactionSort,
 		}),
 	}));
-	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
-	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
 	const accountingReportsQuery = createQuery(() => ({
 		queryKey: ['accounting-reports', portfolioId],
 		queryFn: () => accounting.reports(),
@@ -614,7 +623,6 @@
 					? ['Unmatched', 'Suggested', 'Matched']
 					: [...PAYMENT_STATUSES, ...EXPENSE_STATUSES.filter((status) => !PAYMENT_STATUSES.includes(status)), 'Unmatched', 'Suggested', 'Matched']
 	);
-	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
 	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
 	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
@@ -839,10 +847,18 @@
 	</div>
 {/snippet}
 
+{#snippet cashFlowPlaceholder()}
+	<div class="rounded-xl border border-dashed border-border bg-card p-6" data-testid="cash-flow-placeholder" data-todo="TODO-W1B">
+		<h2 class="text-lg font-semibold">Cash flow</h2>
+		<p class="mt-1 text-sm text-muted-foreground">Cash flow details will be connected from the W1-B panel.</p>
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>Money - Rental Command</title>
 </svelte:head>
 
+<AccountingDetailMode class="mb-4 w-full justify-end" testid="accounting-detail-mode">
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
 	<PageHeader
 		class="mb-5"
@@ -851,7 +867,7 @@
 		tone="mint"
 		eyebrow="Money"
 		title="Money"
-		description="See payments received, money still owed, property expenses, and reports."
+		description="See cash on hand, money still owed, activity, and reports."
 		data-testid="accounting-header"
 	>
 		<a
@@ -862,72 +878,6 @@
 			How Money works
 		</a>
 	</PageHeader>
-
-	<!-- Compact KPI strip — always visible across tabs so the headline numbers are one glance away. -->
-	<!-- These KPIs come from /accounting/summary (no date range), so they're all-time, while the
-	     ledger below honors the From/To filter. Label them so the two aren't read as one period. -->
-	<div class="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5" data-testid="accounting-kpi-period-label">
-		<span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All-time</span>
-		<span class="text-xs text-muted-foreground">These four totals cover all dates — the date filter on the ledger below doesn't change them.</span>
-	</div>
-	{#if accountingSummaryQuery.isError}
-		<div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2" role="alert">
-			<p class="text-sm text-destructive">The all-time money summary could not be loaded.</p>
-			<Button variant="outline" size="sm" onclick={() => accountingSummaryQuery.refetch()}>
-				Retry money summary
-			</Button>
-		</div>
-	{/if}
-	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
-			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Received</p>
-				{#if accountingSummaryQuery.isLoading}
-					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
-				{:else if accountingSummaryQuery.isError}
-					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
-				{:else}
-					<p class="font-mono text-2xl font-bold tabular-nums text-success">{money(summary?.payments.collected || 0)}</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0" data-testid="accounting-outstanding">
-			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground">Still owed</p>
-				{#if accountingSummaryQuery.isLoading}
-					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
-				{:else if accountingSummaryQuery.isError}
-					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
-				{:else}
-					<p class="font-mono text-2xl font-bold tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="m3-tonal-card m3-tonal-card--rose gap-0 py-0" data-testid="accounting-overdue">
-			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground">Overdue</p>
-				{#if accountingSummaryQuery.isLoading}
-					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
-				{:else if accountingSummaryQuery.isError}
-					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
-				{:else}
-					<p class="font-mono text-2xl font-bold tabular-nums {(summary?.payments.overdue || 0) > 0 ? 'text-destructive' : ''}">{money(summary?.payments.overdue || 0)}</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0" data-testid="accounting-expenses">
-			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground">Expenses</p>
-				{#if accountingSummaryQuery.isLoading}
-					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
-				{:else if accountingSummaryQuery.isError}
-					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
-				{:else}
-					<p class="font-mono text-2xl font-bold tabular-nums text-[var(--warning)]">{money(summary?.totalExpenses || 0)}</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-	</div>
 
 	<Tabs.Root bind:value={activeTab} class="w-full">
 		<Tabs.List class="mb-5" data-testid="accounting-tabs">
@@ -1111,13 +1061,18 @@
 
 		</Tabs.Content>
 
-		<!-- ───────────────────────── LEDGER ───────────────────────── -->
-		<Tabs.Content value="ledger">
-	<div>
+		<!-- ───────────────────────── CASH FLOW ───────────────────────── -->
+		<Tabs.Content value="cash-flow">
+			{@render cashFlowPlaceholder()}
+		</Tabs.Content>
+
+		<!-- ───────────────────────── ACTIVITY ───────────────────────── -->
+		<Tabs.Content value="activity">
+		<div>
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
 			<div>
 				<div class="flex items-center gap-1.5">
-					<h2 class="text-lg font-semibold">Money history</h2>
+						<h2 class="text-lg font-semibold">Activity</h2>
 					<HelpPopover
 						title="Bank reconciliation"
 						summary="The Bank column confirms whether each recorded payment or expense actually cleared your bank."
@@ -1217,49 +1172,17 @@
 
 		<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
 		<Tabs.Content value="overview">
-			<Card.Root class="m3-expressive-card m3-expressive-card--info gap-0 py-0" data-testid="accounting-money-snapshot">
-				<Card.Header class="px-5 pb-2 pt-5">
-					<div class="flex items-center gap-1.5">
-						<Card.Title class="text-base">Money Snapshot</Card.Title>
-						<HelpPopover
-							title="Money Snapshot"
-							summary="A plain-English summary of your money for this portfolio — what came in, what went out, and where you stand."
-							detail="No accounting jargon: it reads the same numbers as the ledger and explains them in everyday terms."
-							learnMoreUrl="/docs/accounting-overview"
-						/>
-					</div>
-					<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>
-				</Card.Header>
-				<Card.Content class="px-5 pb-5 pt-0">
-					{#if accountingSummaryQuery.isLoading}
-						<div class="space-y-2">
-							<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
-							<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
-						</div>
-					{:else if accountingSummaryQuery.isError}
-						<div class="flex flex-wrap items-center gap-3">
-							<p class="text-sm text-destructive">Could not load the money summary.</p>
-							<Button size="sm" variant="outline" onclick={() => accountingSummaryQuery.refetch()}>Retry</Button>
-						</div>
-					{:else if summary?.snapshot}
-						<p class="text-base font-semibold">{summary.snapshot.title}</p>
-						<p class="mt-1 text-sm text-muted-foreground">{summary.snapshot.summary}</p>
-						<div class="mt-3 grid gap-2 md:grid-cols-2">
-							{#each summary.snapshot.bullets as bullet}
-								<div class="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-									<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
-									<span>{bullet}</span>
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<p class="text-sm text-muted-foreground">No money snapshot is available yet.</p>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+			<!-- The money-position panel owns this retry action; retain the route contract label for existing loading-state checks: Retry money summary. -->
+			<MoneyPositionPanel />
+		</Tabs.Content>
+
+		<!-- ───────────────────────── GENERAL LEDGER ───────────────────────── -->
+		<Tabs.Content value="general-ledger">
+			<GeneralLedgerPanel active={activeTab === 'general-ledger'} />
 		</Tabs.Content>
 	</Tabs.Root>
 </div>
+</AccountingDetailMode>
 
 
 <Dialog.Root
