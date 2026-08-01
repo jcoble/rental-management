@@ -151,21 +151,7 @@ internal static class ScheduledTenantChargeCompanionStaging
             .Where(entry => entry.PortfolioId == portfolioId && ids.Contains(entry.Id))
             .OrderBy(entry => entry.Id)
             .ToListAsync(ct);
-        foreach (var entry in entries)
-        {
-            await TenantAccountingPosting.PostTenantChargeAsync(
-                db,
-                context,
-                entry,
-                entry.CreatedByUserId,
-                entry.EntryType == TenantLedgerEntryType.LateFeeCharge
-                    ? "late-fee-income"
-                    : "rental-income",
-                ct,
-                actorLabel: entry.CreatedByUserId > 0
-                    ? null
-                    : "system:scheduled-tenant-billing");
-        }
+        await TenantAccountingPosting.PostScheduledTenantChargesAsync(db, context, entries, ct);
     }
 
     public static async Task StageChargeCompanionsAsync(

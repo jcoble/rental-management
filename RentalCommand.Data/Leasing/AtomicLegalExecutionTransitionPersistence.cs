@@ -7,6 +7,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -90,6 +91,7 @@ public static partial class AtomicLeaseMutationPersistence
 
         var charges = await ReconcileInitialSecurityDepositChargesForAgreementAsync(
             db, context, portfolioId, leaseAgreementId, postedAtUtc, ct);
+        await PostInitialSecurityDepositChargeJournalsAsync(db, context, charges, ct);
         StageInitialSecurityDepositChargeAudits(db, context, charges);
         return charges.Count;
     }
@@ -165,8 +167,8 @@ public static partial class AtomicLeaseMutationPersistence
                 FROM candidate
                 ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
                 RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
-                          "Amount", "EffectiveOn", "DueOn", "BusinessKey",
-                          "CreatedByUserId", "PostedAtUtc"
+                          "Amount", "Currency", "EffectiveOn", "DueOn", "Description",
+                          "BusinessKey", "CreatedByUserId", "PostedAtUtc"
             ), outbox AS (
                 INSERT INTO "OutboxMessages" (
                     "PortfolioId", "MessageType", "Payload", "IdempotencyKey", "AttemptCount",
@@ -195,14 +197,17 @@ public static partial class AtomicLeaseMutationPersistence
                    inserted."TenantAccountId",
                    inserted."LeaseAgreementId",
                    inserted."Amount",
+                   inserted."Currency",
                    inserted."EffectiveOn",
                    inserted."DueOn",
+                   inserted."Description",
                    inserted."BusinessKey",
                    inserted."CreatedByUserId",
                    inserted."PostedAtUtc"
             FROM inserted
             ORDER BY inserted."Id"
             """).ToListAsync(ct);
+        await PostInitialSecurityDepositChargeJournalsAsync(db, context, charges, ct);
         StageInitialSecurityDepositChargeAudits(db, context, charges);
         return charges;
     }
@@ -263,8 +268,8 @@ public static partial class AtomicLeaseMutationPersistence
                 FROM candidate
                 ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
                 RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
-                          "Amount", "EffectiveOn", "DueOn", "BusinessKey",
-                          "CreatedByUserId", "PostedAtUtc"
+                          "Amount", "Currency", "EffectiveOn", "DueOn", "Description",
+                          "BusinessKey", "CreatedByUserId", "PostedAtUtc"
             ), outbox AS (
                 INSERT INTO "OutboxMessages" (
                     "PortfolioId", "MessageType", "Payload", "IdempotencyKey", "AttemptCount",
@@ -293,14 +298,53 @@ public static partial class AtomicLeaseMutationPersistence
                    inserted."TenantAccountId",
                    inserted."LeaseAgreementId",
                    inserted."Amount",
+                   inserted."Currency",
                    inserted."EffectiveOn",
                    inserted."DueOn",
+                   inserted."Description",
                    inserted."BusinessKey",
                    inserted."CreatedByUserId",
                    inserted."PostedAtUtc"
             FROM inserted
             ORDER BY inserted."Id"
             """).ToListAsync(ct);
+    }
+
+    private static async Task PostInitialSecurityDepositChargeJournalsAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyList<AtomicInitialSecurityDepositCharge> charges,
+        CancellationToken ct)
+    {
+        // The tenant-ledger rows were created by the guarded set-based statement above. Build the
+        // same source models the normal tenant charge flow uses, then attach all journals through
+        // one batch preflight in this command's existing transaction.
+        await TenantAccountingPosting.PostInitialSecurityDepositChargesAsync(
+            db,
+            context,
+            charges.Select(charge => new TenantLedgerEntry
+            {
+                Id = charge.LedgerEntryId,
+                PortfolioId = charge.PortfolioId,
+                TenantAccountId = charge.TenantAccountId,
+                LeaseAgreementId = charge.LeaseAgreementId,
+                EntryType = TenantLedgerEntryType.DepositCharge,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = charge.Amount,
+                Currency = charge.Currency,
+                EffectiveOn = charge.EffectiveOn,
+                Description = charge.Description,
+                BusinessKey = charge.BusinessKey,
+                CreatedByUserId = charge.CreatedByUserId,
+                PostedAtUtc = charge.PostedAtUtc,
+            }).ToArray(),
+            ct);
+
+        // Direct legal-transition callers and the normal atomic runner share this persistence
+        // method. Flush the journal graph while the caller's explicit transaction is still open;
+        // the runner's final flush then persists the staged audit/outbox companions.
+        if (charges.Count != 0)
+            await context.FlushBusinessAsync(ct);
     }
 
     private static void StageInitialSecurityDepositChargeAudits(

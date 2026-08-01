@@ -74,8 +74,10 @@ public sealed class AtomicInitialSecurityDepositCharge
     public int TenantAccountId { get; set; }
     public int LeaseAgreementId { get; set; }
     public decimal Amount { get; set; }
+    public string Currency { get; set; } = string.Empty;
     public DateOnly EffectiveOn { get; set; }
     public DateOnly DueOn { get; set; }
+    public string Description { get; set; } = string.Empty;
     public string BusinessKey { get; set; } = string.Empty;
     public int CreatedByUserId { get; set; }
     public DateTime PostedAtUtc { get; set; }

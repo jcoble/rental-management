@@ -13,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Esign;
 using RentalCommand.Data.Leasing;
@@ -114,6 +115,36 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         charge.DueOn.Should().Be(DateOnly.FromDateTime(FrozenBusinessNow));
         charge.PostedAtUtc.Should().Be(FrozenBusinessNow);
         charge.BusinessKey.Should().Be($"security-deposit:agreement:{scenario.AgreementPublicId}");
+
+        var journalLines = await db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == scenario.PortfolioId
+                && line.JournalEntry.SourceType == JournalSourceType.TenantCharge
+                && line.JournalEntry.SourceId == charge.Id)
+            .OrderBy(line => line.LedgerAccount!.Code)
+            .Select(line => new
+            {
+                SystemKey = line.LedgerAccount!.SystemKey,
+                line.DebitAmount,
+                line.CreditAmount,
+                line.TenantAccountId,
+            })
+            .ToListAsync();
+        journalLines.Should().BeEquivalentTo([
+            new
+            {
+                SystemKey = "tenant-accounts-receivable",
+                DebitAmount = 1_675m,
+                CreditAmount = 0m,
+                TenantAccountId = (int?)scenario.TenantAccountId,
+            },
+            new
+            {
+                SystemKey = "tenant-security-deposits-payable",
+                DebitAmount = 0m,
+                CreditAmount = 1_675m,
+                TenantAccountId = (int?)scenario.TenantAccountId,
+            },
+        ]);
     }
 
     [SkippableFact]
@@ -227,6 +258,7 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
             var attemptId = Guid.NewGuid();
             var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
             commandContext.BeginAttempt(attemptId);
+            commandContext.BindReceipt(Guid.NewGuid());
             using var attempt = auditScope.BeginAttempt(
                 new AtomicCommandIdentity("test.transition.rollback", Guid.NewGuid().ToString("N")),
                 attemptId,
@@ -287,27 +319,39 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
     private async Task<AtomicLegalExecutionTransitionResult> ExecuteTransitionAsync(Scenario scenario)
     {
         await using var db = NewContext();
-        await using var transaction = await db.Database.BeginTransactionAsync();
-        var auditScope = new AtomicAuditScope(TimeProvider.System);
-        var attemptId = Guid.NewGuid();
-        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
-        commandContext.BeginAttempt(attemptId);
-        using var attempt = auditScope.BeginAttempt(
-            new AtomicCommandIdentity("test.native-esign.transition", Guid.NewGuid().ToString("N")),
-            attemptId,
-            db);
-        var result = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
-            db,
-            commandContext,
-            scenario.PortfolioId,
-            scenario.LeaseManagementId,
-            scenario.LeaseAgreementId,
-            null,
-            scenario.ExecutedArtifactId,
-            FrozenBusinessNow);
-        await transaction.CommitAsync();
-        commandContext.EndAttempt();
-        return result;
+        var originalAutoSavepointsEnabled = db.Database.AutoSavepointsEnabled;
+        try
+        {
+            // This direct persistence harness mirrors AtomicTransactionRunner: journal-line
+            // provenance is bound to the owner transaction XID, not an EF savepoint subtransaction.
+            db.Database.AutoSavepointsEnabled = false;
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            var auditScope = new AtomicAuditScope(TimeProvider.System);
+            var attemptId = Guid.NewGuid();
+            var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+            commandContext.BeginAttempt(attemptId);
+            commandContext.BindReceipt(Guid.NewGuid());
+            using var attempt = auditScope.BeginAttempt(
+                new AtomicCommandIdentity("test.native-esign.transition", Guid.NewGuid().ToString("N")),
+                attemptId,
+                db);
+            var result = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
+                db,
+                commandContext,
+                scenario.PortfolioId,
+                scenario.LeaseManagementId,
+                scenario.LeaseAgreementId,
+                null,
+                scenario.ExecutedArtifactId,
+                FrozenBusinessNow);
+            await transaction.CommitAsync();
+            commandContext.EndAttempt();
+            return result;
+        }
+        finally
+        {
+            db.Database.AutoSavepointsEnabled = originalAutoSavepointsEnabled;
+        }
     }
 
     private async Task<Scenario> SeedScenarioAsync(
@@ -506,6 +550,9 @@ public sealed class NativeEsignDepositChargePostgreSqlTests : IAsyncLifetime
         db.AddRange(user, portfolio, property, unit, template, source, relationship, account,
             issuedStored, issuedArtifact, executedStored, executedArtifact, agreement,
             agreementSigner, request, signer);
+        await db.SaveChangesAsync();
+
+        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
         await db.SaveChangesAsync();
 
         agreement.IssuedArtifactId = issuedArtifact.Id;

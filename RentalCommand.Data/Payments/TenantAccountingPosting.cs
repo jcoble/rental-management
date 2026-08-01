@@ -37,6 +37,143 @@ internal static class TenantAccountingPosting
                 actorLabel,
                 ct);
 
+    /// <summary>
+    /// Posts scheduled rent and late-fee charges with one system-account lookup and one posting
+    /// preflight, rather than repeating account and idempotency reads for every occurrence.
+    /// </summary>
+    internal static async Task<IReadOnlyList<JournalEntry>> PostScheduledTenantChargesAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyCollection<TenantLedgerEntry> entries,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+            return Array.Empty<JournalEntry>();
+
+        var portfolioId = entries.First().PortfolioId;
+        if (entries.Any(entry => entry.PortfolioId != portfolioId))
+        {
+            throw new AccountingPostingValidationException(
+                "Scheduled tenant charges must belong to one portfolio.");
+        }
+
+        var incomeKeys = entries.Select(entry => entry.EntryType switch
+        {
+            TenantLedgerEntryType.RentCharge => "rental-income",
+            TenantLedgerEntryType.LateFeeCharge => "late-fee-income",
+            _ => throw new AccountingPostingValidationException(
+                "Only scheduled rent and late-fee charges can use the batch posting rule."),
+        }).Distinct().ToArray();
+        var systemKeys = new[] { Receivable }.Concat(incomeKeys).ToArray();
+        var accountRows = await db.LedgerAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId
+                && account.IsSystem
+                && account.IsActive
+                && account.SystemKey != null
+                && systemKeys.Contains(account.SystemKey))
+            .Select(account => new { account.SystemKey, account.Id })
+            .ToListAsync(ct);
+        var accounts = accountRows.ToDictionary(row => row.SystemKey!, row => row.Id, StringComparer.Ordinal);
+        if (!accounts.TryGetValue(Receivable, out var receivable)
+            || incomeKeys.Any(key => !accounts.ContainsKey(key)))
+        {
+            throw new AccountingPostingValidationException(
+                "One or more required accounting mappings are missing or inactive.");
+        }
+
+        var proposals = entries.Select(entry =>
+        {
+            var incomeKey = entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                ? "late-fee-income"
+                : "rental-income";
+            return AccountingPostingSupport.BuildProposal(
+                context,
+                entry.PortfolioId,
+                JournalSourceType.TenantCharge,
+                entry.Id,
+                entry.BusinessKey,
+                PostingRuleVersion,
+                entry.EffectiveOn,
+                entry.Currency,
+                entry.Description,
+                [
+                    Debit(receivable, entry.Amount, "debit:tenant-receivable", entry),
+                    Credit(accounts[incomeKey], entry.Amount, "credit:income", entry),
+                ],
+                userId: entry.CreatedByUserId > 0 ? entry.CreatedByUserId : null,
+                actorLabel: entry.CreatedByUserId > 0
+                    ? null
+                    : "system:scheduled-tenant-billing");
+        }).ToArray();
+
+        return await new AccountingPostingService(db).PostBatchAsync(proposals, ct);
+    }
+
+    /// <summary>
+    /// Posts the native e-sign execution deposit charges with one account-map read and one
+    /// posting preflight for the complete claimed batch. The worker can span portfolios, so the
+    /// map is keyed by both portfolio and system account.
+    /// </summary>
+    internal static async Task<IReadOnlyList<JournalEntry>> PostInitialSecurityDepositChargesAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyCollection<TenantLedgerEntry> entries,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+            return Array.Empty<JournalEntry>();
+        if (entries.Any(entry => entry.EntryType != TenantLedgerEntryType.DepositCharge))
+        {
+            throw new AccountingPostingValidationException(
+                "Only security deposit charges can use the native e-sign batch posting rule.");
+        }
+
+        var portfolioIds = entries.Select(entry => entry.PortfolioId).Distinct().ToArray();
+        var systemKeys = new[] { Receivable, DepositPayable };
+        var accountRows = await db.LedgerAccounts.AsNoTracking()
+            .Where(account => portfolioIds.Contains(account.PortfolioId)
+                && account.IsSystem
+                && account.IsActive
+                && account.SystemKey != null
+                && systemKeys.Contains(account.SystemKey))
+            .Select(account => new { account.PortfolioId, account.SystemKey, account.Id })
+            .ToListAsync(ct);
+        var accounts = accountRows.ToDictionary(
+            row => new SystemAccountKey(row.PortfolioId, row.SystemKey!),
+            row => row.Id);
+        var proposals = new List<AccountingProposedEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (!accounts.TryGetValue(new SystemAccountKey(entry.PortfolioId, Receivable), out var receivable)
+                || !accounts.TryGetValue(new SystemAccountKey(entry.PortfolioId, DepositPayable), out var payable))
+            {
+                throw new AccountingPostingValidationException(
+                    "One or more required accounting mappings are missing or inactive.");
+            }
+
+            proposals.Add(AccountingPostingSupport.BuildProposal(
+                context,
+                entry.PortfolioId,
+                JournalSourceType.TenantCharge,
+                entry.Id,
+                entry.BusinessKey,
+                PostingRuleVersion,
+                entry.EffectiveOn,
+                entry.Currency,
+                entry.Description,
+                [
+                    Debit(receivable, entry.Amount, "debit:tenant-receivable", entry),
+                    Credit(payable, entry.Amount, "credit:security-deposit-payable", entry),
+                ],
+                userId: entry.CreatedByUserId > 0 ? entry.CreatedByUserId : null,
+                actorLabel: "native-esign"));
+        }
+
+        return await new AccountingPostingService(db).PostBatchAsync(proposals, ct);
+    }
+
     internal static Task<JournalEntry> PostTenantConcessionAsync(
         RentalCommandDbContext db,
         IAtomicCommandContext context,
@@ -501,6 +638,8 @@ internal static class TenantAccountingPosting
             : string.Equals(cashSystemKey, "undeposited-funds", StringComparison.Ordinal)
                 ? "debit:undeposited-funds"
                 : "debit:operating-cash";
+
+    private readonly record struct SystemAccountKey(int PortfolioId, string SystemKey);
 
     private static JournalSourceType SourceTypeForTenantEntry(TenantLedgerEntryType entryType) =>
         entryType switch
