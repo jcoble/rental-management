@@ -1065,6 +1065,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             {
                 PortfolioId = _portfolioId,
                 PropertyId = _managerPropertyId,
+                UnitId = _managerUnitId,
                 Description = "Original asset",
                 CostBasis = 700m,
                 InServiceDate = new DateTime(2027, 1, 13, 0, 0, 0, DateTimeKind.Utc),
@@ -1098,7 +1099,17 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             (await afterDimension.JournalEntries.CountAsync(entry =>
                 entry.PortfolioId == _portfolioId
                 && entry.SourceType == JournalSourceType.CapitalPurchase
-                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(1);
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(3);
+            var activeDimensionUnitIds = await afterDimension.JournalLines
+                .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                    && line.JournalEntry.SourceType == JournalSourceType.CapitalPurchase
+                    && line.JournalEntry.ReversesJournalEntryId == null
+                    && !afterDimension.JournalEntries.Any(reversal =>
+                        reversal.ReversesJournalEntryId == line.JournalEntryId)
+                    && line.SourceLineId == assetId)
+                .Select(line => line.UnitId)
+                .ToListAsync();
+            activeDimensionUnitIds.Should().OnlyContain(unitId => unitId == null);
         }
 
         var descriptionOnly = AtomicMoneyMutation.Command(
@@ -1117,7 +1128,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             (await afterDescription.JournalEntries.CountAsync(entry =>
                 entry.PortfolioId == _portfolioId
                 && entry.SourceType == JournalSourceType.CapitalPurchase
-                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(1);
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(3);
         }
 
         var factUpdate = AtomicMoneyMutation.Command(
@@ -1139,7 +1150,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 && entry.Lines.Any(line => line.SourceLineId == assetId))
             .OrderBy(entry => entry.Id)
             .ToListAsync();
-        entries.Should().HaveCount(3);
+        entries.Should().HaveCount(5);
         var original = entries.Single(entry => entry.SourceId == assetId
             && entry.ReversesJournalEntryId is null);
         entries.Should().Contain(entry => entry.ReversesJournalEntryId == original.Id);
