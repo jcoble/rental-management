@@ -58,7 +58,7 @@ internal static class AccountingFoundationModelConfiguration
             entity.Property(e => e.ActorLabel).HasMaxLength(120);
             entity.Property(e => e.AtomicReceiptId).IsRequired();
             entity.HasIndex(e => e.PublicId).IsUnique();
-            entity.HasIndex(e => new { e.PortfolioId, e.SourceType, e.SourceId, e.PostingRuleVersion })
+            entity.HasIndex(e => new { e.PortfolioId, e.SourceType, e.SourceBusinessKey, e.PostingRuleVersion })
                 .IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.EffectiveOn, e.Id });
             entity.HasIndex(e => new { e.PortfolioId, e.Currency, e.EffectiveOn, e.Id });
@@ -84,8 +84,10 @@ internal static class AccountingFoundationModelConfiguration
         modelBuilder.Entity<JournalLine>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.DebitAmount).HasPrecision(18, 2);
-            entity.Property(e => e.CreditAmount).HasPrecision(18, 2);
+            // Persist enough scale for the database constraint below to reject a sub-cent input
+            // instead of PostgreSQL coercing it to two decimals before validation runs.
+            entity.Property(e => e.DebitAmount).HasPrecision(22, 6);
+            entity.Property(e => e.CreditAmount).HasPrecision(22, 6);
             entity.Property(e => e.Memo).HasMaxLength(1000);
             entity.Property(e => e.SourceLineType).HasMaxLength(80);
             entity.HasIndex(e => new { e.JournalEntryId, e.Id });
@@ -106,9 +108,18 @@ internal static class AccountingFoundationModelConfiguration
             entity.HasOne(e => e.OwnerEntity).WithMany().HasForeignKey(e => e.OwnerEntityId)
                 .OnDelete(DeleteBehavior.Restrict)
                 .HasConstraintName("FK_JournalLines_OwnerEntities_RestrictHistory");
-            entity.ToTable(table => table.HasCheckConstraint(
-                "CK_JournalLines_Amounts",
-                "\"DebitAmount\" >= 0 AND \"CreditAmount\" >= 0 AND ((\"DebitAmount\" > 0 AND \"CreditAmount\" = 0) OR (\"DebitAmount\" = 0 AND \"CreditAmount\" > 0))"));
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_JournalLines_Amounts",
+                    "\"DebitAmount\" >= 0 AND \"CreditAmount\" >= 0 AND ((\"DebitAmount\" > 0 AND \"CreditAmount\" = 0) OR (\"DebitAmount\" = 0 AND \"CreditAmount\" > 0))");
+                table.HasCheckConstraint(
+                    "CK_JournalLines_DebitScale",
+                    "\"DebitAmount\" = round(\"DebitAmount\", 2)");
+                table.HasCheckConstraint(
+                    "CK_JournalLines_CreditScale",
+                    "\"CreditAmount\" = round(\"CreditAmount\", 2)");
+            });
         });
 
         modelBuilder.Entity<RecurringTenantCharge>(entity =>

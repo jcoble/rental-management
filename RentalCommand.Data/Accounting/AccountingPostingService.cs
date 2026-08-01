@@ -1,65 +1,298 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 
 namespace RentalCommand.Data.Accounting;
 
 /// <summary>
-/// Validates and attaches one complete immutable journal entry to the caller's current context.
-/// The source command owns the transaction and SaveChanges call.
+/// Validates and attaches complete immutable journal entries to the caller's current transaction.
+/// The source command owns the transaction and final SaveChanges call.
 /// </summary>
 public sealed class AccountingPostingService
 {
+    private const long PostingIdentityLockSeed = 803;
     private readonly RentalCommandDbContext _db;
 
     public AccountingPostingService(RentalCommandDbContext db) => _db = db;
 
     /// <summary>
     /// Validates a complete proposed entry, returns an exact committed replay, or attaches a new
-    /// entry to the current context. This method deliberately does not save or open a transaction.
+    /// entry to the current context. This method deliberately does not open or commit a transaction.
     /// </summary>
     public async Task<JournalEntry> PostAsync(
         AccountingProposedEntry proposal,
         CancellationToken ct = default)
     {
-        proposal.Lines = AccountingPostingLineOrdering.Order(proposal.Lines);
-        ValidateProposalShape(proposal);
-        var digest = ComputeIdempotencyDigest(proposal);
+        var prepared = Prepare(proposal);
+        await AcquireBusinessIdentityLockAsync(prepared.Identity, ct);
 
-        var existing = await _db.JournalEntries.SingleOrDefaultAsync(entry =>
-            entry.PortfolioId == proposal.PortfolioId &&
-            entry.SourceType == proposal.SourceType &&
-            entry.SourceId == proposal.SourceId &&
-            entry.PostingRuleVersion == proposal.PostingRuleVersion, ct);
+        var existing = await FindExistingAsync(prepared.Identity, ct);
         if (existing is not null)
-        {
-            if (!string.Equals(existing.IdempotencyDigest, digest, StringComparison.Ordinal))
-                throw new AccountingIdempotencyConflictException(
-                    "The source posting key was already used with different accounting facts.");
+            return ReplayOrConflict(existing, prepared.Digest);
 
-            return existing;
+        await ValidateAccountAndCurrencyFactsAsync([prepared], ct);
+        await ValidateExactReversalAsync(prepared, ct);
+        return Attach(prepared);
+    }
+
+    /// <summary>
+    /// Posts a homogeneous source batch without per-entry account or idempotency reads. Callers
+    /// use this only for bounded, set-based source batches that already own one atomic transaction.
+    /// </summary>
+    public async Task<IReadOnlyList<JournalEntry>> PostBatchAsync(
+        IReadOnlyCollection<AccountingProposedEntry> proposals,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(proposals);
+        if (proposals.Count == 0)
+            return Array.Empty<JournalEntry>();
+
+        var prepared = proposals.Select(Prepare).ToArray();
+        var identities = new HashSet<PostingIdentity>();
+        foreach (var item in prepared)
+        {
+            if (!identities.Add(item.Identity))
+            {
+                throw new AccountingPostingValidationException(
+                    "A posting batch cannot contain the same source business identity twice.");
+            }
         }
 
-        var accountIds = proposal.Lines.Select(line => line.LedgerAccountId).Distinct().ToArray();
-        var accounts = await _db.LedgerAccounts
-            .Where(account => account.PortfolioId == proposal.PortfolioId && accountIds.Contains(account.Id))
-            .Select(account => new { account.Id, account.IsActive })
+        var existingByIdentity = await FindExistingBatchAsync(prepared, ct);
+        var results = new JournalEntry[prepared.Length];
+        var newPostings = new List<(int Index, PreparedPosting Posting)>();
+        for (var index = 0; index < prepared.Length; index++)
+        {
+            var item = prepared[index];
+            if (existingByIdentity.TryGetValue(item.Identity, out var existing))
+            {
+                results[index] = ReplayOrConflict(existing, item.Digest);
+                continue;
+            }
+
+            newPostings.Add((index, item));
+        }
+
+        if (newPostings.Count == 0)
+            return results;
+
+        await ValidateAccountAndCurrencyFactsAsync(
+            newPostings.Select(item => item.Posting).ToArray(),
+            ct);
+
+        foreach (var (_, item) in newPostings)
+        {
+            await ValidateExactReversalAsync(item, ct);
+        }
+
+        foreach (var (index, item) in newPostings)
+        {
+            results[index] = Attach(item);
+        }
+
+        return results;
+    }
+
+    private PreparedPosting Prepare(AccountingProposedEntry proposal)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        proposal.Lines = AccountingPostingLineOrdering.Order(proposal.Lines);
+        ValidateProposalShape(proposal);
+        return new PreparedPosting(
+            proposal,
+            new PostingIdentity(
+                proposal.PortfolioId,
+                proposal.SourceType,
+                proposal.SourceBusinessKey.Trim(),
+                proposal.PostingRuleVersion),
+            ComputeIdempotencyDigest(proposal));
+    }
+
+    private async Task AcquireBusinessIdentityLockAsync(
+        PostingIdentity identity,
+        CancellationToken ct)
+    {
+        if (!_db.Database.IsNpgsql())
+            return;
+
+        var resource = $"{identity.PortfolioId}:{identity.SourceType}:{identity.SourceBusinessKey}:{identity.PostingRuleVersion}";
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({resource}, {PostingIdentityLockSeed}))",
+            ct);
+    }
+
+    private Task<JournalEntry?> FindExistingAsync(
+        PostingIdentity identity,
+        CancellationToken ct) =>
+        _db.JournalEntries.SingleOrDefaultAsync(entry =>
+            entry.PortfolioId == identity.PortfolioId &&
+            entry.SourceType == identity.SourceType &&
+            entry.SourceBusinessKey == identity.SourceBusinessKey &&
+            entry.PostingRuleVersion == identity.PostingRuleVersion,
+            ct);
+
+    private async Task<Dictionary<PostingIdentity, JournalEntry>> FindExistingBatchAsync(
+        IReadOnlyCollection<PreparedPosting> proposals,
+        CancellationToken ct)
+    {
+        var portfolioIds = proposals.Select(item => item.Identity.PortfolioId).Distinct().ToArray();
+        var sourceTypes = proposals.Select(item => item.Identity.SourceType).Distinct().ToArray();
+        var businessKeys = proposals.Select(item => item.Identity.SourceBusinessKey).Distinct().ToArray();
+        var ruleVersions = proposals.Select(item => item.Identity.PostingRuleVersion).Distinct().ToArray();
+
+        var candidates = await _db.JournalEntries
+            .Where(entry => portfolioIds.Contains(entry.PortfolioId)
+                && sourceTypes.Contains(entry.SourceType)
+                && businessKeys.Contains(entry.SourceBusinessKey)
+                && ruleVersions.Contains(entry.PostingRuleVersion))
             .ToListAsync(ct);
 
-        // Use the same message for missing and inactive rows. A caller must not be able to infer
-        // whether an account id exists in a different portfolio.
-        if (accounts.Count != accountIds.Length || accounts.Any(account => !account.IsActive))
-            throw new AccountingPostingValidationException("One or more ledger accounts are unavailable.");
+        return candidates.ToDictionary(
+            entry => new PostingIdentity(
+                entry.PortfolioId,
+                entry.SourceType,
+                entry.SourceBusinessKey,
+                entry.PostingRuleVersion));
+    }
 
-        var debitTotal = proposal.Lines.Sum(line => line.DebitAmount);
-        var creditTotal = proposal.Lines.Sum(line => line.CreditAmount);
-        if (debitTotal != creditTotal)
+    private static JournalEntry ReplayOrConflict(JournalEntry existing, string digest)
+    {
+        if (!string.Equals(existing.IdempotencyDigest, digest, StringComparison.Ordinal))
+        {
+            throw new AccountingIdempotencyConflictException(
+                "The source posting key was already used with different accounting facts.");
+        }
+
+        return existing;
+    }
+
+    private async Task ValidateAccountAndCurrencyFactsAsync(
+        IReadOnlyCollection<PreparedPosting> postings,
+        CancellationToken ct)
+    {
+        var portfolioIds = postings.Select(item => item.Proposal.PortfolioId).Distinct().ToArray();
+        var accountIds = postings.SelectMany(item => item.Proposal.Lines)
+            .Select(line => line.LedgerAccountId)
+            .Distinct()
+            .ToArray();
+
+        var facts = await (
+                from account in _db.LedgerAccounts.AsNoTracking()
+                join portfolio in _db.Portfolios.AsNoTracking()
+                    on account.PortfolioId equals portfolio.Id
+                where portfolioIds.Contains(account.PortfolioId)
+                    && accountIds.Contains(account.Id)
+                select new AccountPostingFact(
+                    account.Id,
+                    account.PortfolioId,
+                    account.IsActive,
+                    portfolio.Currency))
+            .ToListAsync(ct);
+        var factsByAccount = facts.ToDictionary(fact => new AccountPortfolioKey(
+            fact.AccountId,
+            fact.PortfolioId));
+
+        foreach (var posting in postings)
+        {
+            foreach (var line in posting.Proposal.Lines)
+            {
+                if (!factsByAccount.TryGetValue(
+                        new AccountPortfolioKey(line.LedgerAccountId, posting.Proposal.PortfolioId),
+                        out var fact) || !fact.IsActive)
+                {
+                    // Do not distinguish a missing account from an account in another portfolio.
+                    throw new AccountingPostingValidationException(
+                        "One or more ledger accounts are unavailable.");
+                }
+
+                if (!string.Equals(fact.PortfolioCurrency, posting.Proposal.Currency, StringComparison.Ordinal))
+                {
+                    throw new AccountingPostingValidationException(
+                        "The journal currency must match the portfolio currency.");
+                }
+            }
+        }
+    }
+
+    private async Task ValidateExactReversalAsync(PreparedPosting posting, CancellationToken ct)
+    {
+        if (posting.Proposal.ReversesJournalEntryId is not { } reversalId)
+            return;
+
+        var linesJson = JsonSerializer.Serialize(posting.Proposal.Lines.Select(line => new ReversalLineInput(
+            line.LedgerAccountId,
+            line.DebitAmount,
+            line.CreditAmount,
+            TrimOrNull(line.Memo),
+            line.PropertyId,
+            line.UnitId,
+            line.TenantAccountId,
+            line.OwnerEntityId,
+            TrimOrNull(line.SourceLineType),
+            line.SourceLineId)));
+        var valid = await _db.Database.SqlQuery<int>($"""
+            WITH proposed AS (
+                SELECT *
+                FROM jsonb_to_recordset(CAST({linesJson} AS jsonb)) AS line(
+                    "LedgerAccountId" integer,
+                    "DebitAmount" numeric,
+                    "CreditAmount" numeric,
+                    "Memo" text,
+                    "PropertyId" integer,
+                    "UnitId" integer,
+                    "TenantAccountId" integer,
+                    "OwnerEntityId" integer,
+                    "SourceLineType" text,
+                    "SourceLineId" bigint)
+            )
+            SELECT CASE WHEN EXISTS (
+                SELECT 1
+                FROM "JournalEntries" original
+                WHERE original."Id" = {reversalId}
+                  AND original."PortfolioId" = {posting.Proposal.PortfolioId}
+                  AND original."Currency" = {posting.Proposal.Currency}
+                  AND NOT EXISTS (
+                      (SELECT line."LedgerAccountId", line."DebitAmount", line."CreditAmount",
+                              line."Memo", line."PropertyId", line."UnitId", line."TenantAccountId",
+                              line."OwnerEntityId", line."SourceLineType", line."SourceLineId"
+                       FROM "JournalLines" line
+                       WHERE line."JournalEntryId" = original."Id")
+                      EXCEPT ALL
+                      (SELECT line."LedgerAccountId", line."CreditAmount", line."DebitAmount",
+                              line."Memo", line."PropertyId", line."UnitId", line."TenantAccountId",
+                              line."OwnerEntityId", line."SourceLineType", line."SourceLineId"
+                       FROM proposed line)
+                  )
+                  AND NOT EXISTS (
+                      (SELECT line."LedgerAccountId", line."CreditAmount", line."DebitAmount",
+                              line."Memo", line."PropertyId", line."UnitId", line."TenantAccountId",
+                              line."OwnerEntityId", line."SourceLineType", line."SourceLineId"
+                       FROM "JournalLines" line
+                       WHERE line."JournalEntryId" = original."Id")
+                      EXCEPT ALL
+                      (SELECT line."LedgerAccountId", line."DebitAmount", line."CreditAmount",
+                              line."Memo", line."PropertyId", line."UnitId", line."TenantAccountId",
+                              line."OwnerEntityId", line."SourceLineType", line."SourceLineId"
+                       FROM proposed line)
+                  )
+            ) THEN 1 ELSE 0 END AS "Value"
+            """).SingleAsync(ct);
+
+        if (valid != 1)
+        {
             throw new AccountingPostingValidationException(
-                $"The journal entry is not balanced for currency {proposal.Currency}.");
+                "A reversal must exactly mirror the original journal entry.");
+        }
+    }
 
+    private JournalEntry Attach(PreparedPosting posting)
+    {
+        var proposal = posting.Proposal;
         var entry = new JournalEntry
         {
             PortfolioId = proposal.PortfolioId,
@@ -70,7 +303,7 @@ public sealed class AccountingPostingService
             SourceType = proposal.SourceType,
             SourceId = proposal.SourceId,
             SourceBusinessKey = proposal.SourceBusinessKey.Trim(),
-            IdempotencyDigest = digest,
+            IdempotencyDigest = posting.Digest,
             PostingRuleVersion = proposal.PostingRuleVersion,
             ReversesJournalEntryId = proposal.ReversesJournalEntryId,
             AttemptId = proposal.AttemptId,
@@ -104,8 +337,6 @@ public sealed class AccountingPostingService
 
     private static void ValidateProposalShape(AccountingProposedEntry proposal)
     {
-        if (proposal is null)
-            throw new ArgumentNullException(nameof(proposal));
         if (proposal.PortfolioId <= 0 || proposal.SourceId <= 0 || proposal.PostingRuleVersion <= 0)
             throw new AccountingPostingValidationException("A portfolio, source, and posting-rule version are required.");
         if (string.IsNullOrWhiteSpace(proposal.SourceBusinessKey) || proposal.SourceBusinessKey.Trim().Length > 200)
@@ -128,10 +359,24 @@ public sealed class AccountingPostingService
                 throw new AccountingPostingValidationException("Every journal line requires an account.");
             if (line.DebitAmount < 0 || line.CreditAmount < 0)
                 throw new AccountingPostingValidationException("Journal amounts cannot be negative.");
+            if (decimal.Round(line.DebitAmount, 2, MidpointRounding.ToEven) != line.DebitAmount ||
+                decimal.Round(line.CreditAmount, 2, MidpointRounding.ToEven) != line.CreditAmount)
+            {
+                throw new AccountingPostingValidationException(
+                    "Journal amounts cannot include fractions of a cent.");
+            }
             if ((line.DebitAmount > 0) == (line.CreditAmount > 0))
                 throw new AccountingPostingValidationException("Each line must contain exactly one positive debit or credit.");
             if (line.Memo?.Length > 1000 || line.SourceLineType?.Length > 80)
                 throw new AccountingPostingValidationException("Journal line text is too long.");
+        }
+
+        var debitTotal = proposal.Lines.Sum(line => line.DebitAmount);
+        var creditTotal = proposal.Lines.Sum(line => line.CreditAmount);
+        if (debitTotal != creditTotal)
+        {
+            throw new AccountingPostingValidationException(
+                $"The journal entry is not balanced for currency {proposal.Currency}.");
         }
     }
 
@@ -140,7 +385,6 @@ public sealed class AccountingPostingService
         var canonical = new StringBuilder()
             .Append(Value(proposal.PortfolioId))
             .Append(Value(proposal.SourceType))
-            .Append(Value(proposal.SourceId))
             .Append(Value(proposal.SourceBusinessKey.Trim()))
             .Append(Value(proposal.PostingRuleVersion))
             .Append(Value(proposal.EffectiveOn))
@@ -154,13 +398,12 @@ public sealed class AccountingPostingService
             canonical += Value(line.LedgerAccountId)
                 + Value(line.DebitAmount)
                 + Value(line.CreditAmount)
-                + Value(line.Memo)
+                + Value(TrimOrNull(line.Memo))
                 + Value(line.PropertyId)
                 + Value(line.UnitId)
                 + Value(line.TenantAccountId)
                 + Value(line.OwnerEntityId)
-                + Value(line.SourceLineType)
-                + Value(line.SourceLineId);
+                + Value(TrimOrNull(line.SourceLineType));
         }
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
@@ -179,4 +422,35 @@ public sealed class AccountingPostingService
 
     private static string? TrimOrNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record PreparedPosting(
+        AccountingProposedEntry Proposal,
+        PostingIdentity Identity,
+        string Digest);
+
+    private sealed record AccountPostingFact(
+        int AccountId,
+        int PortfolioId,
+        bool IsActive,
+        string PortfolioCurrency);
+
+    private sealed record ReversalLineInput(
+        int LedgerAccountId,
+        decimal DebitAmount,
+        decimal CreditAmount,
+        string? Memo,
+        int? PropertyId,
+        int? UnitId,
+        int? TenantAccountId,
+        int? OwnerEntityId,
+        string? SourceLineType,
+        long? SourceLineId);
+
+    private readonly record struct PostingIdentity(
+        int PortfolioId,
+        JournalSourceType SourceType,
+        string SourceBusinessKey,
+        int PostingRuleVersion);
+
+    private readonly record struct AccountPortfolioKey(int AccountId, int PortfolioId);
 }

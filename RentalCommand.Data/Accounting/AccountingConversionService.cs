@@ -75,39 +75,51 @@ public sealed class AccountingConversionService
         if (batchSize is < 1 or > 1000)
             throw new ArgumentOutOfRangeException(nameof(batchSize));
 
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        await _chart.SeedAsync(portfolioId, ct);
-        await _db.SaveChangesAsync(ct);
-
-        foreach (var sourceType in _framework.SourceTypes)
+        var originalAutoSavepointsEnabled = _db.Database.AutoSavepointsEnabled;
+        try
         {
-            long afterSourceId = 0;
-            while (true)
-            {
-                var sourceIds = await _framework.GetSourceIdsAsync(
-                    portfolioId, sourceType, afterSourceId, batchSize, ct);
-                if (sourceIds.Count == 0)
-                    break;
+            // Journal-line provenance is intentionally tied to the outer transaction XID. This
+            // bounded conversion owns that transaction, so do not let EF introduce a savepoint
+            // subtransaction for its SaveChanges calls.
+            _db.Database.AutoSavepointsEnabled = false;
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+            await _chart.SeedAsync(portfolioId, ct);
+            await _db.SaveChangesAsync(ct);
 
-                foreach (var sourceId in sourceIds)
+            foreach (var sourceType in _framework.SourceTypes)
+            {
+                long afterSourceId = 0;
+                while (true)
                 {
-                    var key = new AccountingSourceJournalKey(
-                        portfolioId, sourceType, sourceId, PostingRuleVersion);
-                    var proposal = await _framework.GenerateAsync(key, ct);
-                    if (proposal is not null)
-                        await _posting.PostAsync(proposal, ct);
-                    afterSourceId = sourceId;
+                    var sourceIds = await _framework.GetSourceIdsAsync(
+                        portfolioId, sourceType, afterSourceId, batchSize, ct);
+                    if (sourceIds.Count == 0)
+                        break;
+
+                    foreach (var sourceId in sourceIds)
+                    {
+                        var key = new AccountingSourceJournalKey(
+                            portfolioId, sourceType, sourceId, PostingRuleVersion);
+                        var proposal = await _framework.GenerateAsync(key, ct);
+                        if (proposal is not null)
+                            await _posting.PostAsync(proposal, ct);
+                        afterSourceId = sourceId;
+                    }
+
+                    await _db.SaveChangesAsync(ct);
+                    _db.ChangeTracker.Clear();
                 }
 
-                await _db.SaveChangesAsync(ct);
-                _db.ChangeTracker.Clear();
+                await UpsertReconciliationAsync(portfolioId, sourceType, ct);
             }
 
-            await UpsertReconciliationAsync(portfolioId, sourceType, ct);
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
         }
-
-        await _db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
+        finally
+        {
+            _db.Database.AutoSavepointsEnabled = originalAutoSavepointsEnabled;
+        }
     }
 
     private async Task UpsertReconciliationAsync(
@@ -510,7 +522,9 @@ public abstract class TenantLedgerSourceJournalGeneratorBase : AccountingSourceJ
                     UnitId = line.UnitId,
                     TenantAccountId = line.TenantAccountId,
                     OwnerEntityId = line.OwnerEntityId,
-                    SourceLineType = OppositeLineType(line.SourceLineType),
+                    // Keep the source discriminator stable. The swapped amounts are the
+                    // reversal; the discriminator is part of the original business fact.
+                    SourceLineType = line.SourceLineType,
                     SourceLineId = line.SourceLineId,
                 }),
                 originalJournal.Id);
@@ -770,7 +784,9 @@ public abstract class SecurityDepositSourceJournalGeneratorBase : AccountingSour
                     UnitId = line.UnitId,
                     TenantAccountId = line.TenantAccountId,
                     OwnerEntityId = line.OwnerEntityId,
-                    SourceLineType = OppositeLineType(line.SourceLineType),
+                    // Keep the source discriminator stable. The swapped amounts are the
+                    // reversal; the discriminator is part of the original business fact.
+                    SourceLineType = line.SourceLineType,
                     SourceLineId = line.SourceLineId,
                 }),
                 original.Id);

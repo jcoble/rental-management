@@ -1,11 +1,16 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -13,6 +18,8 @@ namespace RentalCommand.Api.Tests.Domain;
 [Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class AccountingFoundationPostgreSqlTests
 {
+    private static readonly AtomicJsonResultCodec<ConcurrentJournalPostingResult> ConcurrentPostingCodec =
+        new("accounting.concurrent-journal-posting.v1");
     private readonly MigratedPostgreSqlFixture _fixture;
 
     public AccountingFoundationPostgreSqlTests(MigratedPostgreSqlFixture fixture) => _fixture = fixture;
@@ -71,6 +78,105 @@ public sealed class AccountingFoundationPostgreSqlTests
         await FluentActions.Invoking(() => service.PostAsync(unbalanced))
             .Should().ThrowAsync<AccountingPostingValidationException>()
             .WithMessage("*not balanced*");
+    }
+
+    [Fact]
+    public async Task PostingService_ReplaysBusinessKeyAcrossRecreatedSourceAndRejectsChangedFacts()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        var seed = new ChartOfAccountsSeedService(setup.Db);
+        await seed.SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+        var accountIds = await setup.Db.LedgerAccounts.Where(account => account.PortfolioId == 1)
+            .OrderBy(account => account.Code)
+            .Select(account => account.Id)
+            .Take(2)
+            .ToArrayAsync();
+        var service = new AccountingPostingService(setup.Db);
+        var original = Proposal(accountIds[0], accountIds[1], sourceId: 7_011);
+        original.SourceBusinessKey = "tenant-charge:recreated-source";
+
+        var posted = await service.PostAsync(original);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+
+        var recreatedSource = Proposal(accountIds[0], accountIds[1], sourceId: 7_012);
+        recreatedSource.SourceBusinessKey = original.SourceBusinessKey;
+        var replay = await service.PostAsync(recreatedSource);
+
+        replay.Id.Should().Be(posted.Id);
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == 1 &&
+                entry.SourceBusinessKey == original.SourceBusinessKey))
+            .Should().Be(1);
+
+        var changedFacts = Proposal(accountIds[0], accountIds[1], sourceId: 7_013);
+        changedFacts.SourceBusinessKey = original.SourceBusinessKey;
+        changedFacts.Description = "Changed accounting facts";
+        await FluentActions.Invoking(() => service.PostAsync(changedFacts))
+            .Should().ThrowAsync<AccountingIdempotencyConflictException>()
+            .WithMessage("The source posting key was already used with different accounting facts.");
+    }
+
+    [Fact]
+    public async Task AtomicRunner_ConcurrentBusinessKeyLoserReturnsTheCommittedJournal()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        var seed = new ChartOfAccountsSeedService(setup.Db);
+        await seed.SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+        var accountIds = await setup.Db.LedgerAccounts.Where(account => account.PortfolioId == 1)
+            .OrderBy(account => account.Code)
+            .Select(account => account.Id)
+            .Take(2)
+            .ToArrayAsync();
+
+        var gate = new ConcurrentJournalPostingGate();
+        await using var services = CreateConcurrentPostingServices(setup.ConnectionString, gate);
+        await using var firstScope = services.CreateAsyncScope();
+        await using var secondScope = services.CreateAsyncScope();
+        var firstAtomic = firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var secondAtomic = secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var firstCommand = new ConcurrentJournalPostingCommand(
+            8_071,
+            accountIds[0],
+            accountIds[1],
+            true);
+        var secondCommand = firstCommand with { SourceId = 8_072, HoldBeforeCommit = false };
+
+        var first = firstAtomic.ExecuteAsync(
+            new AtomicCommandIdentity("accounting.concurrent-journal-posting", "first-attempt"),
+            firstCommand,
+            ConcurrentPostingCodec);
+        await gate.FirstJournalFlushed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var second = secondAtomic.ExecuteAsync(
+            new AtomicCommandIdentity("accounting.concurrent-journal-posting", "second-attempt"),
+            secondCommand,
+            ConcurrentPostingCodec);
+        await gate.SecondStartedPosting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var winner = await Task.WhenAny(
+            gate.SecondReturnedCommittedJournal.Task,
+            Task.Delay(TimeSpan.FromMilliseconds(300)));
+        winner.Should().NotBe(gate.SecondReturnedCommittedJournal.Task,
+            "the second Atomic runner must wait for the first transaction's business-identity lock");
+
+        gate.ReleaseFirstCommit.TrySetResult();
+        var outcomes = await Task.WhenAll(first, second);
+
+        outcomes.Should().OnlyContain(outcome => outcome.Disposition == AtomicCommandDisposition.Executed);
+        outcomes.Select(outcome => outcome.Value.JournalEntryId).Distinct().Should().ContainSingle();
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == 1 &&
+                entry.SourceType == JournalSourceType.TenantCharge &&
+                entry.SourceBusinessKey == ConcurrentJournalPostingCommand.SourceBusinessKey))
+            .Should().Be(1);
+        (await setup.Db.AtomicCommandReceipts.CountAsync(receipt =>
+                receipt.CommandType == "accounting.concurrent-journal-posting"))
+            .Should().Be(2);
     }
 
     [Fact]
@@ -133,6 +239,34 @@ public sealed class AccountingFoundationPostgreSqlTests
                 "DELETE FROM \"JournalLines\" WHERE \"JournalEntryId\" = {0}", entry.Id))
             .Should().ThrowAsync<PostgresException>()
             .WithMessage("*immutable*");
+    }
+
+    [Fact]
+    public async Task CommittedJournal_CannotReceiveLateBalancedLines()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        var seed = new ChartOfAccountsSeedService(setup.Db);
+        await seed.SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+        var accountIds = await setup.Db.LedgerAccounts
+            .Where(account => account.PortfolioId == 1)
+            .OrderBy(account => account.Code)
+            .Select(account => account.Id)
+            .Take(2)
+            .ToArrayAsync();
+        var entry = await new AccountingPostingService(setup.Db)
+            .PostAsync(Proposal(accountIds[0], accountIds[1], sourceId: 7006));
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+
+        await FluentActions.Invoking(() => setup.Db.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO "JournalLines" ("JournalEntryId", "LedgerAccountId", "DebitAmount", "CreditAmount")
+                VALUES ({entry.Id}, {accountIds[0]}, 1.0, 0.0),
+                       ({entry.Id}, {accountIds[1]}, 0.0, 1.0)
+                """))
+            .Should().ThrowAsync<PostgresException>()
+            .WithMessage("*Journal lines must be inserted in the journal entry transaction.*");
     }
 
     [Fact]
@@ -366,6 +500,108 @@ public sealed class AccountingFoundationPostgreSqlTests
                 new AccountingProposedLine { LedgerAccountId = creditAccountId, CreditAmount = 100m },
             ],
         };
+
+    private static ServiceProvider CreateConcurrentPostingServices(
+        string connectionString,
+        ConcurrentJournalPostingGate gate)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddSingleton(gate);
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            ConcurrentJournalPostingCommand,
+            ConcurrentJournalPostingResult,
+            ConcurrentJournalPostingHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
+        return services.BuildServiceProvider();
+    }
+
+    private sealed record ConcurrentJournalPostingCommand(
+        long SourceId,
+        int DebitAccountId,
+        int CreditAccountId,
+        bool HoldBeforeCommit) : IAtomicCommandData
+    {
+        public const string SourceBusinessKey = "tenant-charge:atomic-concurrency";
+    }
+
+    private sealed record ConcurrentJournalPostingResult(int JournalEntryId);
+
+    private sealed class ConcurrentJournalPostingHandler
+        : IAtomicCommandHandler<ConcurrentJournalPostingCommand, ConcurrentJournalPostingResult>
+    {
+        private readonly RentalCommandDbContext _db;
+        private readonly ConcurrentJournalPostingGate _gate;
+
+        public ConcurrentJournalPostingHandler(
+            RentalCommandDbContext db,
+            ConcurrentJournalPostingGate gate)
+        {
+            _db = db;
+            _gate = gate;
+        }
+
+        public async Task<ConcurrentJournalPostingResult> HandleAsync(
+            ConcurrentJournalPostingCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct)
+        {
+            if (!command.HoldBeforeCommit)
+                _gate.SecondStartedPosting.TrySetResult();
+
+            var journal = await new AccountingPostingService(_db).PostAsync(new AccountingProposedEntry
+            {
+                PortfolioId = 1,
+                SourceType = JournalSourceType.TenantCharge,
+                SourceId = command.SourceId,
+                SourceBusinessKey = ConcurrentJournalPostingCommand.SourceBusinessKey,
+                PostingRuleVersion = 1,
+                EffectiveOn = new DateOnly(2026, 8, 1),
+                Currency = "USD",
+                Description = "Concurrent business-key test",
+                AttemptId = context.AttemptId,
+                ActorLabel = "accounting-test",
+                AtomicReceiptId = context.AtomicReceiptId,
+                Lines =
+                [
+                    new AccountingProposedLine { LedgerAccountId = command.DebitAccountId, DebitAmount = 100m },
+                    new AccountingProposedLine { LedgerAccountId = command.CreditAccountId, CreditAmount = 100m },
+                ],
+            }, ct);
+
+            if (command.HoldBeforeCommit)
+            {
+                await context.FlushBusinessAsync(ct);
+                _gate.FirstJournalFlushed.TrySetResult();
+                await _gate.ReleaseFirstCommit.Task.WaitAsync(ct);
+            }
+            else
+            {
+                _gate.SecondReturnedCommittedJournal.TrySetResult();
+            }
+
+            return new ConcurrentJournalPostingResult(journal.Id);
+        }
+
+        public Task AuthorizeReplayAsync(
+            ConcurrentJournalPostingCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class ConcurrentJournalPostingGate
+    {
+        public TaskCompletionSource FirstJournalFlushed { get; } = NewSignal();
+        public TaskCompletionSource SecondStartedPosting { get; } = NewSignal();
+        public TaskCompletionSource SecondReturnedCommittedJournal { get; } = NewSignal();
+        public TaskCompletionSource ReleaseFirstCommit { get; } = NewSignal();
+
+        private static TaskCompletionSource NewSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     private static async Task RollbackStageAsync(Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction) =>
         await transaction.RollbackAsync();

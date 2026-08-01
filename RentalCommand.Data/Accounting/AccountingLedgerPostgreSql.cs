@@ -243,4 +243,138 @@ internal static class AccountingLedgerPostgreSql
             "JournalLines_Id_seq", "RecurringTenantCharges_Id_seq",
             "AccountingConversionReconciliations_Id_seq" FROM rentalcommand_api, rentalcommand_engine;
         """;
+
+    // Kept separate from ApplySql because ApplySql is invoked by an already-committed migration.
+    // New database rules must be introduced by a later migration without rewriting history.
+    internal const string HardenSql = """
+        CREATE OR REPLACE FUNCTION rc_accounting_validate_journal_entry_currency()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE
+            portfolio_currency text;
+        BEGIN
+            SELECT portfolio."Currency"
+              INTO portfolio_currency
+              FROM public."Portfolios" portfolio
+             WHERE portfolio."Id" = NEW."PortfolioId";
+            IF portfolio_currency IS NULL
+               OR NEW."Currency" IS DISTINCT FROM portfolio_currency THEN
+                RAISE EXCEPTION 'Journal currency must match the portfolio currency.'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $function$;
+
+        DROP TRIGGER IF EXISTS "TR_JournalEntries_PortfolioCurrency" ON "JournalEntries";
+        CREATE TRIGGER "TR_JournalEntries_PortfolioCurrency"
+        BEFORE INSERT ON "JournalEntries"
+        FOR EACH ROW EXECUTE FUNCTION rc_accounting_validate_journal_entry_currency();
+
+        CREATE OR REPLACE FUNCTION rc_accounting_reject_late_journal_line_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE
+            parent_xmin xid8;
+        BEGIN
+            SELECT entry.xmin::text::xid8
+              INTO parent_xmin
+              FROM public."JournalEntries" entry
+             WHERE entry."Id" = NEW."JournalEntryId";
+            IF parent_xmin IS NULL THEN
+                RAISE EXCEPTION 'Journal entry is unavailable.' USING ERRCODE = '23503';
+            END IF;
+            -- A journal row written through an EF savepoint can have a subtransaction xmin.
+            -- Its transaction status stays in progress until the owning transaction commits.
+            IF pg_xact_status(parent_xmin) IS DISTINCT FROM 'in progress' THEN
+                RAISE EXCEPTION 'Journal lines must be inserted in the journal entry transaction.'
+                    USING ERRCODE = '55000';
+            END IF;
+            RETURN NEW;
+        END;
+        $function$;
+
+        DROP TRIGGER IF EXISTS "TR_JournalLines_NoLateInsert" ON "JournalLines";
+        CREATE TRIGGER "TR_JournalLines_NoLateInsert"
+        BEFORE INSERT ON "JournalLines"
+        FOR EACH ROW EXECUTE FUNCTION rc_accounting_reject_late_journal_line_insert();
+
+        CREATE OR REPLACE FUNCTION rc_accounting_validate_exact_reversal()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        BEGIN
+            IF NEW."ReversesJournalEntryId" IS NULL THEN
+                RETURN NULL;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                  FROM public."JournalEntries" original
+                 WHERE original."Id" = NEW."ReversesJournalEntryId"
+                   AND original."PortfolioId" = NEW."PortfolioId"
+                   AND original."Currency" = NEW."Currency") THEN
+                RAISE EXCEPTION 'A reversal must use the original journal portfolio and currency.'
+                    USING ERRCODE = '23514';
+            END IF;
+
+            IF EXISTS (
+                (SELECT original_line."LedgerAccountId", original_line."DebitAmount", original_line."CreditAmount",
+                        original_line."Memo", original_line."PropertyId", original_line."UnitId",
+                        original_line."TenantAccountId", original_line."OwnerEntityId",
+                        original_line."SourceLineType", original_line."SourceLineId"
+                   FROM public."JournalLines" original_line
+                  WHERE original_line."JournalEntryId" = NEW."ReversesJournalEntryId")
+                EXCEPT ALL
+                (SELECT reversal_line."LedgerAccountId", reversal_line."CreditAmount", reversal_line."DebitAmount",
+                        reversal_line."Memo", reversal_line."PropertyId", reversal_line."UnitId",
+                        reversal_line."TenantAccountId", reversal_line."OwnerEntityId",
+                        reversal_line."SourceLineType", reversal_line."SourceLineId"
+                   FROM public."JournalLines" reversal_line
+                  WHERE reversal_line."JournalEntryId" = NEW."Id")
+            ) OR EXISTS (
+                (SELECT reversal_line."LedgerAccountId", reversal_line."DebitAmount", reversal_line."CreditAmount",
+                        reversal_line."Memo", reversal_line."PropertyId", reversal_line."UnitId",
+                        reversal_line."TenantAccountId", reversal_line."OwnerEntityId",
+                        reversal_line."SourceLineType", reversal_line."SourceLineId"
+                   FROM public."JournalLines" reversal_line
+                  WHERE reversal_line."JournalEntryId" = NEW."Id")
+                EXCEPT ALL
+                (SELECT original_line."LedgerAccountId", original_line."CreditAmount", original_line."DebitAmount",
+                        original_line."Memo", original_line."PropertyId", original_line."UnitId",
+                        original_line."TenantAccountId", original_line."OwnerEntityId",
+                        original_line."SourceLineType", original_line."SourceLineId"
+                   FROM public."JournalLines" original_line
+                  WHERE original_line."JournalEntryId" = NEW."ReversesJournalEntryId")
+            ) THEN
+                RAISE EXCEPTION 'A reversal must exactly mirror the original journal entry.'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NULL;
+        END;
+        $function$;
+
+        DROP TRIGGER IF EXISTS "TR_JournalEntries_ExactReversal" ON "JournalEntries";
+        CREATE CONSTRAINT TRIGGER "TR_JournalEntries_ExactReversal"
+        AFTER INSERT ON "JournalEntries"
+        DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION rc_accounting_validate_exact_reversal();
+        """;
+
+    internal const string HardenDropSql = """
+        DROP TRIGGER IF EXISTS "TR_JournalEntries_PortfolioCurrency" ON "JournalEntries";
+        DROP TRIGGER IF EXISTS "TR_JournalLines_NoLateInsert" ON "JournalLines";
+        DROP TRIGGER IF EXISTS "TR_JournalEntries_ExactReversal" ON "JournalEntries";
+        DROP FUNCTION IF EXISTS rc_accounting_validate_journal_entry_currency();
+        DROP FUNCTION IF EXISTS rc_accounting_reject_late_journal_line_insert();
+        DROP FUNCTION IF EXISTS rc_accounting_validate_exact_reversal();
+        """;
 }
