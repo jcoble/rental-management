@@ -13,6 +13,7 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Services.Voice;
@@ -404,6 +405,7 @@ builder.Services.AddScoped<IAccountingSourceJournalGenerator, OwnerDistributionS
 builder.Services.AddScoped<AccountingConversionFramework>();
 builder.Services.AddScoped<AccountingConversionService>();
 builder.Services.AddScoped<AccountingConversionReconciliationService>();
+builder.Services.AddScoped<IAccountingLedgerReadModelService, AccountingLedgerReadModelService>();
 
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
