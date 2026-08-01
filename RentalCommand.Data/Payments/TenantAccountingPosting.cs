@@ -144,7 +144,7 @@ internal static class TenantAccountingPosting
             UnitId = line.UnitId,
             TenantAccountId = line.TenantAccountId,
             OwnerEntityId = line.OwnerEntityId,
-            SourceLineType = OppositeSourceLineType(line.SourceLineType),
+            SourceLineType = line.SourceLineType,
             SourceLineId = line.SourceLineId,
         });
         var sourceId = sourceType == JournalSourceType.TenantReceipt
@@ -426,7 +426,7 @@ internal static class TenantAccountingPosting
             UnitId = line.UnitId,
             TenantAccountId = line.TenantAccountId,
             OwnerEntityId = line.OwnerEntityId,
-            SourceLineType = OppositeSourceLineType(line.SourceLineType),
+            SourceLineType = line.SourceLineType,
             SourceLineId = line.SourceLineId,
         });
         var proposal = AccountingPostingSupport.BuildProposal(
@@ -539,14 +539,4 @@ internal static class TenantAccountingPosting
                 .Select(ledger => (int?)ledger.TenantAccountId)
                 .SingleOrDefaultAsync(ct);
 
-    private static string? OppositeSourceLineType(string? sourceLineType)
-    {
-        if (string.IsNullOrWhiteSpace(sourceLineType))
-            return sourceLineType;
-        if (sourceLineType.StartsWith("debit:", StringComparison.Ordinal))
-            return "credit:" + sourceLineType[6..];
-        if (sourceLineType.StartsWith("credit:", StringComparison.Ordinal))
-            return "debit:" + sourceLineType[7..];
-        return sourceLineType;
-    }
 }

@@ -1207,7 +1207,10 @@ public static class MoneyAccountingPosting
                 UnitId = line.UnitId,
                 TenantAccountId = line.TenantAccountId,
                 OwnerEntityId = line.OwnerEntityId,
-                SourceLineType = Opposite(line.SourceLineType),
+                // A reversal retains the original discriminator. The debit/credit amounts carry
+                // the reversal direction; changing the discriminator would make the line set a
+                // different business fact rather than an exact mirror.
+                SourceLineType = line.SourceLineType,
                 SourceLineId = line.SourceLineId,
             })
             );
@@ -1231,14 +1234,4 @@ public static class MoneyAccountingPosting
     private static long ReversalSourceId(int originalJournalId) =>
         checked((long)originalJournalId * 10_000L + 1L);
 
-    private static string? Opposite(string? sourceLineType)
-    {
-        if (string.IsNullOrWhiteSpace(sourceLineType))
-            return sourceLineType;
-        return sourceLineType.StartsWith("debit:", StringComparison.Ordinal)
-            ? "credit:" + sourceLineType[6..]
-            : sourceLineType.StartsWith("credit:", StringComparison.Ordinal)
-                ? "debit:" + sourceLineType[7..]
-                : sourceLineType;
-    }
 }
