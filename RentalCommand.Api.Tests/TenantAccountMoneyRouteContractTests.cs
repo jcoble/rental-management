@@ -45,7 +45,8 @@ public sealed class TenantAccountMoneyRouteContractTests
 
         routes.Should().BeEquivalentTo("receipts", "charges", "charges/{chargeEntryId:long}/reversals",
             "credits", "adjustments", "reversals", "deposit/fund", "deposit/deductions",
-            "deposit/refunds", "refunds", "deposit/reversals");
+            "deposit/refunds", "refunds", "deposit/reversals", "recurring-charges",
+            "recurring-charges/{id:int}/deactivate");
     }
 
     [Fact]
