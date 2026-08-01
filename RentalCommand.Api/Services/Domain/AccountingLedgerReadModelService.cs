@@ -34,23 +34,6 @@ public interface IAccountingLedgerReadModelService
     Task<MoneyPositionResponse> GetMoneyPositionAsync(
         WorkspaceReadScope scope, MoneyPositionQuery query, CancellationToken ct = default);
 
-    // Temporary compile bridge until the integrator applies Docs/plans/p0a-controller-wiring.patch.
-    // It fails closed rather than preserving an unscoped accounting read path.
-    Task<AccountingPage<GeneralLedgerRow>> GetGeneralLedgerAsync(
-        int portfolioId, GeneralLedgerQuery query, CancellationToken ct = default) =>
-        throw ScopeRequired();
-    Task<JournalDetail?> GetJournalDetailAsync(
-        int portfolioId, Guid publicId, CancellationToken ct = default) => throw ScopeRequired();
-    Task<TrialBalanceResponse> GetTrialBalanceAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default) => throw ScopeRequired();
-    Task<FinancialStatementResponse> GetBalanceSheetAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default) => throw ScopeRequired();
-    Task<FinancialStatementResponse> GetIncomeStatementAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default) => throw ScopeRequired();
-
-    private static InvalidOperationException ScopeRequired() =>
-        new("Accounting read models require the server-validated workspace read scope.");
-
     Task<AccountingPage<TenantLedgerRow>?> GetTenantLedgerAsync(
         int portfolioId, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default);
 
@@ -639,6 +622,24 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     ?? entry.ProviderPaymentAttempt.CheckNumber,
                 AccountLabel = entry.EntryType.ToString(),
                 SourceDocumentContext = entry.SourceStoredFile!.FileName,
+                RelatedTenantLedgerEntryId = entry.RelatedTenantLedgerEntryId,
+                RelatedEntryDescription = entry.RelatedTenantLedgerEntry!.Description,
+                CategoryName = (
+                    from journal in _db.JournalEntries
+                    join line in _db.JournalLines
+                        on journal.Id equals line.JournalEntryId
+                    join account in _db.LedgerAccounts
+                        on line.LedgerAccountId equals account.Id
+                    where journal.PortfolioId == portfolioId
+                        && journal.SourceId == entry.Id
+                        && (journal.SourceType == JournalSourceType.TenantCharge
+                            || journal.SourceType == JournalSourceType.TenantConcession)
+                        && account.AccountType == AccountType.Income
+                    orderby journal.Id descending, line.Id
+                    select account.Name)
+                    .FirstOrDefault(),
+                ServicePeriodStartOn = entry.ServicePeriodStartOn,
+                ServicePeriodEndOn = entry.ServicePeriodEndOn,
                 ReversesEntryId = entry.ReversesEntryId,
                 JournalEntryPublicId = _db.JournalEntries
                     .Where(journal => journal.PortfolioId == portfolioId && journal.SourceId == entry.Id)
