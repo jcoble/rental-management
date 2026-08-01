@@ -761,7 +761,9 @@ public sealed class AtomicMoneyMutationHandler
                     propertyId, unitId, null, ct))
                 return Missing();
 
-            capitalPurchaseFactsChanged = inServiceDate != entity.InServiceDate
+            capitalPurchaseFactsChanged = propertyId != entity.PropertyId
+                || unitId != entity.UnitId
+                || inServiceDate != entity.InServiceDate
                 || (request.CostBasis.HasValue && request.CostBasis.Value != entity.CostBasis);
 
             entity.PropertyId = propertyId;
