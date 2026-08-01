@@ -18,6 +18,7 @@ public static class MoneyAccountingPosting
     private const string MortgagePayable = "mortgage-payable";
     private const string MortgageInterest = "mortgage-interest";
     private const string MortgageEscrow = "mortgage-escrow-asset";
+    private const string OwnerContributions = "owner-contributions";
     private const string OwnerDistributions = "owner-distributions";
     private const string Buildings = "buildings-and-improvements";
     private const string DepreciationExpense = "depreciation-expense";
@@ -602,6 +603,43 @@ public static class MoneyAccountingPosting
                 Credit(cash, distribution.Amount, "credit:operating-cash", distribution.PropertyId, null,
                     memo: "Owner distribution", sourceLineId: distribution.Id,
                     ownerEntityId: distribution.OwnerEntityId),
+            ]);
+        return await new AccountingPostingService(db).PostAsync(proposal, ct);
+    }
+
+    /// <summary>
+    /// Records owner funding as cash received and owner-specific contribution equity. The caller
+    /// owns the enclosing atomic transaction and final save.
+    /// </summary>
+    public static async Task<JournalEntry> PostOwnerContributionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        OwnerContribution contribution,
+        int actorUserId,
+        CancellationToken ct = default,
+        long? sourceId = null,
+        string? sourceBusinessKey = null)
+    {
+        var currency = await PortfolioCurrencyAsync(db, contribution.PortfolioId, ct);
+        var cash = await AccountAsync(db, contribution.PortfolioId, OperatingCash, ct);
+        var equity = await AccountAsync(db, contribution.PortfolioId, OwnerContributions, ct);
+        var proposal = Proposal(
+            context,
+            contribution.PortfolioId,
+            JournalSourceType.OwnerContribution,
+            sourceId ?? contribution.Id,
+            sourceBusinessKey ?? $"owner-contribution:{contribution.Id}",
+            DateOnly.FromDateTime(contribution.Date),
+            currency,
+            "Owner contribution received",
+            actorUserId,
+            [
+                Debit(cash, contribution.Amount, "debit:operating-cash", contribution.PropertyId, null,
+                    memo: "Owner contribution", sourceLineId: contribution.Id,
+                    ownerEntityId: contribution.OwnerEntityId),
+                Credit(equity, contribution.Amount, "credit:owner-contribution", contribution.PropertyId, null,
+                    memo: "Owner contribution", sourceLineId: contribution.Id,
+                    ownerEntityId: contribution.OwnerEntityId),
             ]);
         return await new AccountingPostingService(db).PostAsync(proposal, ct);
     }

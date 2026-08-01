@@ -219,3 +219,36 @@ internal sealed class MoneyRejectOwnerDistributionPayload
 {
     public string? Reason { get; set; }
 }
+
+internal sealed class MoneyCreateOwnerContributionPayload
+{
+    public int OwnerEntityId { get; set; }
+    public int? PropertyId { get; set; }
+    public DateTime Date { get; set; }
+    public decimal Amount { get; set; }
+    public DistributionMethod Method { get; set; }
+    public string? Memo { get; set; }
+}
+
+internal sealed class MoneyUpdateOwnerContributionPayload
+{
+    public int? OwnerEntityId { get; set; }
+    public int? PropertyId { get; set; }
+    public bool? ClearProperty { get; set; }
+    public DateTime? Date { get; set; }
+    public decimal? Amount { get; set; }
+    public DistributionMethod? Method { get; set; }
+    public string? Memo { get; set; }
+}
+
+internal sealed class MoneyApproveOwnerContributionPayload
+{
+    public string BankReference { get; set; } = string.Empty;
+    public string ExportReference { get; set; } = string.Empty;
+    public DateTime? ExportedAt { get; set; }
+}
+
+internal sealed class MoneyRejectOwnerContributionPayload
+{
+    public string? Reason { get; set; }
+}

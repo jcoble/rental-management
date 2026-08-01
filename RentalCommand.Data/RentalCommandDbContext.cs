@@ -64,6 +64,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<PropertyOwnership> PropertyOwnerships => Set<PropertyOwnership>();
     public DbSet<OwnerUserAccess> OwnerUserAccesses => Set<OwnerUserAccess>();
     public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
+    public DbSet<OwnerContribution> OwnerContributions => Set<OwnerContribution>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<RentalListing> RentalListings => Set<RentalListing>();
@@ -345,6 +346,42 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         });
 
         modelBuilder.Entity<OwnerDistribution>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Method).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.Memo).HasMaxLength(500);
+            entity.Property(e => e.RejectionReason).HasMaxLength(500);
+            entity.Property(e => e.BankReference).HasMaxLength(100);
+            entity.Property(e => e.ExportReference).HasMaxLength(100);
+            entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId, e.Date });
+            entity.HasIndex(e => new { e.PortfolioId, e.Status, e.Date });
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerEntityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.ApprovedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.ApprovedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.RejectedByUser)
+                .WithMany()
+                .HasForeignKey(e => e.RejectedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<OwnerContribution>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);

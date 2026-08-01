@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
         // Year-end accountant packet PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
         services.AddScoped<IOwnerDistributionService, OwnerDistributionService>();
+        services.AddScoped<IOwnerContributionService, OwnerContributionService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerPortalService, OwnerPortalService>();
         services.AddScoped<ILeasingWorkspaceService, LeasingWorkspaceService>();

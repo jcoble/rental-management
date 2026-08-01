@@ -658,6 +658,9 @@ public sealed class DataUpdateService : IDataUpdateService
             "OwnerDistribution" => _db.OwnerDistributions.IgnoreQueryFilters().AsNoTracking()
                 .Where(row => row.PortfolioId == portfolioId && row.Id == entityId && row.PropertyId != null)
                 .Select(row => row.PropertyId!.Value),
+            "OwnerContribution" => _db.OwnerContributions.IgnoreQueryFilters().AsNoTracking()
+                .Where(row => row.PortfolioId == portfolioId && row.Id == entityId && row.PropertyId != null)
+                .Select(row => row.PropertyId!.Value),
             "PropertyDisposition" => _db.PropertyDispositions.IgnoreQueryFilters().AsNoTracking()
                 .Where(row => row.PortfolioId == portfolioId && row.Id == entityId)
                 .Select(row => row.PropertyId),

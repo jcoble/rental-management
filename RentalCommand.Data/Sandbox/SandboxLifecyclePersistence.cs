@@ -16,7 +16,7 @@ public static class SandboxLifecyclePersistence
         "DocumentTemplateFields", "ConversationMessages", "TechnicianWorkEntries",
         "WorkOrderResponsibilities", "WorkOrderStatusEvents",
         "TeamRoutingRuleRecipients", "TeamRoutingRules", "MembershipRoleAssignmentProperties",
-        "OwnerDistributions", "OwnerUserAccesses", "VendorRatings", "VendorDispatches",
+        "OwnerDistributions", "OwnerContributions", "OwnerUserAccesses", "VendorRatings", "VendorDispatches",
         "LeaseRenewalAddendumDecisions", "SignatureSigners", "SignatureRequests", "NoticeDrafts",
         "TenantNoticeWorkItems", "RenderedNotices", "NotificationReadStates",
         "Notifications", "QueuedJobs",
@@ -117,6 +117,7 @@ public static class SandboxLifecyclePersistence
             """, ct);
         await DeleteSimpleAsync(db, context, "MembershipRoleAssignmentProperties", portfolioId, ct);
         await DeleteSimpleAsync(db, context, "OwnerDistributions", portfolioId, ct);
+        await DeleteSimpleAsync(db, context, "OwnerContributions", portfolioId, ct);
         await DeleteAsync(db, context, "OwnerUserAccesses", $"""
             DELETE FROM "OwnerUserAccesses" AS access
             WHERE access."PortfolioId" = {portfolioId}
