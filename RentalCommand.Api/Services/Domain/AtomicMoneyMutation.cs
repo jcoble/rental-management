@@ -519,7 +519,15 @@ public sealed class AtomicMoneyMutationHandler
                 Loan = payment.Loan,
             };
             await MoneyAccountingPosting.PostLoanPaymentAsync(
-                db, attempt, postingPayment, command.ActorUserId, ct);
+                db,
+                attempt,
+                postingPayment,
+                command.ActorUserId,
+                ct,
+                sourceId: effective.CorrectionId ?? payment.Id,
+                sourceBusinessKey: effective.CorrectionId is { } correctionId
+                    ? $"loan-payment-correction:{correctionId}"
+                    : $"loan-payment:{payment.Id}");
 
             var paymentResponseJson = await SnapshotLoanPaymentAsync(
                 payment.Id, command.PortfolioId, db, ct);

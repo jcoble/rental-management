@@ -939,8 +939,8 @@ public sealed class ReconcileBankTransactionHandler
         }
         else if (command.Action == BankReconciliationAction.Clear && clearedLoanPaymentId is not null)
         {
-            await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
-                _db, context, command.PortfolioId, JournalSourceType.LoanPayment,
+            await MoneyAccountingPosting.ReverseBankMatchedLoanPaymentAsync(
+                _db, context, command.PortfolioId, transaction.Id,
                 clearedLoanPaymentId.Value, command.ActorUserId, ct);
         }
         else if (command.Action == BankReconciliationAction.Clear && clearedOwnerDistributionId is not null)
@@ -976,8 +976,8 @@ public sealed class ReconcileBankTransactionHandler
         }
         else if (command.Action == BankReconciliationAction.MatchLoanPayment && loanPaymentTarget is not null)
         {
-            await MoneyAccountingPosting.PostLoanPaymentAsync(
-                _db, context, loanPaymentTarget, command.ActorUserId, ct);
+            await MoneyAccountingPosting.PostBankMatchedLoanPaymentAsync(
+                _db, context, loanPaymentTarget, transaction, command.ActorUserId, ct);
         }
         else if (command.Action == BankReconciliationAction.MatchOwnerDistribution
                  && ownerDistributionTarget is not null)

@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Leasing;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
@@ -1167,6 +1168,10 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                     "Already-paid loan payment corrections require the selected payment to be the latest posted payment.");
             }
 
+            var postingChanged = effective.PrincipalAmount != reviewed.PrincipalAmount
+                || effective.InterestAmount != reviewed.InterestAmount
+                || effective.EscrowAmount != reviewed.EscrowAmount
+                || effective.TotalAmount != reviewed.TotalAmount;
             var correction = new LoanPaymentCorrection
             {
                 PortfolioId = command.PortfolioId,
@@ -1205,6 +1210,16 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
                 UserId: command.ConfirmedByUserId,
                 ChangeReason: $"Scan draft #{command.DraftId} reconciled paid loan payment {payment.Id} to the reviewed statement balance."));
             await context.FlushBusinessAsync(ct);
+            if (postingChanged)
+            {
+                await MoneyAccountingPosting.PostLoanPaymentCorrectionAsync(
+                    _db,
+                    context,
+                    payment,
+                    correction,
+                    command.ConfirmedByUserId,
+                    ct);
+            }
             StageLoanPaymentDataUpdate(context, command, nameof(LoanPayment), payment.Id);
             StageLoanPaymentDataUpdate(context, command, nameof(Loan), payment.Loan.Id);
         }

@@ -252,7 +252,10 @@ public static class MoneyAccountingPosting
             entry.PortfolioId == expense.PortfolioId
             && entry.SourceType == JournalSourceType.BillPayment
             && entry.ReversesJournalEntryId == null
-            && entry.Lines.Any(line => line.SourceLineId == expense.Id), ct);
+            && entry.Lines.Any(line => line.SourceLineId == expense.Id)
+            && !db.JournalEntries.Any(reversal =>
+                reversal.PortfolioId == entry.PortfolioId
+                && reversal.ReversesJournalEntryId == entry.Id), ct);
         if (existingBillPayment is not null)
             return existingBillPayment;
 
@@ -330,6 +333,71 @@ public static class MoneyAccountingPosting
             $"bank-match-reversal:{original.SourceType}:{sourceId}", actorUserId, ct);
     }
 
+    /// <summary>
+    /// Uses an existing loan-payment journal as evidence when a bank line is matched. A bank
+    /// match creates a journal only when the payment has not already been posted elsewhere.
+    /// </summary>
+    public static async Task<JournalEntry?> PostBankMatchedLoanPaymentAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        LoanPayment payment,
+        BankTransaction transaction,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var existingPayment = await db.JournalEntries.SingleOrDefaultAsync(entry =>
+            entry.PortfolioId == payment.PortfolioId
+            && entry.SourceType == JournalSourceType.LoanPayment
+            && entry.ReversesJournalEntryId == null
+            && entry.Lines.Any(line => line.SourceLineId == payment.Id)
+            && !db.JournalEntries.Any(reversal =>
+                reversal.PortfolioId == entry.PortfolioId
+                && reversal.ReversesJournalEntryId == entry.Id), ct);
+        if (existingPayment is not null)
+            return null;
+
+        return await PostLoanPaymentAsync(
+            db,
+            context,
+            payment,
+            actorUserId,
+            ct,
+            sourceId: transaction.Id,
+            sourceBusinessKey: $"bank-loan-payment:{transaction.Id}");
+    }
+
+    /// <summary>
+    /// Reverses only the loan-payment journal created by this bank match. A clear operation must
+    /// not reverse a payment journal that existed before the match.
+    /// </summary>
+    public static async Task<JournalEntry?> ReverseBankMatchedLoanPaymentAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        int portfolioId,
+        int bankTransactionId,
+        int loanPaymentId,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var original = await db.JournalEntries
+            .Include(entry => entry.Lines)
+            .SingleOrDefaultAsync(entry =>
+                entry.PortfolioId == portfolioId
+                && entry.SourceType == JournalSourceType.LoanPayment
+                && entry.SourceId == bankTransactionId
+                && entry.SourceBusinessKey == $"bank-loan-payment:{bankTransactionId}"
+                && entry.ReversesJournalEntryId == null
+                && entry.Lines.Any(line => line.SourceLineId == loanPaymentId)
+                && !db.JournalEntries.Any(reversal =>
+                    reversal.PortfolioId == entry.PortfolioId
+                    && reversal.ReversesJournalEntryId == entry.Id), ct);
+        if (original is null)
+            return null;
+
+        return await ReverseBankMatchedSourceAsync(
+            db, context, original, bankTransactionId, actorUserId, ct);
+    }
+
     public static async Task<JournalEntry> PostLoanPaymentAsync(
         RentalCommandDbContext db,
         IAtomicCommandContext context,
@@ -373,7 +441,7 @@ public static class MoneyAccountingPosting
         return await new AccountingPostingService(db).PostAsync(proposal, ct);
     }
 
-    public static async Task<JournalEntry> PostLoanPaymentCorrectionAsync(
+    public static async Task<JournalEntry?> PostLoanPaymentCorrectionAsync(
         RentalCommandDbContext db,
         IAtomicCommandContext context,
         LoanPayment payment,
@@ -381,12 +449,15 @@ public static class MoneyAccountingPosting
         int actorUserId,
         CancellationToken ct = default)
     {
+        if (correction.Status != LoanPaymentStatus.Paid)
+            return null;
+
         var original = await db.JournalEntries
             .Include(entry => entry.Lines)
             .SingleOrDefaultAsync(entry =>
                 entry.PortfolioId == payment.PortfolioId
                 && entry.SourceType == JournalSourceType.LoanPayment
-                && entry.SourceId == payment.Id
+                && entry.Lines.Any(line => line.SourceLineId == payment.Id)
                 && entry.ReversesJournalEntryId == null
                 && !db.JournalEntries.Any(reversal =>
                     reversal.PortfolioId == entry.PortfolioId

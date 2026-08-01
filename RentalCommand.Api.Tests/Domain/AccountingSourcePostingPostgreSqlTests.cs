@@ -230,6 +230,118 @@ public sealed class AccountingSourcePostingPostgreSqlTests
     }
 
     [Fact]
+    public async Task LoanPaymentOmitsZeroEscrowComponentLine()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var property = NewProperty("Interest-only loan posting property");
+        var loan = new Loan
+        {
+            PortfolioId = 1,
+            Property = property,
+            Lender = "Interest-only lender",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 99_500m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            MonthlyPrincipalInterest = 600m,
+            MonthlyEscrow = 0m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var payment = new LoanPayment
+        {
+            PortfolioId = 1,
+            Loan = loan,
+            PeriodKey = "2027-02",
+            DueDate = new DateTime(2027, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2027, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+            PrincipalAmount = 500m,
+            InterestAmount = 100m,
+            EscrowAmount = 0m,
+            TotalAmount = 600m,
+            BalanceAfter = 99_000m,
+            Status = LoanPaymentStatus.Paid,
+            CreatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(payment);
+        await setup.Db.SaveChangesAsync();
+
+        await MoneyAccountingPosting.PostLoanPaymentAsync(
+            setup.Db, AtomicContext(), payment, 1);
+        await setup.Db.SaveChangesAsync();
+
+        var lines = await LinesAsync(setup.Db, JournalSourceType.LoanPayment, payment.Id);
+        lines.Should().Equal(
+            ("mortgage-payable", 500m, 0m),
+            ("mortgage-interest", 100m, 0m),
+            ("operating-cash", 0m, 600m));
+    }
+
+    [Fact]
+    public async Task UnpaidLoanPaymentCorrectionPostsNoJournal()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var property = NewProperty("Unpaid correction property");
+        var loan = new Loan
+        {
+            PortfolioId = 1,
+            Property = property,
+            Lender = "Unpaid correction lender",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 99_500m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            MonthlyPrincipalInterest = 600m,
+            MonthlyEscrow = 0m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var payment = new LoanPayment
+        {
+            PortfolioId = 1,
+            Loan = loan,
+            PeriodKey = "2027-03",
+            DueDate = new DateTime(2027, 3, 15, 0, 0, 0, DateTimeKind.Utc),
+            PrincipalAmount = 500m,
+            InterestAmount = 100m,
+            TotalAmount = 600m,
+            BalanceAfter = 99_000m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(payment);
+        await setup.Db.SaveChangesAsync();
+        var correction = new LoanPaymentCorrection
+        {
+            PortfolioId = 1,
+            LoanPaymentId = payment.Id,
+            DueDate = payment.DueDate,
+            PrincipalAmount = 450m,
+            InterestAmount = 100m,
+            EscrowAmount = 0m,
+            TotalAmount = 550m,
+            BalanceAfter = 99_050m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        setup.Db.Add(correction);
+        await setup.Db.SaveChangesAsync();
+
+        var journal = await MoneyAccountingPosting.PostLoanPaymentCorrectionAsync(
+            setup.Db, AtomicContext(), payment, correction, 1);
+
+        journal.Should().BeNull();
+        await setup.Db.SaveChangesAsync();
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == 1 && entry.SourceType == JournalSourceType.LoanPayment))
+            .Should().Be(0);
+    }
+
+    [Fact]
     public async Task CapitalPurchasePostsBuildingsAndCash()
     {
         await using var setup = await _fixture.CreateContextAsync();

@@ -1310,6 +1310,108 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Reconciliation_MatchingAlreadyPostedLoanPaymentDoesNotCreateSecondJournal()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int loanPaymentId;
+        await using (var db = NewContext())
+        {
+            var property = SeedProperty(db, "Loan already-posted property");
+            var loan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = property.Id,
+                Lender = "Atomic Mortgage",
+                OriginalAmount = 200000m,
+                CurrentBalance = 180000m,
+                AnnualInterestRatePct = 6m,
+                TermMonths = 360,
+                StartDate = _now.AddYears(-1),
+                DayOfMonthDue = _now.Day,
+                MonthlyPrincipalInterest = 1250m,
+                Status = LoanStatus.Active,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var payment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                Loan = loan,
+                PeriodKey = "2026-07",
+                DueDate = _now,
+                PaidDate = _now,
+                InterestAmount = 700m,
+                PrincipalAmount = 550m,
+                EscrowAmount = 0m,
+                TotalAmount = 1250m,
+                BalanceAfter = 179450m,
+                Status = LoanPaymentStatus.Paid,
+                CreatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Loan already-posted bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "loan-already-posted", -1250m, property.Id);
+            db.LoanPayments.Add(payment);
+            await db.SaveChangesAsync();
+
+            await using var postingTransaction = await db.Database.BeginTransactionAsync();
+            var auditScope = new AtomicAuditScope(TimeProvider.System);
+            var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+            var attemptId = Guid.NewGuid();
+            commandContext.BeginAttempt(attemptId);
+            commandContext.BindReceipt(Guid.NewGuid());
+            using var attempt = auditScope.BeginAttempt(
+                new AtomicCommandIdentity("test.loan-payment.post", $"{_portfolioId}:{payment.Id}"),
+                attemptId,
+                db);
+            await MoneyAccountingPosting.PostLoanPaymentAsync(
+                db, commandContext, payment, auth.UserId);
+            await commandContext.FlushBusinessAsync();
+            await postingTransaction.CommitAsync();
+            commandContext.EndAttempt();
+
+            transactionId = transaction.Id;
+            loanPaymentId = payment.Id;
+        }
+
+        var result = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:loan-already-posted"),
+            ReconcileLoanPayment(transactionId, loanPaymentId, auth, "loan-already-posted"),
+            ReconcileCodec);
+
+        result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+        var clear = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:loan-already-posted-clear"),
+            ReconcileClear(
+                transactionId,
+                auth,
+                "loan-already-posted-clear",
+                result.Value.Transaction!.UpdatedAt,
+                _now.AddSeconds(2)),
+            ReconcileCodec);
+
+        clear.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+        await using var verify = NewContext();
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.LoanPayment)).Should().Be(1);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.LoanPayment
+            && entry.ReversesJournalEntryId != null)).Should().Be(0);
+        (await verify.JournalLines.CountAsync(line =>
+            line.JournalEntry!.PortfolioId == _portfolioId
+            && line.JournalEntry.SourceType == JournalSourceType.LoanPayment
+            && line.CreditAmount > 0m)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task Reconciliation_ConcurrentDifferentBankLines_CannotClaimSameOwnerDistribution()
     {
         SkipIfNoDocker();
