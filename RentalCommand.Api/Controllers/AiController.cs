@@ -61,15 +61,21 @@ public class AiController : ManagementControllerBase
     [HttpPost("ask")]
     [ProducesResponseType(typeof(AskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<AskResponse>> Ask([FromBody] AskRequest req, CancellationToken ct)
+    public async Task<ActionResult<AskResponse>> Ask(
+        [FromBody] AskRequest req,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("Question is required.");
         if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
+        var deliveryOperationId = NormalizeIdempotencyKey(idempotencyKey);
+        if ((req.DeliverViaEmail || req.DeliverViaSms) && deliveryOperationId is null)
+            return BadRequest("Idempotency-Key is required for Q&A delivery and must be at most 128 characters.");
 
         var scope = GetWorkspaceReadScope();
         if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
         var delivery = await BuildDeliveryAsync(req, ct);
-        return Ok(await _qa.AskAsync(scope, req.Question, req.History, delivery, ct));
+        return Ok(await _qa.AskAsync(scope, req.Question, req.History, delivery, deliveryOperationId, ct));
     }
 
     /// <summary>
@@ -141,6 +147,12 @@ public class AiController : ManagementControllerBase
             req.DeliverViaSms,
             req.DeliverViaEmail && !string.IsNullOrWhiteSpace(recipient?.Email) ? recipient.Email : null,
             req.DeliverViaSms && !string.IsNullOrWhiteSpace(recipient?.PhoneNumber) ? recipient.PhoneNumber : null);
+    }
+
+    private static string? NormalizeIdempotencyKey(string? idempotencyKey)
+    {
+        var value = idempotencyKey?.Trim();
+        return value is { Length: > 0 and <= 128 } ? value : null;
     }
 
     /// <summary>

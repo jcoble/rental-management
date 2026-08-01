@@ -7,6 +7,7 @@ namespace RentalCommand.Core.Documents;
 public sealed record CreateDocumentTemplateCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     DocumentTemplateKind Kind,
     DocumentTemplateRenderMode RenderMode,
     string Name,
@@ -16,11 +17,12 @@ public sealed record CreateDocumentTemplateCommand(
     int? PropertyId,
     bool DefaultForPortfolio,
     string? DraftHtml,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record FinalizeDocumentTemplateUploadCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     Guid PendingUploadId,
     string Purpose,
     string OperationKeyHash,
@@ -34,11 +36,12 @@ public sealed record FinalizeDocumentTemplateUploadCommand(
     string? Description,
     bool DefaultForPortfolio,
     int? PropertyId,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record UpdateDocumentTemplateCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     int DocumentTemplateId,
     DocumentTemplateStatus? Status,
     DocumentTemplateRenderMode? RenderMode,
@@ -49,11 +52,12 @@ public sealed record UpdateDocumentTemplateCommand(
     int? PropertyId,
     bool? DefaultForPortfolio,
     string? DraftHtml,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AddDocumentTemplateFieldCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     int DocumentTemplateId,
     string FieldKey,
     string Label,
@@ -68,11 +72,12 @@ public sealed record AddDocumentTemplateFieldCommand(
     bool Locked,
     int SortOrder,
     string? DefaultText,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record UpdateDocumentTemplateFieldCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     int DocumentTemplateId,
     int FieldId,
     string? FieldKey,
@@ -88,14 +93,15 @@ public sealed record UpdateDocumentTemplateFieldCommand(
     bool? Locked,
     int? SortOrder,
     string? DefaultText,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record DeleteDocumentTemplateFieldCommand(
     int PortfolioId,
     StaffOperationActor Actor,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     int DocumentTemplateId,
     int FieldId,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum DocumentTemplateMutationOutcome
 {
@@ -119,7 +125,7 @@ public sealed record DocumentTemplateFieldSnapshot(
     bool Required,
     bool Locked,
     int SortOrder,
-    string? DefaultText) : IAtomicResultData;
+    string? DefaultText);
 
 public sealed record DocumentTemplateSnapshot(
     int Id,
@@ -139,7 +145,7 @@ public sealed record DocumentTemplateSnapshot(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     DateTime? ArchivedAtUtc,
-    IReadOnlyList<DocumentTemplateFieldSnapshot> Fields) : IAtomicResultData;
+    IReadOnlyList<DocumentTemplateFieldSnapshot> Fields);
 
 public sealed record DocumentTemplateMutationResult(
     DocumentTemplateMutationOutcome Outcome,
@@ -147,4 +153,4 @@ public sealed record DocumentTemplateMutationResult(
     int? FieldId = null,
     DocumentTemplateSnapshot? Template = null,
     DocumentTemplateFieldSnapshot? Field = null,
-    string? Error = null) : IAtomicResultData;
+    string? Error = null);

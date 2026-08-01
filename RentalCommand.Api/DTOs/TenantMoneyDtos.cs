@@ -14,6 +14,7 @@ public sealed class RecordTenantReceiptRequest
     [MaxLength(100)] public string? CheckNumber { get; set; }
     [MaxLength(200)] public string? BankName { get; set; }
     [Range(1, int.MaxValue)] public int? SourceStoredFileId { get; set; }
+    [Range(1, long.MaxValue)] public long? TargetChargeEntryId { get; set; }
     public bool AllocateOldestCharges { get; set; } = true;
 }
 

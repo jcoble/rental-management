@@ -9,9 +9,15 @@ public sealed record AiIntegrationStatusDto(
 
 public sealed record TestAiCredentialRequest(string Provider, string ModelId, string ApiKey);
 
-public sealed record ActivateAiCredentialRequest(string Provider, string ModelId, string ApiKey);
+public sealed record ActivateAiCredentialRequest(string Provider, string ModelId, string ApiKey)
+{
+    public string? ClientOperationId { get; init; }
+}
 
-public sealed record RotateAiCredentialRequest(string Provider, string ModelId, string ApiKey);
+public sealed record RotateAiCredentialRequest(string Provider, string ModelId, string ApiKey)
+{
+    public string? ClientOperationId { get; init; }
+}
 
 public sealed record AiCredentialTestResultDto(
     bool Succeeded,

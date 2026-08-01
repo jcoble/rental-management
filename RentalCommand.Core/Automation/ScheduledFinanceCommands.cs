@@ -6,19 +6,19 @@ public sealed record ApplyClaimedDebtServiceBatchCommand(
     int[] LoanIds,
     Guid ClaimToken,
     DateTime BusinessDateUtc,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public sealed record ApplyClaimedRecurringExpenseBatchCommand(
     int[] RecurringExpenseIds,
     Guid ClaimToken,
     DateTime BusinessDateUtc,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public sealed record ApplyClaimedRecurringMaintenanceBatchCommand(
     int[] RecurringMaintenanceTaskIds,
     Guid ClaimToken,
     DateTime BusinessDateUtc,
-    DateTime AppliedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc,
     string BusinessTimeZoneId) : IAtomicCommandData;
 
 public enum ScheduledFinanceApplyOutcome
@@ -29,4 +29,4 @@ public enum ScheduledFinanceApplyOutcome
 public sealed record ApplyScheduledFinanceBatchResult(
     ScheduledFinanceApplyOutcome Outcome,
     int ClaimedScheduleCount,
-    int GeneratedRowCount) : IAtomicResultData;
+    int GeneratedRowCount);

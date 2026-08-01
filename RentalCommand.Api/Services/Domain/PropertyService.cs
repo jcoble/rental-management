@@ -43,8 +43,10 @@ public class PropertyService : IPropertyService
         string operationKey,
         CancellationToken ct = default)
     {
+        var changedAtUtc = _timeProvider.UtcNow();
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
-            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request,
+            changedAtUtc: changedAtUtc);
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<PropertyResponse>(outcome.Value);
@@ -56,8 +58,11 @@ public class PropertyService : IPropertyService
         string operationKey,
         CancellationToken ct = default)
     {
+        var setupAtUtc = _timeProvider.UtcNow();
         var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
-            AtomicCoreCrudMutationOperation.Setup, request.PropertyId.GetValueOrDefault(), operationKey, request);
+            AtomicCoreCrudMutationOperation.Setup, request.PropertyId.GetValueOrDefault(), operationKey, request,
+            createdAtUtc: setupAtUtc,
+            changedAtUtc: setupAtUtc);
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<PropertySetupResponse>(outcome.Value);

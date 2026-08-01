@@ -7,9 +7,11 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -323,6 +325,69 @@ public class ExpenseServiceTests : IDisposable
             method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
     }
 
+    [Fact]
+    public async Task MutationsPassTheAmbientBusinessClockIntoEveryAtomicCommand()
+    {
+        var businessNowUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
+        var captured = new List<AtomicMoneyMutationCommand>();
+        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
+        atomic.Setup(service => service.ExecuteAsync<
+                AtomicMoneyMutationCommand, AtomicMoneyMutationResult>(
+                It.IsAny<AtomicCommandIdentity>(),
+                It.IsAny<AtomicMoneyMutationCommand>(),
+                It.IsAny<AtomicJsonResultCodec<AtomicMoneyMutationResult>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<AtomicCommandIdentity, AtomicMoneyMutationCommand,
+                AtomicJsonResultCodec<AtomicMoneyMutationResult>, CancellationToken>(
+                (_, command, _, _) => captured.Add(command))
+            .ReturnsAsync(new AtomicCommandOutcome<AtomicMoneyMutationResult>(
+                new AtomicMoneyMutationResult(false, false, 0),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        var service = new ExpenseService(
+            _db,
+            Mock.Of<IFileStorage>(),
+            new FixedTimeProvider(new DateTimeOffset(businessNowUtc)),
+            atomic.Object);
+        var scope = new WorkspaceReadScope(
+            PortfolioId, 2, Guid.Parse("7dc8658f-a9d8-4760-b59c-f3087f06ee40"), 3, 4);
+
+        await service.CreateAsync(scope, new CreateExpenseRequest(), "clock-create");
+        await service.UpdateAsync(scope, 41, new UpdateExpenseRequest(), "clock-update");
+        await service.DeleteAsync(scope, 41, "clock-delete");
+
+        captured.Select(command => command.Operation).Should().Equal(
+            AtomicMoneyOperation.Create,
+            AtomicMoneyOperation.Update,
+            AtomicMoneyOperation.Delete);
+        captured.Should().OnlyContain(command => command.BusinessNowUtc == businessNowUtc);
+    }
+
+    [Fact]
+    public async Task AtomicMoneyMutationRejectsAMissingBusinessClockBeforeStartingAnAttempt()
+    {
+        var command = new AtomicMoneyMutationCommand(
+            PortfolioId,
+            2,
+            Guid.Parse("62ebbe35-bf31-4590-8b95-04c146281fa1"),
+            3,
+            4,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Create,
+            0,
+            "missing-clock",
+            "{}",
+            default);
+        var handler = new AtomicMoneyMutationHandler(_db);
+
+        var act = () => handler.HandleAsync(
+            command, Mock.Of<IAtomicCommandContext>(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*business clock*");
+    }
+
     private (int UnitId, int OtherUnitId) SeedUnitsForListPage()
     {
         var now = DateTime.UtcNow;
@@ -454,6 +519,11 @@ public class ExpenseServiceTests : IDisposable
             commands.Add(command.CommandText);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
 

@@ -8,6 +8,10 @@ public sealed record ConfirmAccountingMappingCommand(
     int AccountingConnectionId,
     AccountingProvider Provider,
     int ConfirmedByUserId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    string RequiredCapability,
     string ExternalType,
     string ExternalId,
     string? ExternalDisplayName,
@@ -16,7 +20,7 @@ public sealed record ConfirmAccountingMappingCommand(
     string? LocalEnumValue,
     string ClientOperationId,
     long ExpectedRevision,
-    DateTime ConfirmedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime ConfirmedAtUtc) : IAtomicCommandData;
 
 public enum ConfirmAccountingMappingOutcome
 {
@@ -32,15 +36,19 @@ public sealed record ConfirmAccountingMappingResult(
     long MappingRevision,
     int PromotedCount,
     Guid? ContinuationId,
-    bool HasMore) : IAtomicResultData;
+    bool HasMore);
 
 public sealed record ContinueAccountingMappingPromotionCommand(
     int PortfolioId,
     int AccountingConnectionId,
     Guid ContinuationId,
     int RequestedByUserId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    string RequiredCapability,
     string ClientOperationId,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public enum ContinueAccountingMappingPromotionOutcome
 {
@@ -55,4 +63,4 @@ public sealed record ContinueAccountingMappingPromotionResult(
     Guid ContinuationId,
     int PromotedCount,
     int TotalPromotedCount,
-    bool HasMore) : IAtomicResultData;
+    bool HasMore);

@@ -8,14 +8,17 @@ public interface IListingWorkspaceAtomicCommand : IAtomicCommandData
     int PortfolioId { get; }
     int UnitId { get; }
     int ActorUserId { get; }
+    [AtomicFingerprintIgnore]
     Guid AuthSessionId { get; }
+    [AtomicFingerprintIgnore]
     int AccessContextId { get; }
+    [AtomicFingerprintIgnore]
     long AccessRevision { get; }
 }
 
 public sealed record GenerateListingWorkspaceCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision) : IListingWorkspaceAtomicCommand;
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision) : IListingWorkspaceAtomicCommand;
 
 public sealed record GuidedListingValues(
     string? Status,
@@ -32,8 +35,8 @@ public sealed record GuidedListingValues(
     bool? MarkCurrentVersionPublished) : IAtomicCommandData;
 
 public sealed record SaveListingWorkspaceCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision,
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
     string? Status, string? Headline, string? Description,
     decimal? Rent, decimal? SecurityDeposit, DateTime? AvailableOn,
     string? LeaseTerms, string? PetPolicy, string? Utilities,
@@ -41,26 +44,29 @@ public sealed record SaveListingWorkspaceCommand(
     : IListingWorkspaceAtomicCommand;
 
 public sealed record FinalizeListingPhotoUploadCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision,
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
     int PhotoId, Guid PendingUploadId, string Purpose, string OperationKeyHash,
     string RequestFingerprint, string StoragePath, string FileName,
     string ContentType, long SizeBytes, string Sha256)
     : IListingWorkspaceAtomicCommand;
 
 public sealed record UpdateListingPhotoCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int PhotoId, string Category, string? Caption)
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int PhotoId, string Category, string? Caption)
     : IListingWorkspaceAtomicCommand;
 
 public sealed record RemoveListingPhotoCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int PhotoId)
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int PhotoId)
     : IListingWorkspaceAtomicCommand;
 
 public sealed record ReorderListingPhotosCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int[] PhotoIds)
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int[] PhotoIds)
     : IListingWorkspaceAtomicCommand;
 
 public enum ConnectedListingIntentOperation
@@ -72,8 +78,9 @@ public enum ConnectedListingIntentOperation
 }
 
 public sealed record AdmitConnectedListingIntentCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int PublicationId,
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int PublicationId,
     int RentalListingId, int ExpectedContentVersion, ConnectedListingIntentOperation Operation)
     : IListingWorkspaceAtomicCommand;
 
@@ -89,9 +96,31 @@ public sealed record PersistConnectedListingResultCommand(
     : IAtomicCommandData;
 
 public sealed record ConfirmExternalListingSignalCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int SignalId, bool Accept)
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int SignalId, bool Accept)
     : IListingWorkspaceAtomicCommand;
+
+public sealed record IngestExternalListingSignalCommand(
+    int PortfolioId, int UnitId, int ActorUserId,
+    Guid AuthSessionId, int AccessContextId, long AccessRevision,
+    int PublicationId,
+    string ProviderMessageKey,
+    string SignalType,
+    string? SuggestedExternalListingId,
+    string? SuggestedListingUrl,
+    string? SuggestedExternalStatus)
+    : IListingWorkspaceAtomicCommand;
+
+public sealed record IngestExternalListingSignalResult(
+    bool Found,
+    int SignalId,
+    string SignalType,
+    string? SuggestedExternalListingId,
+    string? SuggestedListingUrl,
+    string? SuggestedExternalStatus,
+    ExternalListingSignalDisposition Disposition,
+    DateTime ReceivedAtUtc);
 
 public enum ListingWorkspaceMutationOutcome
 {
@@ -104,7 +133,7 @@ public sealed record ListingWorkspaceMutationResult(
     ListingWorkspaceMutationOutcome Outcome,
     int PortfolioId,
     int UnitId,
-    int? RentalListingId) : IAtomicResultData;
+    int? RentalListingId);
 
 public sealed record ConnectedListingIntentResult(
     ListingWorkspaceMutationOutcome Outcome,
@@ -113,7 +142,7 @@ public sealed record ConnectedListingIntentResult(
     int UnitId,
     int? RentalListingId,
     int? PublicationId,
-    int? ContentVersion) : IAtomicResultData;
+    int? ContentVersion);
 
 public sealed record ConnectedListingPersistenceResult(
     ListingWorkspaceMutationOutcome Outcome,
@@ -130,7 +159,7 @@ public sealed record ConnectedListingPersistenceResult(
     string DeliveryStatus,
     string? DeliveryError,
     string? ExternalListingId,
-    string? ListingUrl) : IAtomicResultData;
+    string? ListingUrl);
 
 public sealed record ApplyConnectedListingResultCommand(
     int PortfolioId,

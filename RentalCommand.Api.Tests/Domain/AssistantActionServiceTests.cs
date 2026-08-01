@@ -1,6 +1,5 @@
 using FluentAssertions;
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
@@ -10,41 +9,32 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class AssistantActionServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class AssistantActionServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
     private readonly List<string> _commands = [];
-    private readonly AssistantActionService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private AssistantActionService _sut = null!;
+    private WorkspaceReadScope _scope;
     private readonly Mock<IExpenseService> _expenses = new();
 
-    public AssistantActionServiceTests()
+    public AssistantActionServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new AssistantActionTestDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _db = _ctx.Db;
         _db.Properties.Add(new Property
         {
             PortfolioId = PortfolioId,
@@ -81,16 +71,13 @@ public sealed class AssistantActionServiceTests : IDisposable
         _sut = new AssistantActionService(_db, _expenses.Object, TimeProvider.System);
     }
 
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task DraftAsync_ForExpenseAction_RequiresWriteModeAndResolvesPropertyDbSide()
     {
         _commands.Clear();
+        await ActivateApiScopeAsync();
 
         var result = await _sut.DraftAsync(
             _scope,
@@ -119,6 +106,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     [Fact]
     public async Task DraftAsync_ForReadQuestion_ReturnsUnsupportedWithoutPretendingToWrite()
     {
+        await ActivateApiScopeAsync();
         var result = await _sut.DraftAsync(
             _scope,
             new AssistantActionDraftRequest
@@ -135,6 +123,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     [Fact]
     public async Task DraftAsync_WhenPropertyHintIncludesUnitSuffix_ResolvesPropertyAndCleansDescription()
     {
+        await ActivateApiScopeAsync();
         var result = await _sut.DraftAsync(
             _scope,
             new AssistantActionDraftRequest
@@ -151,6 +140,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_RequiresWriteModeAndExplicitConfirmation()
     {
+        await ActivateApiScopeAsync();
         var draft = (await _sut.DraftAsync(
             _scope,
             new AssistantActionDraftRequest
@@ -187,6 +177,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_WithConfirmedExpenseDraft_CreatesExpense()
     {
+        await ActivateApiScopeAsync();
         var draft = (await _sut.DraftAsync(
             _scope,
             new AssistantActionDraftRequest
@@ -237,6 +228,7 @@ public sealed class AssistantActionServiceTests : IDisposable
         };
         _db.Properties.Add(unassigned);
         await _db.SaveChangesAsync();
+        await ActivateApiScopeAsync();
 
         var result = await _sut.ExecuteAsync(
             _scope,
@@ -309,6 +301,7 @@ public sealed class AssistantActionServiceTests : IDisposable
             PropertyId = second.Id,
         });
         await _db.SaveChangesAsync();
+        await ActivateApiScopeAsync();
 
         var result = await _sut.DraftAsync(
             _scope,
@@ -389,6 +382,17 @@ public sealed class AssistantActionServiceTests : IDisposable
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
+    private async Task ActivateApiScopeAsync()
+    {
+        var accessRevision = await _db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .Where(context => context.Id == _scope.AccessContextId)
+            .Select(context => context.AccessRevision)
+            .SingleAsync();
+        _scope = _scope with { AccessRevision = accessRevision };
+        await _ctx.ActivateApiScopeAsync(_scope);
+    }
+
     private sealed class RecordingCommandInterceptor : DbCommandInterceptor
     {
         private readonly List<string> _commands;
@@ -415,8 +419,4 @@ public sealed class AssistantActionServiceTests : IDisposable
         }
     }
 
-    private sealed class AssistantActionTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-    {
-        public AssistantActionTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-    }
 }

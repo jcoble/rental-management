@@ -3,6 +3,7 @@ using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -331,6 +332,383 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Complete_UsesBusinessClockForCompletionWorkOrdersAndReport()
+    {
+        var businessNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(businessNowUtc.AddMinutes(-2)));
+        var logger = new CapturingLogger<InspectionService>();
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            logger,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = businessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var item = created!.Items.OrderBy(i => i.SortOrder).First();
+        clock.SetUtcNow(new DateTimeOffset(businessNowUtc.AddMinutes(-1)));
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Latch sticks" }, NextOperationKey());
+
+        clock.SetUtcNow(new DateTimeOffset(businessNowUtc));
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-business-clock");
+
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+        summary!.ReportStoredFileId.Should().NotBeNull(logger.LastError?.ToString());
+        var inspection = await _db.Inspections.AsNoTracking().SingleAsync(i => i.Id == created.Id);
+        inspection.CompletedAt.Should().Be(businessNowUtc);
+        inspection.UpdatedAt.Should().Be(businessNowUtc);
+        var workOrderId = summary.CreatedWorkOrderIds.Should().ContainSingle().Subject;
+        var workOrder = await _db.WorkOrders.AsNoTracking().SingleAsync(w => w.Id == workOrderId);
+        workOrder.RequestedAt.Should().Be(businessNowUtc);
+        workOrder.UpdatedAt.Should().Be(businessNowUtc);
+        var statusEvent = await _db.WorkOrderStatusEvents.AsNoTracking()
+            .SingleAsync(e => e.WorkOrderId == workOrderId);
+        statusEvent.CreatedAtUtc.Should().Be(businessNowUtc);
+        var report = await _db.StoredFiles.AsNoTracking().SingleAsync(f => f.Id == summary.ReportStoredFileId);
+        report.UploadedAt.Should().Be(businessNowUtc);
+    }
+
+    [Fact]
+    public async Task Complete_UsesCurrentSecurityAccessWhenBusinessClockPredatesAccess()
+    {
+        var securityNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var businessNowUtc = securityNowUtc.AddYears(-1);
+        var clock = new MutableTimeProvider(new DateTimeOffset(businessNowUtc));
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = businessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var item = created!.Items.OrderBy(candidate => candidate.SortOrder).First();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Latch sticks" }, NextOperationKey());
+
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-business-before-access");
+
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+        var inspection = await _db.Inspections.AsNoTracking().SingleAsync(row => row.Id == created.Id);
+        inspection.CompletedAt.Should().Be(businessNowUtc);
+        inspection.UpdatedAt.Should().Be(businessNowUtc);
+    }
+
+    [Fact]
+    public async Task RecoverChronologyAuthorizedAsync_CorrectsCompletedAtRetiresReportAndReplaysExactly()
+    {
+        var originalBusinessNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var correctedCompletedAtUtc = DateTime.SpecifyKind(
+            originalBusinessNowUtc.AddDays(-2),
+            DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(originalBusinessNowUtc));
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = originalBusinessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var firstItem = created!.Items.OrderBy(item => item.SortOrder).First();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, firstItem.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Recovery setup mutation" }, NextOperationKey());
+        var (completed, completeError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        completeError.Should().BeNull();
+        completed.Should().NotBeNull();
+        completed!.ReportStoredFileId.Should().NotBeNull();
+        var contaminatedReportId = completed.ReportStoredFileId.Value;
+        var contaminatedReportUploadedAtUtc = originalBusinessNowUtc.AddMinutes(3);
+        await _db.Inspections
+            .Where(inspection => inspection.Id == created.Id && inspection.PortfolioId == PortfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(inspection => inspection.CompletedAt, (DateTime?)originalBusinessNowUtc)
+                .SetProperty(inspection => inspection.UpdatedAt, originalBusinessNowUtc));
+        await _db.StoredFiles
+            .Where(file => file.Id == contaminatedReportId && file.PortfolioId == PortfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(file => file.UploadedAt, contaminatedReportUploadedAtUtc));
+
+        clock.SetUtcNow(new DateTimeOffset(correctedCompletedAtUtc));
+        var recoveryKey = "inspection-chronology-recovery-ys-263";
+        var request = new RecoverInspectionChronologyRequest
+        {
+            ExpectedContaminatedCompletedAtUtc = originalBusinessNowUtc,
+            ExpectedContaminatedReportStoredFileId = contaminatedReportId,
+            ExpectedContaminatedReportUploadedAtUtc = contaminatedReportUploadedAtUtc,
+            CorrectCompletedAtUtc = correctedCompletedAtUtc,
+        };
+
+        var (recovered, recoveryError) = await _service.RecoverChronologyAuthorizedAsync(
+            _scope, created.Id, request, recoveryKey);
+
+        recoveryError.Should().BeNull();
+        recovered.Should().NotBeNull();
+        recovered!.CompletedAt.Should().Be(correctedCompletedAtUtc);
+        recovered.RetiredReportStoredFileId.Should().Be(contaminatedReportId);
+        recovered.ReportStoredFileId.Should().NotBeNull();
+        recovered.ReportStoredFileId.Should().NotBe(contaminatedReportId);
+        var inspection = await _db.Inspections.AsNoTracking().SingleAsync(i => i.Id == created.Id);
+        inspection.CompletedAt.Should().Be(correctedCompletedAtUtc);
+        inspection.UpdatedAt.Should().Be(correctedCompletedAtUtc);
+        inspection.ReportStoredFileId.Should().Be(recovered.ReportStoredFileId);
+        var retiredReport = await _db.StoredFiles.IgnoreQueryFilters().AsNoTracking()
+            .SingleAsync(file => file.Id == contaminatedReportId && file.PortfolioId == PortfolioId);
+        retiredReport.DeletedAt.Should().Be(correctedCompletedAtUtc);
+        var replacementReport = await _db.StoredFiles.AsNoTracking()
+            .SingleAsync(file => file.Id == recovered.ReportStoredFileId);
+        replacementReport.UploadedAt.Should().Be(correctedCompletedAtUtc);
+        replacementReport.EntityType.Should().Be(nameof(Inspection));
+        replacementReport.EntityId.Should().Be(created.Id);
+        var reportCountAfterRecovery = await _db.StoredFiles.AsNoTracking()
+            .CountAsync(file => file.EntityType == nameof(Inspection) && file.EntityId == created.Id);
+        var outboxCountAfterRecovery = await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.IdempotencyKey.Contains(recoveryKey));
+        var auditCountAfterRecovery = await _db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(log => log.CommandIdempotencyKey.Contains(recoveryKey));
+
+        var (replayed, replayError) = await _service.RecoverChronologyAuthorizedAsync(
+            _scope, created.Id, request, recoveryKey);
+
+        replayError.Should().BeNull();
+        replayed.Should().NotBeNull();
+        replayed!.CompletedAt.Should().Be(recovered.CompletedAt);
+        replayed.RetiredReportStoredFileId.Should().Be(recovered.RetiredReportStoredFileId);
+        replayed.ReportStoredFileId.Should().Be(recovered.ReportStoredFileId);
+        (await _db.StoredFiles.AsNoTracking()
+            .CountAsync(file => file.EntityType == nameof(Inspection) && file.EntityId == created.Id))
+            .Should().Be(reportCountAfterRecovery);
+        (await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.IdempotencyKey.Contains(recoveryKey)))
+            .Should().Be(outboxCountAfterRecovery);
+        (await _db.AtomicAuditLogs.AsNoTracking()
+            .CountAsync(log => log.CommandIdempotencyKey.Contains(recoveryKey)))
+            .Should().Be(auditCountAfterRecovery);
+    }
+
+    [Fact]
+    public async Task RecoverChronologyAuthorizedAsync_ExpectedStateMismatchDoesNotMutate()
+    {
+        var originalBusinessNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var correctedCompletedAtUtc = DateTime.SpecifyKind(
+            originalBusinessNowUtc.AddDays(-2),
+            DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(originalBusinessNowUtc));
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = originalBusinessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var firstItem = created!.Items.OrderBy(item => item.SortOrder).First();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, firstItem.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Recovery setup mutation" }, NextOperationKey());
+        var (completed, completeError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        completeError.Should().BeNull();
+        completed.Should().NotBeNull();
+        completed!.ReportStoredFileId.Should().NotBeNull();
+        var reportId = completed.ReportStoredFileId.Value;
+        var before = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+        var beforeReport = await _db.StoredFiles.AsNoTracking().SingleAsync(file => file.Id == reportId);
+        var outboxCountBefore = await _db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey.Contains("inspection-chronology-recovery-mismatch"));
+
+        clock.SetUtcNow(new DateTimeOffset(correctedCompletedAtUtc));
+        var (result, error) = await _service.RecoverChronologyAuthorizedAsync(
+            _scope,
+            created.Id,
+            new RecoverInspectionChronologyRequest
+            {
+                ExpectedContaminatedCompletedAtUtc = before.CompletedAt!.Value.AddMinutes(1),
+                ExpectedContaminatedReportStoredFileId = reportId,
+                ExpectedContaminatedReportUploadedAtUtc = beforeReport.UploadedAt,
+                CorrectCompletedAtUtc = correctedCompletedAtUtc,
+            },
+            "inspection-chronology-recovery-mismatch");
+
+        result.Should().BeNull();
+        error.Should().Be("Inspection chronology recovery expected-state check failed; no rows were changed.");
+        var after = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+        after.CompletedAt.Should().Be(before.CompletedAt);
+        after.UpdatedAt.Should().Be(before.UpdatedAt);
+        after.ReportStoredFileId.Should().Be(before.ReportStoredFileId);
+        var afterReport = await _db.StoredFiles.AsNoTracking().SingleAsync(file => file.Id == reportId);
+        afterReport.UploadedAt.Should().Be(beforeReport.UploadedAt);
+        afterReport.DeletedAt.Should().BeNull();
+        (await _db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey.Contains("inspection-chronology-recovery-mismatch")))
+            .Should().Be(outboxCountBefore);
+    }
+
+    [Fact]
+    public async Task UpdateItemAuthorizedAsync_AllowsRealItemMutationAtSameFrozenInstant()
+    {
+        var frozenNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(frozenNowUtc));
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = frozenNowUtc,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var item = created!.Items.OrderBy(candidate => candidate.SortOrder).First();
+        var updateKey = "inspection-item-same-instant-real-mutation";
+
+        var updated = await _service.UpdateItemAuthorizedAsync(
+            _scope,
+            created.Id,
+            item.Id,
+            new UpdateInspectionItemRequest
+            {
+                Result = InspectionItemResult.Fail,
+                Note = "Same-instant mutation",
+            },
+            updateKey);
+
+        updated.Should().NotBeNull();
+        updated!.Result.Should().Be(InspectionItemResult.Fail);
+        updated.Note.Should().Be("Same-instant mutation");
+        var inspection = await _db.Inspections.AsNoTracking().SingleAsync(row => row.Id == created.Id);
+        inspection.UpdatedAt.Should().Be(frozenNowUtc);
+        (await _db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+            log.CommandIdempotencyKey.Contains(updateKey) && log.EntityType == nameof(InspectionItem)))
+            .Should().Be(1);
+        (await _db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+            log.CommandIdempotencyKey.Contains(updateKey) && log.EntityType == nameof(Inspection)))
+            .Should().Be(0);
+        (await _db.OutboxMessages.AsNoTracking().CountAsync(message =>
+            message.IdempotencyKey.Contains(updateKey) && message.IdempotencyKey.EndsWith(":item")))
+            .Should().Be(1);
+        (await _db.OutboxMessages.AsNoTracking().CountAsync(message =>
+            message.IdempotencyKey.Contains(updateKey) && message.IdempotencyKey.EndsWith(":inspection")))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UpdateItemAuthorizedAsync_ExactStateFreshKeyNoOpReplaysWithoutAuditOrOutbox()
+    {
+        var frozenNowUtc = DateTime.SpecifyKind(
+            DateTime.UtcNow.AddMinutes(10),
+            DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(frozenNowUtc));
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            new InMemoryFileStorage(),
+            new InspectionReportPdfGenerator(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = frozenNowUtc,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var item = created!.Items.OrderBy(candidate => candidate.SortOrder).First();
+        item.Result.Should().Be(InspectionItemResult.Pending);
+        item.Note.Should().BeNull();
+        var noopKey = "inspection-item-exact-state-noop";
+        var request = new UpdateInspectionItemRequest { Result = InspectionItemResult.Pending };
+
+        var first = await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id, request, noopKey);
+        var replayed = await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id, request, noopKey);
+
+        first.Should().NotBeNull();
+        replayed.Should().NotBeNull();
+        first!.Id.Should().Be(item.Id);
+        replayed!.Id.Should().Be(item.Id);
+        first.Result.Should().Be(InspectionItemResult.Pending);
+        replayed.Result.Should().Be(InspectionItemResult.Pending);
+        (await _db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+            log.CommandIdempotencyKey.Contains(noopKey)))
+            .Should().Be(0);
+        (await _db.OutboxMessages.AsNoTracking().CountAsync(message =>
+            message.IdempotencyKey.Contains(noopKey)))
+            .Should().Be(0);
+    }
+
+    [Fact]
     public async Task Complete_BatchesFailedItemWorkOrderCreationWithoutPerItemScopeQueries()
     {
         var property = SeedProperty();
@@ -610,6 +988,34 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void SetUtcNow(DateTimeOffset utcNow) => _utcNow = utcNow;
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public Exception? LastError { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel >= LogLevel.Error)
+                LastError = exception ?? new InvalidOperationException(formatter(state, exception));
+        }
     }
 
     /// <summary>In-memory <see cref="IFileStorage"/> so report generation works without disk.</summary>

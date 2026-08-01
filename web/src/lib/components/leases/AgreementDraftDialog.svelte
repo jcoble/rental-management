@@ -31,8 +31,8 @@
 		source?: LeaseAgreementSummary | null;
 		canCancel?: boolean;
 		onclose: () => void;
-		onissued: (result: IssueLeaseAgreementResponse) => void;
-		oncanceled: () => void;
+		onissued: (result: IssueLeaseAgreementResponse) => void | Promise<void>;
+		oncanceled: () => void | Promise<void>;
 	} = $props();
 
 	type DraftForm = {
@@ -91,10 +91,15 @@
 		| { fingerprint: string; prepareKey: string; issueKey: string }
 		| null = null;
 	let cancelOperation: { fingerprint: string; key: string } | null = null;
+	let draftRequestsEnabled = $state(true);
+	const canLoadDraft = $derived(
+		draftRequestsEnabled && leaseManagementId > 0 && leaseAgreementId > 0
+	);
 
 	const draftQuery = createQuery(() => ({
 		queryKey: ['lease-managements', leaseManagementId, 'agreements', leaseAgreementId, 'draft'],
-		queryFn: () => leaseManagements.getAgreementDraft(leaseManagementId, leaseAgreementId)
+		queryFn: () => leaseManagements.getAgreementDraft(leaseManagementId, leaseAgreementId),
+		enabled: canLoadDraft
 	}));
 	const templatesQuery = createQuery(() => ({
 		queryKey: ['document-templates', 'agreement-draft', 'active'],
@@ -243,7 +248,7 @@
 			await queryClient.invalidateQueries({
 				queryKey: ['lease-managements', leaseManagementId]
 			});
-			await draftQuery.refetch();
+			if (draftRequestsEnabled) await draftQuery.refetch();
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'Could not save the agreement draft.'))
 	}));
@@ -283,8 +288,10 @@
 		},
 		onSuccess: async (result) => {
 			showSuccess('Agreement issued for signature.');
+			draftRequestsEnabled = false;
+			issueConfirmationOpen = false;
+			await onissued(result);
 			await queryClient.invalidateQueries({ queryKey: ['lease-managements', leaseManagementId] });
-			onissued(result);
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'Could not issue the agreement.'))
 	}));
@@ -323,8 +330,10 @@
 			),
 		onSuccess: async () => {
 			showSuccess('Successor draft canceled.');
+			draftRequestsEnabled = false;
+			cancelConfirmationOpen = false;
+			await oncanceled();
 			await queryClient.invalidateQueries({ queryKey: ['lease-managements', leaseManagementId] });
-			oncanceled();
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'Could not cancel the successor draft.'))
 	}));

@@ -4,6 +4,7 @@
 	import { appointments } from '$lib/api/endpoints/appointments';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Appointment } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { appointmentSchema, parseForm } from '$lib/schemas';
@@ -47,8 +48,18 @@
 	const appointmentStepFields = [
 		['title', 'type', 'status'],
 		['scheduledStart', 'scheduledEnd'],
-		['propertyId', 'tenantId', 'assignedTo', 'prospectName', 'prospectEmail'],
+		['propertyId', 'tenantId', 'workOrderId', 'assignedTo', 'prospectName', 'prospectEmail'],
 	] as const;
+	type AppointmentWorkOrderOption = {
+		id: number;
+		label: string;
+		description: string | null;
+		propertyId: number | null;
+		unitId: number | null;
+		tenantId: number | null;
+		propertyName: string | null;
+		tenantName: string | null;
+	};
 
 	// ── View toggle: Calendar (default) / List ──────────────────────────────────
 	type AppointmentView = 'calendar' | 'list';
@@ -124,10 +135,31 @@
 			}))
 		};
 	}
+	async function loadWorkOrderOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await workOrders.listPage(portfolioId, { ...params, sort: '-requestedAt' });
+		return {
+			...result,
+			items: result.items.map((workOrder) => ({
+				id: workOrder.id,
+				label: `#${workOrder.id} ${workOrder.title}`,
+				description: [
+					workOrder.propertyName,
+					workOrder.unitNumber ? `Unit ${workOrder.unitNumber}` : null,
+					workOrder.tenantName,
+					workOrder.status
+				].filter(Boolean).join(' - ') || null,
+				propertyId: workOrder.propertyId ?? null,
+				unitId: workOrder.unitId ?? null,
+				tenantId: workOrder.tenantId ?? null,
+				propertyName: workOrder.propertyName ?? null,
+				tenantName: workOrder.tenantName ?? null
+			}))
+		};
+	}
 
 	const empty = {
 		title: '', type: 'Showing', scheduledStart: '', scheduledEnd: '',
-		propertyId: '', tenantId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
+		propertyId: '', unitId: '', tenantId: '', workOrderId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -138,6 +170,8 @@
 	let deleteTarget = $state<Appointment | null>(null);
 	let selectedPropertyLabel = $state<string | null>(null);
 	let selectedTenantLabel = $state<string | null>(null);
+	let selectedWorkOrderLabel = $state<string | null>(null);
+	const calendarInitialDate = $derived(typeof window === 'undefined' ? undefined : new Date());
 
 	function clearFormError(field: string) {
 		if (!formErrors[field]) return;
@@ -247,6 +281,7 @@
 		completedAppointmentSteps = [];
 		selectedPropertyLabel = null;
 		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
 		showForm = true;
 	}
 	// Calendar: clicked an empty day/slot → create prefilled with that local time.
@@ -258,6 +293,7 @@
 		completedAppointmentSteps = [];
 		selectedPropertyLabel = null;
 		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
 		showForm = true;
 	}
 	function openEdit(a: Appointment) {
@@ -268,12 +304,15 @@
 			scheduledStart: utcIsoToLocalWallClock(a.scheduledStart),
 			scheduledEnd: utcIsoToLocalWallClock(a.scheduledEnd),
 			propertyId: a.propertyId != null ? String(a.propertyId) : '',
+			unitId: a.unitId != null ? String(a.unitId) : '',
 			tenantId: a.tenantId != null ? String(a.tenantId) : '',
+			workOrderId: a.workOrderId != null ? String(a.workOrderId) : '',
 			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
 		};
 		formErrors = {};
 		selectedPropertyLabel = a.propertyName ?? null;
 		selectedTenantLabel = a.tenantName ?? null;
+		selectedWorkOrderLabel = a.workOrderId != null ? `#${a.workOrderId}` : null;
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
 		showForm = true;
@@ -286,6 +325,16 @@
 		completedAppointmentSteps = [];
 		selectedPropertyLabel = null;
 		selectedTenantLabel = null;
+		selectedWorkOrderLabel = null;
+	}
+	function applyWorkOrderSelection(option: AppointmentWorkOrderOption | null) {
+		selectedWorkOrderLabel = option?.label ?? null;
+		if (!option) return;
+		form.propertyId = option.propertyId != null ? String(option.propertyId) : '';
+		form.unitId = option.unitId != null ? String(option.unitId) : '';
+		form.tenantId = option.tenantId != null ? String(option.tenantId) : '';
+		selectedPropertyLabel = option.propertyName;
+		selectedTenantLabel = option.tenantName;
 	}
 	function submit() {
 		const result = parseForm(appointmentSchema, form);
@@ -449,6 +498,7 @@
 			{#if view === 'calendar'}
 				<AppointmentCalendar
 					appointments={calendarList}
+					initialDate={calendarInitialDate}
 					onSelectAppointment={openEdit}
 					onCreateAt={openCreateAt}
 					onReschedule={reschedule}
@@ -605,6 +655,21 @@
 								onValueChange={(_value, option) => (selectedTenantLabel = option?.label ?? null)}
 								testid="appointment-tenant-input"
 							/>
+							<div class="sm:col-span-2">
+								<RemoteRecordSelect
+									queryKey={['appointment-work-order', portfolioId]}
+									label="Work order"
+									bind:value={form.workOrderId}
+									selectedLabel={selectedWorkOrderLabel}
+									placeholder="No work order"
+									clearLabel="No work order"
+									searchPlaceholder="Search work orders..."
+									emptyLabel="No matching work orders"
+									loadPage={loadWorkOrderOptions}
+									onValueChange={(_value, option) => applyWorkOrderSelection(option as AppointmentWorkOrderOption | null)}
+									testid="appointment-work-order-input"
+								/>
+							</div>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
 								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />

@@ -74,7 +74,15 @@ public class AppointmentController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
+        AppointmentResponse? created;
+        try
+        {
+            created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(403, new { error = ex.Message });
+        }
         return created == null
             ? NotFound(new { error = "Referenced property, unit, lease relationship, application, or tenant not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);

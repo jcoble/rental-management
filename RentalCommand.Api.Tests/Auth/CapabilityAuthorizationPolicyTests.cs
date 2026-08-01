@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 
@@ -88,7 +89,7 @@ public sealed class CapabilityAuthorizationPolicyTests
                 WorkspaceMembershipId: 91,
                 DefaultExperience: null)),
             evaluator,
-            TimeProvider.System);
+            new FixedAuthSecurityClock(DateTime.UtcNow));
 
         await handler.HandleAsync(authorizationContext);
 
@@ -137,5 +138,10 @@ public sealed class CapabilityAuthorizationPolicyTests
             CallCount++;
             return Task.FromResult(true);
         }
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
     }
 }

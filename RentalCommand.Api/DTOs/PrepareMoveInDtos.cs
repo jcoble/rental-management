@@ -45,6 +45,9 @@ public sealed class PrepareMoveInRequest
     public decimal SecurityDepositObligation { get; set; }
     public decimal LateFeeAmount { get; set; }
     public short GracePeriodDays { get; set; }
+    [System.ComponentModel.DataAnnotations.EnumDataType(typeof(RentTrackingStartMode))]
+    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.ForwardOnly;
+    public DateOnly? RentTrackingStartOn { get; set; }
     public int TermsSchemaVersion { get; set; } = 1;
     public JsonElement TermsPayload { get; set; }
     public bool CreateSecurityDepositAccount { get; set; }

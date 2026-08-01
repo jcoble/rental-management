@@ -69,10 +69,9 @@ class GettingStartedSignals {
   /// SignalWire / SMS provider credentials are configured.
   final bool hasTexting;
 
-  /// The user deliberately switched on an automation that defaults OFF (rent
-  /// charges or late fees). Lease-expiry reminders are intentionally excluded —
-  /// they default ON, so counting them would auto-check this task for a
-  /// brand-new account that never touched Settings.
+  /// The user configured at least one optional follow-up automation. Rent
+  /// charges are not a setting: every active lease drives them automatically
+  /// from its chosen rent-tracking start.
   final bool hasAutomations;
 
   /// Signals with nothing set up yet — used as the value while data is loading
@@ -196,10 +195,11 @@ const List<GettingStartedTask> kGettingStartedTasks = [
   ),
   GettingStartedTask(
     key: 'automations',
-    label: 'Turn on automatic reminders',
+    label: 'Configure optional follow-ups',
     eli5:
-        'Let the app charge rent and add late fees on its own — so you do not '
-        'have to remember.',
+        'Rent charges already follow every active lease. Choose any extra late '
+        'fees, tenant notices, renewal reminders, maintenance reminders, or '
+        'briefings you want.',
     icon: Symbols.tune_rounded,
     dest: GettingStartedDest.settings,
     core: false,

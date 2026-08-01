@@ -43,6 +43,7 @@ public sealed record ScanDraftResponse(
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
     LeaseImportProposal? LeaseProposal = null,
     ScanCaptureContextDto? CaptureContext = null,
+    int? SourceStoredFileId = null,
     string? SourceContentSha256 = null)
 {
     /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
@@ -71,6 +72,7 @@ public sealed record ScanDraftResponse(
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
             createdEntityType, createdEntityId, createdUnitId,
             CaptureContext: ToCaptureContext(d),
+            SourceStoredFileId: d.SourceStoredFileId,
             SourceContentSha256: d.SourceContentSha256);
     }
 
@@ -195,6 +197,18 @@ public sealed class ConfirmScanRequest
     public string ClientOperationId { get; set; } = string.Empty;
 
     public string? OverridesJson { get; set; }
+}
+
+/// <summary>Stable operation identity plus selected canonical account for payment scan review.</summary>
+public sealed class SetScanDraftPaymentAccountRequest
+{
+    [Range(1, int.MaxValue)]
+    public int TenantAccountId { get; set; }
+
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
 }
 
 /// <summary>Optional rejection reason when rejecting a scan draft.</summary>

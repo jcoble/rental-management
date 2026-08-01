@@ -7,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/widgets/mobile_m3_list.dart';
 import 'package:rental_command/features/deposits/deposits_screen.dart';
 import 'package:rental_command/features/deposits/deposits_repository.dart';
 
@@ -148,6 +149,31 @@ void main() {
       );
     },
   );
+
+  testWidgets('deposit loading state is not shaped like an account row', (
+    tester,
+  ) async {
+    final repository = _ControlledDepositsRepository();
+    final pending = Completer<TenantAccountDepositPage>();
+    repository.queue(pending.future);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [depositsRepositoryProvider.overrideWithValue(repository)],
+        child: const MaterialApp(home: DepositsScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('deposits-loading')), findsOneWidget);
+    expect(find.byType(MobileM3ListItem), findsNothing);
+    expect(find.text('Loading security deposits'), findsNothing);
+
+    pending.complete(_depositPage(items: const [], totalCount: 0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('deposits-loading')), findsNothing);
+  });
 
   test('detail is resolved by the exact tenant account id', () async {
     final adapter = _DepositAdapter();

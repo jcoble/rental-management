@@ -11,9 +11,13 @@ namespace RentalCommand.Data.Auth;
 public sealed class IssueSessionRefreshCredentialHandler
     : IAtomicCommandHandler<IssueSessionRefreshCredentialCommand, SessionRefreshMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public IssueSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<SessionRefreshMutationResult> HandleAsync(
         IssueSessionRefreshCredentialCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.AuthSessionId == Guid.Empty ||
@@ -26,12 +30,12 @@ public sealed class IssueSessionRefreshCredentialHandler
         ValidateHash(command.TokenHash, nameof(command.TokenHash));
         ValidateIssueTimes(command);
 
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.RefreshTokenFamily,
+        await context.AcquireLockAsync(
+            "RefreshTokenFamily",
             command.AuthSessionId,
             ct);
 
-        var session = await attempt.Persistence.Query<AuthSession>()
+        var session = await _db.Set<AuthSession>()
             .Where(item => item.Id == command.AuthSessionId)
             .Select(item => new SessionTarget(
                 item,
@@ -69,10 +73,10 @@ public sealed class IssueSessionRefreshCredentialHandler
             ExpiresAtUtc = command.ExpiresAtUtc,
         };
         family.Credentials.Add(credential);
-        attempt.Persistence.Add(family);
+        _db.Add(family);
         session.Entity.LastSeenAtUtc = command.IssuedAtUtc;
 
-        attempt.StageSemanticEvent(Audit(
+        context.StageSemanticEvent(Audit(
             session.PortfolioId,
             session.AccessContextId,
             AuditLogOperation.Updated,
@@ -84,6 +88,54 @@ public sealed class IssueSessionRefreshCredentialHandler
             command.AuthSessionId,
             command.RefreshTokenFamilyId,
             command.CredentialId);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        IssueSessionRefreshCredentialCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.AuthSessionId == Guid.Empty ||
+            command.RefreshTokenFamilyId == Guid.Empty ||
+            command.CredentialId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        ValidateHash(command.TokenHash, nameof(command.TokenHash));
+        ValidateIssueTimes(command);
+
+        var exactCredentialExists = await _db.Set<AuthSessionRefreshCredential>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(credential =>
+                credential.Id == command.CredentialId &&
+                credential.RefreshTokenFamilyId == command.RefreshTokenFamilyId &&
+                credential.TokenHash == command.TokenHash &&
+                credential.IssuedAtUtc == command.IssuedAtUtc &&
+                credential.ExpiresAtUtc == command.ExpiresAtUtc &&
+                credential.RefreshTokenFamily!.AuthSessionId == command.AuthSessionId &&
+                credential.RefreshTokenFamily.AbsoluteExpiresAtUtc == command.AbsoluteFamilyExpiresAtUtc,
+                ct);
+        if (exactCredentialExists)
+        {
+            return;
+        }
+
+        var rejectedIssueStillSafe = await _db.Set<AuthSession>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(session =>
+                session.Id == command.AuthSessionId &&
+                (session.Status != AuthSessionStatus.Active ||
+                 session.RevokedAtUtc != null ||
+                 session.ExpiresAtUtc <= command.IssuedAtUtc ||
+                 session.RefreshTokenFamilies.Any()),
+                ct);
+        if (!rejectedIssueStillSafe)
+        {
+            throw new UnauthorizedAccessException("The original refresh issue target is unavailable.");
+        }
     }
 
     private static void ValidateIssueTimes(IssueSessionRefreshCredentialCommand command)
@@ -138,11 +190,15 @@ public sealed class IssueSessionRefreshCredentialHandler
 public sealed class RotateSessionRefreshCredentialHandler
     : IAtomicCommandHandler<RotateSessionRefreshCredentialCommand, SessionRefreshMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RotateSessionRefreshCredentialHandler(RentalCommandDbContext db) => _db = db;
+
     private const string ReuseReason = "Refresh credential reuse detected";
 
     public async Task<SessionRefreshMutationResult> HandleAsync(
         RotateSessionRefreshCredentialCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         IssueSessionRefreshCredentialHandler.ValidateHash(
@@ -162,7 +218,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 "Replacement expiry must follow presentation.");
         }
 
-        var located = await attempt.Persistence.Query<AuthSessionRefreshCredential>()
+        var located = await _db.Set<AuthSessionRefreshCredential>()
             // Refresh is anonymous by design, so no workspace RLS scope exists yet. These three
             // credential/session tables are global auth state; their model filters traverse into
             // workspace-scoped tables and would hide every valid credential from this request.
@@ -185,15 +241,14 @@ public sealed class RotateSessionRefreshCredentialHandler
                 Guid.Empty);
         }
 
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.RefreshTokenFamily,
+        await context.AcquireLockAsync(
+            "RefreshTokenFamily",
             located.RefreshTokenFamilyId,
             ct);
 
         // Re-read after the family lock. The pre-lock lookup discovers only the immutable family id;
         // every eligibility decision below is made against state protected by that transaction lock.
         var target = await LocateAsync(
-            attempt,
             command.PresentedTokenHash,
             command.PresentedAtUtc,
             ct);
@@ -205,7 +260,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 located.Id);
         }
 
-        var authority = await attempt.Persistence.EstablishPreAuthenticatedWorkspaceScopeAsync(
+        var authority = await AtomicEffectiveLoginContextQueries.EstablishPreAuthenticatedScopeAsync(_db,
             target.Session.Id,
             target.Session.UserId,
             target.AccessContextId,
@@ -241,7 +296,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 target,
                 authority.PortfolioId,
                 command.PresentedAtUtc,
-                attempt);
+                context);
             return new SessionRefreshMutationResult(
                 SessionRefreshMutationStatus.ReuseDetected,
                 target.Session.Id,
@@ -258,7 +313,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 target,
                 authority.PortfolioId,
                 command.PresentedAtUtc,
-                attempt);
+                context);
             return new SessionRefreshMutationResult(
                 SessionRefreshMutationStatus.ReuseDetected,
                 target.Session.Id,
@@ -289,9 +344,9 @@ public sealed class RotateSessionRefreshCredentialHandler
         target.Credential.ConsumedByOperationId = command.OperationId;
         target.Credential.ReplacedByCredential = replacement;
         target.Session.LastSeenAtUtc = command.PresentedAtUtc;
-        attempt.Persistence.Add(replacement);
+        _db.Add(replacement);
 
-        attempt.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
+        context.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
             authority.PortfolioId,
             target.AccessContextId,
             AuditLogOperation.Updated,
@@ -317,13 +372,67 @@ public sealed class RotateSessionRefreshCredentialHandler
             authority.AccessRevision);
     }
 
-    private static async Task<RefreshTarget?> LocateAsync(
-        IAtomicWriteAttempt attempt,
+    public async Task AuthorizeReplayAsync(
+        RotateSessionRefreshCredentialCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        IssueSessionRefreshCredentialHandler.ValidateHash(
+            command.PresentedTokenHash,
+            nameof(command.PresentedTokenHash));
+        IssueSessionRefreshCredentialHandler.ValidateHash(
+            command.ReplacementTokenHash,
+            nameof(command.ReplacementTokenHash));
+        if (command.OperationId == Guid.Empty || command.ReplacementCredentialId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+        if (command.ReplacementExpiresAtUtc <= command.PresentedAtUtc)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command.ReplacementExpiresAtUtc));
+        }
+
+        var exactRotationExists = await _db.Set<AuthSessionRefreshCredential>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(credential =>
+                credential.TokenHash == command.PresentedTokenHash &&
+                credential.ConsumedByOperationId == command.OperationId &&
+                credential.ReplacedByCredentialId == command.ReplacementCredentialId &&
+                _db.Set<AuthSessionRefreshCredential>()
+                    .IgnoreQueryFilters()
+                    .Any(replacement =>
+                        replacement.Id == command.ReplacementCredentialId &&
+                        replacement.TokenHash == command.ReplacementTokenHash &&
+                        replacement.RefreshTokenFamilyId == credential.RefreshTokenFamilyId),
+                ct);
+        if (exactRotationExists)
+        {
+            return;
+        }
+
+        var reuseOrRejectedPathStillOwned = await _db.Set<AuthSessionRefreshCredential>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(credential =>
+                credential.TokenHash == command.PresentedTokenHash &&
+                (credential.RevokedAtUtc != null ||
+                 credential.RefreshTokenFamily!.RevokedAtUtc != null ||
+                 credential.RefreshTokenFamily.AuthSession!.RevokedAtUtc != null ||
+                 credential.RefreshTokenFamily.AuthSession.Status != AuthSessionStatus.Active),
+                ct);
+        if (!reuseOrRejectedPathStillOwned)
+        {
+            throw new UnauthorizedAccessException("The original refresh rotation ownership is unavailable.");
+        }
+    }
+
+    private async Task<RefreshTarget?> LocateAsync(
         string tokenHash,
         DateTime presentedAtUtc,
         CancellationToken ct)
     {
-        return await attempt.Persistence.Query<AuthSessionRefreshCredential>()
+        return await _db.Set<AuthSessionRefreshCredential>()
             // See the pre-lock lookup above. The effective workspace context is deliberately
             // resolved in a separate security-definer projection after this global auth read.
             .IgnoreQueryFilters()
@@ -351,7 +460,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         RefreshTarget target,
         int portfolioId,
         DateTime now,
-        IAtomicWriteAttempt attempt)
+        IAtomicCommandContext context)
     {
         target.Credential.ReuseDetectedAtUtc ??= now;
         target.Credential.RevokedAtUtc ??= now;
@@ -363,7 +472,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         target.Session.RevokedAtUtc ??= now;
         target.Session.RevocationReason ??= ReuseReason;
 
-        attempt.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
+        context.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
             portfolioId,
             target.AccessContextId,
             AuditLogOperation.Updated,

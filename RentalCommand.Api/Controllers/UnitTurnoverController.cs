@@ -15,8 +15,13 @@ public sealed class UnitTurnoverController : ManagementControllerBase
     private static readonly AtomicJsonResultCodec<CompleteTurnoverResult> ResultCodec =
         new("unit.complete-turnover.v1");
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly TimeProvider _timeProvider;
 
-    public UnitTurnoverController(IAtomicUnitOfWork atomic) => _atomic = atomic;
+    public UnitTurnoverController(IAtomicUnitOfWork atomic, TimeProvider timeProvider)
+    {
+        _atomic = atomic;
+        _timeProvider = timeProvider;
+    }
 
     [HttpPost("{periodId:int}/complete")]
     [ProducesResponseType(typeof(CompleteTurnoverResponse), StatusCodes.Status200OK)]
@@ -42,13 +47,14 @@ public sealed class UnitTurnoverController : ManagementControllerBase
         var userId = active.UserId;
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
             .ToLowerInvariant();
+        var businessNowUtc = _timeProvider.GetUtcNow().UtcDateTime;
         try
         {
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("unit.complete-turnover",
                     $"{portfolioId}:{unitId}:{periodId}:{digest}"),
                 new CompleteTurnoverCommand(portfolioId, unitId, periodId, userId,
-                    active.SessionId, active.AccessContextId, active.AccessRevision,
+                    active.SessionId, active.AccessContextId, active.AccessRevision, businessNowUtc,
                     $"complete-turnover:{portfolioId}:{unitId}:{periodId}:{digest}"),
                 ResultCodec, ct);
             return outcome.Value.Outcome switch

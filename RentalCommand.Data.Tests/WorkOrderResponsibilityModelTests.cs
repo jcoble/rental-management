@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Operations;
 
@@ -105,6 +106,17 @@ public sealed class WorkOrderResponsibilityModelTests
     }
 
     [Fact]
+    public void ResponsibilityCommands_UseAtomicDataOnlyRevisionExpectations()
+    {
+        typeof(WorkspaceAccessRevisionExpectation)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+        typeof(AssignWorkOrderResponsibilityCommand)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+        typeof(CloseWorkOrderResponsibilityCommand)
+            .Should().BeAssignableTo<IAtomicCommandData>();
+    }
+
+    [Fact]
     public void AssignedUpdate_HandlerFencesStaleWritesAndReauthorizesReplay()
     {
         var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "RentalCommand.Data",
@@ -112,8 +124,9 @@ public sealed class WorkOrderResponsibilityModelTests
 
         source.Should().Contain("workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc");
         source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
-        source.Should().Contain("IAtomicReplayAuthorizer<UpdateAssignedWorkOrderCommand>");
-        source.Should().Contain("AuthorizeAndLoadAsync(command, persistence, now, tracking: false");
+        source.Should().Contain("AuthorizeReplayAsync(");
+        source.Should().Contain(
+            "AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false");
         source.Should().Contain("resultingStatus != WorkOrderStatus.Completed");
     }
 

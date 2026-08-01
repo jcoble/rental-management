@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Time;
@@ -17,11 +18,16 @@ public sealed class AnalyticsService : IAnalyticsService
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _authSecurityClock;
 
-    public AnalyticsService(RentalCommandDbContext db, TimeProvider timeProvider)
+    public AnalyticsService(
+        RentalCommandDbContext db,
+        TimeProvider timeProvider,
+        IAuthSecurityClock authSecurityClock)
     {
         _db = db;
         _timeProvider = timeProvider;
+        _authSecurityClock = authSecurityClock;
     }
 
     /// <summary>
@@ -36,6 +42,7 @@ public sealed class AnalyticsService : IAnalyticsService
         CancellationToken ct = default)
     {
         var now = _timeProvider.UtcNow();
+        var securityNow = _authSecurityClock.UtcNow();
         var today = DateOnly.FromDateTime(now);
         var monthStart = new DateOnly(now.Year, now.Month, 1);
         var monthEnd = monthStart.AddMonths(1);
@@ -73,7 +80,7 @@ public sealed class AnalyticsService : IAnalyticsService
                     AND session."ActiveAccessContextId" = {{scope.AccessContextId}}
                     AND session."Status" = 'Active'
                     AND session."RevokedAtUtc" IS NULL
-                    AND session."ExpiresAtUtc" > {{now}}
+                    AND session."ExpiresAtUtc" > {{securityNow}}
                     AND access_context."Id" = {{scope.AccessContextId}}
                     AND access_context."PortfolioId" = property."PortfolioId"
                     AND access_context."AccessRevision" = {{scope.AccessRevision}}
@@ -83,13 +90,13 @@ public sealed class AnalyticsService : IAnalyticsService
                     AND membership."Status" = 'Active'
                     AND membership."SuspendedAtUtc" IS NULL
                     AND membership."RevokedAtUtc" IS NULL
-                    AND membership."EffectiveFromUtc" <= {{now}}
-                    AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > {{now}})
+                    AND membership."EffectiveFromUtc" <= {{securityNow}}
+                    AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > {{securityNow}})
                     AND assignment."Status" = 'Active'
                     AND assignment."SuspendedAtUtc" IS NULL
                     AND assignment."RevokedAtUtc" IS NULL
-                    AND assignment."EffectiveFromUtc" <= {{now}}
-                    AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > {{now}})
+                    AND assignment."EffectiveFromUtc" <= {{securityNow}}
+                    AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > {{securityNow}})
                     AND capability."Key" = 'reports.read'
                     AND capability."AuthorizationTargetKind" = 'Property'
                     AND (

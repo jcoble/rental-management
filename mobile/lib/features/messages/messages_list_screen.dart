@@ -68,6 +68,19 @@ String _tenantDisplayName(Tenant t) {
   return '${t.firstName} ${t.lastName}'.trim();
 }
 
+const messageRecipientTenantQuery = TenantListQuery(take: 200, sort: 'name');
+
+@visibleForTesting
+String messageRecipientLabel(Tenant tenant) {
+  final locationParts = [
+    tenant.currentPropertyName?.trim(),
+    tenant.currentUnitNumber?.trim(),
+  ].where((part) => part != null && part.isNotEmpty).cast<String>();
+  final location = locationParts.join(' / ');
+  final name = _tenantDisplayName(tenant);
+  return location.isEmpty ? name : '$name - $location';
+}
+
 @visibleForTesting
 String messagesEmptyInstruction({
   required bool hasCriteria,
@@ -80,6 +93,20 @@ String messagesEmptyInstruction({
   }
   if (tenantMode) return 'Messages from your rental team will appear here.';
   return 'You can read conversations here. Ask a workspace admin for access to start one.';
+}
+
+@visibleForTesting
+String conversationDisplayTitle(Conversation conversation) =>
+    conversation.displayName;
+
+@visibleForTesting
+String conversationAvatarInitials(Conversation conversation) {
+  final name = conversationDisplayTitle(conversation).trim();
+  if (name.isEmpty) return '?';
+  final parts = name.split(RegExp(r'\s+'));
+  if (parts.length == 1) return parts.first.characters.first.toUpperCase();
+  return (parts.first.characters.first + parts.last.characters.first)
+      .toUpperCase();
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -156,7 +183,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     Widget detailBuilder(BuildContext _) {
       return MessageDetailScreen(
         conversationId: convo.id,
-        title: convo.tenantName,
+        title: conversationDisplayTitle(convo),
         subtitle: convo.subject,
       );
     }
@@ -176,14 +203,16 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   }
 
   Future<void> _startNewConversation(BuildContext context) async {
-    final created = await showModalBottomSheet<Conversation>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => const _ComposeConversationSheet(),
-    );
+    final created =
+        await showMobileQuickActionHiddenModalBottomSheet<Conversation>(
+          context: context,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) =>
+              const MobileQuickActionHider(child: _ComposeConversationSheet()),
+        );
     if (created == null || !context.mounted) return;
     // Refresh the inbox and open the freshly created thread.
     ref.invalidate(conversationsPageProvider);
@@ -192,7 +221,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     Widget detailBuilder(BuildContext _) {
       return MessageDetailScreen(
         conversationId: created.id,
-        title: created.tenantName,
+        title: conversationDisplayTitle(created),
         subtitle: created.subject,
       );
     }
@@ -378,15 +407,6 @@ class _ConversationTile extends StatelessWidget {
   final MobileM3ListItemPosition position;
   final VoidCallback onTap;
 
-  String _avatarInitials() {
-    final name = conversation.tenantName.trim();
-    if (name.isEmpty) return '?';
-    final parts = name.split(RegExp(r'\s+'));
-    if (parts.length == 1) return parts.first.characters.first.toUpperCase();
-    return (parts.first.characters.first + parts.last.characters.first)
-        .toUpperCase();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -402,7 +422,7 @@ class _ConversationTile extends StatelessWidget {
         radius: 24,
         backgroundColor: colorScheme.primaryContainer,
         child: Text(
-          _avatarInitials(),
+          conversationAvatarInitials(conversation),
           style: theme.textTheme.titleMedium?.copyWith(
             color: colorScheme.onPrimaryContainer,
             fontWeight: FontWeight.w600,
@@ -410,7 +430,7 @@ class _ConversationTile extends StatelessWidget {
         ),
       ),
       title: Text(
-        conversation.tenantName,
+        conversationDisplayTitle(conversation),
         style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
         ),
@@ -616,12 +636,6 @@ class _ComposeConversationSheetState
   String? _operationKey;
 
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(tenantsProvider.notifier).load());
-  }
-
-  @override
   void dispose() {
     _subjectCtrl.dispose();
     _bodyCtrl.dispose();
@@ -682,7 +696,9 @@ class _ComposeConversationSheetState
 
   @override
   Widget build(BuildContext context) {
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = ref.watch(
+      tenantsPageProvider(messageRecipientTenantQuery),
+    );
     final colorScheme = Theme.of(context).colorScheme;
     const gap = SizedBox(height: 12);
 
@@ -711,16 +727,16 @@ class _ComposeConversationSheetState
                     'Could not load tenants: ${e is ApiException ? e.message : e}',
                     style: TextStyle(color: colorScheme.error, fontSize: 13),
                   ),
-                  data: (tenants) => DropdownButtonFormField<int>(
+                  data: (page) => DropdownButtonFormField<int>(
                     initialValue: _selectedTenantId,
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'To (tenant)'),
-                    items: tenants
+                    items: page.items
                         .map(
                           (t) => DropdownMenuItem(
                             value: t.id,
                             child: Text(
-                              _tenantDisplayName(t),
+                              messageRecipientLabel(t),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),

@@ -3,6 +3,8 @@ using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Notifications;
 
 namespace RentalCommand.Data.Notifications;
 
@@ -21,6 +23,76 @@ public interface ITenantNoticeDraftSetStore
         string? noticeType,
         DateTime securityNowUtc,
         CancellationToken ct = default);
+
+    Task<int> CompleteApprovalAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        int? conversationId,
+        string approvedChannels,
+        DateTime approvedAtUtc,
+        DateTime updatedAtUtc,
+        CancellationToken ct = default);
+
+    Task<int> ReconcileApprovalNotificationIntentAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default);
+
+    Task<int> ReconcileApprovedDeliveryChronologyAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        DateTime existingApprovedAtUtc,
+        DateTime correctedApprovedAtUtc,
+        CancellationToken ct = default);
+
+    Task<AtomicNoticeApprovalCompletionValidation> ValidateApprovalCompletionAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        string approvedChannels,
+        int? expectedConversationId,
+        int recipientLeaseManagementPartyId,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        string[] expectedDestinations,
+        string[] expectedOutboxIdempotencyKeys,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default);
+
+    Task<AtomicNoticeApprovalCompletionValidation> ValidateApprovalRecoveryCandidateAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        string approvedChannels,
+        int? expectedConversationId,
+        int recipientLeaseManagementPartyId,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        string[] expectedDestinations,
+        string[] expectedOutboxIdempotencyKeys,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -33,6 +105,235 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
     private readonly RentalCommandDbContext _db;
 
     public TenantNoticeDraftSetStore(RentalCommandDbContext db) => _db = db;
+
+    public async Task<int> CompleteApprovalAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        int? conversationId,
+        string approvedChannels,
+        DateTime approvedAtUtc,
+        DateTime updatedAtUtc,
+        CancellationToken ct = default) =>
+        await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "NoticeDrafts"
+            SET "Status" = 'Approved',
+                "ApprovedAt" = {approvedAtUtc},
+                "ApprovedChannels" = {approvedChannels},
+                "RenderedNoticeId" = {renderedNoticeId},
+                "ConversationId" = {conversationId},
+                "UpdatedAt" = {updatedAtUtc}
+            WHERE "PortfolioId" = {portfolioId}
+              AND "Id" = {noticeDraftId}
+              AND "Status" = 'Draft'
+            """, ct);
+
+    public async Task<int> ReconcileApprovalNotificationIntentAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default) =>
+        await _db.Database.ExecuteSqlRawAsync(
+            ReconcileApprovalNotificationIntentSql,
+            [
+                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("notice_draft_id", NpgsqlDbType.Integer, noticeDraftId),
+                Parameter("rendered_notice_id", NpgsqlDbType.Bigint, renderedNoticeId),
+                Parameter("rendered_subject", NpgsqlDbType.Text, renderedSubject),
+                Parameter("rendered_message_preview", NpgsqlDbType.Text, renderedMessagePreview),
+                Parameter("rendered_approved_at_utc", NpgsqlDbType.TimestampTz, renderedApprovedAtUtc),
+                Parameter("expected_party_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedLeaseManagementPartyIds),
+                Parameter("expected_channels", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                    expectedChannels.Select(channel => channel.ToString()).ToArray()),
+                Parameter("expected_recipient_user_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedRecipientUserIds),
+                Parameter("expected_navigation_access_context_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedNavigationAccessContextIds),
+                Parameter("expected_navigation_access_revisions", NpgsqlDbType.Array | NpgsqlDbType.Bigint,
+                    expectedNavigationAccessRevisions),
+            ],
+            ct);
+
+    public async Task<int> ReconcileApprovedDeliveryChronologyAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        DateTime existingApprovedAtUtc,
+        DateTime correctedApprovedAtUtc,
+        CancellationToken ct = default)
+    {
+        var notificationRows = await _db.Database.ExecuteSqlRawAsync(
+            ReconcileApprovedDeliveryNotificationChronologySql,
+            [
+                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("notice_draft_id", NpgsqlDbType.Integer, noticeDraftId),
+                Parameter("rendered_notice_id", NpgsqlDbType.Bigint, renderedNoticeId),
+                Parameter("existing_approved_at_utc", NpgsqlDbType.TimestampTz, existingApprovedAtUtc),
+                Parameter("corrected_approved_at_utc", NpgsqlDbType.TimestampTz, correctedApprovedAtUtc),
+            ],
+            ct);
+        var draftRows = await _db.Database.ExecuteSqlRawAsync(
+            ReconcileApprovedDeliveryDraftChronologySql,
+            [
+                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("notice_draft_id", NpgsqlDbType.Integer, noticeDraftId),
+                Parameter("rendered_notice_id", NpgsqlDbType.Bigint, renderedNoticeId),
+                Parameter("existing_approved_at_utc", NpgsqlDbType.TimestampTz, existingApprovedAtUtc),
+                Parameter("corrected_approved_at_utc", NpgsqlDbType.TimestampTz, correctedApprovedAtUtc),
+            ],
+            ct);
+        var renderedRows = await _db.Database.ExecuteSqlRawAsync(
+            ReconcileApprovedDeliveryRenderedChronologySql,
+            [
+                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("notice_draft_id", NpgsqlDbType.Integer, noticeDraftId),
+                Parameter("rendered_notice_id", NpgsqlDbType.Bigint, renderedNoticeId),
+                Parameter("existing_approved_at_utc", NpgsqlDbType.TimestampTz, existingApprovedAtUtc),
+                Parameter("corrected_approved_at_utc", NpgsqlDbType.TimestampTz, correctedApprovedAtUtc),
+            ],
+            ct);
+
+        return notificationRows + draftRows + renderedRows;
+    }
+
+    public async Task<AtomicNoticeApprovalCompletionValidation> ValidateApprovalCompletionAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        string approvedChannels,
+        int? expectedConversationId,
+        int recipientLeaseManagementPartyId,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        string[] expectedDestinations,
+        string[] expectedOutboxIdempotencyKeys,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default) =>
+        await ValidateApprovalGraphAsync(
+            portfolioId,
+            noticeDraftId,
+            renderedNoticeId,
+            renderedSubject,
+            renderedMessagePreview,
+            renderedApprovedAtUtc,
+            approvedChannels,
+            expectedConversationId,
+            recipientLeaseManagementPartyId,
+            expectedLeaseManagementPartyIds,
+            expectedChannels,
+            expectedDestinations,
+            expectedOutboxIdempotencyKeys,
+            expectedRecipientUserIds,
+            expectedNavigationAccessContextIds,
+            expectedNavigationAccessRevisions,
+            allowRecoverableStaleNotification: false,
+            ct);
+
+    public async Task<AtomicNoticeApprovalCompletionValidation> ValidateApprovalRecoveryCandidateAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        string approvedChannels,
+        int? expectedConversationId,
+        int recipientLeaseManagementPartyId,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        string[] expectedDestinations,
+        string[] expectedOutboxIdempotencyKeys,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        CancellationToken ct = default) =>
+        await ValidateApprovalGraphAsync(
+            portfolioId,
+            noticeDraftId,
+            renderedNoticeId,
+            renderedSubject,
+            renderedMessagePreview,
+            renderedApprovedAtUtc,
+            approvedChannels,
+            expectedConversationId,
+            recipientLeaseManagementPartyId,
+            expectedLeaseManagementPartyIds,
+            expectedChannels,
+            expectedDestinations,
+            expectedOutboxIdempotencyKeys,
+            expectedRecipientUserIds,
+            expectedNavigationAccessContextIds,
+            expectedNavigationAccessRevisions,
+            allowRecoverableStaleNotification: true,
+            ct);
+
+    private async Task<AtomicNoticeApprovalCompletionValidation> ValidateApprovalGraphAsync(
+        int portfolioId,
+        int noticeDraftId,
+        long renderedNoticeId,
+        string renderedSubject,
+        string renderedMessagePreview,
+        DateTime renderedApprovedAtUtc,
+        string approvedChannels,
+        int? expectedConversationId,
+        int recipientLeaseManagementPartyId,
+        int[] expectedLeaseManagementPartyIds,
+        NoticeDeliveryChannel[] expectedChannels,
+        string[] expectedDestinations,
+        string[] expectedOutboxIdempotencyKeys,
+        int[] expectedRecipientUserIds,
+        int[] expectedNavigationAccessContextIds,
+        long[] expectedNavigationAccessRevisions,
+        bool allowRecoverableStaleNotification,
+        CancellationToken ct = default)
+    {
+        var row = await _db.Database
+            .SqlQueryRaw<ExistingDeliveryGraphValidationRow>(
+                ExistingDeliveryGraphValidationSql,
+                Parameter("portfolio_id", NpgsqlDbType.Integer, portfolioId),
+                Parameter("notice_draft_id", NpgsqlDbType.Integer, noticeDraftId),
+                Parameter("rendered_notice_id", NpgsqlDbType.Bigint, renderedNoticeId),
+                Parameter("rendered_subject", NpgsqlDbType.Text, renderedSubject),
+                Parameter("rendered_message_preview", NpgsqlDbType.Text, renderedMessagePreview),
+                Parameter("rendered_approved_at_utc", NpgsqlDbType.TimestampTz, renderedApprovedAtUtc),
+                Parameter("approved_channels", NpgsqlDbType.Text, approvedChannels),
+                Parameter("expected_conversation_id", NpgsqlDbType.Integer, expectedConversationId),
+                Parameter("recipient_lease_management_party_id", NpgsqlDbType.Integer,
+                    recipientLeaseManagementPartyId),
+                Parameter("expected_party_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedLeaseManagementPartyIds),
+                Parameter("expected_channels", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                    expectedChannels.Select(channel => channel.ToString()).ToArray()),
+                Parameter("expected_destinations", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                    expectedDestinations),
+                Parameter("expected_outbox_keys", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                    expectedOutboxIdempotencyKeys),
+                Parameter("expected_recipient_user_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedRecipientUserIds),
+                Parameter("expected_navigation_access_context_ids", NpgsqlDbType.Array | NpgsqlDbType.Integer,
+                    expectedNavigationAccessContextIds),
+                Parameter("expected_navigation_access_revisions", NpgsqlDbType.Array | NpgsqlDbType.Bigint,
+                    expectedNavigationAccessRevisions),
+                Parameter("allow_stale_message_notification", NpgsqlDbType.Boolean,
+                    allowRecoverableStaleNotification))
+            .TagWith("TSK-754 tenant notice approval recovery validates existing delivery graph")
+            .SingleAsync(ct);
+        return new AtomicNoticeApprovalCompletionValidation(row.IsMatch, row.RecipientConversationId);
+    }
 
     public Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
         Guid claimToken,
@@ -91,6 +392,408 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
 
     private static NpgsqlParameter Parameter(string name, NpgsqlDbType type, object? value) =>
         new(name, type) { Value = value ?? DBNull.Value };
+
+    private sealed class ExistingDeliveryGraphValidationRow
+    {
+        public bool IsMatch { get; init; }
+        public int? RecipientConversationId { get; init; }
+    }
+
+    private const string ReconcileApprovalNotificationIntentSql = """
+        WITH expected AS MATERIALIZED (
+          SELECT expected."RecipientLeaseManagementPartyId",
+                 expected."Channel",
+                 expected."RecipientUserId",
+                 expected."NavigationAccessContextId",
+                 expected."NavigationAccessRevision"
+          FROM unnest(
+              @expected_party_ids::integer[],
+              @expected_channels::text[],
+              @expected_recipient_user_ids::integer[],
+              @expected_navigation_access_context_ids::integer[],
+              @expected_navigation_access_revisions::bigint[])
+            AS expected(
+              "RecipientLeaseManagementPartyId",
+              "Channel",
+              "RecipientUserId",
+              "NavigationAccessContextId",
+              "NavigationAccessRevision")
+        ),
+        rendered_draft AS MATERIALIZED (
+          SELECT ledger."TenantAccountId",
+                 ledger."Id" AS "TenantLedgerEntryId"
+          FROM "RenderedNotices" AS rendered
+          INNER JOIN "NoticeDrafts" AS draft
+            ON draft."Id" = rendered."NoticeDraftId"
+           AND draft."PortfolioId" = rendered."PortfolioId"
+          INNER JOIN "TenantLedgerEntries" AS ledger
+            ON ledger."Id" = draft."TenantLedgerEntryId"
+           AND ledger."PortfolioId" = draft."PortfolioId"
+           AND ledger."TenantAccountId" = draft."TenantAccountId"
+          WHERE rendered."PortfolioId" = @portfolio_id
+            AND rendered."Id" = @rendered_notice_id
+            AND rendered."NoticeDraftId" = @notice_draft_id
+            AND rendered."Subject" = @rendered_subject
+            AND rendered."ApprovedAtUtc" = @rendered_approved_at_utc::timestamp with time zone
+        ),
+        actual AS MATERIALIZED (
+          SELECT evidence."RecipientLeaseManagementPartyId",
+                 evidence."Channel",
+                 conversation."Id" AS "ConversationId"
+          FROM "NoticeDeliveryEvidence" AS evidence
+          INNER JOIN "ConversationMessages" AS message
+            ON message."Id" = evidence."ConversationMessageId"
+          INNER JOIN "Conversations" AS conversation
+            ON conversation."Id" = message."ConversationId"
+           AND conversation."PortfolioId" = evidence."PortfolioId"
+          WHERE evidence."PortfolioId" = @portfolio_id
+            AND evidence."RenderedNoticeId" = @rendered_notice_id
+            AND evidence."Channel" = 'TenantPortal'
+        ),
+        stale AS MATERIALIZED (
+          SELECT notification."Id",
+                 draft."TenantAccountId",
+                 draft."TenantLedgerEntryId",
+                 expected."NavigationAccessContextId",
+                 expected."NavigationAccessRevision"
+          FROM expected
+          INNER JOIN actual
+            ON actual."RecipientLeaseManagementPartyId" = expected."RecipientLeaseManagementPartyId"
+           AND actual."Channel" = expected."Channel"
+          CROSS JOIN rendered_draft AS draft
+          INNER JOIN "Notifications" AS notification
+            ON notification."PortfolioId" = @portfolio_id
+           AND notification."Type" = 'TenantNotice'
+           AND notification."UserId" = expected."RecipientUserId"
+           AND notification."Title" = @rendered_subject
+           AND notification."Message" = @rendered_message_preview
+           AND notification."Severity" = 'Info'
+           AND notification."NavigationExperience" = 'Tenant'
+           AND notification."NavigationDestination" = 'Message'
+           AND notification."NavigationAccessContextId" = expected."NavigationAccessContextId"
+           AND notification."NavigationAccessRevision" = expected."NavigationAccessRevision"
+           AND notification."NavigationResourceKind" = 'Conversation'
+           AND notification."NavigationResourceId" = actual."ConversationId"
+           AND notification."NavigationParentResourceKind" IS NULL
+           AND notification."NavigationParentResourceId" IS NULL
+           AND notification."NavigationChildResourceKind" IS NULL
+           AND notification."NavigationChildResourceId" IS NULL
+           AND notification."NavigationAction" = 'Open'
+           AND notification."NavigationExpiresAtUtc" = @rendered_approved_at_utc::timestamp with time zone + interval '7 days'
+           AND notification."NavigationFallbackDestination" = 'Home'
+           AND notification."RelatedEntityType" = 'Conversation'
+           AND notification."RelatedEntityId" = actual."ConversationId"
+           AND notification."CreatedAt" = @rendered_approved_at_utc::timestamp with time zone
+          WHERE expected."Channel" = 'TenantPortal'
+        )
+        UPDATE "Notifications" AS notification
+        SET "NavigationDestination" = 'TenantLedgerEntry',
+            "NavigationResourceKind" = 'TenantLedgerEntry',
+            "NavigationResourceId" = stale."TenantLedgerEntryId"::integer,
+            "NavigationParentResourceKind" = 'TenantAccount',
+            "NavigationParentResourceId" = stale."TenantAccountId",
+            "NavigationAction" = 'Open',
+            "RelatedEntityType" = 'TenantLedgerEntry',
+            "RelatedEntityId" = stale."TenantLedgerEntryId"::integer
+        FROM stale
+        WHERE notification."Id" = stale."Id";
+        """;
+
+    private const string ReconcileApprovedDeliveryNotificationChronologySql = """
+        UPDATE "Notifications" AS notification
+        SET "CreatedAt" = @corrected_approved_at_utc::timestamp with time zone,
+            "NavigationExpiresAtUtc" =
+              @corrected_approved_at_utc::timestamp with time zone + interval '7 days'
+        FROM "NoticeDeliveryEvidence" AS evidence
+        INNER JOIN "ConversationMessages" AS message
+          ON message."Id" = evidence."ConversationMessageId"
+        INNER JOIN "Conversations" AS conversation
+          ON conversation."Id" = message."ConversationId"
+         AND conversation."PortfolioId" = evidence."PortfolioId"
+        INNER JOIN "NoticeDrafts" AS draft
+          ON draft."PortfolioId" = evidence."PortfolioId"
+         AND draft."Id" = @notice_draft_id
+         AND draft."Status" = 'Approved'
+         AND draft."ApprovedAt" = @existing_approved_at_utc::timestamp with time zone
+         AND draft."RenderedNoticeId" = @rendered_notice_id
+        WHERE evidence."PortfolioId" = @portfolio_id
+          AND evidence."RenderedNoticeId" = @rendered_notice_id
+          AND evidence."Channel" = 'TenantPortal'
+          AND notification."PortfolioId" = evidence."PortfolioId"
+          AND notification."Type" = 'TenantNotice'
+          AND notification."CreatedAt" = @existing_approved_at_utc::timestamp with time zone
+          AND notification."NavigationExpiresAtUtc" =
+            @existing_approved_at_utc::timestamp with time zone + interval '7 days'
+          AND (
+            (
+              notification."RelatedEntityType" = 'Conversation'
+              AND notification."RelatedEntityId" = conversation."Id"
+            )
+            OR (
+              draft."TenantLedgerEntryId" IS NOT NULL
+              AND notification."RelatedEntityType" = 'TenantLedgerEntry'
+              AND notification."RelatedEntityId" = draft."TenantLedgerEntryId"::integer
+            )
+          );
+        """;
+
+    private const string ReconcileApprovedDeliveryDraftChronologySql = """
+        UPDATE "NoticeDrafts" AS draft
+        SET "ApprovedAt" = @corrected_approved_at_utc::timestamp with time zone,
+            "UpdatedAt" = @corrected_approved_at_utc::timestamp with time zone
+        WHERE draft."PortfolioId" = @portfolio_id
+          AND draft."Id" = @notice_draft_id
+          AND draft."Status" = 'Approved'
+          AND draft."ApprovedAt" = @existing_approved_at_utc::timestamp with time zone
+          AND draft."RenderedNoticeId" = @rendered_notice_id;
+        """;
+
+    private const string ReconcileApprovedDeliveryRenderedChronologySql = """
+        UPDATE "RenderedNotices" AS rendered
+        SET "RenderedAtUtc" = @corrected_approved_at_utc::timestamp with time zone,
+            "ApprovedAtUtc" = @corrected_approved_at_utc::timestamp with time zone
+        WHERE rendered."PortfolioId" = @portfolio_id
+          AND rendered."Id" = @rendered_notice_id
+          AND rendered."NoticeDraftId" = @notice_draft_id
+          AND rendered."ApprovedAtUtc" = @existing_approved_at_utc::timestamp with time zone;
+        """;
+
+    private const string ExistingDeliveryGraphValidationSql = """
+        WITH expected AS MATERIALIZED (
+          SELECT expected."RecipientLeaseManagementPartyId",
+                 expected."Channel",
+                 expected."Destination",
+                 expected."OutboxIdempotencyKey",
+                 expected."RecipientUserId",
+                 expected."NavigationAccessContextId",
+                 expected."NavigationAccessRevision"
+          FROM unnest(
+              @expected_party_ids::integer[],
+              @expected_channels::text[],
+              @expected_destinations::text[],
+              @expected_outbox_keys::text[],
+              @expected_recipient_user_ids::integer[],
+              @expected_navigation_access_context_ids::integer[],
+              @expected_navigation_access_revisions::bigint[])
+            AS expected(
+              "RecipientLeaseManagementPartyId",
+              "Channel",
+              "Destination",
+              "OutboxIdempotencyKey",
+              "RecipientUserId",
+              "NavigationAccessContextId",
+              "NavigationAccessRevision")
+        ),
+        rendered AS MATERIALIZED (
+          SELECT rendered.*
+          FROM "RenderedNotices" AS rendered
+          WHERE rendered."PortfolioId" = @portfolio_id
+            AND rendered."Id" = @rendered_notice_id
+            AND rendered."NoticeDraftId" = @notice_draft_id
+            AND rendered."Subject" = @rendered_subject
+            AND rendered."ApprovedAtUtc" = @rendered_approved_at_utc::timestamp with time zone
+        ),
+        approved_draft AS MATERIALIZED (
+          SELECT draft.*
+          FROM "NoticeDrafts" AS draft
+          WHERE draft."PortfolioId" = @portfolio_id
+            AND draft."Id" = @notice_draft_id
+            AND draft."Status" = 'Approved'
+            AND draft."ApprovedAt" = @rendered_approved_at_utc::timestamp with time zone
+            AND draft."ApprovedChannels" = @approved_channels
+            AND draft."RenderedNoticeId" = @rendered_notice_id
+        ),
+        actual AS MATERIALIZED (
+          SELECT evidence."RecipientLeaseManagementPartyId",
+                 evidence."Channel",
+                 evidence."Destination",
+                 evidence."OutboxMessageId",
+                 evidence."IdempotencyKey",
+                 outbox."IdempotencyKey" AS "OutboxIdempotencyKey",
+                 evidence."ConversationMessageId",
+                 conversation."Id" AS "ConversationId"
+          FROM "NoticeDeliveryEvidence" AS evidence
+          LEFT JOIN "OutboxMessages" AS outbox
+            ON outbox."Id" = evidence."OutboxMessageId"
+           AND outbox."PortfolioId" = evidence."PortfolioId"
+          LEFT JOIN "ConversationMessages" AS message
+            ON message."Id" = evidence."ConversationMessageId"
+          LEFT JOIN "Conversations" AS conversation
+            ON conversation."Id" = message."ConversationId"
+           AND conversation."PortfolioId" = evidence."PortfolioId"
+          WHERE evidence."PortfolioId" = @portfolio_id
+            AND evidence."RenderedNoticeId" = @rendered_notice_id
+        ),
+        rendered_draft AS MATERIALIZED (
+          SELECT draft."TenantAccountId",
+                 draft."TenantLedgerEntryId",
+                 (draft."TenantLedgerEntryId" IS NULL OR ledger."Id" IS NOT NULL) AS "HasValidLedgerBinding"
+          FROM "RenderedNotices" AS rendered
+          INNER JOIN "NoticeDrafts" AS draft
+            ON draft."Id" = rendered."NoticeDraftId"
+           AND draft."PortfolioId" = rendered."PortfolioId"
+          LEFT JOIN "TenantLedgerEntries" AS ledger
+            ON ledger."Id" = draft."TenantLedgerEntryId"
+           AND ledger."PortfolioId" = draft."PortfolioId"
+           AND ledger."TenantAccountId" = draft."TenantAccountId"
+          WHERE rendered."PortfolioId" = @portfolio_id
+            AND rendered."Id" = @rendered_notice_id
+        ),
+        notification AS MATERIALIZED (
+          SELECT notification.*
+          FROM "Notifications" AS notification
+          CROSS JOIN rendered_draft AS draft
+          WHERE notification."PortfolioId" = @portfolio_id
+            AND notification."Type" = 'TenantNotice'
+            AND (
+              (
+                draft."TenantLedgerEntryId" IS NULL
+                AND notification."RelatedEntityType" = 'Conversation'
+                AND notification."RelatedEntityId" IN (
+                  SELECT actual."ConversationId"
+                  FROM actual
+                  WHERE actual."Channel" = 'TenantPortal'
+                    AND actual."ConversationId" IS NOT NULL
+                )
+              )
+                      OR (
+                        draft."TenantLedgerEntryId" IS NOT NULL
+                        AND notification."RelatedEntityType" = 'TenantLedgerEntry'
+                        AND notification."RelatedEntityId" = draft."TenantLedgerEntryId"::integer
+                      )
+                      OR (
+                        @allow_stale_message_notification::boolean
+                        AND draft."TenantLedgerEntryId" IS NOT NULL
+                        AND notification."RelatedEntityType" = 'Conversation'
+                        AND notification."RelatedEntityId" IN (
+                          SELECT actual."ConversationId"
+                          FROM actual
+                          WHERE actual."Channel" = 'TenantPortal'
+                            AND actual."ConversationId" IS NOT NULL
+                        )
+                      )
+                    )
+                ),
+        invalid_expected AS (
+          SELECT 1
+          FROM expected
+          CROSS JOIN rendered_draft AS draft
+          LEFT JOIN actual
+            ON actual."RecipientLeaseManagementPartyId" = expected."RecipientLeaseManagementPartyId"
+           AND actual."Channel" = expected."Channel"
+           AND actual."Destination" = expected."Destination"
+           AND actual."IdempotencyKey" = expected."OutboxIdempotencyKey"
+           AND actual."OutboxIdempotencyKey" = expected."OutboxIdempotencyKey"
+          LEFT JOIN notification
+            ON expected."Channel" = 'TenantPortal'
+           AND notification."UserId" = expected."RecipientUserId"
+           AND notification."Title" = @rendered_subject
+                   AND notification."Message" = @rendered_message_preview
+                   AND notification."Severity" = 'Info'
+                   AND notification."NavigationExperience" = 'Tenant'
+                   AND notification."NavigationAccessContextId" = expected."NavigationAccessContextId"
+                   AND notification."NavigationAccessRevision" = expected."NavigationAccessRevision"
+                   AND notification."NavigationChildResourceKind" IS NULL
+                   AND notification."NavigationChildResourceId" IS NULL
+                   AND notification."NavigationAction" = 'Open'
+                   AND notification."NavigationExpiresAtUtc" = @rendered_approved_at_utc::timestamp with time zone + interval '7 days'
+                   AND notification."NavigationFallbackDestination" = 'Home'
+                   AND notification."CreatedAt" = @rendered_approved_at_utc::timestamp with time zone
+                   AND (
+                     (
+                       notification."NavigationDestination" =
+                         CASE WHEN draft."TenantLedgerEntryId" IS NULL THEN 'Message' ELSE 'TenantLedgerEntry' END
+                       AND notification."NavigationResourceKind" =
+                         CASE WHEN draft."TenantLedgerEntryId" IS NULL THEN 'Conversation' ELSE 'TenantLedgerEntry' END
+                       AND notification."NavigationResourceId" =
+                         CASE WHEN draft."TenantLedgerEntryId" IS NULL THEN actual."ConversationId" ELSE draft."TenantLedgerEntryId"::integer END
+                       AND (
+                         (draft."TenantLedgerEntryId" IS NULL
+                          AND notification."NavigationParentResourceKind" IS NULL
+                          AND notification."NavigationParentResourceId" IS NULL)
+                         OR
+                         (draft."TenantLedgerEntryId" IS NOT NULL
+                          AND notification."NavigationParentResourceKind" = 'TenantAccount'
+                          AND notification."NavigationParentResourceId" = draft."TenantAccountId")
+                       )
+                       AND notification."RelatedEntityType" =
+                         CASE WHEN draft."TenantLedgerEntryId" IS NULL THEN 'Conversation' ELSE 'TenantLedgerEntry' END
+                       AND notification."RelatedEntityId" =
+                         CASE WHEN draft."TenantLedgerEntryId" IS NULL THEN actual."ConversationId" ELSE draft."TenantLedgerEntryId"::integer END
+                     )
+                     OR (
+                       @allow_stale_message_notification::boolean
+                       AND draft."TenantLedgerEntryId" IS NOT NULL
+                       AND notification."NavigationDestination" = 'Message'
+                       AND notification."NavigationResourceKind" = 'Conversation'
+                       AND notification."NavigationResourceId" = actual."ConversationId"
+                       AND notification."NavigationParentResourceKind" IS NULL
+                       AND notification."NavigationParentResourceId" IS NULL
+                       AND notification."RelatedEntityType" = 'Conversation'
+                       AND notification."RelatedEntityId" = actual."ConversationId"
+                     )
+                   )
+          WHERE actual."RecipientLeaseManagementPartyId" IS NULL
+             OR actual."OutboxMessageId" <= 0
+             OR (
+               expected."Channel" = 'TenantPortal'
+               AND (actual."ConversationMessageId" IS NULL OR actual."ConversationId" IS NULL)
+             )
+             OR (
+               expected."Channel" <> 'TenantPortal'
+               AND actual."ConversationMessageId" IS NOT NULL
+             )
+             OR (
+               expected."Channel" = 'TenantPortal'
+               AND (
+                 expected."RecipientUserId" <= 0
+                 OR expected."NavigationAccessContextId" <= 0
+                 OR expected."NavigationAccessRevision" <= 0
+                 OR notification."Id" IS NULL
+               )
+             )
+        )
+        SELECT (
+                 (SELECT count(*) FROM rendered) = 1
+                 AND (SELECT count(*) FROM approved_draft) = 1
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM rendered_draft AS draft
+                   WHERE NOT draft."HasValidLedgerBinding"
+                 )
+                 AND (
+                   SELECT draft."ConversationId"
+                   FROM approved_draft AS draft
+                 ) IS NOT DISTINCT FROM COALESCE(
+                   @expected_conversation_id::integer,
+                   (
+                     SELECT actual."ConversationId"
+                     FROM actual
+                     WHERE actual."RecipientLeaseManagementPartyId" = @recipient_lease_management_party_id
+                       AND actual."Channel" = 'TenantPortal'
+                     LIMIT 1
+                   ))
+                 AND
+                 (SELECT count(*) FROM expected) = cardinality(@expected_party_ids::integer[])
+                 AND (SELECT count(*) FROM actual) = cardinality(@expected_party_ids::integer[])
+                 AND (
+                   SELECT count(*)
+                   FROM notification
+                 ) = (
+                   SELECT count(*)
+                   FROM expected
+                   WHERE expected."Channel" = 'TenantPortal'
+                 )
+                 AND NOT EXISTS (SELECT 1 FROM invalid_expected)
+               ) AS "IsMatch",
+               (
+                 SELECT actual."ConversationId"
+                 FROM actual
+                 WHERE actual."RecipientLeaseManagementPartyId" = @recipient_lease_management_party_id
+                   AND actual."Channel" = 'TenantPortal'
+                 LIMIT 1
+               ) AS "RecipientConversationId"
+        """;
 
     private const string ClaimedSourceSql = """
         SELECT work."Id" AS "WorkItemId",
@@ -303,18 +1006,18 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         WHERE money.candidate_rank = 1
         """;
 
-    private const string TenantNameToken = "{{tenant_name}}";
-    private const string PropertyAddressToken = "{{property_address}}";
-    private const string UnitNumberToken = "{{unit_number}}";
-    private const string LeaseStartDateToken = "{{lease_start_date}}";
-    private const string LeaseEndDateToken = "{{lease_end_date}}";
-    private const string RentAmountToken = "{{rent_amount}}";
-    private const string OverdueAmountToken = "{{overdue_amount}}";
-    private const string RentDueDateToken = "{{rent_due_date}}";
-    private const string LateFeeAmountToken = "{{late_fee_amount}}";
-    private const string TodayToken = "{{today}}";
-    private const string PortfolioNameToken = "{{portfolio_name}}";
-    private const string RenewalStartDateToken = "{{renewal_start_date}}";
+    private const string TenantNameTokenSql = "'{{tenant_name}}'";
+    private const string PropertyAddressTokenSql = "'{{property_address}}'";
+    private const string UnitNumberTokenSql = "'{{unit_number}}'";
+    private const string LeaseStartDateTokenSql = "'{{lease_start_date}}'";
+    private const string LeaseEndDateTokenSql = "'{{lease_end_date}}'";
+    private const string RentAmountTokenSql = "'{{rent_amount}}'";
+    private const string OverdueAmountTokenSql = "'{{overdue_amount}}'";
+    private const string RentDueDateTokenSql = "'{{rent_due_date}}'";
+    private const string LateFeeAmountTokenSql = "'{{late_fee_amount}}'";
+    private const string TodayTokenSql = "'{{today}}'";
+    private const string PortfolioNameTokenSql = "'{{portfolio_name}}'";
+    private const string RenewalStartDateTokenSql = "'{{renewal_start_date}}'";
 
     private static string BuildSql(string sourceSql, string authorizedPropertiesSql) => $$"""
         WITH authorized_properties AS MATERIALIZED (
@@ -480,31 +1183,31 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
           SELECT token.*,
                  left(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
                    token."TemplateSubject",
-                   '{{TenantNameToken}}', token."RenderedTenantName"),
-                   '{{PropertyAddressToken}}', token."PropertyLabel"),
-                   '{{UnitNumberToken}}', COALESCE(token."UnitNumber", '')),
-                   '{{LeaseStartDateToken}}', token."LeaseStartText"),
-                   '{{LeaseEndDateToken}}', token."LeaseEndText"),
-                   '{{RentAmountToken}}', token."RentAmountText"),
-                   '{{OverdueAmountToken}}', token."OverdueAmountText"),
-                   '{{RentDueDateToken}}', token."DueOnText"),
-                   '{{LateFeeAmountToken}}', token."LateFeeAmountText"),
-                   '{{TodayToken}}', token."TodayText"),
-                   '{{PortfolioNameToken}}', token."PortfolioName"), 200) AS "RenderedSubject",
+                   {{TenantNameTokenSql}}, token."RenderedTenantName"),
+                   {{PropertyAddressTokenSql}}, token."PropertyLabel"),
+                   {{UnitNumberTokenSql}}, COALESCE(token."UnitNumber", '')),
+                   {{LeaseStartDateTokenSql}}, token."LeaseStartText"),
+                   {{LeaseEndDateTokenSql}}, token."LeaseEndText"),
+                   {{RentAmountTokenSql}}, token."RentAmountText"),
+                   {{OverdueAmountTokenSql}}, token."OverdueAmountText"),
+                   {{RentDueDateTokenSql}}, token."DueOnText"),
+                   {{LateFeeAmountTokenSql}}, token."LateFeeAmountText"),
+                   {{TodayTokenSql}}, token."TodayText"),
+                   {{PortfolioNameTokenSql}}, token."PortfolioName"), 200) AS "RenderedSubject",
                  left(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
                    token."TemplateBody",
-                   '{{TenantNameToken}}', token."RenderedTenantName"),
-                   '{{PropertyAddressToken}}', token."PropertyLabel"),
-                   '{{UnitNumberToken}}', COALESCE(token."UnitNumber", '')),
-                   '{{LeaseStartDateToken}}', token."LeaseStartText"),
-                   '{{LeaseEndDateToken}}', token."LeaseEndText"),
-                   '{{RentAmountToken}}', token."RentAmountText"),
-                   '{{OverdueAmountToken}}', token."OverdueAmountText"),
-                   '{{RentDueDateToken}}', token."DueOnText"),
-                   '{{LateFeeAmountToken}}', token."LateFeeAmountText"),
-                   '{{TodayToken}}', token."TodayText"),
-                   '{{PortfolioNameToken}}', token."PortfolioName"),
-                   '{{RenewalStartDateToken}}', token."RenewalStartText"), 4000) AS "RenderedBody",
+                   {{TenantNameTokenSql}}, token."RenderedTenantName"),
+                   {{PropertyAddressTokenSql}}, token."PropertyLabel"),
+                   {{UnitNumberTokenSql}}, COALESCE(token."UnitNumber", '')),
+                   {{LeaseStartDateTokenSql}}, token."LeaseStartText"),
+                   {{LeaseEndDateTokenSql}}, token."LeaseEndText"),
+                   {{RentAmountTokenSql}}, token."RentAmountText"),
+                   {{OverdueAmountTokenSql}}, token."OverdueAmountText"),
+                   {{RentDueDateTokenSql}}, token."DueOnText"),
+                   {{LateFeeAmountTokenSql}}, token."LateFeeAmountText"),
+                   {{TodayTokenSql}}, token."TodayText"),
+                   {{PortfolioNameTokenSql}}, token."PortfolioName"),
+                   {{RenewalStartDateTokenSql}}, token."RenewalStartText"), 4000) AS "RenderedBody",
                  CASE token."AutomationKey"
                    WHEN 'rent-reminder' THEN concat('Rent due ', token."DueOnText", '.')
                    WHEN 'late-rent-late-fee' THEN concat(
@@ -605,6 +1308,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         ),
         resolved AS (
           SELECT candidate."WorkItemId",
+                 candidate."EffectiveNowUtc" AS "AppliedAtUtc",
                  upserted.*
           FROM candidates AS candidate
           INNER JOIN upserted
@@ -637,6 +1341,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                resolved."Body",
                resolved."Reason",
                resolved."TriggerDate",
+               resolved."AppliedAtUtc",
                resolved."ConversationId",
                resolved."ApprovedChannels",
                resolved."CreatedAt",

@@ -11,17 +11,17 @@ public sealed record CreateAdverseActionNoticeCommand(
     int PortfolioId,
     int ApplicationId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string Reason,
     string CreditReportingAgency,
     string FileName,
     string StorageKey,
     long FileSize,
     bool SendToApplicant,
-    string DeliveryIdempotencyKey,
-    DateTime GeneratedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey,
+    [property: AtomicFingerprintIgnore] DateTime GeneratedAtUtc) : IAtomicCommandData;
 
 /// <summary>
 /// Receipt-backed preflight that freezes the authorized legal/PDF inputs and deterministic storage
@@ -31,9 +31,9 @@ public sealed record PrepareAdverseActionNoticeCommand(
     int PortfolioId,
     int ApplicationId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     string? Reason,
     bool SendToApplicant) : IAtomicCommandData;
@@ -57,7 +57,7 @@ public sealed record PrepareAdverseActionNoticeResult(
     string? FileName,
     string? StorageKey,
     bool SendToApplicant,
-    DateTime GeneratedAtUtc) : IAtomicResultData;
+    DateTime GeneratedAtUtc);
 
 /// <summary>Receipt-safe result for a generated adverse-action package.</summary>
 public sealed record CreateAdverseActionNoticeResult(
@@ -67,4 +67,4 @@ public sealed record CreateAdverseActionNoticeResult(
     string CreditReportingAgency,
     DateTime GeneratedAtUtc,
     int StoredFileId,
-    DateTime? SentAtUtc) : IAtomicResultData;
+    DateTime? SentAtUtc);

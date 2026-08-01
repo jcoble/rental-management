@@ -14,7 +14,9 @@ function appointment(overrides: Partial<Appointment> = {}): Appointment {
 		id: 1,
 		portfolioId: 2,
 		propertyId: 3,
+		unitId: 5,
 		tenantId: 4,
+		workOrderId: 25,
 		title: 'Service visit',
 		type: 'MaintenanceVisit',
 		status: 'Scheduled',
@@ -38,7 +40,9 @@ describe('createAppointmentDetailEditForm', () => {
 		assert.equal(form.scheduledStart, '2026-06-27T09:30:00');
 		assert.equal(form.scheduledEnd, '2026-06-27T10:15:00');
 		assert.equal(form.propertyId, '3');
+		assert.equal(form.unitId, '5');
 		assert.equal(form.tenantId, '4');
+		assert.equal(form.workOrderId, '25');
 		assert.equal(form.type, 'MaintenanceVisit');
 	});
 });
@@ -53,7 +57,9 @@ describe('buildAppointmentDetailSavePayload', () => {
 				scheduledStart: '2026-06-27T09:30:00',
 				scheduledEnd: '2026-06-27T10:15:00',
 				propertyId: 3,
+				unitId: 5,
 				tenantId: 4,
+				workOrderId: 25,
 				prospectName: null,
 				prospectEmail: null,
 				assignedTo: 'Jordan',
@@ -65,7 +71,9 @@ describe('buildAppointmentDetailSavePayload', () => {
 				scheduledStart: '2026-06-27T09:30:00',
 				scheduledEnd: '2026-06-27T10:15:00',
 				propertyId: '3',
+				unitId: '5',
 				tenantId: '4',
+				workOrderId: '25',
 				prospectName: '',
 				prospectEmail: '',
 				assignedTo: 'Jordan',
@@ -80,7 +88,9 @@ describe('buildAppointmentDetailSavePayload', () => {
 
 		assert.equal(payload.portfolioId, 2);
 		assert.equal(payload.propertyId, 3);
+		assert.equal(payload.unitId, 5);
 		assert.equal(payload.tenantId, 4);
+		assert.equal(payload.workOrderId, 25);
 		assert.equal(payload.scheduledStart, '2026-06-27T13:30:00.000Z');
 		assert.equal(payload.scheduledEnd, '2026-06-27T14:15:00.000Z');
 	});
@@ -94,7 +104,9 @@ describe('buildAppointmentDetailSavePayload', () => {
 				scheduledStart: '2026-06-27T09:30:00',
 				scheduledEnd: null,
 				propertyId: null,
+				unitId: null,
 				tenantId: null,
+				workOrderId: null,
 				prospectName: null,
 				prospectEmail: null,
 				assignedTo: null,
@@ -106,7 +118,9 @@ describe('buildAppointmentDetailSavePayload', () => {
 				scheduledStart: '2026-06-27T09:30:00',
 				scheduledEnd: '',
 				propertyId: '',
+				unitId: '',
 				tenantId: '',
+				workOrderId: '',
 				prospectName: '',
 				prospectEmail: '',
 				assignedTo: '',
@@ -128,6 +142,17 @@ describe('appointment detail page wiring', () => {
 		assert.doesNotMatch(source, /scheduledStart:\s*appt\.scheduledStart\?\.slice\(0,\s*16\)/);
 		assert.doesNotMatch(source, /scheduledEnd:\s*appt\.scheduledEnd\?\.slice\(0,\s*16\)/);
 	});
+
+	it('exposes work-order linking in the actual appointment detail edit flow', () => {
+		assert.match(source, /workOrders\.listPage/);
+		assert.match(source, /propertyId: '', unitId: '', tenantId: '', workOrderId: ''/);
+		assert.match(source, /bind:value=\{form\.workOrderId\}/);
+		assert.match(source, /testid="appointment-detail-work-order"/);
+		assert.match(source, /selectedWorkOrderLabel = appt\.workOrderId != null \? `#\$\{appt\.workOrderId\}` : null/);
+		assert.match(source, /form\.propertyId = option\.propertyId != null \? String\(option\.propertyId\) : ''/);
+		assert.match(source, /form\.unitId = option\.unitId != null \? String\(option\.unitId\) : ''/);
+		assert.match(source, /form\.tenantId = option\.tenantId != null \? String\(option\.tenantId\) : ''/);
+	});
 });
 
 describe('appointment create/edit modal wiring', () => {
@@ -144,5 +169,18 @@ describe('appointment create/edit modal wiring', () => {
 		assert.match(source, /appointmentStep < appointmentSteps\.length - 1/);
 		assert.match(source, /data-testid="appointment-form-save"/);
 		assert.match(source, /appointmentStep = firstErrorStep/);
+	});
+
+	it('includes work-order context in the normal create/edit dialog payload', () => {
+		assert.match(source, /workOrders\.listPage/);
+		assert.match(source, /bind:value=\{form\.workOrderId\}/);
+		assert.match(source, /form\.propertyId = option\.propertyId != null \? String\(option\.propertyId\) : ''/);
+		assert.match(source, /form\.unitId = option\.unitId != null \? String\(option\.unitId\) : ''/);
+		assert.match(source, /form\.tenantId = option\.tenantId != null \? String\(option\.tenantId\) : ''/);
+	});
+
+	it('passes the simulated client clock into the calendar initial date', () => {
+		assert.match(source, /const calendarInitialDate = \$derived\(typeof window === 'undefined' \? undefined : new Date\(\)\)/);
+		assert.match(source, /initialDate=\{calendarInitialDate\}/);
 	});
 });

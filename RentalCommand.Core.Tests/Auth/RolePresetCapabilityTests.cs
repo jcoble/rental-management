@@ -7,13 +7,15 @@ namespace RentalCommand.Core.Tests.Auth;
 public sealed class RolePresetCapabilityTests
 {
     [Fact]
-    public void FourCanonicalPresets_HaveReviewedExperienceScopeAndCapabilityBoundaries()
+    public void CanonicalRoles_HaveReviewedExperienceScopeAndCapabilityBoundaries()
     {
         AccessCatalog.Roles.Select(role => role.Key).Should().Equal(
             RoleProfileKeys.WorkspaceAdministrator,
             RoleProfileKeys.PropertyManager,
             RoleProfileKeys.LeasingAgent,
-            RoleProfileKeys.MaintenanceTechnician);
+            RoleProfileKeys.MaintenanceTechnician,
+            RoleProfileKeys.OwnerPortal,
+            RoleProfileKeys.TenantPortal);
 
         var administrator = Role(RoleProfileKeys.WorkspaceAdministrator);
         administrator.DefaultExperience.Should().Be(WorkspaceExperience.Management);
@@ -69,6 +71,18 @@ public sealed class RolePresetCapabilityTests
                 CapabilityKeys.AssignedWorkConverse,
                 CapabilityKeys.AssignedWorkTimeMaterialsManage,
             ]);
+
+        var ownerPortal = Role(RoleProfileKeys.OwnerPortal);
+        ownerPortal.DefaultExperience.Should().Be(WorkspaceExperience.Owner);
+        ownerPortal.DefaultScopeKind.Should().Be(MembershipRoleAssignmentScopeKind.AllProperties);
+        CapabilityKeysFor(ownerPortal).Should().BeEmpty(
+            "owner access is relationship-scoped and must not grant workspace capabilities");
+
+        var tenantPortal = Role(RoleProfileKeys.TenantPortal);
+        tenantPortal.DefaultExperience.Should().Be(WorkspaceExperience.Tenant);
+        tenantPortal.DefaultScopeKind.Should().Be(MembershipRoleAssignmentScopeKind.AllProperties);
+        CapabilityKeysFor(tenantPortal).Should().BeEmpty(
+            "tenant access is relationship-scoped and must not grant workspace capabilities");
     }
 
     [Fact]

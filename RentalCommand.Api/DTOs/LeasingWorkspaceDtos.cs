@@ -37,6 +37,7 @@ public sealed class LeasingRentalResponse
 {
     public int PropertyId { get; init; }
     public int UnitId { get; init; }
+    public int? LeaseManagementId { get; init; }
     public string PropertyName { get; init; } = string.Empty;
     public string UnitNumber { get; init; } = string.Empty;
     public string Address { get; init; } = string.Empty;
@@ -106,6 +107,7 @@ public sealed class LeasingRentalDetailResponse
 {
     public int PropertyId { get; init; }
     public int UnitId { get; init; }
+    public int? LeaseManagementId { get; init; }
     public string PropertyName { get; init; } = string.Empty;
     public string UnitNumber { get; init; } = string.Empty;
     public string Address { get; init; } = string.Empty;
@@ -140,6 +142,7 @@ public sealed class LeasingApplicationDetailResponse
     public string? Notes { get; init; }
     public bool ConsentGiven { get; init; }
     public DateTime SubmittedAtUtc { get; init; }
+    public int? ApprovedTenantId { get; init; }
 }
 
 public sealed class LeasingAppointmentDetailResponse

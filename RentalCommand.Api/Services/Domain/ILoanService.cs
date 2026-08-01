@@ -19,8 +19,13 @@ public interface ILoanService
     Task<LoanResponse?> CreateAsync(WorkspaceReadScope scope, CreateLoanRequest request, string idempotencyKey, CancellationToken ct = default);
     Task<LoanResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateLoanRequest request, string idempotencyKey, CancellationToken ct = default);
     Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
+    Task<LoanPaymentResponse?> PostPaymentAsync(
+        WorkspaceReadScope scope, int loanId, int paymentId, PostLoanPaymentRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     /// <summary>The loan's amortization rows (oldest first), or null when the loan is out of scope.</summary>
-    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default);
-    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(WorkspaceReadScope scope, int loanId, CancellationToken ct = default);
+    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default);
+    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default);
 }

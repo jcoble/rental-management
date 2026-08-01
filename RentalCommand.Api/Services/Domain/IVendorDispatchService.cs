@@ -24,6 +24,23 @@ public interface IVendorDispatchService
         int? changedByUserId,
         CancellationToken ct = default);
 
+    Task<CancelDispatchResult> CancelAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        int dispatchId,
+        CancelVendorDispatchRequest request,
+        int? changedByUserId,
+        CancellationToken ct = default);
+
+    Task<RecoverVendorDispatchChronologyResponse> RecoverChronologyAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        int dispatchId,
+        RecoverVendorDispatchChronologyRequest request,
+        int actorUserId,
+        string idempotencyKey,
+        CancellationToken ct = default);
+
     /// <summary>Record a 1–5 star rating and refresh the vendor's cached aggregates. Null when out of scope.</summary>
     Task<VendorRatingResponse?> RateAsync(
         WorkspaceReadScope scope,
@@ -45,6 +62,15 @@ public sealed record DispatchResult(DispatchOutcome Outcome, VendorDispatchRespo
     public static DispatchResult AlreadyDispatched() => new(DispatchOutcome.AlreadyDispatched, null);
 }
 
+public sealed record CancelDispatchResult(CancelDispatchOutcome Outcome, CancelVendorDispatchResponse? Dispatch)
+{
+    public static CancelDispatchResult Ok(CancelVendorDispatchResponse dispatch) =>
+        new(CancelDispatchOutcome.Cancelled, dispatch);
+    public static CancelDispatchResult NotFound() => new(CancelDispatchOutcome.NotFound, null);
+    public static CancelDispatchResult AlreadyClosed(CancelVendorDispatchResponse dispatch) =>
+        new(CancelDispatchOutcome.AlreadyClosed, dispatch);
+}
+
 public enum DispatchOutcome
 {
     Dispatched,
@@ -60,4 +86,11 @@ public enum DispatchOutcome
     /// duplicate open job + duplicate SMS that the single DONE reply can't both close. Maps to 400.
     /// </summary>
     AlreadyDispatched,
+}
+
+public enum CancelDispatchOutcome
+{
+    Cancelled,
+    NotFound,
+    AlreadyClosed,
 }

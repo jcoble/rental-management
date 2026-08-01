@@ -32,8 +32,9 @@ public sealed class LeaseHouseholdAccessContractTests
         }
 
         typeof(GrantTenantUserAccessHandler)
-            .Should().Implement<IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>>();
+            .Should().Implement<IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>>();
         typeof(GrantTenantUserAccessRequest).GetProperty("ApplicationUserId").Should().BeNull();
+        typeof(LeaseManagementPartyResponse).GetProperty("CanGrantTenantPortalAccess").Should().NotBeNull();
     }
 
     [Fact]
@@ -49,14 +50,23 @@ public sealed class LeaseHouseholdAccessContractTests
     public void Tenant_activation_uses_passwordless_identity_and_a_non_credential_invitation()
     {
         typeof(ApplicationUser).Should().BeDerivedFrom<IdentityUser<int>>();
-        Enum.IsDefined(AtomicLockResource.TenantIdentityEmail).Should().BeTrue();
-
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(), "RentalCommand.Data", "Leasing", "LeasePartyAccessCommandHandlers.cs"));
 
-        source.Should().Contain("AtomicLockResource.TenantIdentityEmail");
+        source.Should().Contain("\"TenantIdentityEmail\"");
         source.Should().Contain("EmailConfirmed = false");
-        source.Should().Contain("/forgot-password?email=");
+        source.Should().Contain("/activate-team?token=");
+        source.Should().Contain("WorkspaceInvitation");
+        source.Should().Contain("RoleProfileKeys.TenantPortal");
+        source.Should().Contain("var changedAtUtc = times.EffectiveNowUtc");
+        source.Should().Contain("var tenantSecurityNowUtc = await context.ReadDatabaseClockUtcAsync(ct)");
+        source.Should().Contain("context.UseDatabaseWallClockForAudit(changedAtUtc)");
+        source.Should().Contain("EffectiveFromUtc = tenantSecurityNowUtc");
+        source.Should().Contain("CreatedAtUtc = changedAtUtc");
+        source.Should().Contain("ExpiresAtUtc = changedAtUtc.AddDays(7)");
+        source.Should().Contain(
+            "relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId" + Environment.NewLine +
+            "                    && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate))");
         source.Should().NotContain("CreateTemporaryPassword");
         source.Should().NotContain("Temporary password:");
         source.Should().NotContain("HashPassword(user");

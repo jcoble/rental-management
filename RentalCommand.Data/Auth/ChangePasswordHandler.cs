@@ -10,23 +10,26 @@ using RentalCommand.Data.Authorization;
 namespace RentalCommand.Data.Auth;
 
 public sealed class ChangePasswordHandler
-    : IAtomicCommandHandler<ChangePasswordCommand, ChangePasswordResult>,
-      IAtomicReplayAuthorizer<ChangePasswordCommand>
+    : IAtomicCommandHandler<ChangePasswordCommand, ChangePasswordResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ChangePasswordHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ChangePasswordResult> HandleAsync(
         ChangePasswordCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var authorization = await AuthorizeAsync(command, attempt.Persistence, ct);
+        var authorization = await AuthorizeAsync(command, _db, ct);
         if (authorization is null)
         {
             return Result(ChangePasswordOutcome.AccessUnavailable, command);
         }
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.ApplicationUser, command.UserId, ct);
-        var user = await attempt.Persistence.Query<ApplicationUser>()
+        await context.AcquireLockAsync("ApplicationUser", command.UserId, ct);
+        var user = await _db.Set<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.UserId, ct);
         if (user is null)
         {
@@ -38,7 +41,7 @@ public sealed class ChangePasswordHandler
         }
 
         // Use the same ASP.NET Identity V3 primitive as UserManager, while keeping its store-level
-        // SaveChanges call out of the atomic attempt. The exact current hash is verified only after
+        // SaveChanges call out of the atomic context. The exact current hash is verified only after
         // the user lock is held, eliminating a check-then-write race.
         var hasher = new PasswordHasher<ApplicationUser>();
         var verified = hasher.VerifyHashedPassword(user, user.PasswordHash, command.CurrentPassword);
@@ -50,7 +53,14 @@ public sealed class ChangePasswordHandler
         user.PasswordHash = hasher.HashPassword(user, command.NewPassword);
         user.SecurityStamp = Guid.NewGuid().ToString("N");
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
-        attempt.StageSemanticEvent(
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        await AtomicAccountSecurityPersistence.RevokeOtherActiveSessionsForPasswordChangeAsync(_db,
+            context, user.Id,
+            command.AuthSessionId,
+            now,
+            "Password changed by account user",
+            ct);
+        context.StageSemanticEvent(
             new AtomicSemanticAudit(
                 authorization.PortfolioId,
                 nameof(ApplicationUser),
@@ -63,6 +73,8 @@ public sealed class ChangePasswordHandler
                     SecurityEvent = "PasswordChanged",
                     TargetUserId = user.Id,
                     command.AccessContextId,
+                    PreservedAuthSessionId = command.AuthSessionId,
+                    OtherSessionsRevoked = true,
                 }),
                 ChangeReason: "Password changed by account user."));
 
@@ -70,24 +82,22 @@ public sealed class ChangePasswordHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ChangePasswordCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ChangePasswordCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        _ = await AuthorizeAsync(command, persistence, ct)
+        _ = await AuthorizeAsync(command, _db, ct)
             ?? throw new UnauthorizedAccessException("The current authentication session is unavailable.");
     }
 
     private static async Task<AuthorizationProjection?> AuthorizeAsync(
         ChangePasswordCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var utcNow = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var utcNow = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         return await (
-                from session in persistence.Query<AuthSession>().AsNoTracking()
-                join context in persistence.Query<WorkspaceAccessContext>().AsNoTracking()
+                from session in db.Set<AuthSession>().AsNoTracking()
+                join context in db.Set<WorkspaceAccessContext>().AsNoTracking()
                     on new { AccessContextId = session.ActiveAccessContextId, session.UserId }
                     equals new { AccessContextId = context.Id, context.UserId }
                 where session.Id == command.AuthSessionId

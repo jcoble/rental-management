@@ -2,56 +2,65 @@ using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Core.Authorization;
 
-public interface IOwnerRelationshipAccessCommand : IAtomicCommandData
-{
-    int PortfolioId { get; }
-    int OwnerEntityId { get; }
-    int TargetAccessContextId { get; }
-    long ExpectedTargetAccessRevision { get; }
-    string Reason { get; }
-    int ActorUserId { get; }
-    Guid ActorAuthSessionId { get; }
-    int ActorAccessContextId { get; }
-    long ActorAccessRevision { get; }
-}
-
-public sealed record GrantOwnerUserAccessCommand(
+public sealed record ActivateOwnerPortalAccessCommand(
     int PortfolioId,
     int OwnerEntityId,
-    int TargetAccessContextId,
-    long ExpectedTargetAccessRevision,
     DateTime EffectiveFromUtc,
     DateTime? EffectiveToUtc,
     string Reason,
     int ActorUserId,
     Guid ActorAuthSessionId,
     int ActorAccessContextId,
-    long ActorAccessRevision) : IOwnerRelationshipAccessCommand;
+    long ActorAccessRevision,
+    Guid EmailLockId,
+    string WebBaseUrl) : IWorkspaceTeamAuthorityCommand;
 
-public sealed record RevokeOwnerUserAccessCommand(
+public sealed record RevokeOwnerPortalAccessCommand(
     int PortfolioId,
     int OwnerEntityId,
-    int TargetAccessContextId,
-    long ExpectedTargetAccessRevision,
-    int OwnerUserAccessId,
     string Reason,
     int ActorUserId,
     Guid ActorAuthSessionId,
     int ActorAccessContextId,
-    long ActorAccessRevision) : IOwnerRelationshipAccessCommand;
+    long ActorAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime ChangedAtUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IWorkspaceTeamAuthorityCommand;
 
-public enum OwnerRelationshipAccessMutationOutcome
+public enum ActivateOwnerPortalAccessMutationOutcome
 {
-    Applied,
+    Activated,
+    InvitationPending,
     AlreadyActive,
-    AlreadyRevoked,
+    MissingOwnerEmail,
+    InactiveWorkspaceAccess,
+    PrimaryOwnerNotSupported,
     Invalid,
     NotFound,
 }
 
-public sealed record OwnerRelationshipAccessMutationResult(
-    OwnerRelationshipAccessMutationOutcome Outcome,
+public enum RevokeOwnerPortalAccessMutationOutcome
+{
+    Revoked,
+    AlreadyRevoked,
+    NotFound,
+}
+
+public sealed record ActivateOwnerPortalAccessMutationResult(
+    ActivateOwnerPortalAccessMutationOutcome Outcome,
     int OwnerEntityId,
-    int TargetAccessContextId,
+    string? OwnerEmail,
+    int? UserId,
+    int? TargetAccessContextId,
     int? OwnerUserAccessId,
-    long AccessRevision) : IAtomicResultData;
+    long? AccessRevision,
+    bool RequiresAccountActivation,
+    DateTime? InvitationExpiresAtUtc);
+
+public sealed record RevokeOwnerPortalAccessMutationResult(
+    RevokeOwnerPortalAccessMutationOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int RevokedRelationshipCount,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision);

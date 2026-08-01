@@ -1,17 +1,24 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Import;
+using RentalCommand.Data.Import;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Import;
 
 public sealed record AtomicCoreCsvImportCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicCoreCsvImportDomain Domain,
     string ImportOperationDigest,
@@ -22,7 +29,7 @@ public sealed record AtomicCoreCsvImportResult(
     int TotalRows,
     int ValidRows,
     int CreatedRows,
-    int DuplicateRows) : IAtomicResultData;
+    int DuplicateRows);
 
 public static class AtomicCoreCsvImport
 {
@@ -36,23 +43,28 @@ public static class AtomicCoreCsvImport
 
 /// <summary>One receipt-backed Property or Tenant CSV command; PostgreSQL owns the entire row set.</summary>
 public sealed class AtomicCoreCsvImportHandler
-    : IAtomicCommandHandler<AtomicCoreCsvImportCommand, AtomicCoreCsvImportResult>,
-      IAtomicReplayAuthorizer<AtomicCoreCsvImportCommand>
+    : IAtomicCommandHandler<AtomicCoreCsvImportCommand, AtomicCoreCsvImportResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicCoreCsvImportHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicCoreCsvImportResult> HandleAsync(
         AtomicCoreCsvImportCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var now = times.WallClockUtc;
+        var loanAutomationStartDateUtc = times.BusinessDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
         var scope = Scope(command);
-        var batch = await attempt.CoreCsvImports.ImportAsync(
-            scope, command.Domain, command.RowsJson, now, ct);
+        var batch = await AtomicCoreCsvImportPersistence.ImportAsync(_db,
+            attempt, scope, command.Domain, command.RowsJson, now, loanAutomationStartDateUtc, ct);
         if (!batch.Authorized)
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
 
@@ -100,18 +112,18 @@ public sealed class AtomicCoreCsvImportHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicCoreCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         AtomicCoreCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
@@ -124,14 +136,14 @@ public sealed class AtomicCoreCsvImportHandler
                 [CapabilityKeys.MoneyExpensesManage],
             _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
         };
-        return persistence.Query<AuthSession>().AsNoTracking().AnyAsync(session =>
+        return db.Set<AuthSession>().AsNoTracking().AnyAsync(session =>
             session.Id == command.AuthSessionId
             && session.UserId == command.ActorUserId
             && session.ActiveAccessContextId == command.AccessContextId
             && session.Status == AuthSessionStatus.Active
             && session.RevokedAtUtc == null
             && session.ExpiresAtUtc > now
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -139,7 +151,7 @@ public sealed class AtomicCoreCsvImportHandler
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -147,7 +159,7 @@ public sealed class AtomicCoreCsvImportHandler
                 && membership.RevokedAtUtc == null
                 && membership.EffectiveFromUtc <= now
                 && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-                && persistence.Query<MembershipRoleAssignment>().Any(assignment =>
+                && db.Set<MembershipRoleAssignment>().Any(assignment =>
                     assignment.WorkspaceMembershipId == membership.Id
                     && assignment.PortfolioId == command.PortfolioId
                     && assignment.Status == MembershipRoleAssignmentStatus.Active
@@ -164,11 +176,11 @@ public sealed class AtomicCoreCsvImportHandler
                            CapabilityAuthorizationTargetKind.Property))), ct);
     }
 
-    private static WorkspaceReadScope Scope(AtomicCoreCsvImportCommand command) => new(
+    private WorkspaceReadScope Scope(AtomicCoreCsvImportCommand command) => new(
         command.PortfolioId, command.ActorUserId, command.AuthSessionId,
         command.AccessContextId, command.ExpectedAccessRevision);
 
-    private static void Validate(AtomicCoreCsvImportCommand command)
+    private void Validate(AtomicCoreCsvImportCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0

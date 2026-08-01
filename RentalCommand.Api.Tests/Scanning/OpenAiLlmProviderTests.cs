@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using SkiaSharp;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
@@ -243,6 +244,59 @@ public class OpenAiLlmProviderTests
         body.GetRawText().Should().Contain("image_url");
         body.GetRawText().Should().Contain("data:image/jpeg;base64");
         body.GetRawText().Should().Contain("\"detail\":\"high\"");
+    }
+
+    [Fact]
+    public async Task ExtractAsync_TallMultiPageImage_SendsReadableHighDetailTiles()
+    {
+        var argsJson = """{"vendor_name":"ACME Supply Co","vendor_name_confidence":0.92,"amount":"78.00","amount_confidence":0.85}""";
+        var openAiJson = $$"""
+            {
+              "model": "gpt-4o-2024-11-20",
+              "choices": [{
+                "message": {
+                  "tool_calls": [{
+                    "function": {
+                      "arguments": {{JsonEscape(argsJson)}}
+                    }
+                  }]
+                },
+                "finish_reason": "tool_calls"
+              }],
+              "usage": { "prompt_tokens": 20, "completion_tokens": 10 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, openAiJson);
+        var provider = BuildProvider(
+            "sk-test-key",
+            handler,
+            new AssistantConfig
+            {
+                ApiKey = "sk-test-key",
+                ModelId = "gpt-4o",
+                ImageDetail = "low",
+            });
+
+        using var bitmap = new SKBitmap(400, 4000);
+        bitmap.Erase(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+
+        await provider.ExtractAsync(
+            encoded.ToArray(),
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        using var doc = JsonDocument.Parse(handler.RequestBody!);
+        var content = doc.RootElement.GetProperty("messages")[1].GetProperty("content");
+        var imageParts = content.EnumerateArray()
+            .Where(part => part.GetProperty("type").GetString() == "image_url")
+            .ToArray();
+
+        imageParts.Should().HaveCountGreaterThan(1);
+        imageParts.Should().OnlyContain(part =>
+            part.GetProperty("image_url").GetProperty("detail").GetString() == "high");
     }
 
     // ----- helpers -----

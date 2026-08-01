@@ -114,6 +114,20 @@ bool canUseManagementOnboarding({
     experience == WorkspaceExperience.management &&
     capabilities.contains('security.manage');
 
+bool hasAllPropertiesRentalsManageAuthority({
+  required AccessEnvelope access,
+  required WorkspaceExperience activeExperience,
+}) =>
+    activeExperience == WorkspaceExperience.management &&
+    access
+        .capabilitiesFor(WorkspaceExperience.management)
+        .contains('rentals.manage') &&
+    access.assignments.any(
+      (assignment) =>
+          assignment.status == 'Active' &&
+          assignment.scope.kind == 'AllProperties',
+    );
+
 bool canOpenRentalsHub(Set<String> capabilities) => hasAnyMobileCapability(
   capabilities,
   [...rentalReadCapabilityKeys, ...applicationCapabilityKeys],
@@ -165,6 +179,8 @@ bool canOpenMobilePath({
 
   if (experience == WorkspaceExperience.tenant) {
     return path == '/notifications' ||
+        _isTenantPortalAccountPath(path) ||
+        _isTenantPortalLedgerEntryPath(path) ||
         path.startsWith('/messages/') ||
         path == '/settings' ||
         path == '/settings/notifications/my-alerts';
@@ -238,7 +254,9 @@ bool canOpenMobilePath({
     if (path == '/notifications' || path.startsWith('/messages/')) {
       return canOpenInboxHub(capabilities);
     }
-    if (path.startsWith('/scan/')) return canUseGlobalScan(capabilities);
+    if (path == '/scans' || path.startsWith('/scan/')) {
+      return canUseGlobalScan(capabilities);
+    }
     return false;
   }
 
@@ -285,8 +303,32 @@ bool canOpenMobilePath({
       path.startsWith('/messages/')) {
     return canOpenInboxHub(capabilities);
   }
-  if (path.startsWith('/scan/')) {
+  if (path == '/scans' || path.startsWith('/scan/')) {
     return canUseGlobalScan(capabilities);
   }
   return false;
+}
+
+bool _isTenantPortalAccountPath(String path) {
+  final segments = Uri(path: path).pathSegments;
+  if (segments.length != 3 ||
+      segments[0] != 'portal' ||
+      segments[1] != 'tenant-accounts') {
+    return false;
+  }
+  final accountId = int.tryParse(segments[2]);
+  return accountId != null && accountId > 0;
+}
+
+bool _isTenantPortalLedgerEntryPath(String path) {
+  final segments = Uri(path: path).pathSegments;
+  if (segments.length != 5 ||
+      segments[0] != 'portal' ||
+      segments[1] != 'tenant-accounts' ||
+      segments[3] != 'entries') {
+    return false;
+  }
+  final accountId = int.tryParse(segments[2]);
+  final entryId = int.tryParse(segments[4]);
+  return accountId != null && accountId > 0 && entryId != null && entryId > 0;
 }

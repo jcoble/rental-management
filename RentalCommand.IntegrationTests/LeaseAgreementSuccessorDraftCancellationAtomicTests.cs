@@ -598,22 +598,28 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     {
         await using var db = NewContext();
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        commandContext.BeginAttempt(attemptId);
         using var attempt = auditScope.BeginAttempt(
             new AtomicCommandIdentity(
                 "test.issued-agreement-reissue-transition",
                 Guid.NewGuid().ToString("N")),
-            Guid.NewGuid());
-        var persistence = new AtomicLeaseMutationPersistence(db, auditScope);
+            attemptId,
+            db);
 
-        var result = await persistence.ExecuteLegalArtifactTransitionAsync(
+        var result = await AtomicLeaseMutationPersistence.ExecuteLegalArtifactTransitionAsync(
+            db,
+            commandContext,
             _scenario.PortfolioId,
             leaseManagementId,
             leaseAgreementId,
-            leaseAddendumId: null,
+            null,
             executedArtifactId,
             executedAtUtc);
         await transaction.CommitAsync();
+        commandContext.EndAttempt();
         return result;
     }
 

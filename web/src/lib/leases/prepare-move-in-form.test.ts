@@ -39,6 +39,7 @@ describe('Prepare move-in form contract', () => {
 			parties: [
 				{
 					tenantId: 42,
+					newTenant: null,
 					role: 'PrimaryTenant',
 					guarantorLegalNoticeEligible: false,
 					changeReason: 'Approved application move-in',
@@ -56,6 +57,8 @@ describe('Prepare move-in form contract', () => {
 			securityDepositObligation: 1875.5,
 			lateFeeAmount: 65,
 			gracePeriodDays: 5,
+			rentTrackingStartMode: 'ForwardOnly',
+			rentTrackingStartOn: null,
 			termsSchemaVersion: 1,
 			termsPayload: {},
 			createSecurityDepositAccount: true,
@@ -77,6 +80,89 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request?.termEndOn, null);
 		assert.equal(result.request?.openingBalanceAmount, null);
 		assert.equal(result.request?.openingBalanceEffectiveOn, null);
+	});
+
+	it('builds a manual lease request without an application and creates the new tenant atomically', () => {
+		const form = completeForm();
+		form.applicationId = '';
+		form.tenantId = '';
+		form.createNewTenant = true;
+		form.newTenantFirstName = 'Maya';
+		form.newTenantLastName = 'Ross';
+		form.newTenantEmail = 'maya@example.com';
+		form.newTenantPhone = '555-0102';
+		form.newTenantEmergencyContact = 'Sam Ross';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.deepEqual(result.errors, {});
+		assert.equal(result.request?.applicationId, null);
+		assert.deepEqual(result.request?.parties[0], {
+			tenantId: null,
+			newTenant: {
+				firstName: 'Maya',
+				lastName: 'Ross',
+				email: 'maya@example.com',
+				phone: '555-0102',
+				emergencyContact: 'Sam Ross'
+			},
+			role: 'PrimaryTenant',
+			guarantorLegalNoticeEligible: false,
+			changeReason: 'Manual lease creation',
+			isAgreementSigner: true,
+			signingOrder: 1,
+			isRequiredSigner: true
+		});
+	});
+
+	it('requires an approved application when the application workflow submits', () => {
+		const form = completeForm();
+		form.applicationId = '';
+
+		const result = buildPrepareMoveInRequest(form, { requireApplication: true });
+
+		assert.equal(result.request, null);
+		assert.match(result.errors.applicationId ?? '', /approved application/);
+	});
+
+	it('preserves backfill and custom rent tracking choices in the atomic request', () => {
+		const backfillForm = completeForm();
+		backfillForm.rentTrackingStartMode = 'BackfillFromLeaseStart';
+
+		const backfillResult = buildPrepareMoveInRequest(backfillForm);
+
+		assert.deepEqual(backfillResult.errors, {});
+		assert.equal(backfillResult.request?.rentTrackingStartMode, 'BackfillFromLeaseStart');
+		assert.equal(backfillResult.request?.rentTrackingStartOn, null);
+
+		const customForm = completeForm();
+		customForm.rentTrackingStartMode = 'CustomCutoffDate';
+		customForm.rentTrackingStartOn = '2027-01-01';
+
+		const customResult = buildPrepareMoveInRequest(customForm);
+
+		assert.deepEqual(customResult.errors, {});
+		assert.equal(customResult.request?.rentTrackingStartMode, 'CustomCutoffDate');
+		assert.equal(customResult.request?.rentTrackingStartOn, '2027-01-01');
+	});
+
+	it('requires a valid date for custom rent tracking', () => {
+		const missingDateForm = completeForm();
+		missingDateForm.rentTrackingStartMode = 'CustomCutoffDate';
+
+		const missingDateResult = buildPrepareMoveInRequest(missingDateForm);
+
+		assert.equal(missingDateResult.request, null);
+		assert.match(missingDateResult.errors.rentTrackingStartOn ?? '', /custom rent tracking/);
+
+		const beforeAgreementForm = completeForm();
+		beforeAgreementForm.rentTrackingStartMode = 'CustomCutoffDate';
+		beforeAgreementForm.rentTrackingStartOn = '2026-08-31';
+
+		const beforeAgreementResult = buildPrepareMoveInRequest(beforeAgreementForm);
+
+		assert.equal(beforeAgreementResult.request, null);
+		assert.match(beforeAgreementResult.errors.rentTrackingStartOn ?? '', /cannot start before/);
 	});
 
 	it('uses the supplied Rental Command lease when no custom template is selected', () => {

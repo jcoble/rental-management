@@ -480,6 +480,8 @@ class PrepareMoveInInput {
     required this.securityDepositObligation,
     required this.lateFeeAmount,
     required this.gracePeriodDays,
+    this.rentTrackingStartMode = 'ForwardOnly',
+    this.rentTrackingStartOn,
     required this.createSecurityDepositAccount,
     this.openingBalanceAmount,
     this.openingBalanceEffectiveOn,
@@ -499,6 +501,8 @@ class PrepareMoveInInput {
   final double securityDepositObligation;
   final double lateFeeAmount;
   final int gracePeriodDays;
+  final String rentTrackingStartMode;
+  final DateTime? rentTrackingStartOn;
   final bool createSecurityDepositAccount;
   final double? openingBalanceAmount;
   final DateTime? openingBalanceEffectiveOn;
@@ -523,6 +527,10 @@ class PrepareMoveInInput {
     'securityDepositObligation': securityDepositObligation,
     'lateFeeAmount': lateFeeAmount,
     'gracePeriodDays': gracePeriodDays,
+    'rentTrackingStartMode': rentTrackingStartMode,
+    'rentTrackingStartOn': rentTrackingStartOn == null
+        ? null
+        : LeaseManagementsRepository._dateOnly(rentTrackingStartOn!),
     'termsSchemaVersion': 1,
     'termsPayload': <String, dynamic>{},
     'createSecurityDepositAccount': createSecurityDepositAccount,

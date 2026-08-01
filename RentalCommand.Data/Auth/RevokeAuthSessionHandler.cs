@@ -11,13 +11,17 @@ namespace RentalCommand.Data.Auth;
 public sealed class RevokeAuthSessionHandler
     : IAtomicCommandHandler<RevokeAuthSessionCommand, RevokeAuthSessionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RevokeAuthSessionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RevokeAuthSessionResult> HandleAsync(
         RevokeAuthSessionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        var session = await attempt.Persistence.Query<AuthSession>()
+        await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        var session = await _db.Set<AuthSession>()
             .Include(item => item.RefreshTokenFamilies)
             .ThenInclude(item => item.Credentials)
             .SingleOrDefaultAsync(item =>
@@ -26,7 +30,7 @@ public sealed class RevokeAuthSessionHandler
                 item.ActiveAccessContextId == command.AccessContextId,
                 ct)
             ?? throw new UnauthorizedAccessException("Authentication session is unavailable.");
-        var access = await attempt.Persistence.Query<WorkspaceAccessContext>()
+        var access = await _db.Set<WorkspaceAccessContext>()
             .WhereEffective()
             .Where(item => item.Id == command.AccessContextId && item.UserId == command.UserId)
             .Select(item => new { item.AccessRevision, item.PortfolioId })
@@ -50,7 +54,7 @@ public sealed class RevokeAuthSessionHandler
             }
         }
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             access.PortfolioId,
             nameof(AuthSession),
             command.AccessContextId,
@@ -60,5 +64,38 @@ public sealed class RevokeAuthSessionHandler
             NewValues: JsonSerializer.Serialize(new { command.AuthSessionId, command.Reason }),
             ChangeReason: "Authentication session revoked"));
         return new RevokeAuthSessionResult(true, session.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        RevokeAuthSessionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.AuthSessionId == Guid.Empty || command.UserId <= 0 ||
+            command.AccessContextId <= 0 || command.AccessRevision <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Reason);
+
+        var authorized = await _db.Set<AuthSession>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.UserId &&
+                session.ActiveAccessContextId == command.AccessContextId &&
+                _db.Set<WorkspaceAccessContext>()
+                    .IgnoreQueryFilters()
+                    .Any(access =>
+                        access.Id == command.AccessContextId &&
+                        access.UserId == command.UserId &&
+                        access.AccessRevision == command.AccessRevision),
+                ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException("The original authentication session ownership is unavailable.");
+        }
     }
 }

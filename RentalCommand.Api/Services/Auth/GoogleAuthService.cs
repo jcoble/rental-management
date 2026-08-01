@@ -2,8 +2,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 
@@ -27,7 +27,7 @@ public class GoogleAuthResult
         new() { Success = false, Error = error };
 }
 
-public interface IGoogleAuthService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface IGoogleAuthService
 {
     /// <summary>
     /// Exchanges a Google authorization <paramref name="code"/> for an id_token, validates it,

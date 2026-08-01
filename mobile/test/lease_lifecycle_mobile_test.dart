@@ -3,8 +3,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/models/lease.dart';
+import 'package:rental_command/features/leases/lease_detail_screen.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 import 'package:rental_command/features/leases/successor_agreement_sheet.dart';
 
@@ -270,6 +275,61 @@ void main() {
     },
   );
 
+  testWidgets(
+    'give possession action opens confirmation sheet without provider disposal assertion',
+    (tester) async {
+      tester.view.physicalSize = const Size(430, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authControllerProvider.overrideWith(
+              () => _StaticAuthController(_managementAuthority()),
+            ),
+            leaseManagementDetailProvider.overrideWith(
+              (ref, id) async => _activeManagementDetail(),
+            ),
+            leaseAgreementHistoryProvider.overrideWith(
+              (ref, id) async => LeaseAgreementHistoryPage(
+                items: [_executedGoverningAgreement()],
+              ),
+            ),
+            leaseHouseholdContextProvider.overrideWith(
+              (ref, id) async => const ReturnPossessionContext(
+                parties: [],
+                activeTenantUserAccesses: [],
+              ),
+            ),
+            leaseAddendumHistoryProvider.overrideWith(
+              (ref, query) async => const LeaseAddendumHistoryPage(
+                items: [],
+                totalCount: 0,
+                skip: 0,
+                take: 10,
+              ),
+            ),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: LeaseManagementDetailScreen(leaseManagementId: 44),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Give possession'), findsOneWidget);
+      await tester.tap(find.text('Give possession'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Confirm possession'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('return possession is an explicit server-dated mobile action', () {
     final sheet = File(
       'lib/features/leases/return_possession_sheet.dart',
@@ -316,6 +376,98 @@ LeaseAgreementHistory _agreement({
 });
 
 String _date(DateTime value) => value.toIso8601String().split('T').first;
+
+LeaseManagementDetail _activeManagementDetail() => LeaseManagementDetail(
+  summary: LeaseManagementSummary(
+    id: 44,
+    publicId: 'DEMO-LM-ACTIVE-044',
+    relationshipNumber: 'DEMO-LM-ACTIVE-044',
+    propertyId: 8,
+    propertyName: 'Elm Haven',
+    unitId: 12,
+    unitNumber: 'Main',
+    lifecycle: 'Active',
+    businessDate: DateTime(2026, 7, 16),
+    agreementId: 81,
+    agreementNumber: 'AGR-81',
+    agreementStatus: 'Active',
+    tenantAccountId: 44,
+    primaryTenantId: 44,
+    primaryTenantName: 'Resident 44',
+    currentPartyCount: 1,
+    currentResidentCount: 1,
+    hasReconciliationException: false,
+    updatedAt: DateTime(2026, 7, 16),
+  ),
+  parties: const [],
+  agreementCount: 1,
+  addendumCount: 0,
+  legalArtifactCount: 1,
+);
+
+LeaseAgreementHistory _executedGoverningAgreement() =>
+    LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 81,
+      'versionNumber': 1,
+      'agreementNumber': 'AGR-81',
+      'changeType': 'Initial',
+      'termType': 'Fixed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'governingFromOn': '2026-01-01',
+      'baseRentAmount': 1500,
+      'agreementStatus': 'Active',
+      'isGoverning': true,
+      'hasLiveReissue': false,
+      'fullyExecutedAtUtc': '2025-12-20T12:00:00Z',
+      'executedArtifact': {
+        'legalDocumentArtifactId': 2,
+        'fileName': 'executed-agreement.pdf',
+        'contentType': 'application/pdf',
+        'byteLength': 2048,
+      },
+    });
+
+AuthStateAuthenticated _managementAuthority() {
+  const experience = WorkspaceExperience.management;
+  return AuthStateAuthenticated(
+    const AuthUser(
+      id: 1,
+      email: 'manager@example.test',
+      displayName: 'Test manager',
+      emailVerified: true,
+    ),
+    const AccessEnvelope(
+      identity: AccessIdentity(userId: 1, displayName: 'Test manager'),
+      selectedContext: SelectedAccessContext(
+        accessContextId: 1,
+        portfolioId: 1,
+        workspaceName: 'Test workspace',
+        accessRevision: 1,
+        activeExperience: experience,
+      ),
+      defaultExperience: experience,
+      availableExperiences: [experience],
+      assignments: [],
+      navigation: [
+        NavigationCapabilities(
+          experience: experience,
+          capabilityKeys: ['rentals.manage'],
+        ),
+      ],
+    ),
+    activeExperience: experience,
+  );
+}
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
+}
 
 class _GivePossessionAdapter implements HttpClientAdapter {
   String path = '';

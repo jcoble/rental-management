@@ -179,6 +179,33 @@ void main() {
     expect(canUseAssistant({'reports.read'}), isTrue);
   });
 
+  test('scan-capable staff can open history without widening owner access', () {
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.management,
+        capabilities: const {'rentals.manage'},
+        path: '/scans',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: const {'leasing.agreements.prepare'},
+        path: '/scans',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {'rentals.manage'},
+        path: '/scans',
+      ),
+      isFalse,
+    );
+  });
+
   test('mutation actions require both capability and matching experience', () {
     expect(
       canUseMobileCapabilityAction(
@@ -208,6 +235,61 @@ void main() {
       isFalse,
     );
   });
+
+  test(
+    'property create/edit/delete requires all-properties rentals.manage authority',
+    () {
+      final allProperties = _accessEnvelope(
+        scopeKind: 'AllProperties',
+        activeExperience: WorkspaceExperience.management,
+        capabilities: {'rentals.manage'},
+      );
+      final selectedProperties = _accessEnvelope(
+        scopeKind: 'SelectedProperties',
+        activeExperience: WorkspaceExperience.management,
+        capabilities: {'rentals.manage'},
+      );
+      final noManagementCapability = _accessEnvelope(
+        scopeKind: 'AllProperties',
+        activeExperience: WorkspaceExperience.management,
+        capabilities: {'rentals.read'},
+      );
+      final wrongExperience = _accessEnvelope(
+        scopeKind: 'AllProperties',
+        activeExperience: WorkspaceExperience.leasing,
+        capabilities: {'rentals.manage'},
+      );
+
+      expect(
+        hasAllPropertiesRentalsManageAuthority(
+          access: allProperties,
+          activeExperience: WorkspaceExperience.management,
+        ),
+        isTrue,
+      );
+      expect(
+        hasAllPropertiesRentalsManageAuthority(
+          access: selectedProperties,
+          activeExperience: WorkspaceExperience.management,
+        ),
+        isFalse,
+      );
+      expect(
+        hasAllPropertiesRentalsManageAuthority(
+          access: noManagementCapability,
+          activeExperience: WorkspaceExperience.management,
+        ),
+        isFalse,
+      );
+      expect(
+        hasAllPropertiesRentalsManageAuthority(
+          access: wrongExperience,
+          activeExperience: WorkspaceExperience.leasing,
+        ),
+        isFalse,
+      );
+    },
+  );
 
   test('owner experience cannot inherit management routes', () {
     for (final path in [
@@ -448,3 +530,41 @@ Set<MobileDestinationId> _visibleIds(
   destinations,
   capabilities,
 ).map((destination) => destination.id).toSet();
+
+AccessEnvelope _accessEnvelope({
+  required String scopeKind,
+  required WorkspaceExperience activeExperience,
+  required Set<String> capabilities,
+}) {
+  return AccessEnvelope(
+    identity: const AccessIdentity(userId: 2, displayName: 'Property Manager'),
+    selectedContext: SelectedAccessContext(
+      accessContextId: 99,
+      portfolioId: 1,
+      workspaceName: 'Test workspace',
+      accessRevision: 1,
+      activeExperience: activeExperience,
+    ),
+    defaultExperience: activeExperience,
+    availableExperiences: [activeExperience],
+    assignments: [
+      AccessAssignment(
+        assignmentId: 1,
+        roleProfileKey: 'property-manager',
+        roleProfileName: 'Property Manager',
+        status: 'Active',
+        scope: AccessAssignmentScope(
+          kind: scopeKind,
+          selectedPropertyCount: scopeKind == 'SelectedProperties' ? 1 : 0,
+          selectedProperties: const [],
+        ),
+      ),
+    ],
+    navigation: [
+      NavigationCapabilities(
+        experience: WorkspaceExperience.management,
+        capabilityKeys: capabilities.toList(),
+      ),
+    ],
+  );
+}

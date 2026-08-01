@@ -13,16 +13,19 @@ using RentalCommand.Data.Notifications;
 namespace RentalCommand.Data.Conversations;
 
 public sealed class SendConversationMessageHandler
-    : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>,
-      IAtomicReplayAuthorizer<SendConversationMessageCommand>
+    : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SendConversationMessageHandler(RentalCommandDbContext db) => _db = db;
+
     private const int PreviewMaxLength = 280;
     private static readonly string[] ManagementCapabilities =
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
     public async Task<SendConversationMessageResult> HandleAsync(
         SendConversationMessageCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.SenderRole is not (ConversationSenderRole.Landlord or ConversationSenderRole.Tenant))
@@ -33,10 +36,10 @@ public sealed class SendConversationMessageHandler
         if (command.SenderRole == ConversationSenderRole.Landlord &&
             command.ManagementAccess is { } managementAccess)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.AuthSession, managementAccess.SessionId, ct);
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.WorkspaceAccessContext, managementAccess.AccessContextId, ct);
+            await context.AcquireLockAsync(
+                "AuthSession", managementAccess.SessionId, ct);
+            await context.AcquireLockAsync(
+                "WorkspaceAccessContext", managementAccess.AccessContextId, ct);
         }
 
         var createsConversation = command.ConversationId is null;
@@ -44,8 +47,8 @@ public sealed class SendConversationMessageHandler
         Tenant tenant;
         if (command.ConversationId is { } conversationId)
         {
-            await attempt.Locking.AcquireAsync(AtomicLockResource.Conversation, conversationId, ct);
-            var conversationQuery = attempt.Persistence.Query<Conversation>()
+            await context.AcquireLockAsync("Conversation", conversationId, ct);
+            var conversationQuery = _db.Set<Conversation>()
                 .Include(candidate => candidate.Tenant)
                 .Where(candidate => candidate.Id == conversationId
                     && candidate.PortfolioId == command.PortfolioId
@@ -53,9 +56,9 @@ public sealed class SendConversationMessageHandler
                         || candidate.TenantId == command.TenantId));
             if (command.SenderRole == ConversationSenderRole.Landlord && command.ManagementAccess is not null)
             {
-                var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+                var now = await context.ReadDatabaseClockUtcAsync(ct);
                 conversationQuery = WhereManagementAuthorized(
-                    conversationQuery, attempt.Persistence, command, now);
+                    conversationQuery, _db, command, now);
             }
 
             var existing = await conversationQuery.SingleOrDefaultAsync(ct);
@@ -81,15 +84,15 @@ public sealed class SendConversationMessageHandler
         }
         else
         {
-            var tenantQuery = attempt.Persistence.Query<Tenant>()
+            var tenantQuery = _db.Set<Tenant>()
                 .Where(candidate => candidate.Id == command.TenantId
                     && candidate.PortfolioId == command.PortfolioId
                     && candidate.DeletedAt == null);
             if (command.SenderRole == ConversationSenderRole.Landlord && command.ManagementAccess is not null)
             {
-                var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+                var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
                 tenantQuery = WhereManagementAuthorizedForStart(
-                    tenantQuery, attempt.Persistence, command, times.WallClockUtc, times.BusinessDate);
+                    tenantQuery, _db, command, times.WallClockUtc, times.BusinessDate);
             }
 
             var target = await tenantQuery.SingleOrDefaultAsync(ct);
@@ -112,7 +115,7 @@ public sealed class SendConversationMessageHandler
                 LandlordUnreadCount = command.SenderRole == ConversationSenderRole.Tenant ? 1 : 0,
                 TenantUnreadCount = command.SenderRole == ConversationSenderRole.Landlord ? 1 : 0,
             };
-            attempt.Persistence.Add(conversation);
+            _db.Add(conversation);
         }
 
         var channels = command.SenderRole == ConversationSenderRole.Landlord
@@ -126,10 +129,10 @@ public sealed class SendConversationMessageHandler
             Channels = channels.Count == 0 ? null : string.Join(',', channels),
             CreatedAt = command.CreatedAtUtc,
         };
-        attempt.Persistence.Add(message);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(message);
+        await context.FlushBusinessAsync(ct);
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(ConversationMessage),
             message.Id,
@@ -143,7 +146,7 @@ public sealed class SendConversationMessageHandler
             ChangeReason: command.SenderRole == ConversationSenderRole.Landlord
                 ? "Landlord conversation message committed with recipient destinations."
                 : "Tenant conversation message committed with staff notifications."));
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+        context.StageSemanticEvent(new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(Conversation),
             conversation.Id,
@@ -163,24 +166,25 @@ public sealed class SendConversationMessageHandler
 
         if (command.SenderRole == ConversationSenderRole.Landlord)
         {
-            StageDestinationIntents(attempt, command, tenant, conversation, message, channels);
+            StageDestinationIntents(context, command, tenant, conversation, message, channels);
         }
         var notifications = command.SenderRole == ConversationSenderRole.Landlord
             ? await CreatePortalNotificationsAsync(
-                attempt,
+                context,
+                _db,
                 command,
                 conversation,
                 channels,
                 DateOnly.FromDateTime(command.CreatedAtUtc),
                 ct)
-            : await CreateStaffNotificationsAsync(attempt, command, conversation, tenant, ct);
+            : await CreateStaffNotificationsAsync(context, _db, command, conversation, tenant, ct);
         if (notifications.Count > 0)
         {
-            attempt.Persistence.AddRange(notifications);
-            await attempt.FlushBusinessAsync(ct);
+            _db.AddRange(notifications);
+            await context.FlushBusinessAsync(ct);
             foreach (var notification in notifications)
             {
-                attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                context.StageSemanticEvent(new AtomicSemanticAudit(
                     command.PortfolioId,
                     nameof(Notification),
                     notification.Id,
@@ -203,9 +207,7 @@ public sealed class SendConversationMessageHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        SendConversationMessageCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        SendConversationMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.SenderRole != ConversationSenderRole.Landlord || command.ManagementAccess is null)
         {
@@ -215,25 +217,25 @@ public sealed class SendConversationMessageHandler
         bool authorized;
         if (command.ConversationId is { } conversationId)
         {
-            var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+            var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
             authorized = await WhereManagementAuthorized(
-                    persistence.Query<Conversation>().Where(conversation =>
+                    _db.Set<Conversation>().Where(conversation =>
                         conversation.Id == conversationId &&
                         conversation.PortfolioId == command.PortfolioId),
-                    persistence,
+                    _db,
                     command,
                     now)
                 .AnyAsync(ct);
         }
         else
         {
-            var times = await persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+            var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
             authorized = await WhereManagementAuthorizedForStart(
-                    persistence.Query<Tenant>().Where(tenant =>
+                    _db.Set<Tenant>().Where(tenant =>
                         tenant.Id == command.TenantId &&
                         tenant.PortfolioId == command.PortfolioId &&
                         tenant.DeletedAt == null),
-                    persistence,
+                    _db,
                     command,
                     times.WallClockUtc,
                     times.BusinessDate)
@@ -249,13 +251,13 @@ public sealed class SendConversationMessageHandler
 
     private static IQueryable<Conversation> WhereManagementAuthorized(
         IQueryable<Conversation> conversations,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow)
     {
-        var allProperties = AuthorizedAssignments(persistence, command, utcNow)
+        var allProperties = AuthorizedAssignments(db, command, utcNow)
             .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
-        var authorizedProperties = AuthorizedProperties(persistence, command, utcNow);
+        var authorizedProperties = AuthorizedProperties(db, command, utcNow);
 
         return conversations.Where(conversation =>
             (conversation.PropertyId == null && allProperties.Any()) ||
@@ -266,12 +268,12 @@ public sealed class SendConversationMessageHandler
 
     private static IQueryable<Tenant> WhereManagementAuthorizedForStart(
         IQueryable<Tenant> tenants,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow,
         DateOnly businessDate)
     {
-        var currentRelationships = persistence.Query<LeaseManagementParty>()
+        var currentRelationships = db.Set<LeaseManagementParty>()
             .Where(party =>
                 party.PortfolioId == command.PortfolioId &&
                 party.Role != LeaseManagementPartyRole.Guarantor &&
@@ -283,7 +285,7 @@ public sealed class SendConversationMessageHandler
 
         if (command.PropertyId is { } propertyId)
         {
-            var authorizedProperties = AuthorizedProperties(persistence, command, utcNow)
+            var authorizedProperties = AuthorizedProperties(db, command, utcNow)
                 .Where(property => property.Id == propertyId);
             return tenants.Where(tenant =>
                 authorizedProperties.Any() &&
@@ -292,7 +294,7 @@ public sealed class SendConversationMessageHandler
                     party.LeaseManagement!.PropertyId == propertyId));
         }
 
-        var allProperties = AuthorizedAssignments(persistence, command, utcNow)
+        var allProperties = AuthorizedAssignments(db, command, utcNow)
             .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
         return tenants.Where(tenant =>
             allProperties.Any() &&
@@ -300,12 +302,12 @@ public sealed class SendConversationMessageHandler
     }
 
     private static IQueryable<Property> AuthorizedProperties(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow)
     {
-        var assignments = AuthorizedAssignments(persistence, command, utcNow);
-        return persistence.Query<Property>().Where(property =>
+        var assignments = AuthorizedAssignments(db, command, utcNow);
+        return db.Set<Property>().Where(property =>
             property.PortfolioId == command.PortfolioId &&
             assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
@@ -316,13 +318,13 @@ public sealed class SendConversationMessageHandler
     }
 
     private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         DateTime utcNow)
     {
         var access = command.ManagementAccess
             ?? throw new InvalidOperationException("Management access is required for this query.");
-        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        return db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId &&
             assignment.Status == MembershipRoleAssignmentStatus.Active &&
             assignment.SuspendedAtUtc == null &&
@@ -344,7 +346,7 @@ public sealed class SendConversationMessageHandler
             assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
             assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
             assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-            persistence.Query<AuthSession>().Any(session =>
+            db.Set<AuthSession>().Any(session =>
                 session.Id == access.SessionId &&
                 session.UserId == access.UserId &&
                 session.ActiveAccessContextId == access.AccessContextId &&
@@ -362,7 +364,8 @@ public sealed class SendConversationMessageHandler
     }
 
     private static async Task<List<Notification>> CreateStaffNotificationsAsync(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         Conversation conversation,
         Tenant tenant,
@@ -373,24 +376,24 @@ public sealed class SendConversationMessageHandler
         // visible administrator fallback applies only when nobody eligible is assigned.
         var userIds = ScopedNotificationRecipientQuery
             .ForTenantTeamTopic(
-                attempt,
+                db,
                 command.PortfolioId,
                 tenant.Id,
                 TeamRoutingTopic.ApplicationsAndLeasing,
                 command.CreatedAtUtc);
         var recipients = await (
-                from context in attempt.Persistence.Query<WorkspaceAccessContext>()
-                join membership in attempt.Persistence.Query<WorkspaceMembership>()
-                    on new { AccessContextId = context.Id, context.PortfolioId }
+                from accessContext in db.Set<WorkspaceAccessContext>()
+                join membership in db.Set<WorkspaceMembership>()
+                    on new { AccessContextId = accessContext.Id, accessContext.PortfolioId }
                     equals new { membership.AccessContextId, membership.PortfolioId }
-                where context.PortfolioId == command.PortfolioId
-                    && userIds.Contains(context.UserId)
+                where accessContext.PortfolioId == command.PortfolioId
+                    && userIds.Contains(accessContext.UserId)
                 select new
                 {
-                    context.UserId,
-                    AccessContextId = context.Id,
-                    context.AccessRevision,
-                    Experience = context.LastAuthorizedExperience ?? membership.DefaultExperience,
+                    accessContext.UserId,
+                    AccessContextId = accessContext.Id,
+                    accessContext.AccessRevision,
+                    Experience = accessContext.LastAuthorizedExperience ?? membership.DefaultExperience,
                 })
             .Distinct()
             .OrderBy(recipient => recipient.UserId)
@@ -430,7 +433,8 @@ public sealed class SendConversationMessageHandler
     }
 
     private static async Task<List<Notification>> CreatePortalNotificationsAsync(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
+        RentalCommandDbContext db,
         SendConversationMessageCommand command,
         Conversation conversation,
         IReadOnlyCollection<string> channels,
@@ -442,7 +446,7 @@ public sealed class SendConversationMessageHandler
             return [];
         }
 
-        var tenantRecipient = await attempt.Persistence.Query<TenantUserAccess>()
+        var tenantRecipient = await db.Set<TenantUserAccess>()
             .Where(access => access.PortfolioId == command.PortfolioId
                 && access.RevokedAtUtc == null
                 && access.AccessContext!.Status == WorkspaceAccessContextStatus.Active
@@ -492,7 +496,7 @@ public sealed class SendConversationMessageHandler
     }
 
     private static void StageDestinationIntents(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         SendConversationMessageCommand command,
         Tenant tenant,
         Conversation conversation,
@@ -501,7 +505,7 @@ public sealed class SendConversationMessageHandler
     {
         if (channels.Contains("Email", StringComparer.Ordinal))
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "email",
@@ -514,7 +518,7 @@ public sealed class SendConversationMessageHandler
 
         if (channels.Contains("Sms", StringComparer.Ordinal))
         {
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "sms",

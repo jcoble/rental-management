@@ -254,6 +254,136 @@ class TenantLedgerEntryListPage {
   }
 }
 
+class TenantChargeListQuery {
+  const TenantChargeListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'dueOn',
+    this.from,
+    this.to,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final String? from;
+  final String? to;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TenantChargeListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.from == from &&
+        other.to == to;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, from, to);
+}
+
+class TenantCharge {
+  const TenantCharge({
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    required this.tenantLedgerEntryId,
+    required this.entryType,
+    required this.direction,
+    required this.currency,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.description,
+    required this.originalAmount,
+    required this.reversedAmount,
+    required this.netAllocations,
+    required this.openAmount,
+    required this.isPastDue,
+    this.dueOn,
+  });
+
+  final int tenantAccountId;
+  final int leaseManagementId;
+  final int tenantLedgerEntryId;
+  final String entryType;
+  final String direction;
+  final String currency;
+  final DateTime effectiveOn;
+  final DateTime? dueOn;
+  final DateTime postedAtUtc;
+  final String description;
+  final double originalAmount;
+  final double reversedAmount;
+  final double netAllocations;
+  final double openAmount;
+  final bool isPastDue;
+
+  factory TenantCharge.fromJson(Map<String, dynamic> json) {
+    return TenantCharge(
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+      entryType: json['entryType'] as String,
+      direction: json['direction'] as String,
+      currency: json['currency'] as String,
+      effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      dueOn: (json['dueOn'] as String?) == null
+          ? null
+          : DateTime.parse(json['dueOn'] as String),
+      postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+      description: json['description'] as String,
+      originalAmount: (json['originalAmount'] as num).toDouble(),
+      reversedAmount: (json['reversedAmount'] as num).toDouble(),
+      netAllocations: (json['netAllocations'] as num).toDouble(),
+      openAmount: (json['openAmount'] as num).toDouble(),
+      isPastDue: json['isPastDue'] as bool? ?? false,
+    );
+  }
+}
+
+class TenantChargePage {
+  const TenantChargePage({
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final int tenantAccountId;
+  final int leaseManagementId;
+  final List<TenantCharge> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory TenantChargePage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final items = rawItems is List
+        ? rawItems
+              .whereType<Map<String, dynamic>>()
+              .map(TenantCharge.fromJson)
+              .toList()
+        : <TenantCharge>[];
+
+    return TenantChargePage(
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt() ?? 0,
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 class RecordTenantReceiptInput {
   const RecordTenantReceiptInput({
     required this.amount,
@@ -265,7 +395,7 @@ class RecordTenantReceiptInput {
     this.checkNumber,
     this.bankName,
     this.sourceStoredFileId,
-    this.allocateOldestCharges = true,
+    this.targetChargeEntryId,
   });
 
   final double amount;
@@ -277,7 +407,7 @@ class RecordTenantReceiptInput {
   final String? checkNumber;
   final String? bankName;
   final int? sourceStoredFileId;
-  final bool allocateOldestCharges;
+  final int? targetChargeEntryId;
 }
 
 class RecordTenantReceiptResult {
@@ -478,6 +608,37 @@ class PaymentsRepository {
     }
   }
 
+  Future<TenantChargePage> listTenantChargesPage(
+    int tenantAccountId, [
+    TenantChargeListQuery query = const TenantChargeListQuery(),
+  ]) async {
+    final params = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      'from': query.from,
+      'to': query.to,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/$tenantAccountId/charges/page',
+        queryParameters: params,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TenantChargePage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<RecordTenantReceiptResult> recordReceipt(
     int tenantAccountId,
     RecordTenantReceiptInput input, {
@@ -501,7 +662,7 @@ class PaymentsRepository {
             'bankName': input.bankName!.trim(),
           if (input.sourceStoredFileId != null)
             'sourceStoredFileId': input.sourceStoredFileId,
-          'allocateOldestCharges': input.allocateOldestCharges,
+          'targetChargeEntryId': input.targetChargeEntryId,
         },
         options: Options(headers: {'Idempotency-Key': operationKey}),
       );
@@ -624,4 +785,16 @@ final tenantLedgerEntriesPageProvider = FutureProvider.autoDispose
       return ref
           .watch(paymentsRepositoryProvider)
           .listTenantLedgerEntriesPage(query);
+    });
+
+typedef TenantChargePageRequest = ({
+  int tenantAccountId,
+  TenantChargeListQuery query,
+});
+
+final tenantChargesPageProvider = FutureProvider.autoDispose
+    .family<TenantChargePage, TenantChargePageRequest>((ref, request) {
+      return ref
+          .watch(paymentsRepositoryProvider)
+          .listTenantChargesPage(request.tenantAccountId, request.query);
     });

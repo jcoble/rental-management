@@ -23,4 +23,4 @@ public sealed record RecordNativeEsignViewCommand(
 public sealed record RecordNativeEsignViewResult(
     NativeEsignViewOutcome Outcome,
     string? Error,
-    int SignatureRequestId) : IAtomicResultData;
+    int SignatureRequestId);

@@ -37,34 +37,50 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         var scenario = await SeedLeasingScenarioAsync();
         var sut = new LeasingWorkspaceService(_context.Db, TimeProvider.System);
         var query = new ListQuery { Search = "unit", Sort = "name", Take = 20 };
+        await _context.ActivateApiScopeAsync(scenario.Scope);
         _commands.Clear();
 
-        var allowed = await sut.ListRentalsAsync(scenario.Scope, query);
+        try
+        {
+            var allowed = await sut.ListRentalsAsync(scenario.Scope, query);
 
-        allowed.TotalCount.Should().Be(1);
-        allowed.Items.Should().ContainSingle(item => item.UnitId == scenario.AllowedUnitId);
-        allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPropertyUnitId);
-        allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPortfolioUnitId);
-        _commands.Should().HaveCount(2, "count and bounded page data must be the only database round trips");
-        _commands.Should().ContainSingle(sql =>
-            IsTopLevelCountCommand(sql) &&
-            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
-        _commands.Should().ContainSingle(sql =>
-            !IsTopLevelCountCommand(sql) &&
-            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+            allowed.TotalCount.Should().Be(1);
+            allowed.Items.Should().ContainSingle(item => item.UnitId == scenario.AllowedUnitId);
+            allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPropertyUnitId);
+            allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPortfolioUnitId);
+            _commands.Should().HaveCount(2, "count and bounded page data must be the only database round trips");
+            _commands.Should().ContainSingle(sql =>
+                IsTopLevelCountCommand(sql) &&
+                sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+            _commands.Should().ContainSingle(sql =>
+                !IsTopLevelCountCommand(sql) &&
+                sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
 
-        var stale = await sut.ListRentalsAsync(
-            scenario.Scope with { AccessRevision = scenario.Scope.AccessRevision + 1 }, query);
-        stale.Items.Should().BeEmpty();
-        stale.TotalCount.Should().Be(0);
+            var stale = await sut.ListRentalsAsync(
+                scenario.Scope with { AccessRevision = scenario.Scope.AccessRevision + 1 }, query);
+            stale.Items.Should().BeEmpty();
+            stale.TotalCount.Should().Be(0);
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
 
         scenario.Session.Status = AuthSessionStatus.Revoked;
         scenario.Session.RevokedAtUtc = DateTime.UtcNow;
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
-        (await sut.ListRentalsAsync(scenario.Scope, query)).Items.Should().BeEmpty();
+        await _context.ActivateApiScopeAsync(scenario.Scope);
+        try
+        {
+            (await sut.ListRentalsAsync(scenario.Scope, query)).Items.Should().BeEmpty();
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
 
         var session = await _context.Db.AuthSessions.SingleAsync(row => row.Id == scenario.Scope.SessionId);
         session.Status = AuthSessionStatus.Active;
@@ -74,7 +90,15 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         membership.RevokedAtUtc = DateTime.UtcNow;
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
-        (await sut.ListRentalsAsync(scenario.Scope, query)).Items.Should().BeEmpty();
+        await _context.ActivateApiScopeAsync(scenario.Scope);
+        try
+        {
+            (await sut.ListRentalsAsync(scenario.Scope, query)).Items.Should().BeEmpty();
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
     }
 
     [Fact]
@@ -88,40 +112,56 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
             Sort = "title",
             Take = 20,
         };
+        await _context.ActivateApiScopeAsync(scenario.Scope);
         _commands.Clear();
 
-        var page = await sut.ListAssignmentsAsync(scenario.Scope, query, conversationsOnly: false, default);
+        try
+        {
+            var page = await sut.ListAssignmentsAsync(scenario.Scope, query, conversationsOnly: false, default);
 
-        page.TotalCount.Should().Be(1);
-        page.Items.Should().ContainSingle(item => item.Id == scenario.AssignedWorkOrderId);
-        page.Items.Should().NotContain(item => item.Id == scenario.UnassignedWorkOrderId);
-        page.Items.Should().NotContain(item => item.Id == scenario.OtherPortfolioWorkOrderId);
-        _commands.Should().HaveCount(2, "authorization, search, sort, and paging remain in count/page SQL");
-        _commands.Should().ContainSingle(sql =>
-            IsTopLevelCountCommand(sql) &&
-            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
-        _commands.Should().ContainSingle(sql =>
-            !IsTopLevelCountCommand(sql) &&
-            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+            page.TotalCount.Should().Be(1);
+            page.Items.Should().ContainSingle(item => item.Id == scenario.AssignedWorkOrderId);
+            page.Items.Should().NotContain(item => item.Id == scenario.UnassignedWorkOrderId);
+            page.Items.Should().NotContain(item => item.Id == scenario.OtherPortfolioWorkOrderId);
+            _commands.Should().HaveCount(2, "authorization, search, sort, and paging remain in count/page SQL");
+            _commands.Should().ContainSingle(sql =>
+                IsTopLevelCountCommand(sql) &&
+                sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+            _commands.Should().ContainSingle(sql =>
+                !IsTopLevelCountCommand(sql) &&
+                sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
 
-        var detail = await sut.GetAssignmentAsync(scenario.Scope, scenario.AssignedWorkOrderId, default);
-        detail.Should().NotBeNull();
-        detail!.Entries.Should().ContainSingle(entry => entry.Note == "Assigned entry");
-        detail.Messages.Should().ContainSingle(message => message.Body == "Assigned message");
-        (await sut.GetAssignmentAsync(scenario.Scope, scenario.UnassignedWorkOrderId, default)).Should().BeNull();
-        (await sut.GetAssignmentAsync(scenario.Scope, scenario.OtherPortfolioWorkOrderId, default)).Should().BeNull();
+            var detail = await sut.GetAssignmentAsync(scenario.Scope, scenario.AssignedWorkOrderId, default);
+            detail.Should().NotBeNull();
+            detail!.Entries.Should().ContainSingle(entry => entry.Note == "Assigned entry");
+            detail.Messages.Should().ContainSingle(message => message.Body == "Assigned message");
+            (await sut.GetAssignmentAsync(scenario.Scope, scenario.UnassignedWorkOrderId, default)).Should().BeNull();
+            (await sut.GetAssignmentAsync(scenario.Scope, scenario.OtherPortfolioWorkOrderId, default)).Should().BeNull();
 
-        var staleScope = scenario.Scope with { AccessRevision = scenario.Scope.AccessRevision + 1 };
-        (await sut.ListAssignmentsAsync(staleScope, query, false, default)).Items.Should().BeEmpty();
-        (await sut.GetAssignmentAsync(staleScope, scenario.AssignedWorkOrderId, default)).Should().BeNull();
+            var staleScope = scenario.Scope with { AccessRevision = scenario.Scope.AccessRevision + 1 };
+            (await sut.ListAssignmentsAsync(staleScope, query, false, default)).Items.Should().BeEmpty();
+            (await sut.GetAssignmentAsync(staleScope, scenario.AssignedWorkOrderId, default)).Should().BeNull();
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
 
         scenario.Session.Status = AuthSessionStatus.Revoked;
         scenario.Session.RevokedAtUtc = DateTime.UtcNow;
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
-        (await sut.ListAssignmentsAsync(scenario.Scope, query, false, default)).Items.Should().BeEmpty();
+        await _context.ActivateApiScopeAsync(scenario.Scope);
+        try
+        {
+            (await sut.ListAssignmentsAsync(scenario.Scope, query, false, default)).Items.Should().BeEmpty();
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
 
         var session = await _context.Db.AuthSessions.SingleAsync(row => row.Id == scenario.Scope.SessionId);
         session.Status = AuthSessionStatus.Active;
@@ -131,7 +171,15 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         membership.RevokedAtUtc = DateTime.UtcNow;
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
-        (await sut.GetAssignmentAsync(scenario.Scope, scenario.AssignedWorkOrderId, default)).Should().BeNull();
+        await _context.ActivateApiScopeAsync(scenario.Scope);
+        try
+        {
+            (await sut.GetAssignmentAsync(scenario.Scope, scenario.AssignedWorkOrderId, default)).Should().BeNull();
+        }
+        finally
+        {
+            await ResetApiScopeAsync();
+        }
     }
 
     [Fact]
@@ -404,6 +452,12 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
             ExpiresAtUtc = now.AddHours(1),
         };
         return new AuthorityRows(context, membership, assignment, session);
+    }
+
+    private async Task ResetApiScopeAsync()
+    {
+        await _context.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
+        await _context.Db.Database.CloseConnectionAsync();
     }
 
     private static ApplicationUser User(string email, string displayName) => new()

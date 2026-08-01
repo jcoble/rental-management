@@ -8,5 +8,7 @@ export function propertyUpdateFields<
 		ownerEntityId: _ownerSelectionField,
 		...mutableFields
 	} = property;
-	return mutableFields;
+	const payload: Record<string, unknown> = { ...mutableFields };
+	if (payload.addressLine2 === null) payload.addressLine2 = '';
+	return payload as Omit<T, 'rentalStructure' | 'ownerEntityId'>;
 }

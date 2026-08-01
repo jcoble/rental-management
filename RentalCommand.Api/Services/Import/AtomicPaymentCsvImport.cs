@@ -1,17 +1,24 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Import;
+using RentalCommand.Data.Import;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Import;
 
 public sealed record AtomicPaymentCsvImportCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     string ImportOperationDigest,
     string RowsJson) : IAtomicCommandData;
@@ -21,7 +28,7 @@ public sealed record AtomicPaymentCsvImportResult(
     int TotalRows,
     int ValidRows,
     int CreatedRows,
-    int DuplicateRows) : IAtomicResultData;
+    int DuplicateRows);
 
 public static class AtomicPaymentCsvImport
 {
@@ -35,28 +42,28 @@ public static class AtomicPaymentCsvImport
 
 /// <summary>One receipt-backed payment CSV command; PostgreSQL owns the entire row set.</summary>
 public sealed class AtomicPaymentCsvImportHandler
-    : IAtomicCommandHandler<AtomicPaymentCsvImportCommand, AtomicPaymentCsvImportResult>,
-      IAtomicReplayAuthorizer<AtomicPaymentCsvImportCommand>
+    : IAtomicCommandHandler<AtomicPaymentCsvImportCommand, AtomicPaymentCsvImportResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicPaymentCsvImportHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicPaymentCsvImportResult> HandleAsync(
         AtomicPaymentCsvImportCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var batch = await attempt.PaymentCsvImports.ImportAsync(Scope(command), command.RowsJson, now, ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        var batch = await AtomicPaymentCsvImportPersistence.ImportAsync(
+            _db, attempt, Scope(command), command.RowsJson, now, ct);
         if (!batch.Authorized)
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
-
-        var createdEntryIds = Array.ConvertAll(
-            batch.CreatedRows.ToArray(), row => row.CreatedId!.Value);
-        await attempt.TenantMoney.AllocateImportedReceiptsAsync(createdEntryIds, now, ct);
 
         foreach (var row in batch.CreatedRows)
         {
@@ -93,28 +100,28 @@ public sealed class AtomicPaymentCsvImportHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicPaymentCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         AtomicPaymentCsvImportCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        persistence.Query<AuthSession>().AsNoTracking().AnyAsync(session =>
+        db.Set<AuthSession>().AsNoTracking().AnyAsync(session =>
             session.Id == command.AuthSessionId
             && session.UserId == command.ActorUserId
             && session.ActiveAccessContextId == command.AccessContextId
             && session.Status == AuthSessionStatus.Active
             && session.RevokedAtUtc == null
             && session.ExpiresAtUtc > now
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -122,7 +129,7 @@ public sealed class AtomicPaymentCsvImportHandler
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().Any(membership =>
+            && db.Set<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == command.AccessContextId
                 && membership.PortfolioId == command.PortfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -130,7 +137,7 @@ public sealed class AtomicPaymentCsvImportHandler
                 && membership.RevokedAtUtc == null
                 && membership.EffectiveFromUtc <= now
                 && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
-                && persistence.Query<MembershipRoleAssignment>().Any(assignment =>
+                && db.Set<MembershipRoleAssignment>().Any(assignment =>
                     assignment.WorkspaceMembershipId == membership.Id
                     && assignment.PortfolioId == command.PortfolioId
                     && assignment.Status == MembershipRoleAssignmentStatus.Active
@@ -143,11 +150,11 @@ public sealed class AtomicPaymentCsvImportHandler
                         && grant.CapabilityDefinition.AuthorizationTargetKind ==
                            CapabilityAuthorizationTargetKind.Property))), ct);
 
-    private static WorkspaceReadScope Scope(AtomicPaymentCsvImportCommand command) => new(
+    private WorkspaceReadScope Scope(AtomicPaymentCsvImportCommand command) => new(
         command.PortfolioId, command.ActorUserId, command.AuthSessionId,
         command.AccessContextId, command.ExpectedAccessRevision);
 
-    private static void Validate(AtomicPaymentCsvImportCommand command)
+    private void Validate(AtomicPaymentCsvImportCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0

@@ -331,6 +331,62 @@ void main() {
     expect(find.text('Blue Door Holdings'), findsOneWidget);
   });
 
+  testWidgets('property owner row fits a 360px edit sheet', (tester) async {
+    const ownerName = 'Northstar Property Partners LLC';
+    final repo = _FakePropertiesRepository(
+      ownerOptions: const [PropertyOwnerOption(id: 42, name: ownerName)],
+    );
+
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [propertiesRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showPropertyFormSheet(
+                  context,
+                  property: _property(
+                    type: 'SingleFamily',
+                    ownerName: ownerName,
+                  ),
+                ),
+                child: const Text('Edit property'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Edit property'));
+    await tester.pumpAndSettle();
+
+    final ownerField = find.byKey(const Key('property-owner-field'));
+    final addOwnerButton = find.byKey(const Key('property-owner-add-button'));
+    final editOwnerButton = find.byKey(const Key('property-owner-edit-button'));
+
+    expect(tester.takeException(), isNull);
+    expect(ownerField, findsOneWidget);
+    expect(addOwnerButton, findsOneWidget);
+    expect(editOwnerButton, findsOneWidget);
+    expect(
+      tester.getRect(ownerField).right,
+      lessThan(tester.getRect(addOwnerButton).left),
+    );
+    expect(
+      tester.getRect(editOwnerButton).right,
+      lessThanOrEqualTo(tester.getSize(find.byType(MaterialApp)).width),
+    );
+
+    final selectedOwner = tester.widget<Text>(find.text(ownerName));
+    expect(selectedOwner.maxLines, 1);
+    expect(selectedOwner.overflow, TextOverflow.ellipsis);
+  });
+
   testWidgets('property edit omits creation-only rental structure', (
     tester,
   ) async {
@@ -371,14 +427,16 @@ void main() {
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {
-  _FakePropertiesRepository() : super(Dio());
+  _FakePropertiesRepository({
+    this.ownerOptions = const [
+      PropertyOwnerOption(id: 42, name: 'North Coast Holdings'),
+    ],
+  }) : super(Dio());
 
   Map<String, dynamic>? createdPayload;
   Map<String, dynamic>? updatedPayload;
   final setupUnits = <Map<String, dynamic>>[];
-  final ownerOptions = <PropertyOwnerOption>[
-    const PropertyOwnerOption(id: 42, name: 'North Coast Holdings'),
-  ];
+  final List<PropertyOwnerOption> ownerOptions;
 
   @override
   Future<List<PropertyOwnerOption>> listOwnerOptions() async => ownerOptions;
@@ -474,6 +532,7 @@ class _FakeOwnersRepository extends OwnersRepository {
 Property _property({
   required String type,
   RentalStructure rentalStructure = RentalStructure.singleRental,
+  String ownerName = 'North Coast Holdings',
 }) {
   return Property(
     id: 1,
@@ -482,11 +541,11 @@ Property _property({
       PropertyOwnership(
         id: 17,
         ownerEntityId: 42,
-        ownerName: 'North Coast Holdings',
+        ownerName: ownerName,
         ownershipSharePercent: 100,
         effectiveFromUtc: DateTime(2026),
-        statementRecipientName: 'North Coast Holdings',
-        payeeName: 'North Coast Holdings',
+        statementRecipientName: ownerName,
+        payeeName: ownerName,
       ),
     ],
     name: 'Vineyard Flats',

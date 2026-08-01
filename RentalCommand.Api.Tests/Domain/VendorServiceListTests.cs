@@ -65,6 +65,34 @@ public class VendorServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_AllowsSelectedPropertyManagerScope()
+    {
+        var property = SeedProperty("Zenith Duplex");
+        var scope = _ctx.Db.SeedPropertyManagerScope(
+            PortfolioId,
+            property.Id,
+            nameof(ListPageAsync_AllowsSelectedPropertyManagerScope));
+        SeedVendor("Summit Roofing", "Roofing");
+        var sut = new VendorService(
+            _ctx.Db,
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAtomicUnitOfWork>(),
+            new FrozenTimeProvider(new DateTimeOffset(2027, 1, 25, 5, 0, 0, TimeSpan.Zero)));
+
+        _commands.Clear();
+        var result = await sut.ListPageAsync(scope, new ListQuery
+        {
+            Sort = "name",
+            Take = 10,
+        });
+
+        result.Items.Select(vendor => vendor.Name).Should().Contain("Summit Roofing");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Vendors\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase));
+    }
+
     private void SeedVendor(
         string name,
         string serviceType,
@@ -90,6 +118,25 @@ public class VendorServiceListTests : IDisposable
         _ctx.Db.SaveChanges();
     }
 
+    private Property SeedProperty(string name)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "525 Zenith Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43225",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {
         public override InterceptionResult<DbDataReader> ReaderExecuting(
@@ -110,5 +157,10 @@ public class VendorServiceListTests : IDisposable
             commands.Add(command.CommandText);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

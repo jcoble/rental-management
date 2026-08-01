@@ -32,6 +32,8 @@ public class ScanServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly MutableTimeProvider _timeProvider = new(new DateTimeOffset(
+        new DateTime(2027, 2, 1, 5, 0, 0, DateTimeKind.Utc)));
     private readonly ScanService _sut;
     private readonly WorkspaceReadScope _scope;
 
@@ -66,7 +68,7 @@ public class ScanServiceTests : IDisposable
             _db,
             new ScanRejectAtomicUnitOfWork(_db),
             NullLogger<ScanService>.Instance,
-            TimeProvider.System);
+            _timeProvider);
     }
 
     public void Dispose()
@@ -115,92 +117,49 @@ public class ScanServiceTests : IDisposable
                 take: 20)
             .ToQueryString());
 
-        AssertPropertyAuthorizationShape(technicianSql, "w1");
+        technicianSql.Should().Contain(
+            "public.rc_api_effective_capability_scopes(",
+            Exactly.Twice());
+        technicianSql.Should().Contain("maintenance.assigned-work.update");
+        technicianSql.Should().Contain("work.manage");
+        technicianSql.Should().Contain("'Property'");
+        technicianSql.Should().Contain("'WorkOrder'");
         AssertSqlContains(
             technicianSql,
             """
-            ) AS s8 ON m2."WorkspaceMembershipId" = s8."Id"
-                AND m2."PortfolioId" = s8."PortfolioId"
-            INNER JOIN "RoleProfiles" AS r1 ON m2."RoleProfileId" = r1."Id"
+            r."ScopeKind" = 'AllProperties'
+                OR (r."ScopeKind" = 'SelectedProperties' AND r."PropertyId" = w."PropertyId")
             """);
+        technicianSql.Should().Contain("""r0."ScopeKind" = 'AssignedWorkOrders'""");
         AssertSqlContains(
             technicianSql,
             """
-            m2."ScopeKind" = 'AssignedWorkOrders'
-                AND m2."Status" = 'Active'
-                AND m2."SuspendedAtUtc" IS NULL
-                AND m2."RevokedAtUtc" IS NULL
-                AND m2."EffectiveFromUtc" <= @utcNow
-                AND (m2."EffectiveToUtc" IS NULL OR m2."EffectiveToUtc" > @utcNow)
-                AND s8."AccessContextId" = @scope_AccessContextId
-                AND s8."PortfolioId" = @scope_PortfolioId
-                AND s8."Status" = 'Active'
-                AND s8."SuspendedAtUtc" IS NULL
-                AND s8."RevokedAtUtc" IS NULL
-                AND s8."EffectiveFromUtc" <= @utcNow
-                AND (s8."EffectiveToUtc" IS NULL OR s8."EffectiveToUtc" > @utcNow)
-                AND s8."UserId" = @scope_UserId
-                AND s8."AccessRevision" = @scope_AccessRevision
-                AND s8."Status0" = 'Active'
-                AND s8."SuspendedAtUtc0" IS NULL
-                AND s8."RevokedAtUtc0" IS NULL
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            ) AS s9 ON a0."ActiveAccessContextId" = s9."Id" AND a0."UserId" = s9."UserId"
-            WHERE s9."DeletedAt" IS NULL
-                AND a0."Id" = @scope_SessionId
-                AND a0."UserId" = @scope_UserId
-                AND a0."ActiveAccessContextId" = @scope_AccessContextId
-                AND a0."Status" = 'Active'
-                AND a0."RevokedAtUtc" IS NULL
-                AND a0."ExpiresAtUtc" > @utcNow
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            FROM "RoleProfileCapabilities" AS r2
-            INNER JOIN "CapabilityDefinitions" AS c0
-                ON r2."CapabilityDefinitionId" = c0."Id"
-            WHERE r1."Id" = r2."RoleProfileId"
-                AND c0."Key" = ANY (@keys)
-                AND c0."AuthorizationTargetKind" = 'WorkOrder'
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            FROM "WorkOrderResponsibilities" AS w10
+            FROM "WorkOrderResponsibilities" AS w0
             INNER JOIN (
-                SELECT w11."Id", w11."DeletedAt", w11."PortfolioId", w11."PropertyId"
-                FROM "WorkOrders" AS w11
-                WHERE w11."DeletedAt" IS NULL
-            ) AS w12 ON w10."WorkOrderId" = w12."Id"
-                AND w10."PropertyId" = w12."PropertyId"
-                AND w10."PortfolioId" = w12."PortfolioId"
+                SELECT w1."Id", w1."DeletedAt", w1."PortfolioId", w1."PropertyId"
+                FROM "WorkOrders" AS w1
+                WHERE w1."DeletedAt" IS NULL
+            ) AS w2 ON w0."WorkOrderId" = w2."Id"
+                AND w0."PropertyId" = w2."PropertyId"
+                AND w0."PortfolioId" = w2."PortfolioId"
             """);
         AssertSqlContains(
             technicianSql,
             """
-            w."Id" = w10."WorkOrderId"
-                AND w."PropertyId" = w10."PropertyId"
-                AND w."PortfolioId" = w10."PortfolioId"
-                AND w10."PortfolioId" = w."PortfolioId"
-                AND w10."WorkspaceMembershipId" = m2."WorkspaceMembershipId"
-                AND w10."MembershipRoleAssignmentId" = m2."Id"
-                AND w10."EffectiveFromUtc" <= @utcNow
-                AND (w10."EffectiveToUtc" IS NULL OR w10."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            p."Id" = w."PropertyId" AND p."PortfolioId" = w."PortfolioId"
+            w."Id" = w0."WorkOrderId"
+                AND w."PropertyId" = w0."PropertyId"
+                AND w."PortfolioId" = w0."PortfolioId"
+                AND w0."PortfolioId" = w."PortfolioId"
+                AND w0."WorkspaceMembershipId" = r0."WorkspaceMembershipId"
+                AND w0."MembershipRoleAssignmentId" = r0."AssignmentId"
+                AND w0."EffectiveFromUtc" <= @utcNow
+                AND (w0."EffectiveToUtc" IS NULL OR w0."EffectiveToUtc" > @utcNow)
             """);
         AssertSqlContains(
             technicianSql,
             """
             w."Title" ILIKE @pattern ESCAPE ''
-                OR p17."Name" ILIKE @pattern ESCAPE ''
+                OR p2."Name" ILIKE @pattern ESCAPE ''
                 OR (u0."Id" IS NOT NULL AND u0."UnitNumber" ILIKE @pattern ESCAPE '')
             """);
         AssertSqlContains(
@@ -210,7 +169,17 @@ public class ScanServiceTests : IDisposable
             LIMIT @p OFFSET @p
             """);
 
-        AssertPropertyAuthorizationShape(targetSql, "w0");
+        targetSql.Should().Contain(
+            "public.rc_api_effective_capability_scopes(",
+            Exactly.Once());
+        targetSql.Should().Contain("rentals.manage");
+        targetSql.Should().Contain("'Property'");
+        AssertSqlContains(
+            targetSql,
+            """
+            r."ScopeKind" = 'AllProperties'
+                OR (r."ScopeKind" = 'SelectedProperties' AND r."PropertyId" = p."Id")
+            """);
         AssertSqlContains(
             targetSql,
             """
@@ -233,115 +202,6 @@ public class ScanServiceTests : IDisposable
             """
             ORDER BY p."Name", u0."UnitNumber", u0."Id"
             LIMIT @p OFFSET @p
-            """);
-    }
-
-    private static void AssertPropertyAuthorizationShape(string sql, string membershipAlias)
-    {
-        AssertSqlContains(
-            sql,
-            """
-            FROM "AuthSessions" AS a
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s ON a."ActiveAccessContextId" = s."Id" AND a."UserId" = s."UserId"
-            LEFT JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            $"""
-            FROM "WorkspaceMemberships" AS {membershipAlias}
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s1 ON s."Id" = s1."AccessContextId"
-                AND s."PortfolioId" = s1."PortfolioId"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            a."Id" = @scope_SessionId
-                AND a."UserId" = @scope_UserId
-                AND a."ActiveAccessContextId" = @scope_AccessContextId
-                AND a."Status" = 'Active'
-                AND a."RevokedAtUtc" IS NULL
-                AND a."ExpiresAtUtc" > @utcNow
-                AND s."Id" = @scope_AccessContextId
-                AND s."UserId" = @scope_UserId
-                AND s."PortfolioId" = @scope_PortfolioId
-                AND s."AccessRevision" = @scope_AccessRevision
-                AND s."Status" = 'Active'
-                AND s."SuspendedAtUtc" IS NULL
-                AND s."RevokedAtUtc" IS NULL
-                AND s1."Id" IS NOT NULL
-                AND s1."PortfolioId" = p."PortfolioId"
-                AND s1."Status" = 'Active'
-                AND s1."SuspendedAtUtc" IS NULL
-                AND s1."RevokedAtUtc" IS NULL
-                AND s1."EffectiveFromUtc" <= @utcNow
-                AND (s1."EffectiveToUtc" IS NULL OR s1."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            FROM "MembershipRoleAssignments" AS m
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s3 ON m."WorkspaceMembershipId" = s3."Id"
-                AND m."PortfolioId" = s3."PortfolioId"
-            INNER JOIN "RoleProfiles" AS r ON m."RoleProfileId" = r."Id"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            s1."Id" = m."WorkspaceMembershipId"
-                AND s1."PortfolioId" = m."PortfolioId"
-                AND m."PortfolioId" = p."PortfolioId"
-                AND m."Status" = 'Active'
-                AND m."SuspendedAtUtc" IS NULL
-                AND m."RevokedAtUtc" IS NULL
-                AND m."EffectiveFromUtc" <= @utcNow
-                AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            FROM "RoleProfileCapabilities" AS r0
-            INNER JOIN "CapabilityDefinitions" AS c
-                ON r0."CapabilityDefinitionId" = c."Id"
-            WHERE r."Id" = r0."RoleProfileId"
-                AND c."Key" = ANY (@keys)
-                AND c."AuthorizationTargetKind" = 'Property'
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            m."ScopeKind" = 'AllProperties'
-                OR (m."ScopeKind" = 'SelectedProperties' AND EXISTS (
-                SELECT 1
-                FROM "MembershipRoleAssignmentProperties" AS m0
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS p7 ON m0."PropertyId" = p7."Id"
-                AND m0."PortfolioId" = p7."PortfolioId"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            m."Id" = m0."MembershipRoleAssignmentId"
-                AND m."PortfolioId" = m0."PortfolioId"
-                AND m0."PortfolioId" = p."PortfolioId"
-                AND m0."PropertyId" = p."Id"
             """);
     }
 
@@ -465,7 +325,7 @@ public class ScanServiceTests : IDisposable
             draft.Id,
             userId: 7,
             overridesJson:
-                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","monthlyRent":1250,"rentDueDay":1}""");
+                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","possessionGivenAtUtc":"2026-08-01","monthlyRent":1250,"rentDueDay":1,"rentTrackingStartMode":"ForwardOnly"}""");
 
         result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
         result.Command.Should().NotBeNull();
@@ -481,6 +341,165 @@ public class ScanServiceTests : IDisposable
         command.Target.LeaseAgreement.LeaseManagementId.Should().Be(56);
         command.Target.LeaseAgreement.TenantAccountId.Should().Be(78);
         command.Target.LeaseAgreement.DocumentTemplateId.Should().BeNull();
+        command.Target.LeaseAgreement.RentTrackingStartMode.Should()
+            .Be(RentTrackingStartMode.ForwardOnly);
+        command.Target.LeaseAgreement.RentTrackingStartOn.Should().BeNull();
+        command.Target.LeaseAgreement.PossessionGivenAtUtc.Should()
+            .Be(new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_ContinuingLeaseTarget_RequiresExplicitRentTrackingChoice()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 7,
+            UserName = "continuing-scan-reviewer@example.test",
+            NormalizedUserName = "CONTINUING-SCAN-REVIEWER@EXAMPLE.TEST",
+            Email = "continuing-scan-reviewer@example.test",
+            NormalizedEmail = "CONTINUING-SCAN-REVIEWER@EXAMPLE.TEST",
+            DisplayName = "Continuing Scan Reviewer",
+        });
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Continuing Lease Property",
+            AddressLine1 = "12 Test Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "A",
+        });
+        _db.LeaseManagements.Add(new LeaseManagement
+        {
+            Id = 56,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitId = 34,
+            RelationshipNumber = "LM-TEST-56",
+            CreatedByUserId = 7,
+        });
+        _db.TenantAccounts.Add(new TenantAccount
+        {
+            Id = 78,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = 56,
+            AccountNumber = "TA-TEST-78",
+            Currency = "USD",
+            CreatedByUserId = 7,
+        });
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        await _db.SaveChangesAsync();
+
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","monthlyRent":1250,"rentDueDay":1}""");
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*rent starts today*");
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_PreservesCustomRentTrackingChoice()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"reviewDisposition":"AlreadyFullySigned","rentTrackingStartMode":"CustomCutoffDate","rentTrackingStartOn":"2026-06-20"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command!.Target.LeaseAgreement!.RentTrackingStartMode.Should()
+            .Be(RentTrackingStartMode.CustomCutoffDate);
+        result.Command.Target.LeaseAgreement.RentTrackingStartOn.Should()
+            .Be(new DateOnly(2026, 6, 20));
+    }
+
+    [Fact]
+    public async Task LeaseImport_RejectsConflictingExtractedIdsBeforePreviewAndConfirmation()
+    {
+        var draft = SeedDraft(
+            "Reviewing",
+            extractedFields:
+                """
+                {
+                  "property_id":{"value":"12"},
+                  "unit_id":{"value":"34"},
+                  "property_name":{"value":"York Duplex"},
+                  "property_address":{"value":"508 York Street"},
+                  "property_city":{"value":"Columbus"},
+                  "unit_number":{"value":"A"}
+                }
+                """,
+            targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Walnut Duplex",
+            AddressLine1 = "491 Walnut Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43223",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "B",
+        });
+        await _db.SaveChangesAsync();
+
+        var proposal = await _sut.BuildLeaseProposalAsync(
+            PortfolioId, draft.Id, overridesJson: "{}");
+        var preparation = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson: """{"reviewDisposition":"AlreadyFullySigned"}""");
+
+        proposal.Should().NotBeNull();
+        proposal!.Property.Action.Should().Be("select");
+        proposal.Property.ExistingId.Should().BeNull();
+        proposal.Property.Label.Should().Be("York Duplex");
+        proposal.Unit.Action.Should().Be("select");
+        proposal.Unit.ExistingId.Should().BeNull();
+        preparation.Command!.Target.LeaseAgreement!.PropertyId.Should().Be(0);
+        preparation.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_CustomRentTrackingRequiresDate()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"reviewDisposition":"AlreadyFullySigned","rentTrackingStartMode":"CustomCutoffDate"}""");
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*custom date*");
     }
 
     [Fact]
@@ -493,6 +512,257 @@ public class ScanServiceTests : IDisposable
 
         await action.Should().ThrowAsync<ScanConfirmationValidationException>()
             .WithMessage("*AlreadyFullySigned*NeedsSignatures*");
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitCreateSentinelsClearCaptureContext()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Captured Property",
+            AddressLine1 = "12 Capture Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Captured",
+        });
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        await _db.SaveChangesAsync();
+        // These tracked values model the remaining Unit command-center context.
+        // They need not be valid targets because an explicit premises choice
+        // must clear them before the sealed command is created.
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        draft.CaptureLeaseAgreementId = 90;
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"rentalStructure":"MultiRental","reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(0);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseManagementId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.TenantAccountId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseAgreementId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitNewUnitClearsCapturedUnit()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Captured Property",
+            AddressLine1 = "12 Capture Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Captured",
+        });
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        await _db.SaveChangesAsync();
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        draft.CaptureLeaseAgreementId = 90;
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"unitId":0,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(21);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseManagementId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.TenantAccountId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseAgreementId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_PropertyOverrideClearsExtractedUnitFromAnotherProperty()
+    {
+        var draft = SeedDraft(
+            "Reviewing",
+            extractedFields:
+                """{"property_id":{"value":"12"},"unit_id":{"value":"34"}}""",
+            targetEntityType: "LeaseAgreement");
+        _db.Properties.AddRange(
+            new Property
+            {
+                Id = 12,
+                PortfolioId = PortfolioId,
+                Name = "Extracted Property",
+                AddressLine1 = "12 Extracted Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            },
+            new Property
+            {
+                Id = 21,
+                PortfolioId = PortfolioId,
+                Name = "Selected Property",
+                AddressLine1 = "21 Selected Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Extracted",
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(21);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_RejectsExplicitUnitFromAnotherProperty()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.AddRange(
+            new Property
+            {
+                Id = 12,
+                PortfolioId = PortfolioId,
+                Name = "Unit Property",
+                AddressLine1 = "12 Unit Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            },
+            new Property
+            {
+                Id = 21,
+                PortfolioId = PortfolioId,
+                Name = "Selected Property",
+                AddressLine1 = "21 Selected Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Wrong property",
+        });
+        await _db.SaveChangesAsync();
+
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"unitId":34,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*selected Unit*selected Property*");
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseEndingNoticeTarget_SealsEndingWorkflowCommand()
+    {
+        var draft = SeedDraft(
+            "Reviewing",
+            """
+            {
+              "lease_management_id": {"value":"56","confidence":0.93},
+              "unit_id": {"value":"34","confidence":0.94},
+              "notice_given_date": {"value":"2027-01-14","confidence":0.92},
+              "planned_move_out_date": {"value":"2027-02-28","confidence":0.9},
+              "notice_type": {"value":"tenant non-renewal notice","confidence":0.95},
+              "reason": {"value":"Tenant will not renew.","confidence":0.88}
+            }
+            """,
+            targetEntityType: "LeaseEndingNotice");
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 44,
+            PortfolioId = PortfolioId,
+            FileName = "scn-0935.pdf",
+            FilePath = "uploads/scn-0935.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1024,
+        });
+        draft.SourceStoredFileId = 44;
+        draft.SourceContentSha256 = new string('b', 64);
+        draft.SourceLabel = "SCN-0935";
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"noticeGivenDate":"2027-01-15","plannedMoveOutDate":"2027-03-01","reason":"Reviewed tenant notice."}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        var command = result.Command!;
+        command.SourceStoredFileId.Should().Be(44);
+        command.SourceContentSha256.Should().Be(new string('b', 64));
+        command.SourceLabel.Should().Be("SCN-0935");
+        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.LeaseEndingNotice);
+        command.Target.LeaseEndingNotice.Should().NotBeNull();
+        var notice = command.Target.LeaseEndingNotice!;
+        notice.LeaseManagementId.Should().Be(56);
+        notice.UnitId.Should().Be(34);
+        notice.NoticeGivenAtUtc.Should().Be(new DateTime(2027, 1, 15, 0, 0, 0, DateTimeKind.Utc));
+        notice.PlannedMoveOutAtUtc.Should().Be(new DateTime(2027, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+        notice.NoticeType.Should().Be("tenant non-renewal notice");
+        notice.Reason.Should().Be("Reviewed tenant notice.");
+        command.ExpectedDraftFingerprint.Should().Be(
+            ScanConfirmationDraftFingerprint.Create(
+                "LeaseEndingNotice",
+                sourceStoredFileId: 44,
+                extractedFields: draft.ExtractedFields,
+                sourceContentSha256: new string('b', 64),
+                sourceLabel: "SCN-0935"));
     }
 
     [Fact]
@@ -524,6 +794,7 @@ public class ScanServiceTests : IDisposable
         var rejectedDraft = await _db.ScanDrafts.AsNoTracking()
             .SingleAsync(candidate => candidate.Id == draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
+        rejectedDraft.ReviewedAt.Should().Be(_timeProvider.GetUtcNow().UtcDateTime);
         rejectedDraft.ReviewedBy.Should().Be("3");
         rejectedDraft.FailureReason.Should().Be("Not a valid receipt");
 
@@ -556,12 +827,12 @@ public class ScanServiceTests : IDisposable
     {
         var draft = new ScanDraft
         {
-            PortfolioId      = PortfolioId,
-            FilePath         = $"uploads/test-{Guid.NewGuid():N}.jpg",
+            PortfolioId = PortfolioId,
+            FilePath = $"uploads/test-{Guid.NewGuid():N}.jpg",
             TargetEntityType = targetEntityType,
-            Status           = status,
-            ExtractedFields  = extractedFields,
-            CreatedAt        = DateTime.UtcNow,
+            Status = status,
+            ExtractedFields = extractedFields,
+            CreatedAt = DateTime.UtcNow,
         };
         _db.ScanDrafts.Add(draft);
         _db.SaveChanges();
@@ -577,7 +848,7 @@ public class ScanServiceTests : IDisposable
         public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
@@ -588,17 +859,25 @@ public class ScanServiceTests : IDisposable
             if (rejected)
             {
                 draft.Status = "Rejected";
-                draft.ReviewedAt = DateTime.UtcNow;
+                draft.ReviewedAt = reject.ReviewedAtUtc;
                 draft.ReviewedBy = reject.UserId.ToString();
                 if (!string.IsNullOrWhiteSpace(reject.Reason)) draft.FailureReason = reject.Reason;
                 await db.SaveChangesAsync(ct);
             }
-            var result = new RejectScanDraftResult(rejected, reject.DraftId);
+            var result = new RejectScanDraftResult(
+                rejected,
+                reject.DraftId,
+                rejected ? reject.ReviewedAtUtc : null);
             return new AtomicCommandOutcome<TResult>(
                 (TResult)(object)result,
                 AtomicCommandDisposition.Executed,
                 Guid.NewGuid());
         }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
 

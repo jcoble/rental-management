@@ -87,6 +87,10 @@ export interface LeaseAgreementEffectiveAddendumSeries {
   series: LeaseAgreementEffectiveAddendumSeriesItem[];
 }
 
+export interface PrepareMoveInContextResponse {
+  businessDate: string;
+}
+
 export interface LeaseAgreementDraftSigner {
   leaseAgreementSignerId: number;
   leaseManagementPartyId: number | null;
@@ -162,6 +166,7 @@ export interface CreateLeaseAgreementSuccessorDraftRequest {
   termStartOn: string;
   termEndOn: string | null;
   governingFromOn: string;
+  documentTemplateId: number | null;
   addendumDecisions: Array<{
     sourceAddendumSeriesPublicId: string;
     decision: LeaseRenewalAddendumDecisionType;
@@ -264,7 +269,14 @@ export interface LeaseAgreementSignatureProgress {
 }
 
 export interface PrepareMoveInPartyRequest {
-  tenantId: number;
+  tenantId: number | null;
+  newTenant: {
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string | null;
+    emergencyContact: string | null;
+  } | null;
   role: LeaseManagementPartyRole;
   guarantorLegalNoticeEligible: boolean;
   changeReason: string;
@@ -274,7 +286,7 @@ export interface PrepareMoveInPartyRequest {
 }
 
 export interface PrepareMoveInRequest {
-  applicationId: number;
+  applicationId: number | null;
   unitId: number;
   plannedPossessionAtUtc: string | null;
   partyEffectiveFrom: string;
@@ -288,6 +300,8 @@ export interface PrepareMoveInRequest {
   securityDepositObligation: number;
   lateFeeAmount: number;
   gracePeriodDays: number;
+  rentTrackingStartMode: "BackfillFromLeaseStart" | "ForwardOnly" | "CustomCutoffDate";
+  rentTrackingStartOn: string | null;
   termsSchemaVersion: number;
   termsPayload: Record<string, unknown>;
   createSecurityDepositAccount: boolean;
@@ -297,7 +311,7 @@ export interface PrepareMoveInRequest {
 }
 
 export interface PrepareMoveInResponse {
-  applicationId: number;
+  applicationId: number | null;
   leaseManagementId: number;
   tenantAccountId: number;
   leaseAgreementId: number;
@@ -367,6 +381,18 @@ export interface GivePossessionRequest {
 }
 
 export interface GivePossessionResponse {
+  leaseManagementId: number;
+  unitId: number;
+  possessionGivenAtUtc: string;
+  replayed: boolean;
+}
+
+export interface ReconcileHistoricalPossessionRequest {
+  unitId: number;
+  possessionGivenOn: string;
+}
+
+export interface ReconcileHistoricalPossessionResponse {
   leaseManagementId: number;
   unitId: number;
   possessionGivenAtUtc: string;
@@ -537,6 +563,9 @@ export interface ReturnPossessionActiveTenantUserAccess {
   userEmail: string;
   grantedAtUtc: string;
   reason: string;
+  requiresAccountActivation?: boolean;
+  hasPendingActivationInvitation?: boolean;
+  isPortalLoginReady?: boolean;
 }
 
 export interface LeaseManagementPageParams {
@@ -604,6 +633,10 @@ function lifecycleActionJson<T>(
 }
 
 export const leaseManagements = {
+  prepareMoveInContext: () =>
+    api.get<PrepareMoveInContextResponse>(
+      "/lease-managements/prepare-move-in-context"
+    ),
   prepareMoveIn: (request: PrepareMoveInRequest, operationKey: string) =>
     fetchApi<PrepareMoveInResponse>("/lease-managements/prepare-move-in", {
       method: "POST",
@@ -670,6 +703,17 @@ export const leaseManagements = {
   ) =>
     idempotentJson<GivePossessionResponse>(
       `/lease-managements/${leaseManagementId}/give-possession`,
+      "POST",
+      request,
+      operationKey
+    ),
+  reconcileHistoricalPossession: (
+    leaseManagementId: number,
+    request: ReconcileHistoricalPossessionRequest,
+    operationKey: string
+  ) =>
+    idempotentJson<ReconcileHistoricalPossessionResponse>(
+      `/lease-managements/${leaseManagementId}/reconcile-historical-possession`,
       "POST",
       request,
       operationKey

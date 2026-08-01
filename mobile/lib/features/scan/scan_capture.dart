@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 
@@ -116,23 +118,20 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     String filename,
     String contentType,
   ) {
-    var hash = 0x811c9dc5;
-    for (final byte in bytes) {
-      hash = ((hash ^ byte) * 0x01000193) & 0xffffffff;
-    }
-    return '$filename|$contentType|${bytes.length}|${hash.toRadixString(16)}';
+    return '$filename|$contentType|${bytes.length}|${sha256.convert(bytes)}';
   }
 
   Future<void> _pick(ImageSource source) async {
+    _uploadOperation.cancel();
     final picker = ImagePicker();
-    final XFile? picked = await picker.pickImage(
-      source: source,
-      // Documents only need enough resolution for legible text + extraction;
-      // smaller files upload/store/retrieve faster and decode cheaper on-device.
-      imageQuality: 80,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
+    // Gallery documents may be multi-page scans composited into one tall image.
+    // A maxHeight silently reduced a 6,605px scan to 1,600px (only 165px wide),
+    // making its text unreadable before it ever reached extraction. Preserve
+    // selected document bytes; camera captures may still use JPEG compression,
+    // but must retain their original dimensions.
+    final XFile? picked = source == ImageSource.gallery
+        ? await picker.pickImage(source: source)
+        : await picker.pickImage(source: source, imageQuality: 90);
     if (picked == null) return; // user cancelled
 
     await _uploadBytes(
@@ -143,6 +142,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 
   Future<void> _pickFile() async {
+    _uploadOperation.cancel();
+    await FilePicker.platform.clearTemporaryFiles().catchError((_) => false);
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
@@ -158,11 +159,10 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 
   Future<void> _pickDocumentPages() async {
-    final picked = await ImagePicker().pickMultiImage(
-      imageQuality: 80,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
+    _uploadOperation.cancel();
+    // Preserve page resolution for OCR/extraction. The PDF stitcher controls
+    // the rendered page size without discarding source pixels.
+    final picked = await ImagePicker().pickMultiImage();
     if (picked.isEmpty) return;
     try {
       final pages = <Uint8List>[];
@@ -365,6 +365,12 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     setState(() => _captureContext = choice.context);
   }
 
+  void _openScanHistory() {
+    final router = GoRouter.of(context);
+    Navigator.of(context).pop();
+    unawaited(router.push<void>('/scans'));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -449,6 +455,14 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              if (!widget.lockTargetEntityType) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  icon: const Icon(Icons.history_outlined),
+                  label: const Text('View scan history'),
+                  onPressed: _openScanHistory,
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Container(

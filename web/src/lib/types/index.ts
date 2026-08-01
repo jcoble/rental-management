@@ -1,19 +1,69 @@
 export type PortfolioStatus = 'Onboarding' | 'Active' | 'Archived';
-export type PropertyType = 'SingleFamily' | 'MultiFamily' | 'Condo' | 'Townhome' | 'Commercial' | 'MixedUse';
+export type PropertyType =
+	| 'SingleFamily'
+	| 'MultiFamily'
+	| 'Condo'
+	| 'Townhome'
+	| 'Commercial'
+	| 'MixedUse';
 export type RentalStructure = 'SingleRental' | 'MultiRental';
 export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type DerivedUnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
-export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
+export type LeaseStatus =
+	| 'Draft'
+	| 'PendingSignature'
+	| 'Active'
+	| 'NoticeGiven'
+	| 'Expired'
+	| 'Terminated';
 export type EsignStatus = 'None' | 'Sent' | 'Signed' | 'Declined';
-export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
-export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived' | 'Failed' | 'Refunded';
-export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid' | 'Rejected' | 'Draft';
+export type PaymentType =
+	| 'Rent'
+	| 'SecurityDeposit'
+	| 'LateFee'
+	| 'Utility'
+	| 'Other';
+export type PaymentStatus =
+	| 'Scheduled'
+	| 'Paid'
+	| 'Partial'
+	| 'Late'
+	| 'Waived'
+	| 'Failed'
+	| 'Refunded';
+export type ExpenseStatus =
+	| 'Pending'
+	| 'Approved'
+	| 'Paid'
+	| 'Rejected'
+	| 'Draft';
 export type WorkOrderPriority = 'Low' | 'Normal' | 'High' | 'Emergency';
-export type WorkOrderStatus = 'New' | 'Scheduled' | 'InProgress' | 'WaitingParts' | 'Completed' | 'Cancelled';
-export type AppointmentType = 'Showing' | 'MoveIn' | 'MoveOut' | 'Inspection' | 'MaintenanceVisit' | 'OwnerMeeting';
-export type AppointmentStatus = 'Scheduled' | 'Confirmed' | 'Completed' | 'Cancelled' | 'NoShow';
+export type WorkOrderStatus =
+	| 'New'
+	| 'Scheduled'
+	| 'InProgress'
+	| 'WaitingParts'
+	| 'Completed'
+	| 'Cancelled';
+export type AppointmentType =
+	| 'Showing'
+	| 'MoveIn'
+	| 'MoveOut'
+	| 'Inspection'
+	| 'MaintenanceVisit'
+	| 'OwnerMeeting';
+export type AppointmentStatus =
+	| 'Scheduled'
+	| 'Confirmed'
+	| 'Completed'
+	| 'Cancelled'
+	| 'NoShow';
 export type InspectionType = 'MoveIn' | 'MoveOut' | 'Routine' | 'AnnualSafety';
-export type InspectionStatus = 'Scheduled' | 'Completed' | 'NeedsFollowUp' | 'Cancelled';
+export type InspectionStatus =
+	| 'Scheduled'
+	| 'Completed'
+	| 'NeedsFollowUp'
+	| 'Cancelled';
 export interface Portfolio {
 	id: number;
 	name: string;
@@ -22,7 +72,7 @@ export interface Portfolio {
 	timeZone: string;
 	status: PortfolioStatus;
 	settings?: string;
-		/** Account-wide sandbox/live state. True = seeded example data. */
+	/** Account-wide sandbox/live state. True = seeded example data. */
 	isSandbox?: boolean;
 	propertyCount?: number;
 	unitCount?: number;
@@ -76,6 +126,9 @@ export interface Owner {
 	phone?: string;
 	email?: string;
 	assignedPropertyCount?: number;
+	isPrimary?: boolean;
+	hasActiveOwnerPortalAccess?: boolean;
+	hasPendingOwnerPortalInvitation?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -138,8 +191,22 @@ export interface Unit {
 	updatedAt: string;
 }
 
-export type RentalListingStatus = 'Draft' | 'ReadyToPublish' | 'Published' | 'Paused' | 'Filled' | 'Archived';
-export type ListingPublicationStatus = 'Draft' | 'Ready' | 'Publishing' | 'Published' | 'Paused' | 'Failed' | 'Removed' | 'ReconciliationRequired';
+export type RentalListingStatus =
+	| 'Draft'
+	| 'ReadyToPublish'
+	| 'Published'
+	| 'Paused'
+	| 'Filled'
+	| 'Archived';
+export type ListingPublicationStatus =
+	| 'Draft'
+	| 'Ready'
+	| 'Publishing'
+	| 'Published'
+	| 'Paused'
+	| 'Failed'
+	| 'Removed'
+	| 'ReconciliationRequired';
 
 export interface ListingPhoto {
 	id: number;
@@ -386,7 +453,12 @@ export interface UnitDashboardOverview {
 	upcomingAppointments: UnitAppointmentSummary[];
 }
 
-export type UnitTurnoverStatus = 'NotStarted' | 'AwaitingVacancy' | 'MoveOut' | 'InProgress' | 'RentReady';
+export type UnitTurnoverStatus =
+	| 'NotStarted'
+	| 'AwaitingVacancy'
+	| 'MoveOut'
+	| 'InProgress'
+	| 'RentReady';
 
 export interface UnitTurnoverSummary {
 	status: UnitTurnoverStatus | string;
@@ -471,6 +543,7 @@ export interface LeaseManagementSummary {
 	currentResidentCount: number;
 	currentFinanciallyResponsiblePartyCount: number;
 	hasReconciliationException: boolean;
+	hasGoverningAgreementWithoutPossession: boolean;
 	plannedPossessionAtUtc?: string | null;
 	possessionGivenAtUtc?: string | null;
 	plannedMoveOutAtUtc?: string | null;
@@ -504,6 +577,7 @@ export interface LeaseManagementParty {
 	effectiveThrough?: string | null;
 	guarantorLegalNoticeEligible: boolean;
 	isCurrent: boolean;
+	canGrantTenantPortalAccess: boolean;
 }
 
 export interface LeaseManagementDetail {
@@ -930,6 +1004,7 @@ export interface PastDueLease {
 	oldestDueOn: string;
 	/** Id of the oldest past-due payment, so the row can deep-link into its detail. */
 	oldestLedgerEntryId: number;
+	oldestLedgerEntryOpenAmount: number;
 }
 
 export interface PropertyFinancialSummary {
@@ -1227,7 +1302,11 @@ export interface Vendor {
 }
 
 /** Vendor dispatch status (mirrors the API's VendorDispatchStatus enum, serialized as strings). */
-export type VendorDispatchStatus = 'Dispatched' | 'Acknowledged' | 'Completed' | 'Cancelled';
+export type VendorDispatchStatus =
+	| 'Dispatched'
+	| 'Acknowledged'
+	| 'Completed'
+	| 'Cancelled';
 
 /** Result of texting a job to a vendor (POST /work-orders/{id}/dispatch). */
 export interface VendorDispatch {
@@ -1292,6 +1371,63 @@ export interface WorkOrder {
 	vendorName?: string;
 	hasScan?: boolean;
 	scanIsImage?: boolean;
+	detailRole?: 'tenant' | 'maintenance' | 'manager' | string;
+	capabilities?: WorkOrderDetailCapabilities;
+	submittedByLabel?: string | null;
+	requesterName?: string | null;
+	requesterPhone?: string | null;
+	requesterEmail?: string | null;
+	residentMustBePresent?: boolean | null;
+	callBeforeEntry?: boolean | null;
+	callIfNotHome?: boolean | null;
+	permissionToEnter?: boolean | null;
+	entryNotes?: string | null;
+	petWarnings?: string | null;
+	accessWarnings?: string | null;
+	residentNames?: string[];
+	privateManagementNotes?: string | null;
+	canViewCosts?: boolean;
+	photos?: WorkOrderPhotoSummary[];
+	activity?: WorkOrderActivityItem[];
+}
+
+export interface WorkOrderDetailCapabilities {
+	canViewTenantContact?: boolean;
+	canViewResidents?: boolean;
+	canViewAccessInstructions?: boolean;
+	canViewPrivateManagementNotes?: boolean;
+	canViewCosts?: boolean;
+	canCommentPublicly?: boolean;
+	canCommentPrivately?: boolean;
+	canUploadPhoto?: boolean;
+	canDeletePhoto?: boolean;
+	canCancel?: boolean;
+	canEditRequestFields?: boolean;
+	canEditManagementFields?: boolean;
+	canAssignTechnician?: boolean;
+	canDispatchVendor?: boolean;
+	allowedStatusTransitions?: WorkOrderStatus[];
+}
+
+export interface WorkOrderPhotoSummary {
+	id: number;
+	fileName: string;
+	caption?: string | null;
+	uploadedAtUtc?: string | null;
+	uploadedByLabel?: string | null;
+}
+
+export interface WorkOrderActivityItem {
+	id?: number;
+	kind?: string;
+	label?: string;
+	note?: string | null;
+	body?: string | null;
+	fromStatus?: WorkOrderStatus | null;
+	toStatus?: WorkOrderStatus | null;
+	createdAtUtc?: string | null;
+	actorLabel?: string | null;
+	visibility?: 'Public' | 'Private' | string;
 }
 
 /** One status-change event in a work order's history (oldest→newest). */
@@ -1320,6 +1456,7 @@ export interface Appointment {
 	unitId?: number;
 	leaseId?: number;
 	tenantId?: number;
+	workOrderId?: number;
 	title: string;
 	prospectName?: string;
 	prospectEmail?: string;
@@ -1354,7 +1491,11 @@ export interface Inspection {
 	updatedAt: string;
 }
 
-export type InspectionItemResult = 'Pending' | 'Pass' | 'Fail' | 'NotApplicable';
+export type InspectionItemResult =
+	| 'Pending'
+	| 'Pass'
+	| 'Fail'
+	| 'NotApplicable';
 
 export interface InspectionItem {
 	id: number;

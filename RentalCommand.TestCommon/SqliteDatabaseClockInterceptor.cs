@@ -26,6 +26,9 @@ public sealed class SqliteDatabaseClockInterceptor : DbConnectionInterceptor
     private static void Register(DbConnection connection)
     {
         if (connection is SqliteConnection sqlite)
+        {
             sqlite.CreateFunction("clock_timestamp", () => DateTime.UtcNow);
+            sqlite.CreateFunction("rc_business_date", (long _) => DateTime.UtcNow.ToString("yyyy-MM-dd"));
+        }
     }
 }

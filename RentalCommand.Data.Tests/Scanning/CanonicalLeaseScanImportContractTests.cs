@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Scanning;
@@ -11,7 +12,8 @@ public sealed class CanonicalLeaseScanImportContractTests
     [Fact]
     public void Production_writer_activates_the_canonical_lease_target()
     {
-        var writer = new ProductionScanConfirmationTargetWriter();
+        using var db = CreateContext();
+        var writer = new ProductionScanConfirmationTargetWriter(db);
 
         writer.Supports(ScanConfirmationTargetKind.LeaseAgreement).Should().BeTrue();
         typeof(ScanLeaseTargetData).GetProperty("LeaseId").Should().BeNull();
@@ -24,6 +26,14 @@ public sealed class CanonicalLeaseScanImportContractTests
             .PropertyType.Should().Be(typeof(int));
         typeof(LeaseAgreement).GetProperty("DocumentTemplateId").Should().BeNull();
         typeof(LeaseAgreement).GetProperty("DocumentTemplateVersion").Should().BeNull();
+    }
+
+    [Fact]
+    public void Signed_import_can_carry_the_reviewed_possession_fact()
+    {
+        typeof(ScanLeaseTargetData).GetProperty("PossessionGivenAtUtc")
+            .Should().NotBeNull(
+                "a signed historical lease must not become governing without an explicit possession fact");
     }
 
     [Fact]
@@ -118,4 +128,15 @@ public sealed class CanonicalLeaseScanImportContractTests
             RentDueDay: 1,
             ReviewDisposition: disposition,
             DocumentTemplateId: documentTemplateId);
+
+    private static TestDbContext CreateContext()
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseInMemoryDatabase($"canonical-lease-scan-{Guid.NewGuid():N}")
+            .Options;
+        return new TestDbContext(options);
+    }
+
+    private sealed class TestDbContext(DbContextOptions<RentalCommandDbContext> options)
+        : RentalCommandDbContext(options);
 }

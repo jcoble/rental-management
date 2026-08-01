@@ -3,6 +3,19 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('authenticated onboarding offers an account-switch escape', () {
+    final source = File(
+      'lib/features/onboarding/onboarding_choice_screen.dart',
+    ).readAsStringSync();
+
+    expect(source, contains("const Key('onboarding-sign-out')"));
+    expect(source, contains('Sign in with a different account'));
+    expect(
+      source,
+      contains('ref.read(authControllerProvider.notifier).logout()'),
+    );
+  });
+
   test('Today work orders use readable two-line status copy', () {
     final source = File('lib/features/home/home_shell.dart').readAsStringSync();
     final cardStart = source.indexOf('class _FieldQueueCard');
@@ -631,4 +644,51 @@ void main() {
       expect(setupSource, contains('UnitCommandCenterTab.tenantLease'));
     },
   );
+
+  test('global scan capture exposes authorized scan history', () {
+    final captureSource = File(
+      'lib/features/scan/scan_capture.dart',
+    ).readAsStringSync();
+    final routerSource = File(
+      'lib/core/router/app_router.dart',
+    ).readAsStringSync();
+
+    expect(captureSource, contains("label: const Text('View scan history')"));
+    expect(captureSource, contains("router.push<void>('/scans')"));
+    expect(routerSource, contains("path: '/scans'"));
+    expect(
+      routerSource,
+      contains('builder: (context, state) => const ScanListScreen()'),
+    );
+  });
+
+  test('scan history reopens leases in the complete canonical review', () {
+    final listSource = File(
+      'lib/features/scan/scan_list_screen.dart',
+    ).readAsStringSync();
+
+    expect(listSource, contains('ScanReviewScreen(draftId: draft.id)'));
+    expect(listSource, isNot(contains('GuidedRentalFlow.open')));
+    expect(listSource, isNot(contains("import 'guided_rental_flow.dart';")));
+  });
+
+  test('scan gallery capture preserves document resolution', () {
+    final captureSource = File(
+      'lib/features/scan/scan_capture.dart',
+    ).readAsStringSync();
+
+    expect(
+      captureSource,
+      contains(
+        'source == ImageSource.gallery\n'
+        '        ? await picker.pickImage(source: source)',
+      ),
+    );
+    expect(captureSource, contains('ImagePicker().pickMultiImage()'));
+    expect(
+      captureSource,
+      isNot(contains('maxHeight: 1600')),
+      reason: 'A height cap makes tall, multi-page document scans unreadable.',
+    );
+  });
 }

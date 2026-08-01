@@ -336,43 +336,16 @@ class _DepositsLoadingSliver extends StatelessWidget {
   const _DepositsLoadingSliver();
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
-    return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-      sliver: SliverToBoxAdapter(
-        child: MobileM3ListItem(
-          key: const Key('deposits-loading'),
-          position: MobileM3ListItemPosition.single,
-          leading: MobileM3LeadingIcon(
-            icon: Icons.shield_outlined,
-            backgroundColor: colors.primaryContainer,
-            foregroundColor: colors.onPrimaryContainer,
-          ),
-          title: Text(
-            'Loading security deposits',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          supporting: [
-            Text(
-              'Tenant, property, status, and held balance',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-          ],
-          trailing: const SizedBox.square(
-            dimension: 22,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
+  Widget build(BuildContext context) => const SliverFillRemaining(
+    hasScrollBody: false,
+    child: Center(
+      child: SizedBox.square(
+        key: Key('deposits-loading'),
+        dimension: 32,
+        child: CircularProgressIndicator(strokeWidth: 3),
       ),
-    );
-  }
+    ),
+  );
 }
 
 class _DepositListItem extends StatelessWidget {

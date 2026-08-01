@@ -17,14 +17,15 @@ public sealed record CancelPlannedRelationshipCommand(
     int LeaseManagementId,
     int UnitId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     string CancellationReasonCode,
     string? CancellationNote,
     string DraftCancellationReason,
     IReadOnlyList<CancelPlannedRelationshipAccess> Accesses,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum CancelPlannedRelationshipOutcome
 {
@@ -46,4 +47,4 @@ public sealed record CancelPlannedRelationshipResult(
     IReadOnlyList<int> CanceledAddendumDraftIds,
     IReadOnlyList<int> RevokedAccessIds,
     IReadOnlyList<int> RetainedAccessIds,
-    string? Error) : IAtomicResultData;
+    string? Error);

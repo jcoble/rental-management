@@ -1,15 +1,18 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed partial class AtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
     private const int ConcurrentSourceResolutionAttempts = 2;
 
-    public async Task<AtomicLegalDocumentSourceVersionResult> ResolveAuthoredDocumentSourceVersionAsync(
+    public static async Task<AtomicLegalDocumentSourceVersionResult> ResolveAuthoredDocumentSourceVersionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int propertyId,
         int leaseManagementId,
@@ -27,12 +30,14 @@ internal sealed partial class AtomicLeaseMutationPersistence
             Integer("actorUserId", actorUserId),
             Timestamp("createdAtUtc", createdAtUtc),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new AtomicRawDmlTarget("LegalDocumentSourceVersions", AtomicRawDmlOperation.Insert));
-        return await ResolveLegalDocumentSourceVersionAsync(ResolveAuthoredSql, parameters, ct);
+        return await ResolveLegalDocumentSourceVersionAsync(db, ResolveAuthoredSql, parameters, ct);
     }
 
-    public async Task<AtomicLegalDocumentSourceVersionResult> ResolveImportedDocumentSourceVersionAsync(
+    public static async Task<AtomicLegalDocumentSourceVersionResult> ResolveImportedDocumentSourceVersionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int sourceStoredFileId,
         int sourceLegalDocumentArtifactId,
@@ -52,12 +57,14 @@ internal sealed partial class AtomicLeaseMutationPersistence
             Integer("actorUserId", actorUserId),
             Timestamp("createdAtUtc", createdAtUtc),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new AtomicRawDmlTarget("LegalDocumentSourceVersions", AtomicRawDmlOperation.Insert));
-        return await ResolveLegalDocumentSourceVersionAsync(ResolveImportedSql, parameters, ct);
+        return await ResolveLegalDocumentSourceVersionAsync(db, ResolveImportedSql, parameters, ct);
     }
 
-    public async Task<AtomicLegalDocumentSourceVersionResult> ResolveBuiltInDocumentSourceVersionAsync(
+    public static async Task<AtomicLegalDocumentSourceVersionResult> ResolveBuiltInDocumentSourceVersionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int actorUserId,
         DateTime createdAtUtc,
@@ -73,12 +80,13 @@ internal sealed partial class AtomicLeaseMutationPersistence
             Integer("actorUserId", actorUserId),
             Timestamp("createdAtUtc", createdAtUtc),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new AtomicRawDmlTarget("LegalDocumentSourceVersions", AtomicRawDmlOperation.Insert));
-        return await ResolveLegalDocumentSourceVersionAsync(ResolveBuiltInSql, parameters, ct);
+        return await ResolveLegalDocumentSourceVersionAsync(db, ResolveBuiltInSql, parameters, ct);
     }
 
-    private async Task<AtomicLegalDocumentSourceVersionResult> ResolveLegalDocumentSourceVersionAsync(
+    private static async Task<AtomicLegalDocumentSourceVersionResult> ResolveLegalDocumentSourceVersionAsync(
+        RentalCommandDbContext db,
         string sql,
         NpgsqlParameter[] parameters,
         CancellationToken ct)
@@ -88,7 +96,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
         // atomic command's existing transaction while obtaining a fresh statement snapshot.
         for (var attempt = 0; attempt < ConcurrentSourceResolutionAttempts; attempt++)
         {
-            var row = await _db.Database.SingleTopLevelResultAsync<LegalDocumentSourceVersionRow>(
+            var row = await db.Database.SingleTopLevelResultAsync<LegalDocumentSourceVersionRow>(
                 sql, CloneSourceResolutionParameters(parameters), ct);
             if (row.DocumentSourceVersionId > 0)
             {

@@ -16,7 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, UserCheck, UserX } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -73,6 +73,7 @@
 	let ownerStep = $state(0);
 	let completedOwnerSteps = $state<number[]>([]);
 	let ownerDeleteTarget = $state<Owner | null>(null);
+	let ownerPortalRevokeTarget = $state<Owner | null>(null);
 
 	const ownerSteps: FormStepperStep[] = [
 		{ id: 'identity', label: 'Identity', description: 'Name and tax info' },
@@ -105,6 +106,25 @@
 		onSuccess: () => {
 			showSuccess('Owner deleted.');
 			ownerDeleteTarget = null;
+			invalidateOwners();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const activatePortalMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.activatePortalAccess(id),
+		onSuccess: (result) => {
+			showSuccess(result.message);
+			invalidateOwners();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const revokePortalMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.revokePortalAccess(id),
+		onSuccess: (result) => {
+			showSuccess(result.message);
+			ownerPortalRevokeTarget = null;
 			invalidateOwners();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -231,6 +251,13 @@
 			accessor: (o) => o.phone ?? '—',
 		},
 		{
+			key: 'portal',
+			title: 'Portal',
+			mobileRole: 'meta',
+			accessor: (o) => o.hasPendingOwnerPortalInvitation ? 'Pending invitation' : o.hasActiveOwnerPortalAccess ? 'Active' : 'Not active',
+			cell: ownerPortalCell,
+		},
+		{
 			key: 'actions',
 			title: '',
 			mobileRole: 'hidden',
@@ -243,6 +270,65 @@
 
 {#snippet ownerNameCell(o: Owner)}
 	<span data-testid="owner-name">{o.name}</span>
+{/snippet}
+
+{#snippet ownerPortalCell(o: Owner)}
+	<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} role="none">
+		{#if o.hasPendingOwnerPortalInvitation}
+			<span class="text-xs font-medium text-amber-700" data-testid="owner-portal-pending">Pending invitation</span>
+			<button
+				type="button"
+				data-testid="owner-portal-retry-invitation"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Retry owner portal invitation"
+				disabled={activatePortalMutation.isPending}
+				title="Retry owner portal invitation"
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Retry
+			</button>
+			<button
+				type="button"
+				data-testid="owner-portal-revoke"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border border-destructive/40 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Revoke owner portal invitation"
+				disabled={revokePortalMutation.isPending}
+				title="Revoke owner portal invitation"
+				onclick={(e) => { e.stopPropagation(); ownerPortalRevokeTarget = o; }}
+			>
+				<UserX class="h-3.5 w-3.5" />
+				Revoke
+			</button>
+		{:else if o.hasActiveOwnerPortalAccess}
+			<span class="text-xs font-medium text-emerald-700" data-testid="owner-portal-active">Active</span>
+			<button
+				type="button"
+				data-testid="owner-portal-revoke"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border border-destructive/40 px-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Revoke owner portal access"
+				disabled={revokePortalMutation.isPending}
+				title="Revoke owner portal access"
+				onclick={(e) => { e.stopPropagation(); ownerPortalRevokeTarget = o; }}
+			>
+				<UserX class="h-3.5 w-3.5" />
+				Revoke
+			</button>
+		{:else}
+			<button
+				type="button"
+				data-testid="owner-portal-activate"
+				class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+				aria-label="Activate owner portal access"
+				disabled={!o.email || o.isPrimary || activatePortalMutation.isPending}
+				title={!o.email ? 'Add an owner email before activation' : o.isPrimary ? 'Primary owners use the management account' : 'Activate owner portal access'}
+				onclick={(e) => { e.stopPropagation(); activatePortalMutation.mutate(o.id); }}
+			>
+				<UserCheck class="h-3.5 w-3.5" />
+				Activate
+			</button>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet ownerActionsCell(o: Owner)}
@@ -261,6 +347,12 @@
 			data-testid="owner-delete"
 			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
 			aria-label="Delete owner"
+			disabled={(o.assignedPropertyCount ?? 0) > 0 || o.hasActiveOwnerPortalAccess || o.hasPendingOwnerPortalInvitation}
+			title={(o.assignedPropertyCount ?? 0) > 0
+				? 'Reassign or clear this owner’s properties before deleting'
+				: o.hasActiveOwnerPortalAccess || o.hasPendingOwnerPortalInvitation
+					? 'Revoke owner portal access before deleting'
+					: 'Delete owner'}
 			onclick={(e) => { e.stopPropagation(); ownerDeleteTarget = o; }}
 		>
 			<Trash2 class="h-3.5 w-3.5" />
@@ -406,4 +498,17 @@
 	testid="owner-delete"
 	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
 	oncancel={() => (ownerDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={ownerPortalRevokeTarget !== null}
+	title="Revoke owner portal access"
+	message={ownerPortalRevokeTarget
+		? `Revoke portal access for "${ownerPortalRevokeTarget.name}"? Any pending activation link will stop working.`
+		: ''}
+	confirmLabel="Revoke access"
+	busy={revokePortalMutation.isPending}
+	testid="owner-portal-revoke"
+	onconfirm={() => ownerPortalRevokeTarget && revokePortalMutation.mutate(ownerPortalRevokeTarget.id)}
+	oncancel={() => (ownerPortalRevokeTarget = null)}
 />

@@ -12,9 +12,10 @@ public sealed record TransferLeaseManagementCommand(
     int SourceUnitId,
     int DestinationUnitId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     Guid TransferPublicId,
     DateOnly EffectiveOn,
     DateTime? PlannedDestinationPossessionAtUtc,
@@ -24,7 +25,7 @@ public sealed record TransferLeaseManagementCommand(
     bool CarryTenantBalance,
     bool CarrySecurityDeposit,
     string TransferReason,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum TransferLeaseManagementOutcome
 {
@@ -61,4 +62,4 @@ public sealed record TransferLeaseManagementResult(
     IReadOnlyList<int> DestinationAccessIds,
     IReadOnlyList<long> TenantLedgerEntryIds,
     IReadOnlyList<long> SecurityDepositEntryIds,
-    string? Error) : IAtomicResultData;
+    string? Error);

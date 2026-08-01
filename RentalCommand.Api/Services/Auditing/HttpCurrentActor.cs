@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using RentalCommand.Api.Auth;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Services.Auditing;
@@ -22,8 +23,8 @@ public sealed class HttpCurrentActor : ICurrentActor
     {
         get
         {
-            var claim = _accessor.HttpContext?.User.FindFirst(ClaimTypes.NameIdentifier);
-            return claim != null && int.TryParse(claim.Value, out var id) ? id : null;
+            var user = _accessor.HttpContext?.User;
+            return user != null && user.TryReadSubjectUserId(out var id) ? id : null;
         }
     }
 

@@ -142,6 +142,8 @@ public sealed class TenantAccountQueryServiceSqlTests
             sql.Should().Contain("OFFSET");
         }
         entrySql.Should().Contain("TenantLedgerEntries");
+        entrySql.Should().Contain("EXISTS");
+        entrySql.Should().Contain("\"ReversesEntryId\" =");
         depositSql.Should().Contain("vw_security_deposit_balances");
     }
 
@@ -204,8 +206,8 @@ public sealed class TenantAccountQueryServiceSqlTests
         limitIndex.Should().BeLessThan(
             sql.IndexOf("vw_security_deposit_balances", StringComparison.Ordinal),
             "the authorized deposit IDs must be paged before aggregate balances are joined");
-        sql.Split("JOIN LATERAL", StringSplitOptions.None).Should().HaveCount(3,
-            "both expensive display views must be correlated to one already-paged deposit seed");
+        sql.Split("JOIN LATERAL", StringSplitOptions.None).Should().HaveCount(4,
+            "the lifecycle view, scheduled-primary fallback, and balance view must be correlated to one already-paged deposit seed");
     }
 
     [Fact]
@@ -249,6 +251,31 @@ public sealed class TenantAccountQueryServiceSqlTests
         filteredCountSql.Should().Contain("vw_security_deposit_balances");
         filteredCountSql.Should().Contain("vw_lease_management_lifecycle");
         filteredCountSql.Should().Contain("ILIKE");
+    }
+
+    [Fact]
+    public void UpcomingPrimaryTenantFallback_DisplaysAndSearchesFutureUnendedPrimaryTenantOnlyInSql()
+    {
+        using var db = NewContext();
+        var service = NewService(db);
+
+        var accountSearchSql = service.BuildAccountPageQuery(
+            Scope,
+            new TenantAccountListQuery { Search = "Hector Reed" }).ToQueryString();
+        var depositSearchSql = service.BuildDepositPageQuery(
+            Scope,
+            new TenantAccountDepositListQuery { Search = "Hector Reed" }).ToQueryString();
+        var depositDetailSql = service.BuildDepositQuery(Scope, 38).ToQueryString();
+
+        foreach (var sql in new[] { accountSearchSql, depositSearchSql, depositDetailSql })
+        {
+            AssertScheduledPrimaryFallback(sql);
+        }
+        foreach (var sql in new[] { accountSearchSql, depositSearchSql })
+        {
+            sql.Should().Contain("Hector Reed");
+            sql.Should().Contain("ILIKE");
+        }
     }
 
     [Fact]
@@ -393,6 +420,7 @@ public sealed class TenantAccountQueryServiceSqlTests
         AssertAuthorized(sql);
         sql.Should().Contain("vw_tenant_charge_balances");
         sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("\"OpenAmount\" > 0.0");
         sql.Should().Contain("ILIKE");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");
@@ -485,6 +513,21 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().NotContain("RoleProfileCapabilities");
         sql.Should().NotContain("MembershipRoleAssignments");
         sql.Should().NotContain("MembershipRoleAssignmentProperties");
+    }
+
+    private static void AssertScheduledPrimaryFallback(string sql)
+    {
+        sql.Should().Contain("LeaseManagementParties");
+        sql.Should().Contain("Tenants");
+        sql.Should().Contain("COALESCE");
+        sql.Should().Contain("PrimaryTenant");
+        sql.Should().Contain("\"EffectiveFrom\" >",
+            "future scheduled tenants must be selected relative to the DB-derived business date");
+        sql.Should().Contain("\"EffectiveThrough\" IS NULL",
+            "ended or canceled party rows must not be used as the fallback display name");
+        sql.Should().Contain("\"BusinessDate\"",
+            "the fallback must use the lifecycle/deposit projection business date, not a UTC client date");
+        sql.Should().NotContain("@__effectiveDate");
     }
 
     private static void AssertFinalOrderingKey(IQueryable query, string expectedMemberName)

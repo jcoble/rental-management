@@ -3,14 +3,18 @@ using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Sandbox;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
+using RentalCommand.Data.Sandbox;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -28,9 +32,8 @@ public class DemoDataSeeder
     private readonly RentalCommandDbContext _db;
     private readonly ILogger<DemoDataSeeder> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly ILegalDocumentSourceVersionResolver _sourceVersions;
-    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
-    private readonly IAtomicExecutionState _atomicExecution;
+    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IAtomicCommandContext _atomicContext;
     private readonly ILeaseAgreementRenderer _agreementRenderer;
     private readonly ILeaseAgreementPdfGenerator _agreementPdf;
     private readonly IExecutedLeasePdfGenerator _executedLeasePdf;
@@ -41,9 +44,8 @@ public class DemoDataSeeder
         RentalCommandDbContext db,
         ILogger<DemoDataSeeder> logger,
         TimeProvider timeProvider,
-        ILegalDocumentSourceVersionResolver sourceVersions,
-        IAtomicInfrastructureUnitOfWork infrastructure,
-        IAtomicExecutionState atomicExecution,
+        IAtomicUnitOfWork atomic,
+        IAtomicCommandContext atomicContext,
         ILeaseAgreementRenderer agreementRenderer,
         ILeaseAgreementPdfGenerator agreementPdf,
         IExecutedLeasePdfGenerator executedLeasePdf,
@@ -53,9 +55,8 @@ public class DemoDataSeeder
         _db = db;
         _logger = logger;
         _timeProvider = timeProvider;
-        _sourceVersions = sourceVersions;
-        _infrastructure = infrastructure;
-        _atomicExecution = atomicExecution;
+        _atomic = atomic;
+        _atomicContext = atomicContext;
         _agreementRenderer = agreementRenderer;
         _agreementPdf = agreementPdf;
         _executedLeasePdf = executedLeasePdf;
@@ -64,7 +65,13 @@ public class DemoDataSeeder
     }
 
     /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
-    public Task SeedAsync(CancellationToken ct = default) => SeedPortfolioAsync(1, ct);
+    public Task SeedAsync(CancellationToken ct = default)
+    {
+        // Each application start is a new reconciliation action. One key is created for this
+        // invocation and reused by every exact retry within the action.
+        var operationKey = $"startup:{Guid.NewGuid():N}";
+        return SeedPortfolioAsync(1, operationKey, ct);
+    }
 
     /// <summary>
     /// Seeds the full demo dataset for an arbitrary portfolio, or reconciles the stable lifecycle and
@@ -72,55 +79,112 @@ public class DemoDataSeeder
     /// finalization are independently atomic; rendering/admission/storage run between them and retries
     /// reuse deterministic identities.
     /// </summary>
-    public async Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default)
+    public async Task SeedPortfolioAsync(
+        int portfolioId,
+        string operationKey,
+        CancellationToken ct = default,
+        bool requirePendingSandboxOnboarding = false)
     {
-        var seedResult = await _infrastructure.ExecuteAsync(
-            AtomicInfrastructureOperation.DemoSeed,
-            innerCt => SeedPortfolioCoreAsync(portfolioId, innerCt),
+        var businessNowUtc = _timeProvider.UtcNow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        operationKey = operationKey.Trim();
+        var command = new SeedDemoPortfolioCommand(
+            portfolioId,
+            requirePendingSandboxOnboarding,
+            businessNowUtc,
+            operationKey);
+        var seedOutcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "sandbox.demo-seed",
+                $"portfolio:{portfolioId}:{operationKey}"),
+            command,
+            DemoSeedCommandHandler.ResultCodec,
             ct);
+        await CompleteLegalArtifactsAsync(
+            portfolioId,
+            ct,
+            seedOutcome.Value.LegalAgreementId,
+            businessNowUtc);
+    }
+
+    public async Task CompleteLegalArtifactsAsync(
+        int portfolioId,
+        CancellationToken ct = default,
+        int? knownLegalAgreementId = null,
+        DateTime? preparedAtUtc = null)
+    {
+        var businessNowUtc = preparedAtUtc ?? _timeProvider.UtcNow();
+        var actorUserId = await ResolveActorUserIdAsync(portfolioId, ct);
+        var legalAgreementId = knownLegalAgreementId
+            ?? await _db.LeaseAgreements
+                .AsNoTracking()
+                .Where(agreement =>
+                    agreement.PortfolioId == portfolioId
+                    && agreement.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1")
+                .Select(agreement => (int?)agreement.Id)
+                .SingleOrDefaultAsync(ct);
+        var legalIntent = legalAgreementId is null
+            ? null
+            : await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentAsync(
+                _db, portfolioId, actorUserId, businessNowUtc, ct);
         _db.ChangeTracker.Clear();
 
-        var prepared = await PrepareLegalDocumentAsync(seedResult.LegalDocumentIntent, ct);
+        var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
         if (prepared is not null)
         {
-            await _infrastructure.ExecuteAsync(
-                AtomicInfrastructureOperation.DemoSeed,
-                innerCt => FinalizeLegalDocumentAsync(prepared, innerCt),
+            var finalizeCommand = ToFinalizeCommand(prepared);
+            await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "sandbox.demo-legal-finalize",
+                    $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1"),
+                finalizeCommand,
+                DemoLegalDocumentFinalizeCommandHandler.ResultCodec,
                 ct);
             _db.ChangeTracker.Clear();
         }
     }
 
-    private async Task<CanonicalDemoLeaseSeedResult> SeedPortfolioCoreAsync(int portfolioId, CancellationToken ct)
+    internal static async Task<SeedDemoPortfolioResult> SeedPortfolioCoreAsync(
+        RentalCommandDbContext db,
+        SeedDemoPortfolioCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct)
     {
+        var portfolioId = command.PortfolioId;
         // Serialize the idempotency check and complete seed beneath the portfolio row. The
-        // infrastructure kernel owns the enclosing transaction, including every intermediate flush.
-        var lockedPortfolioId = _db.Database.IsNpgsql()
-            ? await _db.Database
-                .SqlQuery<int>($$"""
+        // receipt-backed atomic attempt owns the enclosing transaction, including every flush.
+        var lockedPortfolioId = 0;
+        if (db.Database.IsNpgsql())
+        {
+            var lockedPortfolioRows = await db.QuerySqlAsync<int>($$"""
                     SELECT portfolio."Id" AS "Value"
                     FROM "Portfolios" AS portfolio
                     WHERE portfolio."Id" = {{portfolioId}}
                     FOR UPDATE
-                    """)
-                .SingleOrDefaultAsync(ct)
-            : await _db.Portfolios
+                    """,
+                ct);
+            lockedPortfolioId = lockedPortfolioRows.SingleOrDefault();
+        }
+        else
+        {
+            lockedPortfolioId = await db.Portfolios
                 .Where(portfolio => portfolio.Id == portfolioId)
                 .Select(portfolio => portfolio.Id)
                 .SingleOrDefaultAsync(ct);
+        }
         if (lockedPortfolioId == 0)
         {
             throw new InvalidOperationException($"Portfolio {portfolioId} does not exist.");
         }
 
-        var now = _timeProvider.UtcNow();
+        var now = command.BusinessNowUtc;
 
-        var seedContext = await _db.Portfolios
+        var seedContext = await db.Portfolios
             .Where(portfolio => portfolio.Id == portfolioId)
             .Select(portfolio => new
             {
                 Currency = portfolio.Currency,
-                ActorUserId = _db.Users
+                ActorUserId = db.Users
                     .Where(user => user.WorkspaceAccessContexts.Any(context =>
                         context.PortfolioId == portfolioId && context.Membership != null))
                     .OrderBy(user => user.Id)
@@ -136,18 +200,20 @@ public class DemoDataSeeder
         // Existing demo portfolios still run the stable lifecycle/document reconciliation. This is
         // deliberately not a blanket reseed: only DEMO-LM facts are repaired and the stable legal
         // artifact intent is resumed.
-        if (await _db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
+        if (await db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
         {
-            _logger.LogDebug("Demo data already present for portfolio {PortfolioId}; reconciling canonical facts.", portfolioId);
-            return await CanonicalDemoLeaseSeeder.ReconcileAsync(
-                _db, _atomicExecution, portfolioId, actorUserId, now, ct);
+            var reconciled = await CanonicalDemoLeaseSeeder.ReconcileAsync(
+                db, attempt, portfolioId, actorUserId, now, ct);
+            await attempt.FlushBusinessAsync(ct);
+            return Result(portfolioId, true, reconciled, legalAgreementId:
+                reconciled.LegalDocumentIntent?.AgreementId);
         }
 
         // ── 1. OwnerEntities ──────────────────────────────────────────────────────────
         // Account bootstrap already creates the landlord's editable primary owner record. Reuse it
         // for the sample LLC instead of adding a third, unowned "Rental Command Admin" row that has
         // no relationship to any demo property.
-        var primaryOwner = await _db.OwnerEntities
+        var primaryOwner = await db.OwnerEntities
             .SingleOrDefaultAsync(owner => owner.PortfolioId == portfolioId && owner.IsPrimary, ct);
         primaryOwner ??= new OwnerEntity
         {
@@ -180,9 +246,9 @@ public class DemoDataSeeder
             UpdatedAt = now
         };
         var ownerEntities = new List<OwnerEntity> { primaryOwner, ownerPerson };
-        if (primaryOwner.Id == 0) _db.OwnerEntities.Add(primaryOwner);
-        _db.OwnerEntities.Add(ownerPerson);
-        await _db.SaveChangesAsync(ct);
+        if (primaryOwner.Id == 0) db.OwnerEntities.Add(primaryOwner);
+        db.OwnerEntities.Add(ownerPerson);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── 2. Vendors ────────────────────────────────────────────────────────────────
         var vendors = new List<Vendor>
@@ -194,8 +260,8 @@ public class DemoDataSeeder
             new() { PortfolioId = portfolioId, Name = "Handy Pro Services", ServiceType = "Handyman", Email = "jobs@handypro.example", Phone = "614-555-0204", Is1099Eligible = false, W9OnFile = false, Preferred = false, CreatedAt = now, UpdatedAt = now },
             new() { PortfolioId = portfolioId, Name = "Summit Roofing Inc.", ServiceType = "Roofing", Email = "bids@summitroofing.example", Phone = "614-555-0205", Is1099Eligible = true, W9OnFile = true, Preferred = false, CreatedAt = now, UpdatedAt = now }
         };
-        _db.Vendors.AddRange(vendors);
-        await _db.SaveChangesAsync(ct);
+        db.Vendors.AddRange(vendors);
+        await attempt.FlushBusinessAsync(ct);
 
         // Local aliases for readability
         var vPlumber     = vendors[0];
@@ -338,8 +404,8 @@ public class DemoDataSeeder
             properties.Add(prop);
         }
 
-        _db.Properties.AddRange(properties);
-        await _db.SaveChangesAsync(ct);   // get IDs
+        db.Properties.AddRange(properties);
+        await attempt.FlushBusinessAsync(ct);   // get IDs
 
         var propertyOwnerships = properties.Select((property, index) =>
         {
@@ -360,8 +426,8 @@ public class DemoDataSeeder
                 PayeeName = owner.Name,
             };
         }).ToList();
-        _db.PropertyOwnerships.AddRange(propertyOwnerships);
-        await _db.SaveChangesAsync(ct);
+        db.PropertyOwnerships.AddRange(propertyOwnerships);
+        await attempt.FlushBusinessAsync(ct);
 
         // Now add units
         for (int pi = 0; pi < propertyDefs.Length; pi++)
@@ -387,8 +453,8 @@ public class DemoDataSeeder
             }
         }
 
-        _db.Units.AddRange(unitsList);
-        await _db.SaveChangesAsync(ct);   // get unit IDs
+        db.Units.AddRange(unitsList);
+        await attempt.FlushBusinessAsync(ct);   // get unit IDs
 
         // ── 4. Tenants ────────────────────────────────────────────────────────────────
         // 22 tenants: 17 primary tenants and 2 co-tenants in current relationships, plus
@@ -431,14 +497,13 @@ public class DemoDataSeeder
             UpdatedAt   = now
         }).ToList();
 
-        _db.Tenants.AddRange(tenants);
-        await _db.SaveChangesAsync(ct);
+        db.Tenants.AddRange(tenants);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── 5. Canonical lease, agreement, account, and ledger graph ──────────────────
         var leaseSeed = await CanonicalDemoLeaseSeeder.SeedAsync(
-            _db,
-            _sourceVersions,
-            _atomicExecution,
+            db,
+            attempt,
             portfolioId,
             actorUserId,
             currency,
@@ -492,7 +557,7 @@ public class DemoDataSeeder
         };
 
         // A subset of expenses simulate receipts/invoices captured via the scan→draft→confirm flow.
-        // For these we populate the full scan-persistence schema exactly as ScanService does on confirm:
+        // For these we populate the full scan-db schema exactly as ScanService does on confirm:
         // typed columns (Subtotal/TaxAmount/PaymentMethod/CardLast4/DocumentKind), the ReceiptData JSONB
         // superset (same shape as ScanService.BuildReceiptDataJson, so the expense detail UI parses it
         // identically to a real scan), and the ExpenseLineItem child rows. Keyed by index into expenseDefs.
@@ -633,8 +698,8 @@ public class DemoDataSeeder
             return expense;
         }).ToList();
 
-        _db.Expenses.AddRange(expenses);
-        await _db.SaveChangesAsync(ct);
+        db.Expenses.AddRange(expenses);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── 9. WorkOrders (~15) ───────────────────────────────────────────────────────
         var woDefs = new (int propIdx, int? unitIdx, int vendorIdx, int? tenantLeaseIdx,
@@ -724,8 +789,8 @@ public class DemoDataSeeder
             woList.Add(wo);
         }
 
-        _db.WorkOrders.AddRange(woList);
-        await _db.SaveChangesAsync(ct);
+        db.WorkOrders.AddRange(woList);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── 10. Appointments (~12) ────────────────────────────────────────────────────
         var apptDefs = new (int propIdx, AppointmentType type, AppointmentStatus status,
@@ -779,8 +844,8 @@ public class DemoDataSeeder
             });
         }
 
-        _db.Appointments.AddRange(appts);
-        await _db.SaveChangesAsync(ct);
+        db.Appointments.AddRange(appts);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── 11. Inspections (~6) ──────────────────────────────────────────────────────
         var inspDefs = new (int propIdx, InspectionType type, InspectionStatus status,
@@ -870,24 +935,18 @@ public class DemoDataSeeder
             inspections.Add(inspection);
         }
 
-        _db.Inspections.AddRange(inspections);
-        await _db.SaveChangesAsync(ct);
+        db.Inspections.AddRange(inspections);
+        await attempt.FlushBusinessAsync(ct);
 
         // ── Done ──────────────────────────────────────────────────────────────────────
-        _logger.LogInformation(
-            "Demo data seeded for portfolio {PortfolioId}: " +
-            "{OwnerEntities} ownerEntities, {Vendors} vendors, {Properties} properties, " +
-            "{Units} units, {Tenants} tenants, {Relationships} lease relationships " +
-            "({Active} current / {Expired} ended), {LedgerEntries} tenant ledger entries, " +
-            "{DepositAccounts} security deposit accounts, " +
-            "{Expenses} expenses, {WorkOrders} work orders, {Appointments} appointments, {Inspections} inspections.",
+        return new SeedDemoPortfolioResult(
             portfolioId,
+            false,
             ownerEntities.Count,
             vendors.Count,
             properties.Count,
             unitsList.Count,
             tenants.Count,
-            leaseSeed.ActiveManagements.Count + leaseSeed.ExpiredManagementCount,
             leaseSeed.ActiveManagements.Count,
             leaseSeed.ExpiredManagementCount,
             leaseSeed.LedgerEntryCount,
@@ -895,9 +954,65 @@ public class DemoDataSeeder
             expenses.Count,
             woList.Count,
             appts.Count,
-            inspections.Count);
-        return leaseSeed;
+            inspections.Count,
+            leaseSeed.LegalDocumentIntent?.AgreementId);
     }
+
+    private async Task<int> ResolveActorUserIdAsync(int portfolioId, CancellationToken ct) =>
+        await _db.Users
+            .Where(user => user.WorkspaceAccessContexts.Any(context =>
+                context.PortfolioId == portfolioId && context.Membership != null))
+            .OrderBy(user => user.Id)
+            .Select(user => user.Id)
+            .FirstOrDefaultAsync(ct) is var actorUserId && actorUserId > 0
+                ? actorUserId
+                : throw new InvalidOperationException(
+                    $"Portfolio {portfolioId} has no administering user for demo facts.");
+
+    private static SeedDemoPortfolioResult Result(
+        int portfolioId,
+        bool alreadyPresent,
+        CanonicalDemoLeaseSeedResult leaseSeed,
+        int? legalAgreementId) =>
+        new(
+            portfolioId,
+            alreadyPresent,
+            0,
+            0,
+            0,
+            0,
+            0,
+            leaseSeed.ActiveManagements.Count,
+            leaseSeed.ExpiredManagementCount,
+            leaseSeed.LedgerEntryCount,
+            leaseSeed.SecurityDepositAccountCount,
+            0,
+            0,
+            0,
+            0,
+            legalAgreementId);
+
+    private FinalizeDemoLegalDocumentCommand ToFinalizeCommand(
+        PreparedDemoLegalDocument prepared) =>
+        new(
+            prepared.Intent.PortfolioId,
+            prepared.Intent.ActorUserId,
+            prepared.Intent.AgreementId,
+            prepared.IssuedAdmission.Id,
+            prepared.IssuedAdmission.StoragePath,
+            prepared.IssuedAdmission.RequestFingerprint,
+            prepared.IssuedFileName,
+            prepared.IssuedLength,
+            prepared.IssuedHash,
+            prepared.IssuanceFingerprint,
+            prepared.ExecutedAdmission.Id,
+            prepared.ExecutedAdmission.StoragePath,
+            prepared.ExecutedAdmission.RequestFingerprint,
+            prepared.ExecutedFileName,
+            prepared.ExecutedLength,
+            prepared.ExecutedHash,
+            prepared.Intent.IssuedAtUtc,
+            prepared.Intent.ExecutedAtUtc);
 
     private async Task<PreparedDemoLegalDocument?> PrepareLegalDocumentAsync(
         CanonicalDemoLegalDocumentIntent? intent,
@@ -907,7 +1022,7 @@ public class DemoDataSeeder
         {
             return null;
         }
-        EnsureProviderIoIsOutsideInfrastructure();
+        EnsureProviderIoIsOutsideAtomicAttempt();
 
         var issued = await _agreementRenderer.RenderExactAsync(
             intent.PortfolioId,
@@ -1026,54 +1141,71 @@ public class DemoDataSeeder
             return;
         }
 
-        EnsureProviderIoIsOutsideInfrastructure();
+        EnsureProviderIoIsOutsideAtomicAttempt();
         await using var stream = new MemoryStream(bytes, writable: false);
         await _fileStorage.UploadAtAsync(stream, admission.StoragePath, fileName, "application/pdf", ct);
     }
 
-    private async Task FinalizeLegalDocumentAsync(PreparedDemoLegalDocument prepared, CancellationToken ct)
+    internal static async Task<FinalizeDemoLegalDocumentResult> FinalizeLegalDocumentAsync(
+        RentalCommandDbContext db,
+        FinalizeDemoLegalDocumentCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct)
     {
-        var intent = prepared.Intent;
-        var agreement = await _db.LeaseAgreements
+        var agreement = await db.LeaseAgreements
             .Include(candidate => candidate.LeaseManagement)
-            .SingleAsync(candidate => candidate.PortfolioId == intent.PortfolioId
-                && candidate.Id == intent.AgreementId
+            .SingleAsync(candidate => candidate.PortfolioId == command.PortfolioId
+                && candidate.Id == command.AgreementId
                 && candidate.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1", ct);
 
         var pendingById = await LockPendingUploadsAsync(
-            [prepared.IssuedAdmission.Id, prepared.ExecutedAdmission.Id], ct);
-        if (!pendingById.TryGetValue(prepared.IssuedAdmission.Id, out var issuedPending)
-            || !pendingById.TryGetValue(prepared.ExecutedAdmission.Id, out var executedPending))
+            db,
+            [command.IssuedPendingUploadId, command.ExecutedPendingUploadId],
+            ct);
+        if (!pendingById.TryGetValue(command.IssuedPendingUploadId, out var issuedPending)
+            || !pendingById.TryGetValue(command.ExecutedPendingUploadId, out var executedPending))
         {
             throw new InvalidOperationException("The deterministic demo legal-document admissions are unavailable.");
         }
-        ValidatePending(issuedPending, prepared.IssuedAdmission, prepared.IssuedLength);
-        ValidatePending(executedPending, prepared.ExecutedAdmission, prepared.ExecutedLength);
+        ValidatePending(
+            issuedPending,
+            command.IssuedStoragePath,
+            command.IssuedRequestFingerprint,
+            command.IssuedLength);
+        ValidatePending(
+            executedPending,
+            command.ExecutedStoragePath,
+            command.ExecutedRequestFingerprint,
+            command.ExecutedLength);
 
         var artifactStorageKeys = new[] { issuedPending.StoragePath, executedPending.StoragePath };
-        var existingArtifactsByStorageKey = await _db.LegalDocumentArtifacts
-            .Where(artifact => artifact.PortfolioId == intent.PortfolioId
+        var existingArtifactsByStorageKey = await db.LegalDocumentArtifacts
+            .Where(artifact => artifact.PortfolioId == command.PortfolioId
                 && artifactStorageKeys.Contains(artifact.StorageKey))
             .ToDictionaryAsync(artifact => artifact.StorageKey, ct);
 
         var issuedArtifact = await GetOrCreateArtifactAsync(
-            intent,
+            db,
+            attempt,
+            command,
             issuedPending,
             existingArtifactsByStorageKey,
             LegalDocumentArtifactKind.IssuedAgreement,
-            prepared.IssuedFileName,
-            prepared.IssuedLength,
-            prepared.IssuedHash,
-            prepared.IssuanceFingerprint,
+            command.IssuedFileName,
+            command.IssuedLength,
+            command.IssuedHash,
+            command.IssuanceFingerprint,
             ct);
         var executedArtifact = await GetOrCreateArtifactAsync(
-            intent,
+            db,
+            attempt,
+            command,
             executedPending,
             existingArtifactsByStorageKey,
             LegalDocumentArtifactKind.ExecutedAgreement,
-            prepared.ExecutedFileName,
-            prepared.ExecutedLength,
-            prepared.ExecutedHash,
+            command.ExecutedFileName,
+            command.ExecutedLength,
+            command.ExecutedHash,
             null,
             ct);
 
@@ -1084,31 +1216,56 @@ public class DemoDataSeeder
         }
 
         agreement.IssuedArtifactId = issuedArtifact.Id;
-        agreement.IssuedAtUtc = intent.IssuedAtUtc;
+        var alreadyFinalized = agreement.IssuedArtifactId == issuedArtifact.Id
+            && agreement.ExecutedArtifactId == executedArtifact.Id;
+        agreement.IssuedAtUtc = command.IssuedAtUtc;
         agreement.ExecutedArtifactId = executedArtifact.Id;
-        agreement.FullyExecutedAtUtc = intent.ExecutedAtUtc;
-        agreement.UpdatedAtUtc = intent.ExecutedAtUtc;
+        agreement.FullyExecutedAtUtc = command.ExecutedAtUtc;
+        agreement.UpdatedAtUtc = command.ExecutedAtUtc;
         agreement.LeaseManagement!.PossessionAgreementExceptionReason = null;
         agreement.LeaseManagement.PossessionAgreementExceptionAuthorizedByUserId = null;
-        agreement.LeaseManagement.UpdatedAtUtc = intent.ExecutedAtUtc;
+        agreement.LeaseManagement.UpdatedAtUtc = command.ExecutedAtUtc;
         agreement.LeaseManagement.RowVersion = Guid.NewGuid();
 
         issuedPending.State = PendingFileUploadState.Finalized;
         issuedPending.StoredFileId = issuedArtifact.StoredFileId;
-        issuedPending.UpdatedAtUtc = intent.ExecutedAtUtc;
+        issuedPending.UpdatedAtUtc = command.ExecutedAtUtc;
         executedPending.State = PendingFileUploadState.Finalized;
         executedPending.StoredFileId = executedArtifact.StoredFileId;
-        executedPending.UpdatedAtUtc = intent.ExecutedAtUtc;
-        await _db.SaveChangesAsync(ct);
+        executedPending.UpdatedAtUtc = command.ExecutedAtUtc;
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(LeaseAgreement),
+                entityId = command.AgreementId,
+                operation = "update",
+                data = new { },
+            }),
+            IdempotencyKey =
+                $"demo-legal/{command.PortfolioId}/{command.AgreementId}/finalized/v1",
+            CreatedAtUtc = command.ExecutedAtUtc,
+            NextAttemptAtUtc = command.ExecutedAtUtc,
+        });
+        await attempt.FlushBusinessAsync(ct);
+        return new FinalizeDemoLegalDocumentResult(
+            command.PortfolioId,
+            command.AgreementId,
+            issuedArtifact.Id,
+            executedArtifact.Id,
+            alreadyFinalized);
     }
 
-    private async Task<IReadOnlyDictionary<Guid, PendingFileUpload>> LockPendingUploadsAsync(
+    private static async Task<IReadOnlyDictionary<Guid, PendingFileUpload>> LockPendingUploadsAsync(
+        RentalCommandDbContext db,
         Guid[] ids,
         CancellationToken ct)
     {
-        if (_db.Database.IsNpgsql())
+        if (db.Database.IsNpgsql())
         {
-            return await _db.PendingFileUploads
+            return await db.PendingFileUploads
                 .FromSqlInterpolated($$"""
                     SELECT upload.*
                     FROM "PendingFileUploads" AS upload
@@ -1120,14 +1277,16 @@ public class DemoDataSeeder
                 .ToDictionaryAsync(upload => upload.Id, ct);
         }
 
-        return await _db.PendingFileUploads
+        return await db.PendingFileUploads
             .Where(upload => ids.Contains(upload.Id))
             .OrderBy(upload => upload.Id)
             .ToDictionaryAsync(upload => upload.Id, ct);
     }
 
-    private async Task<LegalDocumentArtifact> GetOrCreateArtifactAsync(
-        CanonicalDemoLegalDocumentIntent intent,
+    private static async Task<LegalDocumentArtifact> GetOrCreateArtifactAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext attempt,
+        FinalizeDemoLegalDocumentCommand command,
         PendingFileUpload pending,
         IReadOnlyDictionary<string, LegalDocumentArtifact> existingArtifactsByStorageKey,
         LegalDocumentArtifactKind kind,
@@ -1149,24 +1308,24 @@ public class DemoDataSeeder
 
         var storedFile = new StoredFile
         {
-            PortfolioId = intent.PortfolioId,
+            PortfolioId = command.PortfolioId,
             FileName = fileName,
             FilePath = pending.StoragePath,
             ContentType = "application/pdf",
             FileSize = length,
             EntityType = nameof(LeaseAgreement),
-            EntityId = intent.AgreementId,
+            EntityId = command.AgreementId,
             UploadedAt = kind == LegalDocumentArtifactKind.IssuedAgreement
-                ? intent.IssuedAtUtc
-                : intent.ExecutedAtUtc,
+                ? command.IssuedAtUtc
+                : command.ExecutedAtUtc,
         };
-        _db.StoredFiles.Add(storedFile);
-        await _db.SaveChangesAsync(ct);
+        db.StoredFiles.Add(storedFile);
+        await attempt.FlushBusinessAsync(ct);
 
         var artifact = new LegalDocumentArtifact
         {
             PublicId = Guid.NewGuid(),
-            PortfolioId = intent.PortfolioId,
+            PortfolioId = command.PortfolioId,
             StoredFileId = storedFile.Id,
             ArtifactKind = kind,
             StorageKey = pending.StoragePath,
@@ -1176,39 +1335,40 @@ public class DemoDataSeeder
             ContentSha256 = hash,
             LegalIssuanceFingerprint = issuanceFingerprint,
             CreatedAtUtc = kind == LegalDocumentArtifactKind.IssuedAgreement
-                ? intent.IssuedAtUtc
-                : intent.ExecutedAtUtc,
-            CreatedByUserId = intent.ActorUserId,
+                ? command.IssuedAtUtc
+                : command.ExecutedAtUtc,
+            CreatedByUserId = command.ActorUserId,
         };
-        _db.LegalDocumentArtifacts.Add(artifact);
-        await _db.SaveChangesAsync(ct);
+        db.LegalDocumentArtifacts.Add(artifact);
+        await attempt.FlushBusinessAsync(ct);
         return artifact;
     }
 
     private static void ValidatePending(
         PendingFileUpload pending,
-        PendingFileUploadAdmission admission,
+        string storagePath,
+        string requestFingerprint,
         long expectedLength)
     {
         if (pending.State == PendingFileUploadState.Abandoned
-            || pending.StoragePath != admission.StoragePath
-            || pending.RequestFingerprint != admission.RequestFingerprint
+            || pending.StoragePath != storagePath
+            || pending.RequestFingerprint != requestFingerprint
             || pending.SizeBytes != expectedLength)
         {
             throw new InvalidOperationException("The deterministic demo legal-document admission changed before finalization.");
         }
     }
 
-    private void EnsureProviderIoIsOutsideInfrastructure()
+    private void EnsureProviderIoIsOutsideAtomicAttempt()
     {
-        if (_atomicExecution.IsInfrastructureActive)
+        if (_atomicContext.IsActive)
         {
             throw new AtomicArchitectureException(
-                "Demo legal-document rendering and storage I/O cannot run inside an infrastructure transaction.");
+                "Demo legal-document rendering and storage I/O cannot run inside a database transaction.");
         }
     }
 
-    private static void EnsurePdf(byte[] bytes, string artifactName)
+    private void EnsurePdf(byte[] bytes, string artifactName)
     {
         if (bytes.Length < 4 || bytes[0] != (byte)'%' || bytes[1] != (byte)'P'
             || bytes[2] != (byte)'D' || bytes[3] != (byte)'F')
@@ -1217,7 +1377,7 @@ public class DemoDataSeeder
         }
     }
 
-    private static string Sha256(byte[] bytes) =>
+    private string Sha256(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private sealed record PreparedDemoLegalDocument(
@@ -1231,4 +1391,204 @@ public class DemoDataSeeder
         string ExecutedFileName,
         long ExecutedLength,
         string ExecutedHash);
+}
+
+public sealed class DemoSeedCommandHandler
+    : IAtomicCommandHandler<SeedDemoPortfolioCommand, SeedDemoPortfolioResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public DemoSeedCommandHandler(RentalCommandDbContext db) => _db = db;
+
+    internal static readonly AtomicJsonResultCodec<SeedDemoPortfolioResult> ResultCodec =
+        new("demo-portfolio-seed-result:v1");
+
+    public async Task<SeedDemoPortfolioResult> HandleAsync(
+        SeedDemoPortfolioCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await AuthorizeAsync(command, _db, ct);
+        var result = await DemoDataSeeder.SeedPortfolioCoreAsync(_db, command, attempt, ct);
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(Portfolio),
+            command.PortfolioId,
+            AuditLogOperation.Updated,
+            ChangeReason: result.AlreadyPresent
+                ? "Canonical demo facts reconciled."
+                : "Rich demo portfolio graph seeded."));
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(Portfolio),
+                entityId = command.PortfolioId,
+                operation = "update",
+                data = new { },
+            }),
+            IdempotencyKey = $"demo-seed/{command.PortfolioId}/{command.OperationKey}",
+            CreatedAtUtc = command.BusinessNowUtc,
+            NextAttemptAtUtc = command.BusinessNowUtc,
+        });
+        return result;
+    }
+
+    public Task AuthorizeReplayAsync(
+        SeedDemoPortfolioCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        return AuthorizeAsync(command, _db, ct);
+    }
+
+    private async Task AuthorizeAsync(
+        SeedDemoPortfolioCommand command,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        if (!db.Database.IsNpgsql())
+        {
+            var authorizedForProviderTests = await db.Set<Portfolio>()
+                .AsNoTracking()
+                .AnyAsync(portfolio =>
+                    portfolio.Id == command.PortfolioId
+                    && db.Set<WorkspaceMembership>().Any(membership =>
+                        membership.PortfolioId == portfolio.Id
+                        && membership.Status == WorkspaceMembershipStatus.Active
+                        && membership.SuspendedAtUtc == null
+                        && membership.RevokedAtUtc == null), ct);
+            if (!authorizedForProviderTests)
+            {
+                throw new UnauthorizedAccessException(
+                    "The portfolio has no active administering membership for demo seeding.");
+            }
+            return;
+        }
+
+        var authorized = await db.QuerySqlAsync<int>($$"""
+            SELECT 1 AS "Value"
+            FROM "Portfolios" AS portfolio
+            WHERE portfolio."Id" = {{command.PortfolioId}}
+              AND (
+                    NOT {{command.RequirePendingSandboxOnboarding}}
+                    OR COALESCE(portfolio."Settings"::jsonb #>> '{onboarding,choice}', 'pending')
+                        = 'pending')
+              AND EXISTS (
+                    SELECT 1
+                    FROM "WorkspaceAccessContexts" AS context
+                    JOIN "WorkspaceMemberships" AS membership
+                      ON membership."AccessContextId" = context."Id"
+                     AND membership."PortfolioId" = context."PortfolioId"
+                    WHERE context."PortfolioId" = portfolio."Id"
+                      AND context."Status" = 'Active'
+                      AND context."SuspendedAtUtc" IS NULL
+                      AND context."RevokedAtUtc" IS NULL
+                      AND membership."Status" = 'Active'
+                      AND membership."SuspendedAtUtc" IS NULL
+                      AND membership."RevokedAtUtc" IS NULL)
+            LIMIT 1
+            """,
+            ct);
+        if (authorized.Count == 0)
+        {
+            throw new UnauthorizedAccessException(
+                "The portfolio has no active administering membership for demo seeding.");
+        }
+    }
+
+    private void Validate(SeedDemoPortfolioCommand command)
+    {
+        if (command.PortfolioId <= 0
+            || command.BusinessNowUtc.Kind != DateTimeKind.Utc
+            || string.IsNullOrWhiteSpace(command.OperationKey)
+            || command.OperationKey.Length > 128
+            || !string.Equals(command.OperationKey, command.OperationKey.Trim(), StringComparison.Ordinal))
+        {
+            throw new DomainValidationException("A valid demo portfolio seed command is required.");
+        }
+    }
+}
+
+public sealed class DemoLegalDocumentFinalizeCommandHandler
+    : IAtomicCommandHandler<FinalizeDemoLegalDocumentCommand, FinalizeDemoLegalDocumentResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public DemoLegalDocumentFinalizeCommandHandler(RentalCommandDbContext db) => _db = db;
+
+    internal static readonly AtomicJsonResultCodec<FinalizeDemoLegalDocumentResult> ResultCodec =
+        new("demo-legal-document-finalize-result:v1");
+
+    public async Task<FinalizeDemoLegalDocumentResult> HandleAsync(
+        FinalizeDemoLegalDocumentCommand command,
+        IAtomicCommandContext attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await AuthorizeAsync(command, _db, ct);
+        await attempt.AcquireLockAsync("LeaseAgreement", command.AgreementId, ct);
+        return await DemoDataSeeder.FinalizeLegalDocumentAsync(_db, command, attempt, ct);
+    }
+
+    public Task AuthorizeReplayAsync(
+        FinalizeDemoLegalDocumentCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        return AuthorizeAsync(command, _db, ct);
+    }
+
+    private async Task AuthorizeAsync(
+        FinalizeDemoLegalDocumentCommand command,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        var authorized = await db.Set<LeaseAgreement>()
+            .AsNoTracking()
+            .AnyAsync(agreement =>
+                agreement.Id == command.AgreementId
+                && agreement.PortfolioId == command.PortfolioId
+                && db.Set<WorkspaceMembership>().Any(membership =>
+                    membership.PortfolioId == command.PortfolioId
+                    && membership.AccessContext!.UserId == command.ActorUserId
+                    && membership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+                    && membership.AccessContext.SuspendedAtUtc == null
+                    && membership.AccessContext.RevokedAtUtc == null
+                    && membership.Status == WorkspaceMembershipStatus.Active
+                    && membership.SuspendedAtUtc == null
+                    && membership.RevokedAtUtc == null), ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The demo legal document cannot be finalized in this portfolio.");
+        }
+    }
+
+    private void Validate(FinalizeDemoLegalDocumentCommand command)
+    {
+        if (command.PortfolioId <= 0
+            || command.ActorUserId <= 0
+            || command.AgreementId <= 0
+            || command.IssuedPendingUploadId == Guid.Empty
+            || command.ExecutedPendingUploadId == Guid.Empty
+            || command.IssuedLength <= 0
+            || command.ExecutedLength <= 0
+            || command.IssuedAtUtc.Kind != DateTimeKind.Utc
+            || command.ExecutedAtUtc.Kind != DateTimeKind.Utc
+            || string.IsNullOrWhiteSpace(command.IssuedStoragePath)
+            || string.IsNullOrWhiteSpace(command.ExecutedStoragePath)
+            || string.IsNullOrWhiteSpace(command.IssuedHash)
+            || string.IsNullOrWhiteSpace(command.ExecutedHash)
+            || string.IsNullOrWhiteSpace(command.IssuanceFingerprint))
+        {
+            throw new DomainValidationException(
+                "A complete immutable demo legal-document finalization command is required.");
+        }
+    }
 }

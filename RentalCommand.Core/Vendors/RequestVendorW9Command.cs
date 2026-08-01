@@ -8,11 +8,11 @@ public sealed record RequestVendorW9Command(
     int VendorId,
     string ClientOperationId,
     int? ChangedByUserId,
-    Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     int ActorUserId,
-    int AccessContextId,
-    long AccessRevision,
-    DateTime RequestedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long AccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime RequestedAtUtc) : IAtomicCommandData;
 
 public enum RequestVendorW9Outcome
 {
@@ -24,4 +24,4 @@ public enum RequestVendorW9Outcome
 /// <summary>Canonical receipt result for a W-9 request admission.</summary>
 public sealed record RequestVendorW9Result(
     RequestVendorW9Outcome Outcome,
-    string? Phone) : IAtomicResultData;
+    string? Phone);

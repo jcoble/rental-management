@@ -95,7 +95,7 @@ public sealed class AuthControllerChangePasswordTests
             Mock.Of<ICanonicalAccessTokenService>(),
             Mock.Of<IAccessEnvelopeQuery>(),
             Mock.Of<IEffectiveAccessContextSelectionQuery>(),
-            TimeProvider.System,
+            new SystemAuthSecurityClock(),
             NullLogger<AuthController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },

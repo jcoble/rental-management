@@ -141,32 +141,44 @@ public sealed class LegalDocumentSourceVersionConcurrencyTests : IAsyncLifetime
         await using var loserTransaction = await loserDb.Database.BeginTransactionAsync();
         var transactionIdBefore = await CurrentTransactionIdAsync(loserDb);
 
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
-        using var attemptLease = auditScope.BeginAttempt(
-            new AtomicCommandIdentity("test.resolve-legal-source", Guid.NewGuid().ToString("N")),
-            Guid.NewGuid());
-        var resolver = new AtomicLeaseMutationPersistence(loserDb, auditScope);
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        var commandContext = new AtomicCommandContext(loserDb, auditScope, TimeProvider.System);
+        commandContext.BeginAttempt(attemptId);
+        try
+        {
+            using var attemptLease = auditScope.BeginAttempt(
+                new AtomicCommandIdentity("test.resolve-legal-source", Guid.NewGuid().ToString("N")),
+                attemptId,
+                loserDb);
 
-        var resolutionTask = resolver.ResolveAuthoredDocumentSourceVersionAsync(
-            _portfolioId,
-            _propertyId,
-            0,
-            _templateId,
-            _actorUserId,
-            CreatedAtUtc.AddMinutes(1));
+            var resolutionTask = AtomicLeaseMutationPersistence.ResolveAuthoredDocumentSourceVersionAsync(
+                loserDb,
+                commandContext,
+                _portfolioId,
+                _propertyId,
+                0,
+                _templateId,
+                _actorUserId,
+                CreatedAtUtc.AddMinutes(1));
 
-        await WaitForLoserLockAsync();
-        await winnerTransaction.CommitAsync();
+            await WaitForLoserLockAsync();
+            await winnerTransaction.CommitAsync();
 
-        var result = await resolutionTask.WaitAsync(TimeSpan.FromSeconds(10));
-        var transactionIdAfter = await CurrentTransactionIdAsync(loserDb);
+            var result = await resolutionTask.WaitAsync(TimeSpan.FromSeconds(10));
+            var transactionIdAfter = await CurrentTransactionIdAsync(loserDb);
 
-        result.Resolved.Should().BeTrue();
-        result.DocumentSourceVersionId.Should().Be(winnerId);
-        transactionIdAfter.Should().Be(transactionIdBefore,
-            "the fresh statement snapshot must remain inside the command's original transaction");
+            result.Resolved.Should().BeTrue();
+            result.DocumentSourceVersionId.Should().Be(winnerId);
+            transactionIdAfter.Should().Be(transactionIdBefore,
+                "the fresh statement snapshot must remain inside the command's original transaction");
 
-        await loserTransaction.RollbackAsync();
+            await loserTransaction.RollbackAsync();
+        }
+        finally
+        {
+            commandContext.EndAttempt();
+        }
 
         await using var verify = NewContext(_connectionString);
         var matching = await verify.LegalDocumentSourceVersions

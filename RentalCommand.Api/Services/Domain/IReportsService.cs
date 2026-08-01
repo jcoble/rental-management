@@ -20,6 +20,9 @@ public interface IReportsService
     /// <summary>The full catalog of available reports grouped by category, for the generic web UI.</summary>
     ReportsCatalogResponse GetCatalog();
 
+    /// <summary>The portfolio business year used when annual report requests omit <c>year</c>.</summary>
+    Task<int> GetDefaultAnnualReportYearAsync(WorkspaceReadScope scope, CancellationToken ct = default);
+
     /// <summary>Current rent-roll snapshot: one row per active/under-notice lease, plus totals.</summary>
     Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 

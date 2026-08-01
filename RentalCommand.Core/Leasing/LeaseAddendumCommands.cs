@@ -40,10 +40,10 @@ public sealed record CreateLeaseAddendumDraftCommand(
     IReadOnlyList<LeaseAddendumDraftSignerInput> Signers,
     IReadOnlyList<LeaseAddendumFinancialEffectInput> FinancialEffects,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
 
 public sealed record EditLeaseAddendumDraftCommand(
     int PortfolioId,
@@ -60,10 +60,10 @@ public sealed record EditLeaseAddendumDraftCommand(
     IReadOnlyList<LeaseAddendumDraftSignerInput> Signers,
     IReadOnlyList<LeaseAddendumFinancialEffectInput> FinancialEffects,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
 
 public sealed record CorrectLeaseAddendumDraftCommand(
     int PortfolioId,
@@ -71,10 +71,10 @@ public sealed record CorrectLeaseAddendumDraftCommand(
     int SourceAddendumId,
     DateOnly SupersessionEffectiveOn,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
 
 public enum LeaseAddendumDraftMutationOutcome
 {
@@ -98,7 +98,7 @@ public sealed record LeaseAddendumDraftMutationResult(
     int? SourceAddendumId,
     IReadOnlyList<int> LeaseAddendumSignerIds,
     IReadOnlyList<int> FinancialEffectIds,
-    string? Error) : IAtomicResultData;
+    string? Error);
 
 public sealed record VoidLeaseAgreementCommand(
     int PortfolioId,
@@ -107,10 +107,10 @@ public sealed record VoidLeaseAgreementCommand(
     string VoidReasonCode,
     string? VoidNote,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
 
 public sealed record VoidLeaseAddendumCommand(
     int PortfolioId,
@@ -119,10 +119,10 @@ public sealed record VoidLeaseAddendumCommand(
     string VoidReasonCode,
     string? VoidNote,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAddendumCommand;
 
 public enum VoidLegalArtifactOutcome
 {
@@ -140,7 +140,7 @@ public sealed record VoidLegalArtifactResult(
     int? LeaseAgreementId,
     int? LeaseAddendumId,
     DateTime? VoidedAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);
 
 public sealed record CloseTenantAccountCommand(
     int PortfolioId,
@@ -149,10 +149,10 @@ public sealed record CloseTenantAccountCommand(
     string CloseReasonCode,
     string? CloseNote,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
 
 public enum CloseTenantAccountOutcome
 {
@@ -169,4 +169,4 @@ public sealed record CloseTenantAccountResult(
     int LeaseManagementId,
     int TenantAccountId,
     DateTime? ClosedAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);

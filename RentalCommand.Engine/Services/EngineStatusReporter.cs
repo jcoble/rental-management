@@ -1,32 +1,26 @@
 using System.Reflection;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Atomic;
-using RentalCommand.Core.Enums;
-using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
 /// Persists worker health records (start, heartbeat, error) to the database.
 /// Called from <see cref="Workers.EngineWorkerBase"/> on each poll cycle and on errors.
-/// Registered as <b>Scoped</b>; its kernel-owned infrastructure transaction uses that scope's
-/// DbContext and performs each concurrent-safe upsert as one PostgreSQL statement.
+/// Registered as <b>Scoped</b>; each concurrent-safe heartbeat upsert is performed by a Data-owned
+/// store as one PostgreSQL statement.
 /// </summary>
 public class EngineStatusReporter
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
+    private readonly IEngineWorkerHeartbeatStore _heartbeats;
     private readonly ILogger<EngineStatusReporter> _logger;
 
     public EngineStatusReporter(
-        RentalCommandDbContext db,
-        IAtomicInfrastructureUnitOfWork infrastructure,
+        IEngineWorkerHeartbeatStore heartbeats,
         ILogger<EngineStatusReporter> logger)
     {
-        _db = db;
-        _infrastructure = infrastructure;
+        _heartbeats = heartbeats;
         _logger = logger;
     }
 
@@ -40,25 +34,7 @@ public class EngineStatusReporter
         try
         {
             var now = DateTime.UtcNow;
-            await _infrastructure.ExecuteAsync(
-                AtomicInfrastructureOperation.EngineHeartbeat,
-                async ct =>
-                {
-                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-                        INSERT INTO "EngineWorkerHeartbeats"
-                            ("WorkerName", "LastHeartbeatUtc", "Status", "StartedAtUtc",
-                             "ProcessedCount", "CycleCount")
-                        VALUES
-                            ({{workerName}}, {{now}}, {{(int)EngineWorkerStatus.Running}}, {{now}}, 0, 0)
-                        ON CONFLICT ("WorkerName") DO UPDATE SET
-                            "StartedAtUtc" = EXCLUDED."StartedAtUtc",
-                            "LastHeartbeatUtc" = EXCLUDED."LastHeartbeatUtc",
-                            "Status" = EXCLUDED."Status",
-                            "ProcessedCount" = 0,
-                            "CycleCount" = 0
-                        """, ct);
-                },
-                cancellationToken);
+            await _heartbeats.RecordStartAsync(workerName, now, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -88,28 +64,7 @@ public class EngineStatusReporter
                 lockContested = Program.LockContested
             });
 
-            await _infrastructure.ExecuteAsync(
-                AtomicInfrastructureOperation.EngineHeartbeat,
-                async ct =>
-                {
-                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-                        INSERT INTO "EngineWorkerHeartbeats"
-                            ("WorkerName", "LastHeartbeatUtc", "Status", "StartedAtUtc",
-                             "ProcessedCount", "CycleCount", "Metadata")
-                        VALUES
-                            ({{workerName}}, {{now}}, {{(int)EngineWorkerStatus.Running}}, {{now}},
-                             {{processedDelta}}, 1, CAST({{metadata}} AS jsonb))
-                        ON CONFLICT ("WorkerName") DO UPDATE SET
-                            "LastHeartbeatUtc" = EXCLUDED."LastHeartbeatUtc",
-                            "Status" = EXCLUDED."Status",
-                            "ProcessedCount" = "EngineWorkerHeartbeats"."ProcessedCount" + EXCLUDED."ProcessedCount",
-                            "CycleCount" = "EngineWorkerHeartbeats"."CycleCount" + 1,
-                            "Metadata" = EXCLUDED."Metadata",
-                            "LastErrorMessage" = NULL,
-                            "LastErrorUtc" = NULL
-                        """, ct);
-                },
-                cancellationToken);
+            await _heartbeats.RecordHeartbeatAsync(workerName, now, processedDelta, metadata, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -126,24 +81,7 @@ public class EngineStatusReporter
         try
         {
             var now = DateTime.UtcNow;
-            await _infrastructure.ExecuteAsync(
-                AtomicInfrastructureOperation.EngineHeartbeat,
-                async ct =>
-                {
-                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-                        INSERT INTO "EngineWorkerHeartbeats"
-                            ("WorkerName", "LastHeartbeatUtc", "LastErrorMessage", "LastErrorUtc",
-                             "Status", "ProcessedCount", "StartedAtUtc", "CycleCount")
-                        VALUES
-                            ({{workerName}}, {{now}}, {{ex.Message}}, {{now}},
-                             {{(int)EngineWorkerStatus.Error}}, 0, {{now}}, 0)
-                        ON CONFLICT ("WorkerName") DO UPDATE SET
-                            "Status" = EXCLUDED."Status",
-                            "LastErrorMessage" = EXCLUDED."LastErrorMessage",
-                            "LastErrorUtc" = EXCLUDED."LastErrorUtc"
-                        """, ct);
-                },
-                cancellationToken);
+            await _heartbeats.RecordErrorAsync(workerName, now, ex.Message, cancellationToken);
         }
         catch (Exception loggingEx)
         {

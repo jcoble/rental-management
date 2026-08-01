@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -136,7 +137,8 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, CreateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -147,7 +149,8 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int id, UpdateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -158,10 +161,29 @@ public class LoanService : ILoanService
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;
+    }
+
+    public async Task<LoanPaymentResponse?> PostPaymentAsync(
+        WorkspaceReadScope scope,
+        int loanId,
+        int paymentId,
+        PostLoanPaymentRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default)
+    {
+        request.LoanId = loanId;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, paymentId, idempotencyKey, request,
+            _timeProvider.UtcNow());
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        if (!outcome.Value.Found) return null;
+        return ReadSnapshot<LoanPaymentResponse>(outcome.Value);
     }
 
     private static TResponse ReadSnapshot<TResponse>(AtomicMoneyMutationResult result) where TResponse : class =>
@@ -170,7 +192,8 @@ public class LoanService : ILoanService
                 ?? throw new AtomicReceiptInvariantException("The money receipt snapshot is invalid.")
             : throw new AtomicReceiptInvariantException("The money receipt snapshot is missing.");
 
-    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
+        int portfolioId, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
     {
         // Confirm the loan is in-portfolio before returning its schedule (IDOR guard).
         var loanInScope = await _db.Loans
@@ -179,30 +202,15 @@ public class LoanService : ILoanService
         if (!loanInScope)
             return null;
 
-        return await _db.LoanPayments
-            .AsNoTracking()
-            .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId)
-            .OrderBy(p => p.PeriodKey)
-            .Select(payment => new LoanPaymentResponse
-            {
-                Id = payment.Id,
-                LoanId = payment.LoanId,
-                PeriodKey = payment.PeriodKey,
-                DueDate = payment.DueDate,
-                PaidDate = payment.PaidDate,
-                InterestAmount = payment.InterestAmount,
-                PrincipalAmount = payment.PrincipalAmount,
-                EscrowAmount = payment.EscrowAmount,
-                TotalAmount = payment.TotalAmount,
-                BalanceAfter = payment.BalanceAfter,
-                Status = payment.Status,
-                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
-            })
+        return await BuildPaymentQuery(
+                LoanPaymentEffectiveQuery.From(_db)
+                    .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId),
+                query)
             .ToListAsync(ct);
     }
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(
-        WorkspaceReadScope scope, int loanId, CancellationToken ct = default)
+        WorkspaceReadScope scope, int loanId, LoanPaymentQuery? query = null, CancellationToken ct = default)
     {
         var loanInScope = await _db.Loans.AsNoTracking()
             .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow())
@@ -210,24 +218,49 @@ public class LoanService : ILoanService
         if (!loanInScope)
             return null;
 
-        return await _db.LoanPayments.AsNoTracking()
-            .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId)
-            .OrderBy(payment => payment.PeriodKey)
-            .Select(payment => new LoanPaymentResponse
-            {
-                Id = payment.Id,
-                LoanId = payment.LoanId,
-                PeriodKey = payment.PeriodKey,
-                DueDate = payment.DueDate,
-                PaidDate = payment.PaidDate,
-                InterestAmount = payment.InterestAmount,
-                PrincipalAmount = payment.PrincipalAmount,
-                EscrowAmount = payment.EscrowAmount,
-                TotalAmount = payment.TotalAmount,
-                BalanceAfter = payment.BalanceAfter,
-                Status = payment.Status,
-                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
-            })
+        return await BuildPaymentQuery(
+                LoanPaymentEffectiveQuery.From(_db)
+                    .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId),
+                query)
             .ToListAsync(ct);
+    }
+
+    private static IQueryable<LoanPaymentResponse> BuildPaymentQuery(
+        IQueryable<LoanPaymentEffectiveRow> payments,
+        LoanPaymentQuery? query)
+    {
+        query ??= new LoanPaymentQuery();
+        if (query.Status is { } status)
+            payments = payments.Where(payment => payment.Status == status);
+
+        var ordered = query.SortField switch
+        {
+            "duedate" => query.SortDescending
+                ? payments.OrderByDescending(payment => payment.DueDate).ThenByDescending(payment => payment.Id)
+                : payments.OrderBy(payment => payment.DueDate).ThenBy(payment => payment.Id),
+            _ => query.SortDescending
+                ? payments.OrderByDescending(payment => payment.PeriodKey).ThenByDescending(payment => payment.Id)
+                : payments.OrderBy(payment => payment.PeriodKey).ThenBy(payment => payment.Id),
+        };
+
+        var paged = ordered.Skip(query.NormalizedSkip);
+        if (query.NormalizedTake is int take)
+            paged = paged.Take(take);
+
+        return paged.Select(payment => new LoanPaymentResponse
+        {
+            Id = payment.Id,
+            LoanId = payment.LoanId,
+            PeriodKey = payment.PeriodKey,
+            DueDate = payment.DueDate,
+            PaidDate = payment.PaidDate,
+            InterestAmount = payment.InterestAmount,
+            PrincipalAmount = payment.PrincipalAmount,
+            EscrowAmount = payment.EscrowAmount,
+            TotalAmount = payment.TotalAmount,
+            BalanceAfter = payment.BalanceAfter,
+            Status = payment.Status,
+            PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+        });
     }
 }

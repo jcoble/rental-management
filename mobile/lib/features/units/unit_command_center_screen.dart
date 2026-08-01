@@ -16,7 +16,7 @@ import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/navigation/mobile_restoration_state.dart';
 import '../../core/presentation/plain_english_labels.dart';
-import '../../core/widgets/mobile_section_selector.dart';
+import '../../core/widgets/mobile_pill_tab_bar.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -328,52 +328,40 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         builder: (tabContext) {
           final topController = DefaultTabController.of(tabContext);
           _bindTopController(topController);
-          final unitSelector = AnimatedBuilder(
+          final unitTabs = AnimatedBuilder(
             animation: topController.animation!,
-            builder: (context, _) => MobileSectionSelector<int>(
-              items: const [
-                MobileSectionItem(
-                  value: 0,
-                  id: 'summary',
+            builder: (context, _) => MobilePillTabBar(
+              key: const Key('unit-section-tabs'),
+              scrollKey: const Key('unit-section-tabs-scroll'),
+              semanticLabel: 'Unit sections',
+              selectedIndex: topController.index,
+              onSelected: topController.animateTo,
+              tabs: const [
+                MobilePillTab(
+                  key: ValueKey('unit-section-summary'),
                   label: 'Summary',
-                  icon: Icons.dashboard_outlined,
                 ),
-                MobileSectionItem(
-                  value: 1,
-                  id: 'leasing',
+                MobilePillTab(
+                  key: ValueKey('unit-section-leasing'),
                   label: 'Leasing',
-                  icon: Icons.campaign_outlined,
                 ),
-                MobileSectionItem(
-                  value: 2,
-                  id: 'tenant-lease',
+                MobilePillTab(
+                  key: ValueKey('unit-section-tenant-lease'),
                   label: 'Tenant & lease',
-                  icon: Icons.group_outlined,
                 ),
-                MobileSectionItem(
-                  value: 3,
-                  id: 'money',
+                MobilePillTab(
+                  key: ValueKey('unit-section-money'),
                   label: 'Money',
-                  icon: Icons.payments_outlined,
                 ),
-                MobileSectionItem(
-                  value: 4,
-                  id: 'maintenance',
+                MobilePillTab(
+                  key: ValueKey('unit-section-maintenance'),
                   label: 'Maintenance',
-                  icon: Icons.build_outlined,
                 ),
-                MobileSectionItem(
-                  value: 5,
-                  id: 'documents-history',
+                MobilePillTab(
+                  key: ValueKey('unit-section-documents-history'),
                   label: 'Documents & history',
-                  icon: Icons.folder_copy_outlined,
                 ),
               ],
-              selectedValue: topController.index,
-              onSelected: topController.animateTo,
-              tooltip: 'Choose unit section',
-              selectorKey: const Key('unit-section-selector'),
-              itemKeyPrefix: 'unit-section',
             ),
           );
           return _UnitViewScope(
@@ -406,7 +394,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: unitSelector,
+                          child: unitTabs,
                         ),
                         Expanded(child: tabView),
                       ],
@@ -415,7 +403,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: unitSelector,
+                          child: unitTabs,
                         ),
                         Expanded(child: tabView),
                       ],

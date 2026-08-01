@@ -1,4 +1,5 @@
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Notifications;
 
 namespace RentalCommand.Core.Automation;
 
@@ -11,7 +12,7 @@ public sealed record ApplyClaimedTenantNoticeDraftBatchCommand(
 
 public sealed record ApplyClaimedTenantNoticeDraftBatchResult(
     int CreatedCount,
-    AtomicGeneratedTenantNoticeDraft[] Drafts) : IAtomicResultData;
+    AtomicGeneratedTenantNoticeDraft[] Drafts);
 
 public static class TenantNoticeDraftAutomation
 {

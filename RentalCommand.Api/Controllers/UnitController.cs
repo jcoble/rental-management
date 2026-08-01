@@ -295,7 +295,7 @@ public class UnitController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var signal = await _listings.IngestSignalAsync(GetPortfolioId(), id, publicationId,
+        var signal = await _listings.IngestSignalAsync(GetWorkspaceReadScope(), id, publicationId,
             RequireListingOperationId(idempotencyKey), request, ct);
         return signal is null ? NotFound(new { error = "Listing publication not found" }) : Ok(signal);
     }
@@ -420,10 +420,6 @@ public class UnitController : ManagementControllerBase
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var scope = GetWorkspaceReadScope();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.RentalsManage,
-                new UnitCapabilityAuthorizationTarget(scope.PortfolioId, id),
-                ct)) return Forbid();
         try
         {
             var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);

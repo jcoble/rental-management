@@ -5,6 +5,22 @@ import { describe, it } from 'node:test';
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 describe('property detail grid server-side query contracts', () => {
+	it('refreshes the active Rentals grid after a unit mutation succeeds', () => {
+		const component = source('../../routes/(protected)/properties/[id]/+page.svelte');
+		const invalidateUnits = component.match(
+			/function invalidateUnits\(\) \{([\s\S]*?)\n\t\}/
+		)?.[1] ?? '';
+
+		assert.match(
+			invalidateUnits,
+			/queryClient\.invalidateQueries\(\{ queryKey: \['property-workspace', id, 'rentals'\] \}\)/
+		);
+		assert.doesNotMatch(
+			invalidateUnits,
+			/queryClient\.invalidateQueries\(\{ queryKey: \['units', id\] \}\)/
+		);
+	});
+
 	it('drives the loans grid from the paged API with date filtering', () => {
 		const component = source('../components/property/PropertyLoansSection.svelte');
 

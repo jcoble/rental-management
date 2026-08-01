@@ -105,8 +105,8 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var credentialId = Guid.NewGuid();
         var command = Issue(familyId, credentialId, Hash("first"));
 
-        var first = await Atomic.ExecuteAsync(Identity("issue", operationId), command, Codec);
-        var replay = await Atomic.ExecuteAsync(Identity("issue", operationId), command, Codec);
+        var first = await ExecuteAtomicAsync(Identity("issue", operationId), command, Codec);
+        var replay = await ExecuteAtomicAsync(Identity("issue", operationId), command, Codec);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -132,8 +132,8 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var second = Rotate(secondOperation, issued.TokenHash, secondReplacement, Hash("replacement-b"));
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(Identity("rotate", firstOperation), first, Codec),
-            Atomic.ExecuteAsync(Identity("rotate", secondOperation), second, Codec));
+            ExecuteAtomicAsync(Identity("rotate", firstOperation), first, Codec),
+            ExecuteAtomicAsync(Identity("rotate", secondOperation), second, Codec));
 
         outcomes.Select(item => item.Value.Status).Should().BeEquivalentTo(
             [SessionRefreshMutationStatus.Rotated, SessionRefreshMutationStatus.ReuseDetected]);
@@ -168,8 +168,8 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var replacementHash = Hash("stable-replacement");
         var command = Rotate(operation, issued.TokenHash, replacementId, replacementHash);
 
-        var first = await Atomic.ExecuteAsync(Identity("rotate", operation), command, Codec);
-        var retry = await Atomic.ExecuteAsync(Identity("rotate", operation), command, Codec);
+        var first = await ExecuteAtomicAsync(Identity("rotate", operation), command, Codec);
+        var retry = await ExecuteAtomicAsync(Identity("rotate", operation), command, Codec);
 
         first.Value.Status.Should().Be(SessionRefreshMutationStatus.Rotated);
         retry.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -193,7 +193,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var operation = Guid.NewGuid();
         var replacementId = Guid.NewGuid();
 
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             Identity("rotate", operation),
             Rotate(
                 operation,
@@ -216,14 +216,14 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var issued = await IssueCredentialAsync();
         var initialRotationOperation = Guid.NewGuid();
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity("rotate", initialRotationOperation),
             Rotate(initialRotationOperation, issued.TokenHash, Guid.NewGuid(), Hash("replacement")),
             Codec);
         var reuseOperation = Guid.NewGuid();
         _failureInterceptor!.FailNextReuse = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("rotate", reuseOperation),
             Rotate(reuseOperation, issued.TokenHash, Guid.NewGuid(), Hash("discarded")),
             Codec);
@@ -253,7 +253,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var issued = await IssueCredentialAsync();
         var operation = Guid.NewGuid();
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("rotate", operation),
             Rotate(operation, issued.TokenHash, Guid.NewGuid(), issued.TokenHash),
             Codec);
@@ -281,7 +281,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var familyId = Guid.NewGuid();
         var credentialId = Guid.NewGuid();
 
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             Identity("issue", Guid.NewGuid()),
             Issue(familyId, credentialId, Hash($"rejected-{loss}")),
             Codec);
@@ -305,7 +305,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var replacementId = Guid.NewGuid();
         var operationId = Guid.NewGuid();
 
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             Identity("rotate", operationId),
             Rotate(operationId, issued.TokenHash, replacementId, Hash($"rejected-rotation-{loss}")),
             Codec);
@@ -323,7 +323,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         var familyId = Guid.NewGuid();
         var credentialId = Guid.NewGuid();
         var hash = Hash(Guid.NewGuid().ToString("N"));
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             Identity("issue", Guid.NewGuid()),
             Issue(familyId, credentialId, hash),
             Codec);
@@ -482,9 +482,20 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options);
 
-    private IAtomicUnitOfWork Atomic =>
-        _services?.GetRequiredService<IAtomicUnitOfWork>()
-        ?? throw new InvalidOperationException("Atomic refresh services are unavailable.");
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        var services = _services
+            ?? throw new InvalidOperationException("Atomic refresh services are unavailable.");
+        await using var scope = services.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; session refresh kernel test skipped.");

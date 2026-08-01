@@ -157,7 +157,9 @@ public sealed class DocumentService : IDocumentService
                 CreateCodec,
                 ct);
 
-        if (outcome.Value.Outcome != StoredDocumentMutationOutcome.Created)
+        if (outcome.Value.Outcome is not (
+            StoredDocumentMutationOutcome.Created or
+            StoredDocumentMutationOutcome.ReusedExisting))
         {
             return null;
         }

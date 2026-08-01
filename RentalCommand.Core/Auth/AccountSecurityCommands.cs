@@ -6,7 +6,7 @@ public sealed record BootstrapAccountCommand(
     string Email,
     string NormalizedEmail,
     string DisplayName,
-    string? PasswordHash,
+    [property: AtomicFingerprintIgnore] string? PasswordHash,
     string CredentialIntentHash,
     bool EmailConfirmed,
     string PortfolioName,
@@ -24,12 +24,12 @@ public sealed record BootstrapAccountResult(
     BootstrapAccountOutcome Outcome,
     int UserId,
     int PortfolioId,
-    int AccessContextId) : IAtomicResultData;
+    int AccessContextId);
 
 public sealed record ConfirmAccountEmailCommand(
     int UserId,
-    string ExpectedSecurityStamp,
-    bool TokenWasValidated,
+    [property: AtomicFingerprintIgnore] string ExpectedSecurityStamp,
+    [property: AtomicFingerprintIgnore] bool TokenWasValidated,
     string ConfirmationIntentHash) : IAtomicCommandData;
 
 public enum ConfirmAccountEmailOutcome
@@ -42,13 +42,13 @@ public enum ConfirmAccountEmailOutcome
 
 public sealed record ConfirmAccountEmailResult(
     ConfirmAccountEmailOutcome Outcome,
-    int UserId) : IAtomicResultData;
+    int UserId);
 
 public sealed record ResetAccountPasswordCommand(
     int UserId,
-    string ExpectedSecurityStamp,
-    bool TokenWasValidated,
-    string PasswordHash,
+    [property: AtomicFingerprintIgnore] string ExpectedSecurityStamp,
+    [property: AtomicFingerprintIgnore] bool TokenWasValidated,
+    [property: AtomicFingerprintIgnore] string PasswordHash,
     string PasswordIntentHash) : IAtomicCommandData;
 
 public enum ResetAccountPasswordOutcome
@@ -60,28 +60,28 @@ public enum ResetAccountPasswordOutcome
 
 public sealed record ResetAccountPasswordResult(
     ResetAccountPasswordOutcome Outcome,
-    int UserId) : IAtomicResultData;
+    int UserId);
 
 public sealed record ConfirmGoogleAccountEmailCommand(
     int UserId,
-    string ExpectedSecurityStamp,
+    [property: AtomicFingerprintIgnore] string ExpectedSecurityStamp,
     string GoogleSubjectHash) : IAtomicCommandData;
 
 public sealed record AuthEmailOutboxCommand(
     int UserId,
     int? ExpectedPortfolioId,
-    string ExpectedSecurityStamp,
+    [property: AtomicFingerprintIgnore] string ExpectedSecurityStamp,
     string EmailKind,
-    string PreparedEmailPayload,
+    [property: AtomicFingerprintIgnore] string PreparedEmailPayload,
     string EmailIntentHash,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AuthEmailOutboxResult(
     bool Enqueued,
     int UserId,
     int PortfolioId,
-    string EmailKind) : IAtomicResultData;
+    string EmailKind);
 
 public sealed record AtomicInitialWorkspaceBootstrap(
     int PortfolioId,
-    int AccessContextId) : IAtomicResultData;
+    int AccessContextId);

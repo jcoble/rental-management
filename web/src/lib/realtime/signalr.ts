@@ -66,6 +66,41 @@ class SignalRService {
 	private isBackgroundRetrying = false;
 
 	/**
+	 * The dev simulation clock replaces global Date so normal app display follows the simulated
+	 * business date. The SignalR JS client also uses global Date internally to schedule client
+	 * keepalive pings; under a frozen/offset sim clock that scheduler can drift from real timers and
+	 * the API closes the websocket after its ~30s client-timeout window. Keep the hub transport on
+	 * real time without weakening the app-wide simulation clock.
+	 */
+	private runWithRealDate<T>(operation: () => T): T {
+		const realDate = browser ? window.__RealDate : undefined;
+		if (!realDate || window.Date === realDate) {
+			return operation();
+		}
+
+		const simulatedDate = window.Date;
+		window.Date = realDate;
+		try {
+			return operation();
+		} finally {
+			window.Date = simulatedDate;
+		}
+	}
+
+	private bindSignalRTimersToRealDate(connection: HubConnection): void {
+		if (!browser || !window.__RealDate) return;
+
+		const internal = connection as unknown as Record<string, unknown>;
+		for (const methodName of ['_resetKeepAliveInterval', '_resetTimeoutPeriod']) {
+			const original = internal[methodName];
+			if (typeof original !== 'function') continue;
+
+			internal[methodName] = (...args: unknown[]) =>
+				this.runWithRealDate(() => original.apply(connection, args));
+		}
+	}
+
+	/**
 	 * Build a fresh HubConnection with all event handlers wired up. Shared by
 	 * the initial connect and every background reconnect so behaviour stays
 	 * identical across retries.
@@ -100,6 +135,7 @@ class SignalRService {
 			})
 			.configureLogging(signalR.LogLevel.Warning)
 			.build();
+		this.bindSignalRTimersToRealDate(connection);
 
 		connection.onreconnecting(() => {
 			connectionStatus.set('reconnecting');

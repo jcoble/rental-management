@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
 	buildOnboardingPropertyPayload,
 	onboardingPropertyFormFromProperty,
+	onboardingPropertyPrefillCandidate,
 	onboardingPropertyRecordOptions
 } from './property-payload.ts';
 
@@ -154,5 +155,33 @@ test('property record options do not duplicate a created property after the quer
 			]
 		}).map((property) => property.id),
 		[8, 9]
+	);
+});
+
+test('property prefill chooses the first available property before the user touches selection', () => {
+	assert.deepEqual(
+		onboardingPropertyPrefillCandidate({
+			createdProperty: null,
+			propertyRecordOptions: [
+				{ id: 8, name: 'Eastland 8-Plex' },
+				{ id: 9, name: 'Westview Four-Plex' }
+			],
+			selectionTouched: false
+		}),
+		{ id: 8, name: 'Eastland 8-Plex' }
+	);
+});
+
+test('property prefill preserves an explicit new-property selection while options load', () => {
+	assert.equal(
+		onboardingPropertyPrefillCandidate({
+			createdProperty: null,
+			propertyRecordOptions: [
+				{ id: 8, name: 'Eastland 8-Plex' },
+				{ id: 9, name: 'Westview Four-Plex' }
+			],
+			selectionTouched: true
+		}),
+		null
 	);
 });

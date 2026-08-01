@@ -78,6 +78,24 @@ void main() {
   });
 
   test(
+    'property loans repository can request payments page without status filter',
+    () async {
+      final adapter = _RecordingAdapter(
+        responseBody: jsonEncode([_paymentJson()]),
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = PropertyLoansRepository(dio);
+
+      await repo.getLoanPayments(42, sort: 'dueDate', skip: 0, take: 50);
+
+      expect(adapter.method, 'GET');
+      expect(adapter.path, '/loans/42/payments');
+      expect(adapter.query, {'sort': 'dueDate', 'skip': 0, 'take': 50});
+    },
+  );
+
+  test(
     'property loans provider requests additional pages server-side',
     () async {
       final repo = _FakePropertyLoansRepository(
@@ -142,6 +160,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Property finances'));
+    await tester.tap(find.text('Property finances'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Mortgage / Loans'), findsOneWidget);
     expect(find.text('First Federal'), findsOneWidget);
     expect(find.textContaining(r'$196,500'), findsOneWidget);
@@ -160,6 +182,7 @@ void main() {
     expect(find.text('Principal'), findsOneWidget);
     expect(find.text(r'$825'), findsOneWidget);
     expect(find.text(r'$195,675'), findsOneWidget);
+    expect(find.text('Record paid'), findsOneWidget);
     expect(loansRepo.lastPaymentLoanId, 42);
 
     await tester.tap(find.byTooltip('Scan mortgage statement'));
@@ -388,7 +411,13 @@ class _FakePropertyLoansRepository extends PropertyLoansRepository {
   }
 
   @override
-  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+  Future<List<LoanPayment>> getLoanPayments(
+    int loanId, {
+    String? status,
+    String? sort,
+    int? skip,
+    int? take,
+  }) async {
     lastPaymentLoanId = loanId;
     return [LoanPayment.fromJson(_paymentJson())];
   }

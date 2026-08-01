@@ -63,7 +63,7 @@
 			!agreement.executedDocumentFileName ||
 			!agreement.executedDocumentContentType
 		) {
-			leaseDocumentMessage = 'Signed lease PDF is not available yet. Contact management.';
+			leaseDocumentMessage = 'Signed lease is not available yet. Contact management.';
 			return;
 		}
 
@@ -77,7 +77,7 @@
 				agreement.executedDocumentContentType
 			);
 		} catch {
-			leaseDocumentMessage = 'Could not download the signed lease PDF. Please try again or contact management.';
+			leaseDocumentMessage = 'Could not download the signed lease. Please try again or contact management.';
 		} finally {
 			downloadingAgreementId = null;
 		}
@@ -113,11 +113,11 @@
 							data-testid="portal-lease-download-signed-pdf"
 						>
 							<FileDown class="h-4 w-4" />
-							{downloadingAgreementId === relationship.agreement.leaseAgreementId ? 'Downloading…' : 'Download signed lease PDF'}
+							{downloadingAgreementId === relationship.agreement.leaseAgreementId ? 'Downloading…' : 'Download signed lease'}
 						</Button>
 					{:else if relationship.agreement}
 						<p class="mt-4 text-sm text-muted-foreground" data-testid="portal-lease-signed-pdf-missing">
-							Signed lease PDF is not available yet. Contact management.
+							Signed lease is not available yet. Contact management.
 						</p>
 					{/if}
 				</div>

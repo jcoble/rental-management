@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Authorization;
@@ -77,16 +78,16 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
 {
     private readonly IActiveAccessContextResolver _accessContextResolver;
     private readonly IWorkspaceAuthorizationEvaluator _authorizationEvaluator;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public CapabilityAuthorizationHandler(
         IActiveAccessContextResolver accessContextResolver,
         IWorkspaceAuthorizationEvaluator authorizationEvaluator,
-        TimeProvider timeProvider)
+        IAuthSecurityClock securityClock)
     {
         _accessContextResolver = accessContextResolver;
         _authorizationEvaluator = authorizationEvaluator;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
     }
 
     protected override async Task HandleRequirementAsync(
@@ -99,7 +100,7 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
             return;
         }
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var utcNow = _securityClock.UtcNow();
         ActiveAccessContext activeContext;
         try
         {
@@ -151,7 +152,7 @@ public sealed class CapabilityAuthorizationHandler : AuthorizationHandler<Capabi
         accessRevision = default;
 
         return Guid.TryParse(principal.FindFirstValue("sid"), out sessionId) &&
-               int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out userId) &&
+               principal.TryReadSubjectUserId(out userId) &&
                int.TryParse(principal.FindFirstValue("ctx"), out accessContextId) &&
                long.TryParse(principal.FindFirstValue("ar"), out accessRevision);
     }
@@ -167,14 +168,14 @@ public sealed class CanonicalManagementAuthorizationHandler
     : AuthorizationHandler<CanonicalManagementRequirement>
 {
     private readonly RentalCommand.Data.RentalCommandDbContext _db;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
 
     public CanonicalManagementAuthorizationHandler(
         RentalCommand.Data.RentalCommandDbContext db,
-        TimeProvider timeProvider)
+        IAuthSecurityClock securityClock)
     {
         _db = db;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
     }
 
     protected override async Task HandleRequirementAsync(
@@ -189,7 +190,7 @@ public sealed class CanonicalManagementAuthorizationHandler
             return;
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var now = _securityClock.UtcNow();
         var allowed = await _db.MembershipRoleAssignments
             .AsNoTracking()
             .WhereEffective(now)

@@ -42,12 +42,12 @@ public sealed class AppointmentScheduleSummarySqlTests
         sql.Should().Contain(">=");
         sql.Should().Contain("<");
         sql.Should().Contain("Status");
-        sql.Should().Contain("AuthSessions");
-        sql.Should().Contain("AccessRevision");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("RoleProfileCapabilities");
-        sql.Should().Contain("CapabilityDefinitions");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("public.rc_api_effective_capability_scopes(");
+        sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("CapabilityDefinitions");
+        sql.Should().NotContain("MembershipRoleAssignmentProperties");
         sql.Should().NotContain("LIMIT");
         sql.Should().NotContain("OFFSET");
     }

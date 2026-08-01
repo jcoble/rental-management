@@ -1,10 +1,10 @@
-using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -56,14 +56,14 @@ public interface IPendingFileUploadStore
 public sealed class PendingFileUploadStore : IPendingFileUploadStore
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicInfrastructureWriteGate _writeGate;
+    private readonly IInternalSetBasedWriteScope _writeScope;
 
-    public PendingFileUploadStore(
+    internal PendingFileUploadStore(
         RentalCommandDbContext db,
-        IAtomicInfrastructureWriteGate writeGate)
+        IInternalSetBasedWriteScope writeScope)
     {
         _db = db;
-        _writeGate = writeGate;
+        _writeScope = writeScope;
     }
 
     public async Task<PendingFileUploadAdmission> PrepareAsync(
@@ -90,31 +90,47 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         var storagePath = $"pending-{id:N}-{safeName}";
         var now = AsUtc(nowUtc);
 
-        using var admissionLease = _writeGate.BeginPendingFileUploadAdmission();
-        await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-            INSERT INTO "PendingFileUploads"
+        using var admissionLease = _writeScope.BeginWrite("PendingFileUploads", InternalWriteOperation.Insert);
+        var rows = await _db.Database.SqlQuery<PendingFileUploadAdmissionRow>($$"""
+            WITH inserted AS (
+              INSERT INTO "PendingFileUploads"
                 ("Id", "PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash",
                  "RequestFingerprint", "StoragePath", "FileName", "ContentType", "SizeBytes",
                  "State", "CreatedAtUtc", "UpdatedAtUtc")
-            VALUES
+              VALUES
                 ({{id}}, {{portfolioId}}, {{actorScopeId}}, {{normalizedPurpose}}, {{operationHash}},
                  {{requestFingerprint}}, {{storagePath}}, {{safeName}}, {{contentType}}, {{sizeBytes}},
                  {{(int)PendingFileUploadState.Prepared}}, {{now}}, {{now}})
-            ON CONFLICT ("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash") DO NOTHING
-            """, ct);
-
-        var admission = await _db.PendingFileUploads.AsNoTracking()
-            .Where(upload => upload.PortfolioId == portfolioId
-                && upload.ActorScopeId == actorScopeId
-                && upload.Purpose == normalizedPurpose
-                && upload.OperationKeyHash == operationHash)
-            .Select(upload => new PendingFileUploadAdmission(
-                upload.Id,
-                upload.StoragePath,
-                upload.State,
-                upload.StoredFileId,
-                upload.RequestFingerprint))
-            .SingleAsync(ct);
+              ON CONFLICT ("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash") DO NOTHING
+              RETURNING "Id", "StoragePath", "State", "StoredFileId", "RequestFingerprint"
+            )
+            SELECT inserted."Id",
+                   inserted."StoragePath",
+                   inserted."State",
+                   inserted."StoredFileId",
+                   inserted."RequestFingerprint"
+            FROM inserted
+            UNION ALL
+            SELECT upload."Id",
+                   upload."StoragePath",
+                   upload."State",
+                   upload."StoredFileId",
+                   upload."RequestFingerprint"
+            FROM "PendingFileUploads" AS upload
+            WHERE upload."PortfolioId" = {{portfolioId}}
+              AND upload."ActorScopeId" = {{actorScopeId}}
+              AND upload."Purpose" = {{normalizedPurpose}}
+              AND upload."OperationKeyHash" = {{operationHash}}
+              AND NOT EXISTS (SELECT 1 FROM inserted)
+            LIMIT 1
+            """).ToListAsync(ct);
+        var row = rows.Single();
+        var admission = new PendingFileUploadAdmission(
+            row.Id,
+            row.StoragePath,
+            (PendingFileUploadState)row.State,
+            row.StoredFileId,
+            row.RequestFingerprint);
 
         if (!CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(admission.RequestFingerprint),
@@ -138,55 +154,44 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         if (preparedRetention < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(preparedRetention));
         if (claimLease <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(claimLease));
         if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
-        var connection = _db.Database.GetDbConnection();
-        var close = connection.State != ConnectionState.Open;
-        if (close) await _db.Database.OpenConnectionAsync(ct);
-        try
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                WITH clock AS MATERIALIZED (
-                    SELECT clock_timestamp() AS now_utc
-                ), candidates AS (
-                    SELECT upload."Id"
-                    FROM "PendingFileUploads" AS upload
-                    CROSS JOIN clock
-                    WHERE upload."State" = @prepared
-                      AND upload."CreatedAtUtc" <= clock.now_utc - @preparedRetention
-                      AND (upload."CleanupClaimToken" IS NULL
-                           OR upload."CleanupClaimExpiresAtUtc" <= clock.now_utc)
-                    ORDER BY upload."CreatedAtUtc", upload."Id"
-                    FOR UPDATE OF upload SKIP LOCKED
-                    LIMIT @batchSize
-                )
-                UPDATE "PendingFileUploads" AS upload
-                SET "CleanupClaimOwner" = @claimOwner,
-                    "CleanupClaimToken" = gen_random_uuid(),
-                    "CleanupClaimExpiresAtUtc" = clock.now_utc + @claimLease,
-                    "UpdatedAtUtc" = clock.now_utc
-                FROM candidates, clock
-                WHERE upload."Id" = candidates."Id"
-                RETURNING upload."Id", upload."CleanupClaimOwner",
-                          upload."CleanupClaimToken", upload."StoragePath";
-                """;
-            command.Parameters.Add(new NpgsqlParameter("prepared", NpgsqlDbType.Integer) { Value = (int)PendingFileUploadState.Prepared });
-            command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("preparedRetention", NpgsqlDbType.Interval) { Value = preparedRetention });
-            command.Parameters.Add(new NpgsqlParameter("claimLease", NpgsqlDbType.Interval) { Value = claimLease });
-            command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
-            var claims = new List<PendingFileUploadCleanupClaim>();
-            await using var reader = await command.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                claims.Add(new PendingFileUploadCleanupClaim(
-                    reader.GetGuid(0), reader.GetString(1), reader.GetGuid(2), reader.GetString(3)));
-            }
-            return claims;
-        }
-        finally
-        {
-            if (close) await _db.Database.CloseConnectionAsync();
-        }
+        using var lease = _writeScope.BeginWrite("PendingFileUploads", InternalWriteOperation.Update);
+        var rows = await _db.Database.SqlQueryRaw<PendingFileUploadCleanupClaimRow>("""
+            WITH clock AS MATERIALIZED (
+                SELECT clock_timestamp() AS now_utc
+            ), candidates AS (
+                SELECT upload."Id"
+                FROM "PendingFileUploads" AS upload
+                CROSS JOIN clock
+                WHERE upload."State" = @prepared
+                  AND upload."CreatedAtUtc" <= clock.now_utc - @preparedRetention
+                  AND (upload."CleanupClaimToken" IS NULL
+                       OR upload."CleanupClaimExpiresAtUtc" <= clock.now_utc)
+                ORDER BY upload."CreatedAtUtc", upload."Id"
+                FOR UPDATE OF upload SKIP LOCKED
+                LIMIT @batchSize
+            )
+            UPDATE "PendingFileUploads" AS upload
+            SET "CleanupClaimOwner" = @claimOwner,
+                "CleanupClaimToken" = gen_random_uuid(),
+                "CleanupClaimExpiresAtUtc" = clock.now_utc + @claimLease,
+                "UpdatedAtUtc" = clock.now_utc
+            FROM candidates, clock
+            WHERE upload."Id" = candidates."Id"
+            RETURNING upload."Id",
+                      upload."CleanupClaimOwner" AS "ClaimOwner",
+                      upload."CleanupClaimToken" AS "ClaimToken",
+                      upload."StoragePath";
+            """,
+            new NpgsqlParameter("prepared", NpgsqlDbType.Integer) { Value = (int)PendingFileUploadState.Prepared },
+            new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner },
+            new NpgsqlParameter("preparedRetention", NpgsqlDbType.Interval) { Value = preparedRetention },
+            new NpgsqlParameter("claimLease", NpgsqlDbType.Interval) { Value = claimLease },
+            new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize })
+            .ToListAsync(ct);
+
+        return rows
+            .Select(row => new PendingFileUploadCleanupClaim(row.Id, row.ClaimOwner, row.ClaimToken, row.StoragePath))
+            .ToArray();
     }
 
     public Task<int> MarkAbandonedAsync(
@@ -231,25 +236,36 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         params NpgsqlParameter[] parameters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
-        var connection = _db.Database.GetDbConnection();
-        var close = connection.State != ConnectionState.Open;
-        if (close) await _db.Database.OpenConnectionAsync(ct);
-        try
+        using var lease = _writeScope.BeginWrite("PendingFileUploads", InternalWriteOperation.Update);
+        var sqlParameters = new object[]
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = sql;
-            command.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Uuid) { Value = id });
-            command.Parameters.Add(new NpgsqlParameter("prepared", NpgsqlDbType.Integer)
-                { Value = (int)PendingFileUploadState.Prepared });
-            command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
-            command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
-            foreach (var parameter in parameters) command.Parameters.Add(parameter);
-            return await command.ExecuteNonQueryAsync(ct);
-        }
-        finally
-        {
-            if (close) await _db.Database.CloseConnectionAsync();
-        }
+            new NpgsqlParameter("id", NpgsqlDbType.Uuid) { Value = id },
+            new NpgsqlParameter("prepared", NpgsqlDbType.Integer)
+                { Value = (int)PendingFileUploadState.Prepared },
+            new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner },
+            new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken },
+        }.Concat(parameters).ToArray();
+        return await _db.Database.ExecuteSqlRawAsync(
+            sql,
+            sqlParameters,
+            ct);
+    }
+
+    private sealed class PendingFileUploadCleanupClaimRow
+    {
+        public Guid Id { get; init; }
+        public string ClaimOwner { get; init; } = string.Empty;
+        public Guid ClaimToken { get; init; }
+        public string StoragePath { get; init; } = string.Empty;
+    }
+
+    private sealed class PendingFileUploadAdmissionRow
+    {
+        public Guid Id { get; init; }
+        public string StoragePath { get; init; } = string.Empty;
+        public int State { get; init; }
+        public int? StoredFileId { get; init; }
+        public string RequestFingerprint { get; init; } = string.Empty;
     }
 
     internal static string ComputeOperationKeyHash(string value)

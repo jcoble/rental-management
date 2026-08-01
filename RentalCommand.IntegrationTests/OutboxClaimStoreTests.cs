@@ -71,6 +71,30 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Simulation_clock_claims_rows_that_are_future_dated_against_host_clock()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var simulatedNow = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(30), DateTimeKind.Utc);
+        await SeedAsync(Message("simulation-ready", simulatedNow.AddMinutes(-5), simulatedNow));
+
+        await using (var realClockDb = NewContext())
+        {
+            (await new OutboxClaimStore(realClockDb, TimeProvider.System)
+                .ClaimAsync("real-clock-worker", TimeSpan.FromMinutes(2), 10))
+                .Should().BeEmpty("the row is still future-dated when readiness uses real host time");
+        }
+
+        await using var simulatedClockDb = NewContext();
+        var claims = await new OutboxClaimStore(simulatedClockDb, new FixedTimeProvider(simulatedNow))
+            .ClaimAsync("simulation-worker", TimeSpan.FromMinutes(2), 10);
+
+        var claim = claims.Should().ContainSingle().Which;
+        claim.IdempotencyKey.Should().Be("simulation-ready");
+        claim.AttemptCount.Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task Concurrent_workers_claim_each_row_at_most_once()
     {
         SkipIfDockerUnavailable();
@@ -191,6 +215,36 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Worker_dispatches_rows_that_are_ready_under_simulation_clock()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var simulatedNow = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(30), DateTimeKind.Utc);
+        await SeedAsync(new OutboxMessage
+        {
+            MessageType = "sms",
+            Payload = """{"to":"+15555550100","message":"Vendor reminder"}""",
+            IdempotencyKey = "simulation-dispatch-sms",
+            CreatedAtUtc = simulatedNow.AddMinutes(-1),
+            NextAttemptAtUtc = simulatedNow,
+        });
+        var channel = new CapturingChannel();
+
+        await RunWorkerAsync(
+            channel,
+            new CapturingPushSender(),
+            timeProvider: new FixedTimeProvider(simulatedNow));
+
+        channel.SmsMessages.Should().ContainSingle().Which.Should().Be("+15555550100");
+        await using var verify = NewContext();
+        var row = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "simulation-dispatch-sms");
+        row.AcceptedAtUtc.Should().BeCloseTo(simulatedNow, TimeSpan.FromMilliseconds(1));
+        row.Provider.Should().Be("sms");
+        row.ProviderMessageId.Should().Be("sms-provider-id");
+    }
+
+    [SkippableFact]
     public async Task Worker_records_missing_provider_as_blocked_not_accepted()
     {
         SkipIfDockerUnavailable();
@@ -297,6 +351,39 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Worker_dispatches_canonical_lease_entity_update_payload_without_embedded_data()
+    {
+        SkipIfDockerUnavailable();
+        await ResetOutboxAsync();
+        var now = DateTime.UtcNow;
+        await SeedAsync(new OutboxMessage
+        {
+            PortfolioId = 17,
+            MessageType = "data-update",
+            Payload = """
+                {"action":"addendum-draft-created","entityId":1,"entityType":"LeaseAddendum","leaseManagementId":39}
+                """,
+            IdempotencyKey = "addendum-create:17:39:regression",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+        var updates = new CapturingDataUpdateService();
+
+        await RunWorkerAsync(
+            new CapturingChannel(),
+            new CapturingPushSender(),
+            dataUpdateService: updates);
+
+        updates.Updates.Should().ContainSingle().Which.Should().Be((17, "LeaseAddendum", 1));
+        await using var verify = NewContext();
+        var row = await verify.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey == "addendum-create:17:39:regression");
+        row.AcceptedAtUtc.Should().NotBeNull();
+        row.DeadLetteredAtUtc.Should().BeNull();
+        row.Provider.Should().Be("postgres-notify");
+    }
+
+    [SkippableFact]
     public async Task Worker_retries_durable_blob_cleanup_until_storage_accepts_it()
     {
         SkipIfDockerUnavailable();
@@ -351,11 +438,13 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         INotificationChannel channel,
         IPushSender pushSender,
         IFileStorage? fileStorage = null,
-        IDataUpdateService? dataUpdateService = null)
+        IDataUpdateService? dataUpdateService = null,
+        TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgsql(_connectionString!));
+        services.AddSingleton(timeProvider ?? TimeProvider.System);
         services.AddScoped<IOutboxClaimStore, OutboxClaimStore>();
         services.AddScoped(_ => channel);
         services.AddScoped<INotificationChannel>(_ => channel);
@@ -438,6 +527,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
 
     private sealed class CapturingChannel : INotificationChannel
     {
+        public List<string> SmsMessages { get; } = [];
         public List<string> Emails { get; } = [];
         public bool SuppressEmail { get; init; }
 
@@ -447,7 +537,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
             NotificationDeliveryContext delivery,
             int? portfolioId = null,
             CancellationToken ct = default) =>
-            Task.FromResult(new NotificationDeliveryReceipt("sms", "sms-provider-id"));
+            CaptureSms(toPhoneNumber);
 
         public Task<NotificationDeliveryReceipt> SendEmailAsync(
             string toEmail,
@@ -462,6 +552,18 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
             Emails.Add(toEmail);
             return Task.FromResult(new NotificationDeliveryReceipt("email", "email-provider-id"));
         }
+
+        private Task<NotificationDeliveryReceipt> CaptureSms(string toPhoneNumber)
+        {
+            SmsMessages.Add(toPhoneNumber);
+            return Task.FromResult(new NotificationDeliveryReceipt("sms", "sms-provider-id"));
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() =>
+            new(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc));
     }
 
     private sealed class CapturingPushSender : IPushSender

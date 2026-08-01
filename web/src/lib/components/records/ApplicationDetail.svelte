@@ -59,11 +59,23 @@
 		onDeleted,
 		expectedUnitId,
 		onUnitMismatch,
+		prepareMoveInBasePath = '/applications',
+		loadApplication = applications.get,
+		showApplicationActions = true,
+		showScreening = true,
+		showTenantLink = true,
+		applicationQueryScope = 'management',
 	}: {
 		applicationId: number;
 		onDeleted: () => void;
 		expectedUnitId?: number;
 		onUnitMismatch?: () => void;
+		prepareMoveInBasePath?: string;
+		loadApplication?: (id: number) => Promise<ApplicationResponse>;
+		showApplicationActions?: boolean;
+		showScreening?: boolean;
+		showTenantLink?: boolean;
+		applicationQueryScope?: string;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -71,8 +83,8 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const applicationQuery = createQuery(() => ({
-		queryKey: ['application', id],
-		queryFn: () => applications.get(id),
+		queryKey: ['application', applicationQueryScope, id],
+		queryFn: () => loadApplication(id),
 		enabled: !isNaN(id) && id > 0,
 	}));
 
@@ -314,7 +326,7 @@
 	const screeningQuery = createQuery(() => ({
 		queryKey: ['application-screening', id],
 		queryFn: () => applications.screening(id),
-		enabled: !isNaN(id) && id > 0,
+		enabled: showScreening && !isNaN(id) && id > 0,
 	}));
 
 	const latestScreening = $derived<ApplicantScreeningResponse | undefined>(
@@ -594,7 +606,7 @@
 					<span class="flex items-center gap-1"><Phone class="h-3.5 w-3.5" />{application.phone}</span>
 				</div>
 			</div>
-			{#if isOpen}
+			{#if showApplicationActions && isOpen}
 				<div class="flex flex-wrap items-center gap-2">
 					<Button variant="outline" class="gap-2" onclick={openEditApplication} data-testid="application-edit">
 						<Edit3 class="h-4 w-4" /> Edit
@@ -626,12 +638,14 @@
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
-					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '')} data-testid="application-prepare-move-in">
+					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '', prepareMoveInBasePath)} data-testid="application-prepare-move-in">
 						<Home class="h-4 w-4" /> Prepare move-in <ArrowRight class="h-4 w-4" />
 					</Button>
-					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
-						<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
-					</Button>
+					{#if showTenantLink}
+						<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
+							<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
+						</Button>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -756,6 +770,7 @@
 			{/if}
 
 			<!-- Screening -->
+			{#if showScreening}
 			<Card.Root class="lg:col-span-2" data-testid="application-screening-card">
 				<Card.Header>
 					<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Applicant screening</Card.Title>
@@ -968,6 +983,7 @@
 					</Card.Footer>
 				{/if}
 			</Card.Root>
+			{/if}
 		</div>
 	{/if}
 </div>

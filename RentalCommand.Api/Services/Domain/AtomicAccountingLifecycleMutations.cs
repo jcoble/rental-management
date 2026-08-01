@@ -4,6 +4,8 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -11,10 +13,14 @@ public interface IAccountingLifecycleWorkspaceCommand : IAtomicCommandData
 {
     int PortfolioId { get; }
     int ActorUserId { get; }
+    [AtomicFingerprintIgnore]
     Guid AuthSessionId { get; }
+    [AtomicFingerprintIgnore]
     int AccessContextId { get; }
+    [AtomicFingerprintIgnore]
     long ExpectedAccessRevision { get; }
     AccountingProvider Provider { get; }
+    [AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey { get; }
 }
 
@@ -39,7 +45,7 @@ public sealed record PrepareAccountingDisconnectResult(
     int ConnectionId,
     long TokenGeneration,
     DateTime? PreparedAtUtc,
-    string? RefreshTokenCipherText) : IAtomicResultData;
+    string? RefreshTokenCipherText);
 
 public sealed record FinalizeAccountingDisconnectCommand(
     int PortfolioId,
@@ -50,6 +56,7 @@ public sealed record FinalizeAccountingDisconnectCommand(
     AccountingProvider Provider,
     int ConnectionId,
     long PreparedTokenGeneration,
+    [property: AtomicFingerprintIgnore]
     DateTime PreparedAtUtc,
     string DeliveryIdempotencyKey) : IAccountingLifecycleWorkspaceCommand;
 
@@ -65,7 +72,7 @@ public sealed record FinalizeAccountingDisconnectResult(
     FinalizeAccountingDisconnectOutcome Outcome,
     int ConnectionId,
     long TokenGeneration,
-    DateTime? DisconnectedAtUtc) : IAtomicResultData;
+    DateTime? DisconnectedAtUtc);
 
 public sealed record SetAccountingDirectionCommand(
     int PortfolioId,
@@ -83,31 +90,34 @@ public sealed record SetAccountingDirectionResult(
     int ConnectionId,
     bool PullEnabled,
     bool PushEnabled,
-    DateTime? UpdatedAtUtc) : IAtomicResultData;
+    DateTime? UpdatedAtUtc);
 
 public sealed class PrepareAccountingDisconnectHandler
-    : IAtomicCommandHandler<PrepareAccountingDisconnectCommand, PrepareAccountingDisconnectResult>,
-      IAtomicReplayAuthorizer<PrepareAccountingDisconnectCommand>
+    : IAtomicCommandHandler<PrepareAccountingDisconnectCommand, PrepareAccountingDisconnectResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public PrepareAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<PrepareAccountingDisconnectResult> HandleAsync(
         PrepareAccountingDisconnectCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         AccountingLifecycleCommandSupport.Validate(command);
         await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
         var connectionId = await AccountingLifecycleCommandSupport.ResolveAndLockConnectionIdAsync(
-            command, attempt, ct);
+            _db, command, attempt, ct);
         if (connectionId is null)
         {
             return new PrepareAccountingDisconnectResult(
                 PrepareAccountingDisconnectOutcome.NotFound, 0, 0, null, null);
         }
 
-        var connection = await attempt.Persistence.Query<AccountingConnection>()
+        var connection = await _db.Set<AccountingConnection>()
             .SingleAsync(row => row.Id == connectionId.Value
                 && row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider, ct);
@@ -175,18 +185,21 @@ public sealed class PrepareAccountingDisconnectHandler
 
     public Task AuthorizeReplayAsync(
         PrepareAccountingDisconnectCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
-        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
 public sealed class FinalizeAccountingDisconnectHandler
-    : IAtomicCommandHandler<FinalizeAccountingDisconnectCommand, FinalizeAccountingDisconnectResult>,
-      IAtomicReplayAuthorizer<FinalizeAccountingDisconnectCommand>
+    : IAtomicCommandHandler<FinalizeAccountingDisconnectCommand, FinalizeAccountingDisconnectResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public FinalizeAccountingDisconnectHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<FinalizeAccountingDisconnectResult> HandleAsync(
         FinalizeAccountingDisconnectCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         AccountingLifecycleCommandSupport.Validate(command);
@@ -196,12 +209,12 @@ public sealed class FinalizeAccountingDisconnectHandler
         }
 
         await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.AccountingConnection, command.ConnectionId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+        await attempt.AcquireLockAsync(
+            "AccountingConnection", command.ConnectionId, ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
-        var connection = await attempt.Persistence.Query<AccountingConnection>()
+        var connection = await _db.Set<AccountingConnection>()
             .SingleOrDefaultAsync(row => row.Id == command.ConnectionId
                 && row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider, ct);
@@ -262,18 +275,21 @@ public sealed class FinalizeAccountingDisconnectHandler
 
     public Task AuthorizeReplayAsync(
         FinalizeAccountingDisconnectCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
-        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
 public sealed class SetAccountingDirectionHandler
-    : IAtomicCommandHandler<SetAccountingDirectionCommand, SetAccountingDirectionResult>,
-      IAtomicReplayAuthorizer<SetAccountingDirectionCommand>
+    : IAtomicCommandHandler<SetAccountingDirectionCommand, SetAccountingDirectionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SetAccountingDirectionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<SetAccountingDirectionResult> HandleAsync(
         SetAccountingDirectionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         AccountingLifecycleCommandSupport.Validate(command);
@@ -283,17 +299,17 @@ public sealed class SetAccountingDirectionHandler
         }
 
         await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, _db, now, ct);
 
         var connectionId = await AccountingLifecycleCommandSupport.ResolveAndLockConnectionIdAsync(
-            command, attempt, ct);
+            _db, command, attempt, ct);
         if (connectionId is null)
         {
             return new SetAccountingDirectionResult(false, 0, false, false, null);
         }
 
-        var connection = await attempt.Persistence.Query<AccountingConnection>()
+        var connection = await _db.Set<AccountingConnection>()
             .SingleAsync(row => row.Id == connectionId.Value
                 && row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider, ct);
@@ -346,51 +362,52 @@ public sealed class SetAccountingDirectionHandler
 
     public Task AuthorizeReplayAsync(
         SetAccountingDirectionCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
-        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, _db, context, ct);
 }
 
 internal static class AccountingLifecycleCommandSupport
 {
     public static async Task AcquireWorkspaceLocksAsync(
         IAccountingLifecycleWorkspaceCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
         // A portfolio owns at most one row per provider. This lock serializes provider-row
         // resolution with connect/disconnect/direction commands before the exact row lock is known.
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
     }
 
     public static async Task<int?> ResolveAndLockConnectionIdAsync(
+        RentalCommandDbContext db,
         IAccountingLifecycleWorkspaceCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
-        var connectionId = await attempt.Persistence.Query<AccountingConnection>().AsNoTracking()
+        var connectionId = await db.Set<AccountingConnection>().AsNoTracking()
             .Where(row => row.PortfolioId == command.PortfolioId
                 && row.Provider == command.Provider)
             .Select(row => (int?)row.Id)
             .SingleOrDefaultAsync(ct);
         if (connectionId.HasValue)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.AccountingConnection, connectionId.Value, ct);
+            await attempt.AcquireLockAsync(
+                "AccountingConnection", connectionId.Value, ct);
         }
         return connectionId;
     }
 
     public static async Task RequireAuthorizationAsync(
         IAccountingLifecycleWorkspaceCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        if (!await IsAuthorizedAsync(command, db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or no longer permits accounting integrations.");
@@ -399,12 +416,13 @@ internal static class AccountingLifecycleCommandSupport
 
     public static async Task AuthorizeReplayAsync(
         IAccountingLifecycleWorkspaceCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await RequireAuthorizationAsync(command, persistence, now, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        await RequireAuthorizationAsync(command, db, now, ct);
     }
 
     public static void Validate(IAccountingLifecycleWorkspaceCommand command)
@@ -437,7 +455,7 @@ internal static class AccountingLifecycleCommandSupport
         && connection.TokenRotationClaimExpiresAtUtc is null;
 
     public static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         IAccountingLifecycleWorkspaceCommand command,
         AccountingConnection connection,
         DateTime now,
@@ -466,10 +484,10 @@ internal static class AccountingLifecycleCommandSupport
 
     private static Task<bool> IsAuthorizedAsync(
         IAccountingLifecycleWorkspaceCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null
@@ -485,7 +503,7 @@ internal static class AccountingLifecycleCommandSupport
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -493,7 +511,7 @@ internal static class AccountingLifecycleCommandSupport
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId
                 && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId

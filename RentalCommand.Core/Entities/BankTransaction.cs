@@ -1,3 +1,5 @@
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Entities;
 
 public class BankTransaction
@@ -22,6 +24,17 @@ public class BankTransaction
     public int? MatchedTenantAccountId { get; set; }
     public long? MatchedTenantLedgerEntryId { get; set; }
     public int? MatchedExpenseId { get; set; }
+    public DateTime? ExpenseMatchAppliedAt { get; set; }
+    public ExpenseStatus? ExpenseMatchPreviousStatus { get; set; }
+    public DateTime? ExpenseMatchPreviousPaidAt { get; set; }
+    public DateTime? ExpenseMatchPreviousUpdatedAt { get; set; }
+    public int? MatchedLoanPaymentId { get; set; }
+    public int? MatchedOwnerDistributionId { get; set; }
+    /// <summary>
+    /// The opposite statement line for an internal account transfer. Transfer matching is
+    /// symmetric: both rows point at each other and commit in the same transaction.
+    /// </summary>
+    public int? MatchedBankTransactionId { get; set; }
     public string MatchStatus { get; set; } = "Unmatched";
     public decimal? MatchConfidence { get; set; }
     public string? Notes { get; set; }
@@ -35,4 +48,7 @@ public class BankTransaction
     public TenantAccount? MatchedTenantAccount { get; set; }
     public TenantLedgerEntry? MatchedTenantLedgerEntry { get; set; }
     public Expense? MatchedExpense { get; set; }
+    public LoanPayment? MatchedLoanPayment { get; set; }
+    public OwnerDistribution? MatchedOwnerDistribution { get; set; }
+    public BankTransaction? MatchedBankTransaction { get; set; }
 }

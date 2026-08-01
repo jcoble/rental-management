@@ -1,14 +1,18 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.Data;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -19,6 +23,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
     private readonly SqliteTestContext _context;
     private readonly Mock<IClientProxy> _client = new();
     private readonly Mock<IHubClients> _clients = new();
+    private readonly Mock<IHubContext<DataUpdateHub>> _hub = new();
     private readonly DataUpdateService _service;
     private IReadOnlyList<string> _deliveredGroups = [];
 
@@ -27,8 +32,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
         _context = new SqliteTestContext(
             [new Domain.RecordingCommandInterceptor(_commands)]);
         EnsureRelationshipProjectionView();
-        var hub = new Mock<IHubContext<DataUpdateHub>>();
-        hub.SetupGet(value => value.Clients).Returns(_clients.Object);
+        _hub.SetupGet(value => value.Clients).Returns(_clients.Object);
         _clients.Setup(value => value.Groups(It.IsAny<IReadOnlyList<string>>()))
             .Callback<IReadOnlyList<string>>(groups => _deliveredGroups = groups)
             .Returns(_client.Object);
@@ -38,7 +42,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
         _service = new DataUpdateService(
             _context.Db,
-            hub.Object,
+            _hub.Object,
             TimeProvider.System,
             Mock.Of<ILogger<DataUpdateService>>());
     }
@@ -123,7 +127,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             1,
             "Notification",
             notification.Id,
-            new { notification.Id, Secret = "must-not-reach-signalr" });
+            NotificationResponse.FromEntity(notification));
 
         _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(team.SessionId, 1));
         _deliveredGroups.Should().Contain(
@@ -137,6 +141,234 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             "realtime fanout must honor the same in-app preference as the REST notification read");
         _commands.Should().HaveCount(1,
             "notification authorization, effective access, and session selection must be one SQL query");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: current REST-readable notification audience");
+        _commands.Single().Should().NotContain(
+            "ScopedNotificationRecipients: active workspace membership",
+            "the realtime notification fanout must not nest the reusable staff-recipient query");
+    }
+
+    [Fact]
+    public async Task TenantMessageNotificationInvalidation_UsesSavedAccessContextInOneQuery()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Tenant Message Target");
+        var decoyProperty = AddProperty("Tenant Message Decoy");
+        _context.Db.SaveChanges();
+        var target = AddTeamSession("tenant-message-target", targetProperty, now);
+        var decoy = AddTeamSession("tenant-message-decoy", decoyProperty, now);
+        _context.Db.SaveChanges();
+        var notification = new Notification
+        {
+            PortfolioId = 1,
+            UserId = target.User.Id,
+            Type = "TenantMessage",
+            Title = "New tenant message",
+            Message = "The tenant replied.",
+            CreatedAt = now,
+            NavigationExperience = NavigationExperience.Management,
+            NavigationDestination = NavigationDestination.Message,
+            NavigationAccessContextId = target.Context.Id,
+            NavigationAccessRevision = target.Context.AccessRevision,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(1),
+            NavigationFallbackDestination = NavigationDestination.Notifications,
+        };
+        _context.Db.Notifications.Add(notification);
+        _context.Db.SaveChanges();
+        var response = NotificationResponse.FromEntity(notification);
+        response.NavigationIntent.Should().NotBeNull();
+        _commands.Clear();
+
+        await _service.BroadcastEntityUpdateAsync(
+            1,
+            "Notification",
+            notification.Id,
+            response);
+
+        _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(target.SessionId, 1));
+        _deliveredGroups.Should().NotContain(DataUpdateHub.SessionRevisionGroup(decoy.SessionId, 1),
+            "a personally addressed tenant-message notification must fan out only through its saved access context");
+        _commands.Should().HaveCount(1,
+            "saved-context notification authorization and session selection must stay one SQL query");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: saved navigation access context");
+        _commands.Single().Should().NotContain(
+            "ScopedNotificationRecipients: active workspace membership",
+            "the tenant-message realtime query must not invoke the broad reusable staff-recipient helper");
+        _commands.Single().Should().NotContain(
+            "UNION",
+            "a saved-context notification must not plan the portfolio broadcast branch under API-role RLS");
+    }
+
+    [Fact]
+    public async Task BatchTenantMessageNotificationInvalidation_ResolvesSavedAccessContextsInOneQuery()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Tenant Message Batch Target");
+        var decoyProperty = AddProperty("Tenant Message Batch Decoy");
+        _context.Db.SaveChanges();
+        var targets = new[]
+        {
+            AddTeamSession("tenant-message-batch-target-1", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-2", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-3", targetProperty, now),
+            AddTeamSession("tenant-message-batch-target-4", targetProperty, now),
+        };
+        var decoy = AddTeamSession("tenant-message-batch-decoy", decoyProperty, now);
+        _context.Db.SaveChanges();
+        var notifications = targets.Select((target, index) => new Notification
+        {
+            PortfolioId = 1,
+            UserId = target.User.Id,
+            Type = "TenantMessage",
+            Title = "New tenant message",
+            Message = $"The tenant replied {index}.",
+            CreatedAt = now,
+            NavigationExperience = NavigationExperience.Management,
+            NavigationDestination = NavigationDestination.Message,
+            NavigationAccessContextId = target.Context.Id,
+            NavigationAccessRevision = target.Context.AccessRevision,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(1),
+            NavigationFallbackDestination = NavigationDestination.Notifications,
+        }).ToArray();
+        _context.Db.Notifications.AddRange(notifications);
+        _context.Db.SaveChanges();
+        var sentPayloadIds = new List<int>();
+        _client.Setup(value => value.SendCoreAsync(
+                "EntityUpdated",
+                It.IsAny<object?[]>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, arguments, _) =>
+            {
+                if (arguments.SingleOrDefault() is EntityUpdatePayload payload)
+                {
+                    sentPayloadIds.Add(payload.EntityId);
+                }
+            })
+            .Returns(Task.CompletedTask);
+        _commands.Clear();
+
+        await _service.BroadcastEntityUpdatesAsync(notifications
+            .Select(notification => new EntityUpdateBroadcast(
+                1,
+                "Notification",
+                notification.Id,
+                new SavedContextNotificationRealtimeHint()))
+            .ToArray());
+
+        sentPayloadIds.Should().BeEquivalentTo(notifications.Select(notification => notification.Id));
+        _deliveredGroups.Should().NotContain(DataUpdateHub.SessionRevisionGroup(decoy.SessionId, 1),
+            "a batch of personally addressed tenant-message notifications must not fan out to unrelated contexts");
+        _commands.Should().HaveCount(1,
+            "saved-context notification batches must not repeat the RLS recipient query once per notification");
+        _commands.Single().Should().Contain(
+            "Realtime notification recipients: saved navigation access contexts batch");
+        _commands.Single().Should().NotContain(
+            "UNION",
+            "a saved-context notification batch must not plan the portfolio broadcast branch under API-role RLS");
+    }
+
+    [Fact]
+    public async Task PropertyInvalidation_ReturnsPromptlyWhenHubSendNeverCompletes()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Bounded fanout");
+        _context.Db.SaveChanges();
+        var target = AddTeamSession("bounded-fanout", targetProperty, now);
+        _context.Db.SaveChanges();
+        _commands.Clear();
+        var blockedSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _client.Setup(value => value.SendCoreAsync(
+                It.IsAny<string>(), It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Returns(blockedSend.Task);
+        var service = new DataUpdateService(
+            _context.Db,
+            _hub.Object,
+            TimeProvider.System,
+            Mock.Of<ILogger<DataUpdateService>>(),
+            TimeSpan.FromMilliseconds(25));
+
+        var elapsed = Stopwatch.StartNew();
+        await service.BroadcastEntityUpdateAsync(
+            1,
+            "Property",
+            targetProperty.Id,
+            new { targetProperty.Id });
+        elapsed.Stop();
+
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "a stuck post-commit SignalR delivery must not hold the durable mutation response");
+        blockedSend.Task.IsCompleted.Should().BeFalse();
+        _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(target.SessionId, 1));
+        _commands.Should().HaveCount(1,
+            "recipient authorization and session selection still run as one translated SQL query");
+        _client.Verify(value => value.SendCoreAsync(
+            "EntityUpdated",
+            It.IsAny<object?[]>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task BatchPropertyInvalidation_SendsResolvedHubHintsConcurrently()
+    {
+        var now = DateTime.UtcNow;
+        var targetProperty = AddProperty("Concurrent batch fanout");
+        _context.Db.SaveChanges();
+        AddTeamSession("batch-fanout", targetProperty, now);
+        _context.Db.SaveChanges();
+        _commands.Clear();
+        var gate = new object();
+        var inFlight = 0;
+        var maxInFlight = 0;
+        var calls = 0;
+        _client.Setup(value => value.SendCoreAsync(
+                It.IsAny<string>(), It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Returns<string, object?[], CancellationToken>(async (_, _, _) =>
+            {
+                lock (gate)
+                {
+                    calls++;
+                    inFlight++;
+                    maxInFlight = Math.Max(maxInFlight, inFlight);
+                }
+
+                try
+                {
+                    await Task.Delay(300);
+                }
+                finally
+                {
+                    lock (gate)
+                    {
+                        inFlight--;
+                    }
+                }
+            });
+        var service = new DataUpdateService(
+            _context.Db,
+            _hub.Object,
+            TimeProvider.System,
+            Mock.Of<ILogger<DataUpdateService>>(),
+            TimeSpan.FromSeconds(5));
+
+        var elapsed = Stopwatch.StartNew();
+        await service.BroadcastEntityUpdatesAsync(
+        [
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+            new EntityUpdateBroadcast(1, "Property", targetProperty.Id, new { targetProperty.Id }),
+        ]);
+        elapsed.Stop();
+
+        calls.Should().Be(3);
+        maxInFlight.Should().BeGreaterThan(1,
+            "post-commit realtime batches should not serialize one hub wait per invalidation");
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(800),
+            "three 300 ms hub sends should overlap after the DB-side recipient queries resolve");
+        _commands.Should().HaveCount(3,
+            "each update still resolves its authorized audience with one translated SQL query");
     }
 
     private Property AddProperty(string name)
@@ -217,7 +449,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             RevokedAtUtc = revoked ? now : null,
         };
         _context.Db.AddRange(assignment, session);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private SessionCoordinates AddEffectiveTenantSession(string key, DateTime now)
@@ -293,7 +525,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             Reason = "Realtime authorization test",
         };
         _context.Db.AddRange(session, access);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private SessionCoordinates AddBareContextSession(string key, DateTime now)
@@ -318,7 +550,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             ExpiresAtUtc = now.AddHours(1),
         };
         _context.Db.Add(session);
-        return new SessionCoordinates(session.Id, user);
+        return new SessionCoordinates(session.Id, user, context);
     }
 
     private void EnsureRelationshipProjectionView()
@@ -368,5 +600,5 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
     public void Dispose() => _context.Dispose();
 
-    private sealed record SessionCoordinates(Guid SessionId, ApplicationUser User);
+    private sealed record SessionCoordinates(Guid SessionId, ApplicationUser User, WorkspaceAccessContext Context);
 }

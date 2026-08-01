@@ -15,16 +15,20 @@ namespace RentalCommand.Data.Esign;
 
 /// <summary>Canonical Agreement issuance. No legacy Lease row is read or changed.</summary>
 public sealed class IssueLeaseAgreementHandler
-    : IAtomicCommandHandler<IssueLeaseAgreementCommand, IssueLeaseAgreementResult>,
-      IAtomicReplayAuthorizer<IssueLeaseAgreementCommand>
+    : IAtomicCommandHandler<IssueLeaseAgreementCommand, IssueLeaseAgreementResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public IssueLeaseAgreementHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<IssueLeaseAgreementResult> HandleAsync(
-        IssueLeaseAgreementCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var agreement = await AuthorizedAgreements(command, attempt.Persistence, times.WallClockUtc)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var businessNowUtc = times.EffectiveNowUtc;
+        var agreement = await AuthorizedAgreements(command, _db, times.WallClockUtc)
             .Include(item => item.Signers)
             .SingleOrDefaultAsync(item => item.Id == command.LeaseAgreementId, ct)
             ?? throw new UnauthorizedAccessException("Agreement issuance is outside the caller's current access scope.");
@@ -41,7 +45,7 @@ public sealed class IssueLeaseAgreementHandler
         var predecessorId = agreement.ReplacesAgreementId ?? agreement.RenewsAgreementId;
         if (predecessorId.HasValue)
         {
-            var predecessorFacts = await attempt.Persistence.Query<LeaseAgreement>()
+            var predecessorFacts = await _db.Set<LeaseAgreement>()
                 .Where(source => source.Id == predecessorId.Value
                     && source.PortfolioId == command.PortfolioId
                     && source.LeaseManagementId == command.LeaseManagementId)
@@ -103,7 +107,7 @@ public sealed class IssueLeaseAgreementHandler
                 "The issued PDF fingerprint does not match the Agreement source, terms, and artifact.");
         }
 
-        var pending = await attempt.Persistence.Query<PendingFileUpload>()
+        var pending = await _db.Set<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == command.PortfolioId
                 && upload.ActorScopeId == command.ActorUserId
@@ -127,10 +131,10 @@ public sealed class IssueLeaseAgreementHandler
             FileSize = command.FileSize,
             EntityType = nameof(LeaseAgreement),
             EntityId = agreement.Id,
-            UploadedAt = times.WallClockUtc,
+            UploadedAt = businessNowUtc,
         };
-        attempt.Persistence.Add(storedFile);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(storedFile);
+        await context.FlushBusinessAsync(ct);
         var artifact = new LegalDocumentArtifact
         {
             PortfolioId = command.PortfolioId,
@@ -142,16 +146,16 @@ public sealed class IssueLeaseAgreementHandler
             ByteLength = command.FileSize,
             ContentSha256 = command.ContentSha256,
             LegalIssuanceFingerprint = issuanceFingerprint,
-            CreatedAtUtc = times.WallClockUtc,
+            CreatedAtUtc = businessNowUtc,
             CreatedByUserId = command.ActorUserId,
         };
-        attempt.Persistence.Add(artifact);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(artifact);
+        await context.FlushBusinessAsync(ct);
 
         agreement.IssuedArtifactId = artifact.Id;
-        agreement.IssuedAtUtc = times.WallClockUtc;
-        agreement.UpdatedAtUtc = times.WallClockUtc;
-        attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(command.PortfolioId,
+        agreement.IssuedAtUtc = businessNowUtc;
+        agreement.UpdatedAtUtc = businessNowUtc;
+        context.BindSemanticAudit(agreement, new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseAgreement), agreement.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { agreement.IssuedArtifactId, agreement.IssuedAtUtc }),
             ChangeReason: "Issued immutable Agreement artifact and froze the legal signer snapshot."));
@@ -165,8 +169,8 @@ public sealed class IssueLeaseAgreementHandler
             Status = SignatureRequestStatus.AwaitingSignatures,
             Subject = command.Subject.Trim(),
             IssuedArtifactId = artifact.Id,
-            PreparedAtUtc = times.WallClockUtc,
-            ProviderAcceptedAtUtc = times.WallClockUtc,
+            PreparedAtUtc = businessNowUtc,
+            ProviderAcceptedAtUtc = businessNowUtc,
             CreatedByUserId = command.ActorUserId,
         };
         var invitationTokens = new Dictionary<int, string>();
@@ -185,8 +189,8 @@ public sealed class IssueLeaseAgreementHandler
                 TokenHash = HashToken(rawToken),
                 TokenExpiresAtUtc = times.WallClockUtc.AddDays(14),
                 Status = SignatureSignerStatus.Pending,
-                CreatedAtUtc = times.WallClockUtc,
-                UpdatedAtUtc = times.WallClockUtc,
+                CreatedAtUtc = businessNowUtc,
+                UpdatedAtUtc = businessNowUtc,
             });
             invitationTokens[source.Id] = rawToken;
         }
@@ -194,23 +198,23 @@ public sealed class IssueLeaseAgreementHandler
         {
             PortfolioId = command.PortfolioId,
             Type = SignatureAuditEventType.Sent,
-            OccurredAtUtc = times.WallClockUtc,
+            OccurredAtUtc = businessNowUtc,
             Detail = $"Native packet admitted for {packet.Signers.Count} required signer(s).",
         });
-        attempt.Persistence.Add(packet);
-        await attempt.FlushBusinessAsync(ct);
+        _db.Add(packet);
+        await context.FlushBusinessAsync(ct);
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
-        pending.UpdatedAtUtc = times.WallClockUtc;
+        pending.UpdatedAtUtc = businessNowUtc;
 
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(SignatureRequest), packet.Id, AuditLogOperation.Created, UserId: command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { packet.PublicId, packet.LeaseAgreementId, Status = packet.Status.ToString() }),
-            ChangeReason: "Created canonical Agreement signature packet."), times.WallClockUtc);
+            ChangeReason: "Created canonical Agreement signature packet."), businessNowUtc);
         foreach (var signer in packet.Signers)
         {
             var link = $"{command.WebBaseUrl.TrimEnd('/')}/sign/{invitationTokens[signer.AgreementSignerId!.Value]}";
-            attempt.StageOutbox(new OutboxMessage
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
                 MessageType = "email",
@@ -225,25 +229,24 @@ public sealed class IssueLeaseAgreementHandler
                     body = $"Hi {signer.NameSnapshot},\n\nReview and sign {packet.Subject}:\n{link}\n\nThis secure link is unique to you.",
                 }),
                 IdempotencyKey = $"agreement-esign:{packet.Id}:signer:{signer.Id}:invite",
-                CreatedAtUtc = times.WallClockUtc,
-                NextAttemptAtUtc = times.WallClockUtc,
+                CreatedAtUtc = businessNowUtc,
+                NextAttemptAtUtc = businessNowUtc,
             });
         }
         return new(packet.PublicId, command.LeaseManagementId, agreement.Id, packet.Id, artifact.Id);
     }
 
-    public async Task AuthorizeReplayAsync(IssueLeaseAgreementCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(IssueLeaseAgreementCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedAgreements(command, persistence, now).AnyAsync(item => item.Id == command.LeaseAgreementId, ct))
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedAgreements(command, _db, now).AnyAsync(item => item.Id == command.LeaseAgreementId, ct))
             throw new UnauthorizedAccessException("Agreement issuance replay is outside the caller's current access scope.");
     }
 
     private static IQueryable<LeaseAgreement> AuthorizedAgreements(IssueLeaseAgreementCommand command,
-        IAtomicPersistenceSession persistence, DateTime securityNowUtc) =>
-        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, persistence, securityNowUtc)
+        RentalCommandDbContext db, DateTime securityNowUtc) =>
+        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, db, securityNowUtc)
             .SelectMany(relationship => relationship.Agreements);
 
     private static void Validate(IssueLeaseAgreementCommand command)

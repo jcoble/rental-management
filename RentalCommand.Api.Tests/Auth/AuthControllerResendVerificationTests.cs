@@ -91,7 +91,7 @@ public class AuthControllerResendVerificationTests
             Mock.Of<ICanonicalAccessTokenService>(),
             Mock.Of<RentalCommand.Core.Authorization.IAccessEnvelopeQuery>(),
             Mock.Of<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>(),
-            TimeProvider.System,
+            new SystemAuthSecurityClock(),
             NullLogger<AuthController>.Instance)
         {
             ControllerContext = new ControllerContext

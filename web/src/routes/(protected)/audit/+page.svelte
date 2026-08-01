@@ -13,6 +13,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { currentUserIsPlatformAdmin } from '$lib/stores/auth.svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
 	// platform-operator-only, so workspace security administrators must not receive a dead link.
@@ -41,23 +43,46 @@
 		'RentalApplication',
 	] as const;
 
-	let search = $state('');
-	let operationFilter = $state('');
-	let entityTypeFilter = $state('');
-	let dateFrom = $state('');
-	let dateTo = $state('');
-	let skip = $state(0);
+	// Keep the exact forensic position in the URL so opening a target and using browser Back restores
+	// the same search, filters, date span, and page. The URL uses a human page number while the API
+	// continues to receive its canonical row offset.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let operationFilter = $state(readGridParam(initialParams, 'operation'));
+	let entityTypeFilter = $state(readGridParam(initialParams, 'entity'));
+	let dateFrom = $state(readGridParam(initialParams, 'from'));
+	let dateTo = $state(readGridParam(initialParams, 'to'));
+	let skip = $state((readGridParam(initialParams, 'page', 1) - 1) * PAGE_SIZE);
 
 	const debouncedSearch = debounced(() => search, 300);
 
-	// Reset pagination when filters change
+	// Reset pagination when filters change, but preserve a URL-restored page on the initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedSearch.value;
 		operationFilter;
 		entityTypeFilter;
 		dateFrom;
 		dateTo;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
 		skip = 0;
+	});
+
+	$effect(() => {
+		syncGridUrl(
+			{
+				q: search,
+				operation: operationFilter,
+				entity: entityTypeFilter,
+				from: dateFrom,
+				to: dateTo,
+				page: Math.floor(skip / PAGE_SIZE) + 1,
+			},
+			{ page: 1 },
+		);
 	});
 
 	const auditQuery = createQuery(() => ({

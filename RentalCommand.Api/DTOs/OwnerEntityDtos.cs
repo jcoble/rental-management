@@ -27,6 +27,12 @@ public class OwnerEntityResponse
     /// <summary>True for the self-owner auto-created from the landlord's own account at onboarding.</summary>
     public bool IsPrimary { get; set; }
 
+    /// <summary>True when this owner already has at least one active owner-portal relationship.</summary>
+    public bool HasActiveOwnerPortalAccess { get; set; }
+
+    /// <summary>True when owner portal access exists but the invited passwordless account is still pending activation.</summary>
+    public bool HasPendingOwnerPortalInvitation { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -49,10 +55,62 @@ public class OwnerEntityResponse
         Email = e.Email,
         AssignedPropertyCount = assignedPropertyCount,
         IsPrimary = e.IsPrimary,
+        HasActiveOwnerPortalAccess = e.UserAccesses.Any(access => access.RevokedAtUtc == null),
+        HasPendingOwnerPortalInvitation = false,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
 }
+
+public sealed record ActivateOwnerPortalAccessRequest(
+    string? Reason = null,
+    DateTime? EffectiveToUtc = null);
+
+public enum ActivateOwnerPortalAccessOutcome
+{
+    Activated,
+    InvitationPending,
+    AlreadyActive,
+    MissingOwnerEmail,
+    MissingUserAccount,
+    MissingWorkspaceAccess,
+    InactiveWorkspaceAccess,
+    PrimaryOwnerNotSupported,
+    NotFound,
+    Invalid,
+}
+
+public sealed record ActivateOwnerPortalAccessResponse(
+    ActivateOwnerPortalAccessOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool Replayed,
+    bool RequiresAccountActivation,
+    DateTime? InvitationExpiresAtUtc,
+    string Message);
+
+public sealed record RevokeOwnerPortalAccessRequest(string? Reason = null);
+
+public enum RevokeOwnerPortalAccessOutcome
+{
+    Revoked,
+    AlreadyRevoked,
+    NotFound,
+}
+
+public sealed record RevokeOwnerPortalAccessResponse(
+    RevokeOwnerPortalAccessOutcome Outcome,
+    int OwnerEntityId,
+    string? OwnerEmail,
+    int RevokedRelationshipCount,
+    int? TargetAccessContextId,
+    int? OwnerUserAccessId,
+    long? AccessRevision,
+    bool Replayed,
+    string Message);
 
 public class OwnerEntityListResponse
 {

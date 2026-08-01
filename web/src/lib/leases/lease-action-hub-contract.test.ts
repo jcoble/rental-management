@@ -39,11 +39,14 @@ describe('canonical lease lifecycle action hub', () => {
 
 	it('edits and issues the exact canonical draft revision', () => {
 		assert.match(draftDialogSource, /leaseManagements\.getAgreementDraft/);
+		assert.match(draftDialogSource, /draftRequestsEnabled && leaseManagementId > 0 && leaseAgreementId > 0/);
+		assert.match(draftDialogSource, /enabled: canLoadDraft/);
 		assert.match(draftDialogSource, /draftRevision: draft\.draftRevision/);
 		assert.match(draftDialogSource, /termsSchemaVersion: draft\.termsSchemaVersion/);
 		assert.match(draftDialogSource, /termsPayload: draft\.termsPayload/);
 		assert.match(draftDialogSource, /leaseManagements\.prepareAgreementIssuance/);
 		assert.match(draftDialogSource, /\{ \.\.\.prepared, subject: subject\.trim\(\) \}/);
+		assert.match(draftDialogSource, /draftRequestsEnabled = false;\s*issueConfirmationOpen = false;\s*await onissued\(result\);\s*await queryClient\.invalidateQueries/s);
 		assert.match(draftDialogSource, /Save the current draft changes before issuing/);
 		assert.match(draftDialogSource, /isRequired: true/);
 		assert.match(draftDialogSource, /draft\.signers\.some\(\(signer\) => !signer\.isRequired\)/);
@@ -59,6 +62,20 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(successorDialogSource, /sourceAddendumSeriesPublicId: series\.seriesPublicId/);
 		assert.doesNotMatch(successorDialogSource, /addendumDecisionBlocked/);
 		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
+	});
+
+	it('requires an active lease template only for imported-source successor drafts', () => {
+		assert.match(endpointSource, /documentTemplateId: number \| null/);
+		assert.match(successorDialogSource, /const sourceRequiresTemplate = \$derived\(source\.hasSourceScan\)/);
+		assert.match(successorDialogSource, /documentTemplates\.listPage\(\{/);
+		assert.match(successorDialogSource, /kind: 'Lease'/);
+		assert.match(successorDialogSource, /status: 'Active'/);
+		assert.match(successorDialogSource, /propertyId: templatePropertyId!/);
+		assert.match(successorDialogSource, /const defaultTemplates = templates\.filter\(\(template\) => template\.defaultForPortfolio\)/);
+		assert.match(successorDialogSource, /selectedDocumentTemplateId = Number\(documentTemplateId\)/);
+		assert.match(successorDialogSource, /documentTemplateId: selectedDocumentTemplateId/);
+		assert.match(successorDialogSource, /agreement-successor-document-template/);
+		assert.match(successorDialogSource, /if \(!sourceRequiresTemplate\) \{\s*documentTemplateId = ''/s);
 	});
 
 	it('supports the correction successor UX and abandoned-draft cancellation', () => {
@@ -108,6 +125,26 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(
 			detailPageSource,
 			/<PossessionActions \{summary\} canManage=\{canManageHousehold\} onchanged=\{refreshLease\} \/>/,
+		);
+	});
+
+	it('formats lease-detail planned date-only fields without local timezone drift', () => {
+		assert.match(detailPageSource, /import \{ formatDateOnly \} from '\$lib\/utils\/date';/);
+		assert.match(
+			detailPageSource,
+			/Possession planned \$\{formatDateOnly\(summary\.plannedPossessionAtUtc\)\}/
+		);
+		assert.match(
+			detailPageSource,
+			/Move-out planned \{formatDateOnly\(summary\.plannedMoveOutAtUtc\)\}/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedPossessionAtUtc\)\.toLocaleDateString/
+		);
+		assert.doesNotMatch(
+			detailPageSource,
+			/new Date\(summary\.plannedMoveOutAtUtc\)\.toLocaleDateString/
 		);
 	});
 

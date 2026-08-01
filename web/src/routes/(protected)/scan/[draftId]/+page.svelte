@@ -12,6 +12,13 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { units } from '$lib/api/endpoints/units';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import {
+		loans,
+		type Loan,
+		type LoanPayment
+	} from '$lib/api/endpoints/loans';
+	import type { WorkOrder } from '$lib/types';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import {
@@ -35,6 +42,8 @@
 		parseScanContext
 	} from '$lib/scan/scan-context';
 	import { scanProcessingCopy } from '$lib/scan/scan-copy';
+	import { hasAllPropertiesRentalsManageAuthority } from '$lib/auth/property-authority';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -43,6 +52,7 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LeaseScanSignatureChoice, {
 		type LeaseScanReviewDisposition
 	} from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
@@ -71,6 +81,9 @@
 	}
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	const canCreateLeaseProperty = $derived(hasAllPropertiesRentalsManageAuthority(currentAccess));
 
 	const draftId = $derived(parseInt(page.params.draftId ?? '0', 10));
 	const launchContext = $derived(parseScanContext(page.url.searchParams));
@@ -85,7 +98,9 @@
 		refetchInterval: (q) => {
 			const s = q.state.data?.status;
 			return s === 'Pending' || s === 'Processing' ? 1500 : false;
-		}
+		},
+		refetchIntervalInBackground: true,
+		refetchOnReconnect: true
 	}));
 
 	const data = $derived(draftQuery.data);
@@ -146,14 +161,33 @@
 	// 'none' is the sentinel for "no property" (empty string conflicts with the
 	// Select's "nothing selected" state in bits-ui).
 	const NO_PROPERTY = 'none';
+	const NO_UNIT = 'none';
+	const NO_WORK_ORDER = 'none';
 	let selectedPropertyId = $state<string>(NO_PROPERTY);
+	let selectedExpenseUnitId = $state<string>(NO_UNIT);
+	let selectedExpenseWorkOrderId = $state<string>(NO_WORK_ORDER);
+	let selectedExpenseWorkOrderLabelText = $state('');
 	let propertySearch = $state('');
 	let propertySkip = $state(0);
 	let tenantSearch = $state('');
 	let tenantSkip = $state(0);
 	let unitSearch = $state('');
 	let unitSkip = $state(0);
+	let workOrderSearch = $state('');
+	let workOrderSkip = $state(0);
 	const CONTEXT_PAGE_SIZE = 20;
+	type LoanReviewMode = 'match' | 'create';
+	let loanReviewMode = $state<LoanReviewMode>('match');
+	let selectedExistingLoanId = $state('');
+	let selectedExistingLoanPaymentId = $state('');
+
+	$effect(() => {
+		if (!draftId || !isProcessing) return;
+		const refresh = setInterval(() => {
+			if (!draftQuery.isFetching) void draftQuery.refetch();
+		}, 1500);
+		return () => clearInterval(refresh);
+	});
 
 	const tenantAccountOptionsQuery = createQuery(() => ({
 		queryKey: ['tenant-account-options', getCurrentPortfolioId(), tenantAccountSearch.trim(), tenantAccountSkip],
@@ -213,6 +247,112 @@
 		enabled: !isPayment
 	}));
 	const propertyChoices = $derived(propertiesQuery.data?.items ?? []);
+	const selectedExpensePropertyId = $derived(
+		selectedPropertyId !== NO_PROPERTY ? Number(selectedPropertyId) : null
+	);
+	const selectedExpenseUnitIdNumber = $derived(
+		selectedExpenseUnitId !== NO_UNIT ? Number(selectedExpenseUnitId) : null
+	);
+	const selectedExpenseWorkOrderIdNumber = $derived(
+		selectedExpenseWorkOrderId !== NO_WORK_ORDER ? Number(selectedExpenseWorkOrderId) : null
+	);
+	const selectedLoanPropertyIdNumber = $derived(
+		selectedPropertyId !== NO_PROPERTY ? Number(selectedPropertyId) : null
+	);
+
+	const existingLoansQuery = createQuery(() => ({
+		queryKey: ['scan-loans', getCurrentPortfolioId(), selectedLoanPropertyIdNumber],
+		queryFn: () => loans.listPage({
+			propertyId: selectedLoanPropertyIdNumber as number,
+			sort: 'lender',
+			skip: 0,
+			take: 50
+		}),
+		enabled: isLoan && loanReviewMode === 'match' && !!selectedLoanPropertyIdNumber
+	}));
+	const existingLoanChoices = $derived(existingLoansQuery.data?.items ?? []);
+	const selectedExistingLoan = $derived.by<Loan | null>(() =>
+		existingLoanChoices.find((loan) => String(loan.id) === selectedExistingLoanId) ?? null
+	);
+	const existingLoanPaymentsQuery = createQuery(() => ({
+		queryKey: ['scan-loan-payments', getCurrentPortfolioId(), selectedExistingLoanId],
+		queryFn: () => loans.payments(Number(selectedExistingLoanId), {
+			sort: 'dueDate',
+			skip: 0,
+			take: 50
+		}),
+		enabled: isLoan && loanReviewMode === 'match' && !!selectedExistingLoanId
+	}));
+	const existingLoanPaymentChoices = $derived(existingLoanPaymentsQuery.data ?? []);
+	const selectedExistingLoanPayment = $derived.by<LoanPayment | null>(() =>
+		existingLoanPaymentChoices.find(
+			(payment) => String(payment.id) === selectedExistingLoanPaymentId
+		) ?? null
+	);
+
+	function loanPaymentLabel(payment: LoanPayment): string {
+		const dueDate = new Date(payment.dueDate).toLocaleDateString();
+		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${payment.status}`;
+	}
+
+	const expenseUnitsQuery = createQuery(() => ({
+		queryKey: [
+			'scan-expense-units',
+			getCurrentPortfolioId(),
+			selectedExpensePropertyId,
+			unitSearch.trim(),
+			unitSkip
+		],
+		queryFn: () =>
+			units.listWithHealthPage({
+				propertyId: selectedExpensePropertyId as number,
+				search: unitSearch.trim() || undefined,
+				sort: 'unitNumber',
+				skip: unitSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
+		enabled: !!data && isExpense && !!selectedExpensePropertyId
+	}));
+	const expenseUnitChoices = $derived(expenseUnitsQuery.data?.items ?? []);
+
+	const expenseWorkOrdersQuery = createQuery(() => ({
+		queryKey: [
+			'scan-expense-work-orders',
+			getCurrentPortfolioId(),
+			selectedExpensePropertyId,
+			selectedExpenseUnitIdNumber,
+			workOrderSearch.trim(),
+			workOrderSkip
+		],
+		queryFn: () =>
+			workOrders.listPage(getCurrentPortfolioId(), {
+				propertyId: selectedExpensePropertyId ?? undefined,
+				unitId: selectedExpenseUnitIdNumber ?? undefined,
+				search: workOrderSearch.trim() || undefined,
+				sort: '-requestedAt',
+				skip: workOrderSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
+		enabled: !!data && isExpense
+	}));
+	const selectedExpenseWorkOrderIsInPage = $derived(
+		!!selectedExpenseWorkOrderIdNumber &&
+		(expenseWorkOrdersQuery.data?.items.some((workOrder) => workOrder.id === selectedExpenseWorkOrderIdNumber) ?? false)
+	);
+	const selectedExpenseWorkOrderQuery = createQuery(() => ({
+		queryKey: ['scan-expense-work-order', getCurrentPortfolioId(), selectedExpenseWorkOrderIdNumber],
+		queryFn: () => workOrders.get(selectedExpenseWorkOrderIdNumber as number),
+		enabled: !!data && isExpense && !!selectedExpenseWorkOrderIdNumber && !selectedExpenseWorkOrderIsInPage,
+		retry: false
+	}));
+	const expenseWorkOrderChoices = $derived.by<WorkOrder[]>(() => {
+		const choices = [...(expenseWorkOrdersQuery.data?.items ?? [])];
+		const selected = selectedExpenseWorkOrderQuery.data;
+		if (selected && !choices.some((workOrder) => workOrder.id === selected.id)) {
+			choices.unshift(selected);
+		}
+		return choices;
+	});
 
 	// --- Lease draft selectors ---
 	// A Lease confirm needs a property + unit; tenant is optional (when omitted the server matches the
@@ -244,6 +384,11 @@
 	let newPropertyFieldsSeeded = $state(false);
 	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
 	let leaseDocumentTemplateId = $state('');
+	let possessionGivenOn = $state('');
+	let rentTrackingStartMode = $state<
+		'ForwardOnly' | 'BackfillFromLeaseStart' | 'CustomCutoffDate'
+	>('ForwardOnly');
+	let rentTrackingStartOn = $state('');
 
 	function resetLeaseReviewState() {
 		selectedLeasePropertyId = '';
@@ -261,6 +406,9 @@
 		newPropertyFieldsSeeded = false;
 		leaseReviewDisposition = '';
 		leaseDocumentTemplateId = '';
+		possessionGivenOn = '';
+		rentTrackingStartMode = 'ForwardOnly';
+		rentTrackingStartOn = '';
 	}
 
 	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
@@ -376,6 +524,15 @@
 		{ name: 'monthly_principal_interest', label: 'Monthly P&I', type: 'number' },
 		{ name: 'monthly_escrow', label: 'Monthly escrow', type: 'number' }
 	];
+	const LOAN_STATEMENT_FIELDS: { name: string; label: string; type: 'date' | 'number'; required: boolean }[] = [
+		{ name: 'current_balance', label: 'Opening balance', type: 'number', required: true },
+		{ name: 'statement_principal_amount', label: 'Principal', type: 'number', required: true },
+		{ name: 'statement_interest_amount', label: 'Interest', type: 'number', required: true },
+		{ name: 'monthly_principal_interest', label: 'P&I', type: 'number', required: true },
+		{ name: 'statement_escrow_amount', label: 'Escrow', type: 'number', required: true },
+		{ name: 'statement_total_amount', label: 'Total cash', type: 'number', required: true },
+		{ name: 'statement_effective_date', label: 'Statement due/payment date', type: 'date', required: false }
+	];
 
 	// Loan escrow-cover flags are booleans (not in the string-keyed editedFields). Seeded once from the
 	// extraction, then owned by the user; reset per-draft alongside the other editable state.
@@ -391,8 +548,16 @@
 	// reviewer can change it). Mirrors leaseSelectionInvalid / applicationInvalid.
 	const loanInvalid = $derived.by(() => {
 		if (!isLoan) return false;
-		if (!(editedFields['lender'] ?? '').trim()) return true;
-		return !selectedPropertyId || selectedPropertyId === NO_PROPERTY;
+		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return true;
+		if (loanReviewMode === 'match') {
+			return !selectedExistingLoanId ||
+				!selectedExistingLoanPaymentId ||
+				(selectedExistingLoanPayment?.status !== 'Scheduled'
+					&& selectedExistingLoanPayment?.status !== 'Paid') ||
+				LOAN_STATEMENT_FIELDS.some((field) =>
+					field.required && parseAmount(editedFields[field.name]) == null);
+		}
+		return !(editedFields['lender'] ?? '').trim();
 	});
 
 	// Lease term fields shown as editable inputs (in display order).
@@ -409,6 +574,9 @@
 	// Reset the unit pick only when the reviewer changes property. A paged/search result that does not
 	// contain the selected unit must not erase a valid choice.
 	$effect(() => {
+		if (!canCreateLeaseProperty && selectedLeasePropertyId === CREATE_PROPERTY) {
+			selectedLeasePropertyId = '';
+		}
 		const nextPropertyId = selectedLeasePropertyId;
 		if (previousLeasePropertyId && previousLeasePropertyId !== nextPropertyId) {
 			selectedLeaseUnitId = '';
@@ -426,6 +594,78 @@
 		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return '— No property —';
 		const sel = propertyChoices.find((p) => String(p.id) === selectedPropertyId);
 		return sel ? sel.name : `Property #${selectedPropertyId}`;
+	});
+
+	const selectedExpenseUnitLabel = $derived.by(() => {
+		if (!selectedExpenseUnitId || selectedExpenseUnitId === NO_UNIT) return '— No unit —';
+		const selected = expenseUnitChoices.find((unit) => String(unit.id) === selectedExpenseUnitId);
+		return selected ? `Unit ${selected.unitNumber}` : `Unit #${selectedExpenseUnitId}`;
+	});
+
+	function expenseWorkOrderLabel(workOrder: WorkOrder): string {
+		const unit = workOrder.unitNumber ? ` · Unit ${workOrder.unitNumber}` : '';
+		return `${workOrder.title}${unit} · ${workOrder.status}`;
+	}
+
+	const selectedExpenseWorkOrderLabel = $derived.by(() => {
+		if (!selectedExpenseWorkOrderId || selectedExpenseWorkOrderId === NO_WORK_ORDER) return '— No work order —';
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		return selected
+			? expenseWorkOrderLabel(selected)
+			: selectedExpenseWorkOrderLabelText || `Work order #${selectedExpenseWorkOrderId}`;
+	});
+
+	function clearExpenseWorkOrderSelection() {
+		selectedExpenseWorkOrderId = NO_WORK_ORDER;
+		selectedExpenseWorkOrderLabelText = '';
+		workOrderSearch = '';
+		workOrderSkip = 0;
+	}
+
+	function selectContextPropertyId(value: string | undefined): void {
+		const next = value ?? NO_PROPERTY;
+		selectedPropertyId = next;
+		if (isExpense) {
+			selectedExpenseUnitId = NO_UNIT;
+			unitSearch = '';
+			unitSkip = 0;
+			clearExpenseWorkOrderSelection();
+		}
+	}
+
+	function selectLoanPropertyId(value: string | undefined): void {
+		selectedPropertyId = value ?? NO_PROPERTY;
+		selectedExistingLoanId = '';
+		selectedExistingLoanPaymentId = '';
+	}
+
+	function selectExistingLoanId(value: string | undefined): void {
+		selectedExistingLoanId = value ?? '';
+		selectedExistingLoanPaymentId = '';
+	}
+
+	function selectExpenseUnitId(value: string | undefined): void {
+		selectedExpenseUnitId = value ?? NO_UNIT;
+		clearExpenseWorkOrderSelection();
+	}
+
+	function selectExpenseWorkOrder(value: string | undefined): void {
+		selectedExpenseWorkOrderId = value ?? NO_WORK_ORDER;
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		selectedExpenseWorkOrderLabelText = selected ? expenseWorkOrderLabel(selected) : '';
+		if (!selected) return;
+		selectedPropertyId = String(selected.propertyId);
+		selectedExpenseUnitId = selected.unitId ? String(selected.unitId) : NO_UNIT;
+	}
+
+	$effect(() => {
+		if (!isExpense || selectedExpenseWorkOrderId === NO_WORK_ORDER) return;
+		const selected = expenseWorkOrderChoices.find((workOrder) => String(workOrder.id) === selectedExpenseWorkOrderId);
+		if (!selected) return;
+		selectedExpenseWorkOrderLabelText = expenseWorkOrderLabel(selected);
+		if (selectedPropertyId !== String(selected.propertyId)) selectedPropertyId = String(selected.propertyId);
+		const nextUnitId = selected.unitId ? String(selected.unitId) : NO_UNIT;
+		if (selectedExpenseUnitId !== nextUnitId) selectedExpenseUnitId = nextUnitId;
 	});
 
 	function tenantAccountLabel(account: TenantAccountChoice): string {
@@ -522,6 +762,7 @@
 	const leaseSelectionInvalid = $derived.by(() => {
 		if (!isLease) return false;
 		if (isCreatingLeaseProperty) {
+			if (!canCreateLeaseProperty) return true;
 			const hasPropertyAnchor = !!(newPropertyAddress.trim() || newPropertyName.trim());
 			return !hasPropertyAnchor || !newPropertyRentalStructure || !newUnitNumber.trim();
 		}
@@ -530,6 +771,9 @@
 	const leaseSignatureChoiceInvalid = $derived(
 		isLease &&
 			!leaseReviewDisposition
+	);
+	const leaseRentTrackingInvalid = $derived(
+		isLease && rentTrackingStartMode === 'CustomCutoffDate' && !rentTrackingStartOn
 	);
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
@@ -557,15 +801,23 @@
 		tenantAccountSearch = '';
 		tenantAccountSkip = 0;
 		selectedPropertyId = NO_PROPERTY;
+		selectedExpenseUnitId = NO_UNIT;
+		selectedExpenseWorkOrderId = NO_WORK_ORDER;
+		selectedExpenseWorkOrderLabelText = '';
 		propertySearch = '';
 		propertySkip = 0;
 		tenantSearch = '';
 		tenantSkip = 0;
 		unitSearch = '';
 		unitSkip = 0;
+		workOrderSearch = '';
+		workOrderSkip = 0;
 		loanEscrowCoversTaxes = false;
 		loanEscrowCoversInsurance = false;
 		loanEscrowSeeded = false;
+		loanReviewMode = 'match';
+		selectedExistingLoanId = '';
+		selectedExistingLoanPaymentId = '';
 		resetLeaseReviewState();
 	});
 
@@ -608,6 +860,14 @@
 					properties: propertyChoices
 				});
 				if (resolvedPropertyId) selectedPropertyId = resolvedPropertyId;
+			}
+			if (data.targetEntityType === 'Expense' && selectedExpenseWorkOrderId === NO_WORK_ORDER) {
+				const contextWorkOrderId = data.captureContext?.workOrderId ?? scanContext.workOrderId;
+				if (contextWorkOrderId) selectedExpenseWorkOrderId = String(contextWorkOrderId);
+			}
+			if (data.targetEntityType === 'Expense' && selectedExpenseUnitId === NO_UNIT) {
+				const contextUnitId = data.captureContext?.unitId ?? scanContext.unitId;
+				if (contextUnitId) selectedExpenseUnitId = String(contextUnitId);
 			}
 			// Loan drafts: seed the escrow-cover checkboxes from the extraction once.
 			if (data.targetEntityType === 'Loan' && !loanEscrowSeeded && data.fields.length > 0) {
@@ -652,7 +912,7 @@
 						selectedLeasePropertyId = extractedId;
 					} else if (leaseProposal?.property.action === 'link' && leaseProposal.property.existingId != null) {
 						selectedLeasePropertyId = String(leaseProposal.property.existingId);
-					} else if (leaseProposal && (leaseProposal.property.action === 'create' || leaseProposal.property.action === 'select')) {
+					} else if (canCreateLeaseProperty && leaseProposal && (leaseProposal.property.action === 'create' || leaseProposal.property.action === 'select')) {
 						// Nothing to link — start in create-new mode (the empty-portfolio bootstrap).
 						selectedLeasePropertyId = CREATE_PROPERTY;
 					}
@@ -764,8 +1024,17 @@
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
 	// the new lease instead, so they don't use this card.)
 	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null; unitId: number | null } | null>(null);
+	let depositFundingRedirectPending = $state(false);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
+	const canRecoverPaymentDepositHandoff = $derived(
+		isPayment &&
+			!!data?.sourceStoredFileId &&
+			(data.status === 'Rejected' || data.status === 'Failed') &&
+			!confirmedRecord
+	);
+	const showPaymentTenantAccountSelector = $derived(isPayment && (!isTerminal || canRecoverPaymentDepositHandoff));
+	const disablePaymentTenantAccountSelector = $derived(reviewControlsDisabled && !canRecoverPaymentDepositHandoff);
 	const lowConfidenceFields = $derived(
 		(data?.fields ?? []).filter(
 			(field) => field.name !== LINE_ITEMS_FIELD && confidenceLevel(field.confidence) === 'low'
@@ -785,7 +1054,11 @@
 				: 'Create one rental relationship and agreement for the selected unit';
 		}
 		if (isApplication) return 'Create one rental application';
-		if (isLoan) return 'Add one loan to the selected property';
+		if (isLoan) {
+			return loanReviewMode === 'match'
+				? 'Match this statement and record one scheduled loan payment'
+				: 'Add one loan to the selected property';
+		}
 		return 'Create one expense and attach this source document';
 	});
 	const proposedDestination = $derived.by(() => {
@@ -803,6 +1076,13 @@
 					? `Unit #${scanContext.unitId}`
 					: 'Applications queue';
 		}
+		if (isLoan && loanReviewMode === 'match') {
+			const loan = selectedExistingLoan;
+			const payment = selectedExistingLoanPayment;
+			return loan && payment
+				? `${selectedPropertyLabel} · ${loan.lender} · ${payment.periodKey}`
+				: selectedPropertyLabel;
+		}
 		if (isWorkOrder || isLoan || isExpense) return selectedPropertyLabel;
 		return 'Review required';
 	});
@@ -819,6 +1099,37 @@
 			leaseManagementId: data?.captureContext?.leaseManagementId ?? scanContext.leaseManagementId ?? null
 		});
 	})());
+	const depositFundingHref = $derived.by(() => {
+		if (!isPayment || !data?.sourceStoredFileId) return null;
+		const accountId = selectedTenantAccountId
+			? Number(selectedTenantAccountId)
+			: data.captureContext?.tenantAccountId ?? scanContext.tenantAccountId ?? null;
+		if (!accountId || !Number.isFinite(accountId) || accountId <= 0) return null;
+		const params = new URLSearchParams({
+			sourceStoredFileId: String(data.sourceStoredFileId),
+			sourceDraftId: String(data.id)
+		});
+		return `/deposits/${accountId}?${params.toString()}`;
+	});
+
+	async function recordScanAsDepositFunds(): Promise<void> {
+		if (!depositFundingHref || !data) return;
+		depositFundingRedirectPending = true;
+		try {
+			if (data.status !== 'Rejected' && data.status !== 'Failed') {
+				await scan.reject(
+					data.id,
+					'Reclassified as a security deposit receipt; record it through the deposit workflow.'
+				);
+				queryClient.invalidateQueries({ queryKey: ['scans'] });
+				queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			}
+			await goto(depositFundingHref);
+		} catch (err) {
+			depositFundingRedirectPending = false;
+			toast.error(err instanceof Error ? err.message : 'Could not open deposit funding.');
+		}
+	}
 
 	function formatUsd(val: number | null): string {
 		if (val == null) return '';
@@ -882,7 +1193,7 @@
 			// Loan drafts attach to a property (no standalone loan page) — go back to that property,
 			// where PropertyLoansSection shows the new loan.
 			if (isLoan) {
-				toast.success('Loan added');
+				toast.success(loanReviewMode === 'match' ? 'Loan payment matched and recorded' : 'Loan added');
 				const propertyId = selectedPropertyId && selectedPropertyId !== NO_PROPERTY
 					? Number(selectedPropertyId)
 					: scanContext.propertyId;
@@ -1010,6 +1321,13 @@
 				overrides['tenantId'] = Number(selectedTenantId);
 			}
 			overrides['reviewDisposition'] = leaseReviewDisposition;
+			if (leaseReviewDisposition === 'AlreadyFullySigned' && possessionGivenOn) {
+				overrides['possessionGivenAtUtc'] = possessionGivenOn;
+			}
+			overrides['rentTrackingStartMode'] = rentTrackingStartMode;
+			if (rentTrackingStartMode === 'CustomCutoffDate') {
+				overrides['rentTrackingStartOn'] = rentTrackingStartOn;
+			}
 			if (leaseReviewDisposition === 'NeedsSignatures' && leaseDocumentTemplateId) {
 				overrides['documentTemplateId'] = Number(leaseDocumentTemplateId);
 			}
@@ -1019,11 +1337,16 @@
 		if (isLoan) {
 			// The edited loan scalar fields (lender, original_amount, current_balance,
 			// annual_interest_rate_pct, term_months, start_date, day_of_month_due,
-			// monthly_principal_interest, monthly_escrow, notes) are already in `overrides` as snake_case
-			// keys, which the server's ApplyLoanOverrides accepts directly. Add the required property and
+			// monthly_principal_interest, monthly_escrow, notes) and the statement-match fields
+			// are already in `overrides` as snake_case keys, which the server's ApplyLoanOverrides accepts
+			// directly. Add the required property and
 			// the escrow-cover flags (booleans the checkboxes own, not in the string-keyed editedFields).
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
+			}
+			if (loanReviewMode === 'match') {
+				overrides['existingLoanId'] = Number(selectedExistingLoanId);
+				overrides['existingLoanPaymentId'] = Number(selectedExistingLoanPaymentId);
 			}
 			overrides['escrowCoversTaxes'] = loanEscrowCoversTaxes;
 			overrides['escrowCoversInsurance'] = loanEscrowCoversInsurance;
@@ -1055,6 +1378,12 @@
 			// Optional property association (server honors `propertyId`).
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
+			}
+			if (selectedExpenseUnitId && selectedExpenseUnitId !== NO_UNIT) {
+				overrides['unitId'] = Number(selectedExpenseUnitId);
+			}
+			if (selectedExpenseWorkOrderId && selectedExpenseWorkOrderId !== NO_WORK_ORDER) {
+				overrides['workOrderId'] = Number(selectedExpenseWorkOrderId);
 			}
 			applyScanContextOverrides(overrides, scanContext, 'Expense');
 			// Include the (possibly edited) line items so corrections survive into the expense.
@@ -1358,23 +1687,23 @@
 						</p>
 					{:else if isPayment}
 						<!-- Canonical tenant-account selector — required for Payment drafts -->
-						{#if !isTerminal}
+						{#if showPaymentTenantAccountSelector}
 							<div class="mb-5 space-y-2 rounded-md border border-border bg-muted/30 p-3">
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-tenant-account-select">
-									Which rental account is this payment for? <span class="text-[var(--m3c-error)]">*</span>
+									{canRecoverPaymentDepositHandoff ? 'Which rental account should receive these deposit funds?' : 'Which rental account is this payment for?'} <span class="text-[var(--m3c-error)]">*</span>
 								</label>
 								<Input
 									aria-label="Search rental accounts"
 									placeholder="Search tenant, property, unit, or relationship number"
 									value={tenantAccountSearch}
-									disabled={reviewControlsDisabled}
+									disabled={disablePaymentTenantAccountSelector}
 									oninput={(event) => {
 										tenantAccountSearch = (event.currentTarget as HTMLInputElement).value;
 										tenantAccountSkip = 0;
 									}}
 								/>
-								<Select.Root type="single" value={selectedTenantAccountId} onValueChange={selectTenantAccount} disabled={reviewControlsDisabled}>
-									<Select.Trigger id="scan-tenant-account-select" data-testid="scan-tenant-account-select" class="w-full" disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedTenantAccountId} onValueChange={selectTenantAccount} disabled={disablePaymentTenantAccountSelector}>
+									<Select.Trigger id="scan-tenant-account-select" data-testid="scan-tenant-account-select" class="w-full" disabled={disablePaymentTenantAccountSelector}>
 										{selectedTenantAccountLabel}
 									</Select.Trigger>
 									<Select.Content>
@@ -1415,16 +1744,16 @@
 										<p class="mb-1 font-semibold text-foreground">When you confirm, this lease will:</p>
 										<ul class="space-y-0.5 text-muted-foreground">
 											<li data-testid="scan-lease-proposal-property">
-												{#if isCreatingLeaseProperty || leaseProposal.property.action === 'create'}
+												{#if isCreatingLeaseProperty || (canCreateLeaseProperty && leaseProposal.property.action === 'create')}
 													<span class="font-medium text-[var(--success)]">Create</span> a new property{leaseProposal.property.label ? ` — ${leaseProposal.property.label}` : ''}
 												{:else if leaseProposal.property.action === 'link'}
 													<span class="font-medium">Link</span> to {leaseProposal.property.label ?? 'an existing property'}
 												{:else}
-													Need you to choose a property
+													Need you to choose an authorized property
 												{/if}
 											</li>
 											<li data-testid="scan-lease-proposal-unit">
-												{#if isCreatingLeaseProperty || leaseProposal.unit.action === 'create'}
+												{#if isCreatingLeaseProperty || (canCreateLeaseProperty && leaseProposal.unit.action === 'create')}
 													<span class="font-medium text-[var(--success)]">Create</span> {leaseProposal.unit.label ?? 'a unit'}
 												{:else if leaseProposal.unit.action === 'link'}
 													<span class="font-medium">Link</span> to {leaseProposal.unit.label ?? 'an existing unit'}
@@ -1455,7 +1784,9 @@
 											{selectedLeasePropertyLabel}
 										</Select.Trigger>
 										<Select.Content>
-											<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
+											{#if canCreateLeaseProperty}
+												<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
+											{/if}
 									{#if propertiesQuery.data}
 										{#each propertyChoices as prop (prop.id)}
 													<Select.Item value={String(prop.id)} label={prop.name}>
@@ -1637,6 +1968,66 @@
 										disabled={reviewControlsDisabled}
 									/>
 								</div>
+								{#if leaseReviewDisposition === 'AlreadyFullySigned'}
+									<div class="mb-5 rounded-md border border-border bg-muted/20 p-3">
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-possession-given-date">
+											Possession given
+										</label>
+										<DatePicker
+											id="scan-possession-given-date"
+											bind:value={possessionGivenOn}
+											min={editedFields['start_date'] || undefined}
+											testid="scan-possession-given-date"
+										/>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Required when the signed lease term has started and the tenant already received possession.
+										</p>
+									</div>
+								{/if}
+								<div class="mb-5 grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
+									<div class={rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-rent-tracking-mode">
+											Begin rent charges
+										</label>
+										<Select.Root
+											type="single"
+											bind:value={rentTrackingStartMode}
+											onValueChange={() => {
+												if (rentTrackingStartMode !== 'CustomCutoffDate') rentTrackingStartOn = '';
+											}}
+											disabled={reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-rent-tracking-mode" data-testid="scan-rent-tracking-mode" class="w-full">
+												{rentTrackingStartMode === 'ForwardOnly'
+													? 'Start from the current date'
+													: rentTrackingStartMode === 'BackfillFromLeaseStart'
+														? 'Backfill from the lease start'
+														: 'Start from a custom date'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="ForwardOnly" label="Start from the current date">Start from the current date</Select.Item>
+												<Select.Item value="BackfillFromLeaseStart" label="Backfill from the lease start">Backfill from the lease start</Select.Item>
+												<Select.Item value="CustomCutoffDate" label="Start from a custom date">Start from a custom date</Select.Item>
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											This decides whether older rent periods are posted when the lease is imported.
+										</p>
+									</div>
+									{#if rentTrackingStartMode === 'CustomCutoffDate'}
+										<div>
+											<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-rent-tracking-date">
+												Custom start date
+											</label>
+											<DatePicker
+												id="scan-rent-tracking-date"
+												bind:value={rentTrackingStartOn}
+												min={editedFields['start_date'] || undefined}
+												testid="scan-rent-tracking-date"
+											/>
+										</div>
+									{/if}
+								</div>
 							{/if}
 
 						<!-- Lease terms — editable, mapped from the extracted fields -->
@@ -1741,9 +2132,33 @@
 							</div>
 						</div>
 					{:else if isLoan}
-						<!-- Loan review — a property selector (required) + editable loan fields. Confirming creates
-						     a Loan on the property; the Engine's DebtServiceWorker then generates the schedule. -->
+						<!-- Mortgage documents can either match an existing scheduled payment or create a new loan.
+						     Statement scans default to matching so confirming never silently duplicates a mortgage. -->
 						{#if !isTerminal}
+							<div class="mb-4 grid grid-cols-2 rounded-md border border-border bg-muted p-1" data-testid="scan-loan-review-mode">
+								<button
+									type="button"
+									class="rounded px-3 py-2 text-sm font-medium {loanReviewMode === 'match' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}"
+									disabled={reviewControlsDisabled}
+									onclick={() => {
+										loanReviewMode = 'match';
+									}}
+								>
+									Match existing payment
+								</button>
+								<button
+									type="button"
+									class="rounded px-3 py-2 text-sm font-medium {loanReviewMode === 'create' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'}"
+									disabled={reviewControlsDisabled}
+									onclick={() => {
+										loanReviewMode = 'create';
+										selectedExistingLoanId = '';
+										selectedExistingLoanPaymentId = '';
+									}}
+								>
+									Add new loan
+								</button>
+							</div>
 							<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-loan-property-select">
 									Which property is this loan for? <span class="text-[var(--m3c-error)]">*</span>
@@ -1758,7 +2173,7 @@
 										propertySkip = 0;
 									}}
 								/>
-								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedPropertyId} onValueChange={selectLoanPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-loan-property-select" data-testid="scan-loan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
 									</Select.Trigger>
@@ -1776,7 +2191,7 @@
 								{#if propertiesQuery.isLoading}
 									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
 								{:else if selectedPropertyId === NO_PROPERTY}
-									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this loan.</p>
+									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to continue.</p>
 								{/if}
 								{#if propertiesQuery.data}
 									<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -1789,6 +2204,103 @@
 								{/if}
 							</div>
 						{/if}
+						{#if loanReviewMode === 'match' && !isTerminal}
+							<div class="mb-5 space-y-4 rounded-md border border-border p-4" data-testid="scan-loan-payment-match">
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-existing-loan-select">
+										Existing loan <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Select.Root
+										type="single"
+										value={selectedExistingLoanId}
+										onValueChange={selectExistingLoanId}
+										disabled={reviewControlsDisabled || !selectedLoanPropertyIdNumber}
+									>
+										<Select.Trigger id="scan-existing-loan-select" data-testid="scan-existing-loan-select" class="w-full">
+											{selectedExistingLoan ? `${selectedExistingLoan.lender} · ${formatUsd(selectedExistingLoan.currentBalance)} balance` : '— Select an existing loan —'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each existingLoanChoices as loan (loan.id)}
+												<Select.Item value={String(loan.id)} label={loan.lender}>
+													{loan.lender} · {formatUsd(loan.currentBalance)} balance
+												</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+									{#if existingLoansQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading loans…</p>
+									{:else if selectedLoanPropertyIdNumber && existingLoansQuery.data?.totalCount === 0}
+										<p class="mt-1 text-xs text-[var(--warning)]">No loans exist for this property. Choose “Add new loan” for an origination document.</p>
+									{/if}
+								</div>
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-existing-loan-payment-select">
+										Scheduled payment <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Select.Root
+										type="single"
+										bind:value={selectedExistingLoanPaymentId}
+										disabled={reviewControlsDisabled || !selectedExistingLoanId}
+									>
+										<Select.Trigger id="scan-existing-loan-payment-select" data-testid="scan-existing-loan-payment-select" class="w-full">
+											{selectedExistingLoanPayment ? loanPaymentLabel(selectedExistingLoanPayment) : '— Select the statement period —'}
+										</Select.Trigger>
+										<Select.Content>
+											{#each existingLoanPaymentChoices as payment (payment.id)}
+												<Select.Item value={String(payment.id)} label={loanPaymentLabel(payment)}>
+													{loanPaymentLabel(payment)}
+												</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+									{#if existingLoanPaymentsQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading scheduled payments…</p>
+									{:else if selectedExistingLoanId && existingLoanPaymentChoices.length === 0}
+										<p class="mt-1 text-xs text-[var(--warning)]">This loan has no scheduled payments available to match.</p>
+									{/if}
+								</div>
+								{#if selectedExistingLoanPayment}
+									<div class="space-y-2 rounded bg-muted/50 p-3 text-sm">
+										<p class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Scheduled values</p>
+										<div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
+											<span>Principal {formatUsd(selectedExistingLoanPayment.principalAmount)}</span>
+											<span>Interest {formatUsd(selectedExistingLoanPayment.interestAmount)}</span>
+											<span>Escrow {formatUsd(selectedExistingLoanPayment.escrowAmount)}</span>
+											<span>Total {formatUsd(selectedExistingLoanPayment.totalAmount)}</span>
+											<span>Balance {formatUsd(selectedExistingLoanPayment.balanceAfter)}</span>
+										</div>
+									</div>
+								{/if}
+								<div>
+									<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Statement values</h2>
+									<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+										{#each LOAN_STATEMENT_FIELDS as statementField (statementField.name)}
+											{@const field = data.fields.find((f) => f.name === statementField.name)}
+											{@const level = field ? confidenceLevel(field.confidence) : 'high'}
+											<div class="{statementField.name === 'current_balance' || statementField.name === 'statement_effective_date' ? 'col-span-2 sm:col-span-1' : ''}">
+												<div class="mb-1 flex items-center justify-between">
+													<label class="text-xs font-medium {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}" for="loan-statement-{statementField.name}">
+														{statementField.label}{#if statementField.required}<span class="text-[var(--m3c-error)]"> *</span>{/if}
+													</label>
+													{#if field && level !== 'high'}
+														<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
+															{confidenceLabel(field.confidence)}
+														</span>
+													{/if}
+												</div>
+												<Input
+													id="loan-statement-{statementField.name}"
+													data-testid="scan-field-{statementField.name}"
+													type={statementField.type}
+													bind:value={editedFields[statementField.name]}
+													disabled={reviewControlsDisabled}
+												/>
+											</div>
+										{/each}
+									</div>
+								</div>
+							</div>
+						{:else}
 						<div class="mb-5" data-testid="scan-loan-fields">
 							<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Loan details</h2>
 							<div class="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -1832,6 +2344,7 @@
 								<Input id="loan-notes" data-testid="scan-field-notes" type="text" bind:value={editedFields['notes']} disabled={reviewControlsDisabled} />
 							</div>
 						</div>
+						{/if}
 					{:else}
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						{#if !isTerminal}
@@ -1849,7 +2362,7 @@
 										propertySkip = 0;
 									}}
 								/>
-								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+								<Select.Root type="single" value={selectedPropertyId} onValueChange={selectContextPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
 									</Select.Trigger>
@@ -1880,6 +2393,108 @@
 									</div>
 								{/if}
 							</div>
+							{#if isExpense}
+								<div class="mb-5 grid gap-3 rounded-md border border-border bg-muted/30 p-3 md:grid-cols-2" data-testid="scan-expense-work-order-scope">
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-expense-unit-select">
+											Unit <span class="font-normal text-muted-foreground">(optional)</span>
+										</label>
+										<Input
+											aria-label="Search units for expense"
+											placeholder={selectedPropertyId === NO_PROPERTY ? 'Select a property first' : 'Search units in this property'}
+											value={unitSearch}
+											disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}
+											oninput={(event) => {
+												unitSearch = (event.currentTarget as HTMLInputElement).value;
+												unitSkip = 0;
+											}}
+										/>
+										<Select.Root
+											type="single"
+											value={selectedExpenseUnitId}
+											onValueChange={selectExpenseUnitId}
+											disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-expense-unit-select" data-testid="scan-expense-unit-select" class="w-full" disabled={selectedPropertyId === NO_PROPERTY || reviewControlsDisabled}>
+												{selectedExpenseUnitLabel}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_UNIT} label="— No unit —">— No unit —</Select.Item>
+												{#if expenseUnitsQuery.data}
+													{#each expenseUnitChoices as unit (unit.id)}
+														<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
+															Unit {unit.unitNumber}
+														</Select.Item>
+													{/each}
+												{/if}
+											</Select.Content>
+										</Select.Root>
+										{#if selectedPropertyId === NO_PROPERTY}
+											<p class="mt-1 text-xs text-muted-foreground">Pick a property to narrow units and work orders.</p>
+										{:else if expenseUnitsQuery.isLoading}
+											<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
+										{:else if expenseUnitsQuery.data}
+											<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+												<span>{expenseUnitsQuery.data.totalCount === 0 ? 'No matching units' : `${unitSkip + 1}–${Math.min(unitSkip + CONTEXT_PAGE_SIZE, expenseUnitsQuery.data.totalCount)} of ${expenseUnitsQuery.data.totalCount}`}</span>
+												<div class="flex gap-1">
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip === 0} onclick={() => (unitSkip = Math.max(0, unitSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip + CONTEXT_PAGE_SIZE >= expenseUnitsQuery.data.totalCount} onclick={() => (unitSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+												</div>
+											</div>
+										{/if}
+									</div>
+
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-expense-work-order-select">
+											Work order <span class="font-normal text-muted-foreground">(optional)</span>
+										</label>
+										<Input
+											aria-label="Search work orders for expense"
+											placeholder="Search work orders"
+											value={workOrderSearch}
+											disabled={reviewControlsDisabled}
+											oninput={(event) => {
+												workOrderSearch = (event.currentTarget as HTMLInputElement).value;
+												workOrderSkip = 0;
+											}}
+										/>
+										<Select.Root
+											type="single"
+											value={selectedExpenseWorkOrderId}
+											onValueChange={selectExpenseWorkOrder}
+											disabled={reviewControlsDisabled}
+										>
+											<Select.Trigger id="scan-expense-work-order-select" data-testid="scan-expense-work-order-select" class="w-full" disabled={reviewControlsDisabled}>
+												{selectedExpenseWorkOrderLabel}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_WORK_ORDER} label="— No work order —">— No work order —</Select.Item>
+												{#if expenseWorkOrdersQuery.data}
+													{#each expenseWorkOrderChoices as workOrder (workOrder.id)}
+														<Select.Item value={String(workOrder.id)} label={expenseWorkOrderLabel(workOrder)}>
+															{expenseWorkOrderLabel(workOrder)}
+														</Select.Item>
+													{/each}
+												{/if}
+											</Select.Content>
+										</Select.Root>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Choosing a work order also chooses its property{selectedExpenseUnitId !== NO_UNIT ? ' and unit' : ''}.
+										</p>
+										{#if expenseWorkOrdersQuery.isLoading}
+											<p class="mt-1 text-xs text-muted-foreground">Loading work orders…</p>
+										{:else if expenseWorkOrdersQuery.data}
+											<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+												<span>{expenseWorkOrdersQuery.data.totalCount === 0 ? 'No matching work orders' : `${workOrderSkip + 1}–${Math.min(workOrderSkip + CONTEXT_PAGE_SIZE, expenseWorkOrdersQuery.data.totalCount)} of ${expenseWorkOrdersQuery.data.totalCount}`}</span>
+												<div class="flex gap-1">
+													<Button type="button" variant="outline" size="sm" disabled={workOrderSkip === 0} onclick={() => (workOrderSkip = Math.max(0, workOrderSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+													<Button type="button" variant="outline" size="sm" disabled={workOrderSkip + CONTEXT_PAGE_SIZE >= expenseWorkOrdersQuery.data.totalCount} onclick={() => (workOrderSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+												</div>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
 							{/if}
 					{/if}
 					{#if isLease || isApplication || isLoan}
@@ -2137,10 +2752,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || applicationInvalid || loanInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || leaseRentTrackingInvalid || applicationInvalid || loanInvalid || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? 'Add Loan' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? loanReviewMode === 'match' ? 'Match & Record Payment' : 'Add Loan' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -2152,6 +2767,16 @@
 								{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
 							</Button>
 						</div>
+						{#if depositFundingHref && !confirmedRecord && data.status !== 'Confirmed'}
+							<Button
+								data-testid="scan-record-security-deposit"
+								variant="secondary"
+								onclick={recordScanAsDepositFunds}
+								disabled={depositFundingRedirectPending || isProcessing}
+							>
+								{depositFundingRedirectPending ? 'Opening deposit…' : 'Record as deposit funds'}
+							</Button>
+						{/if}
 						{#if amountInvalid && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--m3c-error)]" data-testid="scan-amount-error">
 								Enter an amount greater than $0 (under "total") before confirming.
@@ -2159,6 +2784,9 @@
 						{/if}
 						{#if isPayment && !selectedTenantAccountId && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]">Select a rental account above to enable payment creation.</p>
+						{/if}
+						{#if canRecoverPaymentDepositHandoff && !selectedTenantAccountId && !isProcessing}
+							<p class="text-center text-xs text-[var(--warning)]">Select a rental account above to record these deposit funds.</p>
 						{/if}
 						{#if isWorkOrder && selectedPropertyId === NO_PROPERTY && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]">Select a property above to enable work order creation.</p>
@@ -2184,7 +2812,9 @@
 						{/if}
 						{#if loanInvalid && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-loan-error">
-								Enter a lender and pick a property above to add this loan.
+								{loanReviewMode === 'match'
+									? 'Pick the loan, scheduled payment, and reviewed statement amounts above to match this statement.'
+									: 'Enter a lender and pick a property above to add this loan.'}
 							</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}

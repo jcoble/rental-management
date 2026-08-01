@@ -11,12 +11,13 @@ namespace RentalCommand.Core.Entities;
 /// One loan per property (a property may have a paid-off loan plus none active). A blanket loan
 /// spanning several properties is, for v1, entered as a single loan on a primary property.
 ///
-/// <para><b>Balance is a derived cache (spec §18).</b> <see cref="CurrentBalance"/> is updated by the
-/// <c>DebtServiceWorker</c> after each generated <see cref="LoanPayment"/>, but the authoritative,
-/// immutable amortization comes from the <see cref="LoanPayment"/> rows themselves — each period's
+/// <para><b>Balance is a derived cache (spec §18).</b> <see cref="CurrentBalance"/> is updated only
+/// when a scheduled <see cref="LoanPayment"/> is posted as paid. The authoritative, immutable
+/// amortization comes from the <see cref="LoanPayment"/> rows themselves — each period's
 /// opening balance is the prior payment's <see cref="LoanPayment.BalanceAfter"/>, never this live,
 /// user-editable field. That keeps a filed interest figure from silently changing if the balance is
-/// later edited.</para>
+/// later edited. The only exception is an imported existing loan with no generated payment tail yet:
+/// its first generated period opens from the imported <see cref="CurrentBalance"/> snapshot.</para>
 /// </summary>
 public class Loan : IAuditable, IPortfolioScoped
 {
@@ -32,8 +33,8 @@ public class Loan : IAuditable, IPortfolioScoped
     public decimal OriginalAmount { get; set; }
 
     /// <summary>
-    /// Live outstanding principal. <b>Derived cache</b> (spec §18): maintained by the debt-service
-    /// worker from the amortization rows; do not treat as the source of truth for a period's split.
+    /// Live outstanding principal. <b>Derived cache</b> (spec §18): advanced to a scheduled row's
+    /// balance only when that payment is posted; do not treat it as the source of truth for a period's split.
     /// </summary>
     public decimal CurrentBalance { get; set; }
 
@@ -45,6 +46,12 @@ public class Loan : IAuditable, IPortfolioScoped
 
     /// <summary>Loan start / first-payment-period anchor (UTC). Period index is counted from here.</summary>
     public DateTime StartDate { get; set; }
+
+    /// <summary>
+    /// Business-effective boundary for generated debt-service automation. This preserves real DB-wall
+    /// audit timestamps while preventing imported historical loans from generating pre-import periods.
+    /// </summary>
+    public DateTime? DebtServiceAutomationStartDate { get; set; }
 
     /// <summary>Day of month the payment is due (1–31, clamped to the month's length).</summary>
     public int DayOfMonthDue { get; set; } = 1;

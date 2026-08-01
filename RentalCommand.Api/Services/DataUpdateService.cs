@@ -1,12 +1,12 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
-using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services;
 
@@ -18,6 +18,7 @@ namespace RentalCommand.Api.Services;
 /// </summary>
 public sealed class DataUpdateService : IDataUpdateService
 {
+    private static readonly TimeSpan DefaultHubSendTimeout = TimeSpan.FromSeconds(2);
     private static readonly string[] RentalReadCapabilities =
         [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingTermsRead, CapabilityKeys.LeasingOnboardingManage];
     private static readonly string[] WorkReadCapabilities = [CapabilityKeys.WorkRead];
@@ -25,94 +26,139 @@ public sealed class DataUpdateService : IDataUpdateService
     private static readonly string[] ApplicationReadCapabilities = [CapabilityKeys.LeasingApplicationsManage];
     private static readonly string[] ListingReadCapabilities = [CapabilityKeys.LeasingListingsManage];
     private static readonly string[] ShowingReadCapabilities = [CapabilityKeys.LeasingShowingsManage];
+    private sealed record PendingRealtimeSend(
+        string EntityType,
+        int EntityId,
+        IReadOnlyList<string> GroupNames,
+        string EventName,
+        object Payload);
+    private sealed record NotificationRealtimeRecipient(
+        int NotificationId,
+        Guid SessionId,
+        long AccessRevision);
 
     private readonly RentalCommandDbContext _db;
     private readonly IHubContext<DataUpdateHub> _hubContext;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DataUpdateService> _logger;
+    private readonly TimeSpan _hubSendTimeout;
 
     public DataUpdateService(
         RentalCommandDbContext db,
         IHubContext<DataUpdateHub> hubContext,
         TimeProvider timeProvider,
         ILogger<DataUpdateService> logger)
+        : this(db, hubContext, timeProvider, logger, DefaultHubSendTimeout)
     {
+    }
+
+    internal DataUpdateService(
+        RentalCommandDbContext db,
+        IHubContext<DataUpdateHub> hubContext,
+        TimeProvider timeProvider,
+        ILogger<DataUpdateService> logger,
+        TimeSpan hubSendTimeout)
+    {
+        if (hubSendTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(hubSendTimeout), "Realtime send timeout must be positive.");
+        }
+
         _db = db;
         _hubContext = hubContext;
         _timeProvider = timeProvider;
         _logger = logger;
+        _hubSendTimeout = hubSendTimeout;
     }
 
     public Task BroadcastEntityUpdateAsync(
         int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default) =>
-        BroadcastAsync(portfolioId, entityType, entityId, "EntityUpdated", ct);
+        BroadcastAsync(portfolioId, entityType, entityId, data, "EntityUpdated", ct);
+
+    public async Task BroadcastEntityUpdatesAsync(
+        IReadOnlyList<EntityUpdateBroadcast> updates,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (updates.Count == 0)
+            {
+                return;
+            }
+
+            var sends = new List<PendingRealtimeSend>(updates.Count);
+            var batchedUpdateIndexes = new HashSet<int>();
+            foreach (var group in updates
+                .Select((update, index) => new { update, index })
+                .Where(item => IsSavedContextNotificationUpdate(item.update))
+                .GroupBy(item => item.update.PortfolioId))
+            {
+                var batchSends = await BuildSavedContextNotificationPendingSendsAsync(
+                    group.Select(item => item.update).ToArray(),
+                    ct);
+                sends.AddRange(batchSends);
+                foreach (var item in group)
+                {
+                    batchedUpdateIndexes.Add(item.index);
+                }
+            }
+
+            for (var index = 0; index < updates.Count; index++)
+            {
+                if (batchedUpdateIndexes.Contains(index))
+                {
+                    continue;
+                }
+
+                var update = updates[index];
+                var pending = await BuildPendingSendAsync(
+                    update.PortfolioId,
+                    update.EntityType,
+                    update.EntityId,
+                    update.Data,
+                    "EntityUpdated",
+                    ct);
+                if (pending is not null)
+                {
+                    sends.Add(pending);
+                }
+            }
+
+            if (sends.Count == 0)
+            {
+                return;
+            }
+
+            await Task.WhenAll(sends.Select(send => SendPendingAsync(send, ct)));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed scoped realtime invalidation batch with {UpdateCount} updates",
+                updates.Count);
+        }
+    }
 
     public Task BroadcastEntityDeleteAsync(
         int portfolioId, string entityType, int entityId, CancellationToken ct = default) =>
-        BroadcastAsync(portfolioId, entityType, entityId, "EntityDeleted", ct);
+        BroadcastAsync(portfolioId, entityType, entityId, null, "EntityDeleted", ct);
 
     private async Task BroadcastAsync(
         int portfolioId,
         string entityType,
         int entityId,
+        object? data,
         string eventName,
         CancellationToken ct)
     {
         try
         {
-            var recipients = entityType switch
-            {
-                "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId),
-                "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
-                _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
-            };
-
-            if (recipients is null)
-            {
-                _logger.LogWarning(
-                    "Suppressed unscoped realtime invalidation {EntityType} {EntityId} for portfolio {PortfolioId}",
-                    entityType,
-                    entityId,
-                    portfolioId);
-                return;
-            }
-
-            // Authorization, resource mapping, capability matching, session validity, and revision
-            // selection all execute in this one SQL statement. Formatting already-authorized group
-            // coordinates after materialization does not perform an authorization filter.
-            var recipientRows = await recipients
-                .Distinct()
-                .ToListAsync(ct);
-            if (recipientRows.Count == 0)
+            var pending = await BuildPendingSendAsync(portfolioId, entityType, entityId, data, eventName, ct);
+            if (pending is null || !await SendPendingAsync(pending, ct))
             {
                 return;
             }
-
-            var groupNames = recipientRows
-                .Select(row => DataUpdateHub.SessionRevisionGroup(row.SessionId, row.AccessRevision))
-                .ToArray();
-            object payload = eventName == "EntityDeleted"
-                ? new EntityDeletePayload
-                {
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
-                }
-                : new EntityUpdatePayload
-                {
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
-                };
-
-            await _hubContext.Clients.Groups(groupNames).SendAsync(eventName, payload, ct);
-
-            _logger.LogDebug(
-                "Sent scoped {EventName} invalidation for {EntityType} {EntityId} to {RecipientCount} current session revisions",
-                eventName,
-                entityType,
-                entityId,
-                groupNames.Length);
         }
         catch (Exception ex)
         {
@@ -124,6 +170,219 @@ public sealed class DataUpdateService : IDataUpdateService
                 entityType,
                 entityId,
                 portfolioId);
+        }
+    }
+
+    private async Task<PendingRealtimeSend?> BuildPendingSendAsync(
+        int portfolioId,
+        string entityType,
+        int entityId,
+        object? data,
+        string eventName,
+        CancellationToken ct)
+    {
+        var recipients = entityType switch
+        {
+            "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId, data),
+            "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
+            _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
+        };
+
+        if (recipients is null)
+        {
+            _logger.LogWarning(
+                "Suppressed unscoped realtime invalidation {EntityType} {EntityId} for portfolio {PortfolioId}",
+                entityType,
+                entityId,
+                portfolioId);
+            return null;
+        }
+
+        // Authorization, resource mapping, capability matching, session validity, and revision
+        // selection all execute in this one SQL statement. Formatting already-authorized group
+        // coordinates after materialization does not perform an authorization filter.
+        var recipientRows = await recipients
+            .Distinct()
+            .ToListAsync(ct);
+        if (recipientRows.Count == 0)
+        {
+            return null;
+        }
+
+        var groupNames = recipientRows
+            .Select(row => DataUpdateHub.SessionRevisionGroup(row.SessionId, row.AccessRevision))
+            .ToArray();
+        object payload = eventName == "EntityDeleted"
+            ? new EntityDeletePayload
+            {
+                EntityType = entityType,
+                EntityId = entityId,
+                Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
+            }
+            : new EntityUpdatePayload
+            {
+                EntityType = entityType,
+                EntityId = entityId,
+                Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
+            };
+
+        return new PendingRealtimeSend(entityType, entityId, groupNames, eventName, payload);
+    }
+
+    private async Task<IReadOnlyList<PendingRealtimeSend>> BuildSavedContextNotificationPendingSendsAsync(
+        IReadOnlyList<EntityUpdateBroadcast> updates,
+        CancellationToken ct)
+    {
+        if (updates.Count == 0)
+        {
+            return [];
+        }
+
+        var portfolioId = updates[0].PortfolioId;
+        var notificationIds = updates
+            .Select(update => update.EntityId)
+            .Distinct()
+            .ToArray();
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
+        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
+        var effectiveAssignments = _db.MembershipRoleAssignments.AsNoTracking().WhereEffective(utcNow);
+        var effectiveOwnerAccess = _db.OwnerUserAccesses.AsNoTracking().Where(access =>
+            access.RevokedAtUtc == null
+            && access.EffectiveFromUtc <= utcNow
+            && (access.EffectiveToUtc == null || access.EffectiveToUtc > utcNow));
+        var effectiveTenantAccess = _db.EffectiveTenantAccess.AsNoTracking();
+
+        var recipientRows = await (
+                from notification in _db.Notifications.AsNoTracking()
+                join context in effectiveContexts
+                    on new
+                    {
+                        AccessContextId = notification.NavigationAccessContextId,
+                        UserId = notification.UserId,
+                        AccessRevision = notification.NavigationAccessRevision,
+                    }
+                    equals new
+                    {
+                        AccessContextId = (int?)context.Id,
+                        UserId = (int?)context.UserId,
+                        AccessRevision = (long?)context.AccessRevision,
+                    }
+                join session in _db.AuthSessions.AsNoTracking()
+                    on new { ActiveAccessContextId = context.Id, context.UserId }
+                    equals new { session.ActiveAccessContextId, session.UserId }
+                where notificationIds.Contains(notification.Id)
+                    && notification.PortfolioId == portfolioId
+                    && notification.NavigationAccessContextId != null
+                    && notification.NavigationAccessRevision != null
+                    && context.PortfolioId == portfolioId
+                    && session.Status == AuthSessionStatus.Active
+                    && session.RevokedAtUtc == null
+                    && session.ExpiresAtUtc > utcNow
+                    && (effectiveMemberships.Any(membership =>
+                            membership.AccessContextId == context.Id
+                            && membership.PortfolioId == context.PortfolioId
+                            && effectiveAssignments.Any(assignment =>
+                                assignment.WorkspaceMembershipId == membership.Id
+                                && assignment.PortfolioId == membership.PortfolioId))
+                        || effectiveOwnerAccess.Any(access =>
+                            access.AccessContextId == context.Id
+                            && access.ApplicationUserId == context.UserId
+                            && access.PortfolioId == context.PortfolioId)
+                        || effectiveTenantAccess.Any(access =>
+                            access.AccessContextId == context.Id
+                            && access.UserId == context.UserId
+                            && access.PortfolioId == context.PortfolioId))
+                    && !_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                        preference.PortfolioId == portfolioId
+                        && preference.UserId == context.UserId
+                        && !preference.EnableInApp)
+                    && (notification.Type != "TenantMessage"
+                        || effectiveMemberships.Any(membership =>
+                            membership.AccessContextId == context.Id
+                            && membership.PortfolioId == context.PortfolioId))
+                select new NotificationRealtimeRecipient(
+                    notification.Id,
+                    session.Id,
+                    context.AccessRevision))
+            .Distinct()
+            .TagWith("Realtime notification recipients: saved navigation access contexts batch")
+            .ToListAsync(ct);
+        if (recipientRows.Count == 0)
+        {
+            return [];
+        }
+
+        var sends = new List<PendingRealtimeSend>(recipientRows.Count);
+        foreach (var row in recipientRows)
+        {
+            sends.Add(new PendingRealtimeSend(
+                "Notification",
+                row.NotificationId,
+                [DataUpdateHub.SessionRevisionGroup(row.SessionId, row.AccessRevision)],
+                "EntityUpdated",
+                new EntityUpdatePayload
+                {
+                    EntityType = "Notification",
+                    EntityId = row.NotificationId,
+                    Timestamp = _timeProvider.GetUtcNow().UtcDateTime,
+                }));
+        }
+
+        return sends;
+    }
+
+    private static bool IsSavedContextNotificationUpdate(EntityUpdateBroadcast update) =>
+        update.EntityType == "Notification"
+        && update.Data is SavedContextNotificationRealtimeHint
+            or NotificationResponse { NavigationIntent: not null };
+
+    private async Task<bool> SendPendingAsync(PendingRealtimeSend send, CancellationToken ct)
+    {
+        if (!await TrySendHubAsync(send.GroupNames, send.EventName, send.Payload, ct))
+        {
+            return false;
+        }
+
+        _logger.LogDebug(
+            "Sent scoped {EventName} invalidation for {EntityType} {EntityId} to {RecipientCount} current session revisions",
+            send.EventName,
+            send.EntityType,
+            send.EntityId,
+            send.GroupNames.Count);
+        return true;
+    }
+
+    private async Task<bool> TrySendHubAsync(
+        IReadOnlyList<string> groupNames,
+        string eventName,
+        object payload,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _hubContext.Clients.Groups(groupNames)
+                .SendAsync(eventName, payload, ct)
+                .WaitAsync(_hubSendTimeout, ct);
+            return true;
+        }
+        catch (TimeoutException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Timed out after {TimeoutMilliseconds} ms sending scoped {EventName} invalidation to {RecipientCount} current session revisions",
+                _hubSendTimeout.TotalMilliseconds,
+                eventName,
+                groupNames.Count);
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _logger.LogDebug(
+                "Cancelled scoped {EventName} invalidation to {RecipientCount} current session revisions",
+                eventName,
+                groupNames.Count);
+            return false;
         }
     }
 
@@ -180,26 +439,89 @@ public sealed class DataUpdateService : IDataUpdateService
 
     private IQueryable<RealtimeSessionRecipient> BuildNotificationRecipientQuery(
         int portfolioId,
-        int notificationId)
+        int notificationId,
+        object? data)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking()
-            .WhereEffectiveAccess(
-                _db.WorkspaceMemberships.AsNoTracking(),
-                _db.MembershipRoleAssignments.AsNoTracking(),
-                _db.OwnerUserAccesses.AsNoTracking(),
-                _db.EffectiveTenantAccess.AsNoTracking(),
-                userId: 0,
-                utcNow: utcNow);
-        var staffUserIds = ScopedNotificationRecipientQuery
-            .ForWorkspaceMembership(_db, portfolioId, utcNow);
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
+        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
+        var effectiveAssignments = _db.MembershipRoleAssignments.AsNoTracking().WhereEffective(utcNow);
+        var effectiveOwnerAccess = _db.OwnerUserAccesses.AsNoTracking().Where(access =>
+            access.RevokedAtUtc == null
+            && access.EffectiveFromUtc <= utcNow
+            && (access.EffectiveToUtc == null || access.EffectiveToUtc > utcNow));
+        var effectiveTenantAccess = _db.EffectiveTenantAccess.AsNoTracking();
 
         // Mirror NotificationService.AuthorizedNotifications: a portfolio-wide notification is
         // readable in every currently-authorized Team/owner/tenant context, while a user-addressed
         // row reaches only that user. Personal in-app preferences and the staff-only TenantMessage
         // exception stay in the same translated recipient query. The wire still carries only an
         // invalidation hint; each client refetches through the authorized REST read.
-        return (
+        var navigationHint = (data as NotificationResponse)?.NavigationIntent;
+        var contextTargeted =
+            from notification in _db.Notifications.AsNoTracking()
+            join context in effectiveContexts
+                on new
+                {
+                    AccessContextId = notification.NavigationAccessContextId,
+                    UserId = notification.UserId,
+                    AccessRevision = notification.NavigationAccessRevision,
+                }
+                equals new
+                {
+                    AccessContextId = (int?)context.Id,
+                    UserId = (int?)context.UserId,
+                    AccessRevision = (long?)context.AccessRevision,
+                }
+            join session in _db.AuthSessions.AsNoTracking()
+                on new { ActiveAccessContextId = context.Id, context.UserId }
+                equals new { session.ActiveAccessContextId, session.UserId }
+            where notification.Id == notificationId
+                && notification.PortfolioId == portfolioId
+                && notification.NavigationAccessContextId != null
+                && notification.NavigationAccessRevision != null
+                && (navigationHint == null
+                    || (notification.NavigationAccessContextId == navigationHint.AccessContextId
+                        && notification.NavigationAccessRevision == navigationHint.AccessRevision))
+                && context.PortfolioId == portfolioId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > utcNow
+                && (effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId
+                        && effectiveAssignments.Any(assignment =>
+                            assignment.WorkspaceMembershipId == membership.Id
+                            && assignment.PortfolioId == membership.PortfolioId))
+                    || effectiveOwnerAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.ApplicationUserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId)
+                    || effectiveTenantAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.UserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId))
+                && !_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                    preference.PortfolioId == portfolioId
+                    && preference.UserId == context.UserId
+                    && !preference.EnableInApp)
+                && (notification.Type != "TenantMessage"
+                    || effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId))
+            select new RealtimeSessionRecipient
+            {
+                SessionId = session.Id,
+                AccessRevision = context.AccessRevision,
+            };
+
+        if (navigationHint is not null)
+        {
+            return contextTargeted
+                .TagWith("Realtime notification recipients: saved navigation access context");
+        }
+
+        var portfolioScoped =
             from session in _db.AuthSessions.AsNoTracking()
             join context in effectiveContexts
                 on new { Id = session.ActiveAccessContextId, session.UserId }
@@ -208,25 +530,42 @@ public sealed class DataUpdateService : IDataUpdateService
                 && session.Status == AuthSessionStatus.Active
                 && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > utcNow
+                && (effectiveMemberships.Any(membership =>
+                        membership.AccessContextId == context.Id
+                        && membership.PortfolioId == context.PortfolioId
+                        && effectiveAssignments.Any(assignment =>
+                            assignment.WorkspaceMembershipId == membership.Id
+                            && assignment.PortfolioId == membership.PortfolioId))
+                    || effectiveOwnerAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.ApplicationUserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId)
+                    || effectiveTenantAccess.Any(access =>
+                        access.AccessContextId == context.Id
+                        && access.UserId == context.UserId
+                        && access.PortfolioId == context.PortfolioId))
                 && _db.Notifications.AsNoTracking().Any(notification =>
                     notification.Id == notificationId
                     && notification.PortfolioId == portfolioId
+                    && notification.NavigationAccessContextId == null
+                    && notification.NavigationAccessRevision == null
                     && (notification.UserId == null || notification.UserId == context.UserId)
-                    && (!_db.UserAlertPreferences.AsNoTracking().Any(preference =>
-                            preference.PortfolioId == portfolioId
-                            && preference.UserId == context.UserId)
-                        || _db.UserAlertPreferences.AsNoTracking().Any(preference =>
-                            preference.PortfolioId == portfolioId
-                            && preference.UserId == context.UserId
-                            && preference.EnableInApp))
+                    && !_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                        preference.PortfolioId == portfolioId
+                        && preference.UserId == context.UserId
+                        && !preference.EnableInApp)
                     && (notification.Type != "TenantMessage"
-                        || staffUserIds.Any(candidateUserId =>
-                            candidateUserId == context.UserId)))
+                        || effectiveMemberships.Any(membership =>
+                            membership.AccessContextId == context.Id
+                            && membership.PortfolioId == context.PortfolioId)))
             select new RealtimeSessionRecipient
             {
                 SessionId = session.Id,
                 AccessRevision = context.AccessRevision,
-            })
+            };
+
+        return contextTargeted
+            .Union(portfolioScoped)
             .TagWith("Realtime notification recipients: current REST-readable notification audience");
     }
 
@@ -317,6 +656,9 @@ public sealed class DataUpdateService : IDataUpdateService
                             && property.Units.Any(unit => unit.Id == expense.UnitId))
                 select property.Id,
             "OwnerDistribution" => _db.OwnerDistributions.IgnoreQueryFilters().AsNoTracking()
+                .Where(row => row.PortfolioId == portfolioId && row.Id == entityId && row.PropertyId != null)
+                .Select(row => row.PropertyId!.Value),
+            "OwnerContribution" => _db.OwnerContributions.IgnoreQueryFilters().AsNoTracking()
                 .Where(row => row.PortfolioId == portfolioId && row.Id == entityId && row.PropertyId != null)
                 .Select(row => row.PropertyId!.Value),
             "PropertyDisposition" => _db.PropertyDispositions.IgnoreQueryFilters().AsNoTracking()

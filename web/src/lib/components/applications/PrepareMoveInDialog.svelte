@@ -8,6 +8,7 @@
 	} from '$lib/api/endpoints/lease-managements';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { units } from '$lib/api/endpoints/units';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import type { PrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
 	import {
 		buildPrepareMoveInRequest,
@@ -17,6 +18,7 @@
 	} from '$lib/leases/prepare-move-in-form';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -24,21 +26,28 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
-	import { CalendarClock, FileSignature, Users } from '@lucide/svelte';
+	import { CalendarClock, FileSignature, UserPlus, Users } from '@lucide/svelte';
 
 	let {
 		prefill,
+		mode = 'application',
 		onclose,
 		onprepared
 	}: {
 		prefill: PrepareMoveInPrefill;
+		mode?: 'application' | 'manual';
 		onclose: () => void;
 		onprepared: (result: PrepareMoveInResponse) => void;
 	} = $props();
 
 	const queryClient = useQueryClient();
+	// svelte-ignore state_referenced_locally
 	const seededApplicationId = Number(prefill.applicationId) || 0;
+	const manualMode = $derived(mode === 'manual' && seededApplicationId === 0);
+	const portfolioId = $derived(getCurrentPortfolioId());
+	// svelte-ignore state_referenced_locally
 	const requiredTenantId = Number(prefill.tenantId) || 0;
+	// svelte-ignore state_referenced_locally
 	let form = $state<PrepareMoveInForm>(createPrepareMoveInForm(prefill));
 	let errors = $state<PrepareMoveInFormErrors>({});
 	let currentStep = $state(0);
@@ -46,6 +55,8 @@
 	let applicationSearch = $state('');
 	let unitSearch = $state('');
 	let templateSearch = $state('');
+	let selectedUnitLabel = $state('');
+	let selectedTenantLabel = $state('');
 	let appliedApplicationId = 0;
 	let appliedUnitId = 0;
 	let operation: { fingerprint: string; key: string } | null = null;
@@ -56,7 +67,15 @@
 		{ id: 'money', label: 'Money & review', description: 'Rent, deposit, opening balance' }
 	];
 	const stepFields: (keyof PrepareMoveInForm)[][] = [
-		['applicationId', 'unitId', 'tenantId', 'partyEffectiveFrom'],
+		[
+			'applicationId',
+			'unitId',
+			'tenantId',
+			'newTenantFirstName',
+			'newTenantLastName',
+			'newTenantEmail',
+			'partyEffectiveFrom'
+		],
 		['documentTemplateId', 'termType', 'termStartOn', 'termEndOn'],
 		[
 			'baseRentAmount',
@@ -64,6 +83,8 @@
 			'securityDepositObligation',
 			'lateFeeAmount',
 			'gracePeriodDays',
+			'rentTrackingStartMode',
+			'rentTrackingStartOn',
 			'openingBalanceAmount',
 			'openingBalanceEffectiveOn',
 			'openingBalanceNote'
@@ -79,7 +100,7 @@
 				sort: '-reviewedAtUtc',
 				take: 50
 			}),
-		enabled: seededApplicationId === 0
+		enabled: !manualMode && seededApplicationId === 0
 	}));
 
 	const selectedApplicationId = $derived(Number(form.applicationId) || 0);
@@ -111,6 +132,7 @@
 		queryFn: () => units.get(selectedUnitId),
 		enabled: selectedUnitId > 0
 	}));
+	const selectedPropertyId = $derived(application?.propertyId ?? unitQuery.data?.propertyId ?? null);
 	$effect(() => {
 		const unit = unitQuery.data;
 		if (!unit || appliedUnitId === unit.id) return;
@@ -142,14 +164,14 @@
 		queryKey: [
 			'document-templates',
 			'prepare-move-in',
-			application?.propertyId,
+			selectedPropertyId,
 			templateSearch
 		],
 		queryFn: () =>
 				documentTemplates.listPage({
 					kind: 'Lease',
 					status: 'Active',
-					propertyId: application?.propertyId ?? undefined,
+					propertyId: selectedPropertyId ?? undefined,
 				search: templateSearch || undefined,
 				sort: 'name',
 				take: 50
@@ -162,6 +184,38 @@
 		enabled: selectedTemplateId > 0
 	}));
 
+	async function loadManualUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			sort: 'propertyName',
+			status: 'Vacant'
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `${unit.propertyName} · Unit ${unit.unitNumber}`,
+				description: `${unit.status} · ${unit.simpleStage}`
+			}))
+		};
+	}
+
+	async function loadManualTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, {
+			...params,
+			sort: 'lastName',
+			availableForLease: true
+		});
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
+
 	function clearError(field: keyof PrepareMoveInForm) {
 		if (!errors[field]) return;
 		const { [field]: _removed, ...rest } = errors;
@@ -169,9 +223,11 @@
 	}
 
 	function contextError(): string | null {
+		if (manualMode) return null;
+		if (selectedApplicationId <= 0) return 'Choose an approved application.';
 		if (!application) {
 			if (applicationQuery.isLoading) return 'Loading the approved application…';
-			return selectedApplicationId > 0 ? 'The approved application could not be loaded.' : null;
+			return 'The approved application could not be loaded.';
 		}
 		if (application.status !== 'Approved')
 			return 'Only an approved application can prepare a move-in.';
@@ -193,14 +249,14 @@
 		if (template.kind !== 'Lease' || template.status !== 'Active') {
 			return 'Choose an active lease template.';
 		}
-		if (template.propertyId && template.propertyId !== application?.propertyId) {
+		if (template.propertyId && template.propertyId !== selectedPropertyId) {
 			return 'Choose a lease template for the requested property.';
 		}
 		return null;
 	}
 
 	function validateStep(step: number): boolean {
-		const validation = buildPrepareMoveInRequest(form);
+		const validation = buildPrepareMoveInRequest(form, { requireApplication: !manualMode });
 		const fields = new Set(stepFields[step]);
 		const relevant = Object.fromEntries(
 			Object.entries(validation.errors).filter(([field]) =>
@@ -255,7 +311,7 @@
 	}));
 
 	function submit() {
-		const validation = buildPrepareMoveInRequest(form);
+		const validation = buildPrepareMoveInRequest(form, { requireApplication: !manualMode });
 		const selectionError = contextError();
 		if (selectionError) validation.errors.applicationId = selectionError;
 		const selectedTemplateError = templateError();
@@ -289,10 +345,11 @@
 		data-testid="prepare-move-in-dialog"
 	>
 		<Dialog.Header>
-			<Dialog.Title>Prepare move-in</Dialog.Title>
+			<Dialog.Title>{manualMode ? 'Create lease' : 'Prepare move-in'}</Dialog.Title>
 			<Dialog.Description>
-				Confirm the approved application, exact rental, agreement terms, and opening money. This
-				creates one planned tenant relationship, account, and agreement draft together.
+				{manualMode
+					? 'Choose the rental, tenant, agreement terms, and opening money. This creates one planned tenant relationship, account, and agreement draft together.'
+					: 'Confirm the approved application, exact rental, agreement terms, and opening money. This creates one planned tenant relationship, account, and agreement draft together.'}
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -303,7 +360,21 @@
 					data-testid="prepare-move-in-context-step"
 				>
 					<div class="space-y-4">
-						{#if seededApplicationId > 0}
+						{#if manualMode}
+							<div
+								class="rounded-xl border bg-muted/20 p-4"
+								data-testid="prepare-move-in-manual-context"
+							>
+								<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+									Manual lease
+								</p>
+								<p class="mt-1 font-semibold">No application required</p>
+								<p class="text-sm text-muted-foreground">
+									The lease, tenant relationship, rent account, and rent tracking are created by the
+									canonical move-in command.
+								</p>
+							</div>
+						{:else if seededApplicationId > 0}
 							<div
 								class="rounded-xl border bg-muted/20 p-4"
 								data-testid="prepare-move-in-locked-application"
@@ -359,7 +430,24 @@
 
 						<div class="space-y-2">
 							<p class="block text-sm font-medium">Exact rental</p>
-							{#if application?.unitId}
+							{#if manualMode}
+								<RemoteRecordSelect
+									queryKey={['manual-lease-units', portfolioId]}
+									label="Exact rental"
+									hideLabel
+									bind:value={form.unitId}
+									selectedLabel={selectedUnitLabel}
+									placeholder="Choose a vacant unit"
+									searchPlaceholder="Search property or unit…"
+									emptyLabel="No vacant units match this search"
+									testid="prepare-move-in-manual-unit"
+									loadPage={loadManualUnitOptions}
+									onValueChange={(_value, option) => {
+										selectedUnitLabel = option?.label ?? '';
+										clearError('unitId');
+									}}
+								/>
+							{:else if application?.unitId}
 								<div
 									class="rounded-xl border bg-muted/20 p-4"
 									data-testid="prepare-move-in-locked-unit"
@@ -405,6 +493,132 @@
 					</div>
 
 					<div class="space-y-4 border-t pt-4 md:border-l md:border-t-0 md:pl-5 md:pt-0">
+						{#if manualMode}
+							<div class="space-y-3" data-testid="prepare-move-in-manual-tenant">
+								<div class="flex items-start gap-3">
+									<div
+										class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"
+									>
+										<UserPlus class="h-4 w-4" />
+									</div>
+									<div>
+										<p class="text-sm font-medium">Primary tenant</p>
+										<p class="text-xs text-muted-foreground">
+											Pick an existing tenant or create the primary tenant during this atomic move-in.
+										</p>
+									</div>
+								</div>
+								<div class="grid grid-cols-2 gap-2" data-testid="prepare-move-in-tenant-source">
+									<Button
+										type="button"
+										variant={form.createNewTenant ? 'outline' : 'default'}
+										onclick={() => {
+											form.createNewTenant = false;
+											form.tenantId = '';
+											selectedTenantLabel = '';
+											clearError('tenantId');
+										}}>Use existing</Button
+									>
+									<Button
+										type="button"
+										variant={form.createNewTenant ? 'default' : 'outline'}
+										onclick={() => {
+											form.createNewTenant = true;
+											form.tenantId = '';
+											selectedTenantLabel = '';
+											clearError('tenantId');
+										}}>Create new</Button
+									>
+								</div>
+								{#if form.createNewTenant}
+									<div class="grid gap-3 sm:grid-cols-2" data-testid="prepare-move-in-new-tenant-fields">
+										<div>
+											<label class="mb-1 block text-sm font-medium" for="prepare-new-tenant-first"
+												>First name</label
+											>
+											<Input
+												id="prepare-new-tenant-first"
+												bind:value={form.newTenantFirstName}
+												oninput={() => clearError('newTenantFirstName')}
+												data-testid="prepare-move-in-new-tenant-first-name"
+											/>
+											{#if errors.newTenantFirstName}<p class="mt-1 text-xs text-destructive">
+													{errors.newTenantFirstName}
+												</p>{/if}
+										</div>
+										<div>
+											<label class="mb-1 block text-sm font-medium" for="prepare-new-tenant-last"
+												>Last name</label
+											>
+											<Input
+												id="prepare-new-tenant-last"
+												bind:value={form.newTenantLastName}
+												oninput={() => clearError('newTenantLastName')}
+												data-testid="prepare-move-in-new-tenant-last-name"
+											/>
+											{#if errors.newTenantLastName}<p class="mt-1 text-xs text-destructive">
+													{errors.newTenantLastName}
+												</p>{/if}
+										</div>
+										<div>
+											<label class="mb-1 block text-sm font-medium" for="prepare-new-tenant-email"
+												>Email</label
+											>
+											<Input
+												id="prepare-new-tenant-email"
+												type="email"
+												bind:value={form.newTenantEmail}
+												oninput={() => clearError('newTenantEmail')}
+												data-testid="prepare-move-in-new-tenant-email"
+											/>
+											{#if errors.newTenantEmail}<p class="mt-1 text-xs text-destructive">
+													{errors.newTenantEmail}
+												</p>{/if}
+										</div>
+										<div>
+											<label class="mb-1 block text-sm font-medium" for="prepare-new-tenant-phone"
+												>Phone</label
+											>
+											<Input
+												id="prepare-new-tenant-phone"
+												type="tel"
+												inputmode="tel"
+												mask="phone"
+												bind:value={form.newTenantPhone}
+												data-testid="prepare-move-in-new-tenant-phone"
+											/>
+										</div>
+										<div class="sm:col-span-2">
+											<label class="mb-1 block text-sm font-medium" for="prepare-new-tenant-emergency"
+												>Emergency contact</label
+											>
+											<Input
+												id="prepare-new-tenant-emergency"
+												bind:value={form.newTenantEmergencyContact}
+												data-testid="prepare-move-in-new-tenant-emergency"
+											/>
+										</div>
+									</div>
+								{:else}
+									<RemoteRecordSelect
+										queryKey={['manual-lease-tenants', portfolioId]}
+										label="Existing tenant"
+										bind:value={form.tenantId}
+										selectedLabel={selectedTenantLabel}
+										placeholder="Choose an available tenant"
+										searchPlaceholder="Search tenants…"
+										emptyLabel="No available tenants match this search"
+										testid="prepare-move-in-existing-tenant"
+										loadPage={loadManualTenantOptions}
+										onValueChange={(_value, option) => {
+											selectedTenantLabel = option?.label ?? '';
+											clearError('tenantId');
+										}}
+									/>
+									{#if errors.tenantId}<p class="text-xs text-destructive">{errors.tenantId}</p>{/if}
+								{/if}
+							</div>
+						{:else}
 						<div class="flex items-start gap-3">
 							<div
 								class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"
@@ -424,6 +638,7 @@
 								{:else}<p class="text-sm text-destructive">No approved tenant is available.</p>{/if}
 							</div>
 						</div>
+						{/if}
 						<div>
 							<label class="mb-1 block text-sm font-medium" for="prepare-party-effective"
 								>Household relationship begins</label
@@ -537,6 +752,48 @@
 				</div>
 			{:else}
 				<div class="space-y-5" data-testid="prepare-move-in-money-step">
+					<div class="grid gap-4 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2">
+						<div class={form.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+							<p class="mb-1 block text-sm font-medium">Begin rent charges</p>
+							<SimpleSelect
+								bind:value={form.rentTrackingStartMode}
+								onchange={() => {
+									if (form.rentTrackingStartMode !== 'CustomCutoffDate') {
+										form.rentTrackingStartOn = '';
+									}
+									clearError('rentTrackingStartMode');
+									clearError('rentTrackingStartOn');
+								}}
+								options={[
+									{ value: 'ForwardOnly', label: 'Start from the current date' },
+									{ value: 'BackfillFromLeaseStart', label: 'Backfill from the lease start' },
+									{ value: 'CustomCutoffDate', label: 'Start from a custom date' }
+								]}
+								ariaLabel="Begin rent charges"
+								testid="prepare-move-in-rent-tracking-mode"
+							/>
+							<p class="mt-1 text-xs text-muted-foreground">
+								This controls the first rent period Rental Command posts to the tenant ledger.
+							</p>
+						</div>
+						{#if form.rentTrackingStartMode === 'CustomCutoffDate'}
+							<div>
+								<label class="mb-1 block text-sm font-medium" for="prepare-rent-tracking-start"
+									>Custom start date</label
+								>
+								<DatePicker
+									id="prepare-rent-tracking-start"
+									bind:value={form.rentTrackingStartOn}
+									min={form.termStartOn || undefined}
+									onchange={() => clearError('rentTrackingStartOn')}
+									testid="prepare-move-in-rent-tracking-date"
+								/>
+								{#if errors.rentTrackingStartOn}<p class="mt-1 text-xs text-destructive">
+										{errors.rentTrackingStartOn}
+									</p>{/if}
+							</div>
+						{/if}
+					</div>
 					<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 						<div>
 							<label class="mb-1 block text-sm font-medium" for="prepare-rent">Base rent</label

@@ -2,15 +2,23 @@ using System.Net.Sockets;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
+using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
+using RentalCommand.TestCommon;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -21,8 +29,19 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 {
     private static readonly DateTime CommandTime =
         new(2026, 7, 11, 14, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime StatementDate =
+        new(2027, 1, 20, 0, 0, 0, DateTimeKind.Utc);
+    private const decimal StatementOpeningBalance = 125_825m;
+    private const decimal StatementPrincipal = 431m;
+    private const decimal StatementInterest = 623m;
+    private const decimal StatementPrincipalInterest = 1_054m;
+    private const decimal StatementEscrow = 318m;
+    private const decimal StatementTotal = 1_372m;
+    private const decimal StatementBalanceAfter = 125_394m;
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> Codec =
         new("scan-confirm.result.v1");
+    private static readonly AtomicJsonResultCodec<TenantPaymentRefundResult> RefundCodec =
+        new("tenant-account.payment.refund.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -32,8 +51,11 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     private int _unitId;
     private int _tenantId;
     private int _leaseManagementId;
+    private int _leaseAgreementId;
     private int _tenantAccountId;
     private int _vendorId;
+    private int _workOrderId;
+    private int _ownerEntityId;
     private int _actorUserId;
     private Guid _authSessionId;
     private int _accessContextId;
@@ -56,12 +78,20 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
-        services.AddScoped<ProductionScanConfirmationTargetWriter>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddScoped<IScanConfirmationTargetWriter, ProductionScanConfirmationTargetWriter>();
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             ConfirmScanDraftCommand,
             ConfirmScanDraftResult,
-            ConfirmScanDraftHandler<ProductionScanConfirmationTargetWriter>>();
+            ConfirmScanDraftHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicMoneyMutationCommand,
+            AtomicMoneyMutationResult,
+            AtomicMoneyMutationHandler>();
+        services.AddAtomicCommandHandler<
+            RefundTenantPaymentCommand,
+            TenantPaymentRefundResult,
+            RefundTenantPaymentHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -97,6 +127,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await scope.Db.SaveChangesAsync();
         _actorUserId = actor.Id;
         _portfolioId = portfolio.Id;
+        await new ChartOfAccountsSeedService(scope.Db).SeedAsync(_portfolioId);
+        await scope.Db.SaveChangesAsync();
 
         var property = new Property
         {
@@ -126,11 +158,21 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             CreatedAt = CommandTime,
             UpdatedAt = CommandTime,
         };
-        scope.Db.AddRange(property, tenant, vendor);
+        var owner = new OwnerEntity
+        {
+            PortfolioId = _portfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Baseline Owner",
+            Email = "baseline-owner@example.test",
+            CreatedAt = CommandTime,
+            UpdatedAt = CommandTime,
+        };
+        scope.Db.AddRange(property, tenant, vendor, owner);
         await scope.Db.SaveChangesAsync();
         _propertyId = property.Id;
         _tenantId = tenant.Id;
         _vendorId = vendor.Id;
+        _ownerEntityId = owner.Id;
 
         var unit = new Unit
         {
@@ -221,10 +263,59 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             CreatedAtUtc = CommandTime,
             CreatedByUserId = _actorUserId,
         };
-        scope.Db.AddRange(tenantAccount, primaryParty);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = _portfolioId,
+            LeaseManagementId = relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-SCAN-BASE",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(CommandTime.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(CommandTime.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(CommandTime.AddMonths(-1)),
+            BaseRentAmount = 125m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 0m,
+            LateFeeAmount = 0m,
+            GracePeriodDays = 0,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                _portfolioId, _actorUserId, CommandTime),
+            CreatedAtUtc = CommandTime,
+            UpdatedAtUtc = CommandTime,
+            CreatedByUserId = _actorUserId,
+        };
+        scope.Db.AddRange(tenantAccount, primaryParty, agreement);
         await scope.Db.SaveChangesAsync();
         _tenantAccountId = tenantAccount.Id;
         _leaseManagementId = relationship.Id;
+        _leaseAgreementId = agreement.Id;
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            UnitId = _unitId,
+            TenantId = _tenantId,
+            LeaseManagementId = _leaseManagementId,
+            VendorId = _vendorId,
+            Title = "Scan-linked repair",
+            Description = "Fixture work order for scanned expense receipts.",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = CommandTime,
+            CreatedBy = "test",
+            UpdatedAt = CommandTime,
+        };
+        scope.Db.WorkOrders.Add(workOrder);
+        await scope.Db.SaveChangesAsync();
+        _workOrderId = workOrder.Id;
+
         _authSessionId = session.Id;
         _accessContextId = accessContext.Id;
         _accessRevision = accessContext.AccessRevision;
@@ -243,15 +334,26 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     [InlineData(ScanConfirmationTargetKind.WorkOrder)]
     [InlineData(ScanConfirmationTargetKind.Application)]
     [InlineData(ScanConfirmationTargetKind.Loan)]
+    [InlineData(ScanConfirmationTargetKind.PropertyAcquisition)]
+    [InlineData(ScanConfirmationTargetKind.LeaseEndingNotice)]
     public async Task EachSupportedTarget_ConfirmsDraftAndPersistsCompleteTarget(
         ScanConfirmationTargetKind kind)
     {
         SkipIfDockerUnavailable();
+        if (kind == ScanConfirmationTargetKind.LeaseEndingNotice)
+        {
+            await MarkBaseRelationshipOccupiedAsync();
+        }
         var draftId = await SeedDraftAsync(kind);
+        var command = Command(draftId, kind);
+        if (kind is ScanConfirmationTargetKind.PropertyAcquisition or ScanConfirmationTargetKind.LeaseEndingNotice)
+        {
+            command = command with { SourceStoredFileId = await SourceStoredFileIdAsync(draftId) };
+        }
 
-        var result = await UnitOfWork.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, $"writer-{kind}"),
-            Command(draftId, kind),
+            command,
             Codec);
 
         result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
@@ -273,6 +375,678 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task PaidExpenseScanConfirmation_PreservesReviewedDueDateAndPaidState()
+    {
+        SkipIfDockerUnavailable();
+        var dueDate = new DateTime(2027, 3, 2, 0, 0, 0, DateTimeKind.Utc);
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "paid-expense-preserves-due-date");
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense);
+        command = command with
+        {
+            Target = command.Target with
+            {
+                Expense = command.Target.Expense! with
+                {
+                    Receipt = command.Target.Expense.Receipt with { DueDate = dueDate },
+                    IsPaid = true,
+                },
+            },
+        };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var expense = await verify.Db.Expenses.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.TargetEntityId);
+        expense.DueDate.Should().Be(dueDate);
+        expense.Status.Should().Be(ExpenseStatus.Paid);
+        expense.PaidAt.Should().Be(CommandTime);
+        expense.ReceiptData.Should().Contain("\"dueDate\": \"2027-03-02T00:00:00Z\"");
+    }
+
+    [SkippableFact]
+    public async Task PaidExpenseScanConfirmation_AuditFailureRollsBackCompleteConfirmation()
+    {
+        SkipIfDockerUnavailable();
+        var dueDate = new DateTime(2027, 3, 2, 0, 0, 0, DateTimeKind.Utc);
+        var vendorName = $"Paid expense rollback {Guid.NewGuid():N}";
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "paid-expense-audit-failure");
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense);
+        command = command with
+        {
+            Target = command.Target with
+            {
+                Expense = command.Target.Expense! with
+                {
+                    Receipt = command.Target.Expense.Receipt with
+                    {
+                        VendorName = vendorName,
+                        DueDate = dueDate,
+                    },
+                    IsPaid = true,
+                },
+            },
+        };
+        int auditCountBefore;
+        int outboxCountBefore;
+        await using (var before = Scope())
+        {
+            auditCountBefore = await before.Db.AtomicAuditLogs.CountAsync();
+            outboxCountBefore = await before.Db.OutboxMessages.CountAsync();
+            await before.Db.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_paid_expense_scan_audit()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."EntityType" = 'Expense' THEN
+                        RAISE EXCEPTION 'fail paid expense scan audit';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_paid_expense_scan_audit
+                BEFORE INSERT ON "AtomicAuditLogs"
+                FOR EACH ROW EXECUTE FUNCTION fail_paid_expense_scan_audit();
+                """);
+        }
+
+        try
+        {
+            var action = () => ExecuteAtomicAsync(identity, command, Codec);
+            var failure = await action.Should().ThrowAsync<DbUpdateException>();
+            failure.WithInnerException<PostgresException>()
+                .WithMessage("*fail paid expense scan audit*");
+        }
+        finally
+        {
+            await using var cleanup = Scope();
+            await cleanup.Db.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_paid_expense_scan_audit ON "AtomicAuditLogs";
+                DROP FUNCTION IF EXISTS fail_paid_expense_scan_audit();
+                """);
+        }
+
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(ScanConfirmationTargetKind.Expense));
+        source.EntityId.Should().BeNull();
+        (await verify.Db.Expenses.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.Description == vendorName)).Should().Be(0);
+        (await verify.Db.ExpenseLineItems.CountAsync(row =>
+            row.Expense!.PortfolioId == _portfolioId
+            && row.Expense.Description == vendorName)).Should().Be(0);
+        (await verify.Db.ExpenseAllocations.CountAsync(row =>
+            row.Expense!.PortfolioId == _portfolioId
+            && row.Expense.Description == vendorName)).Should().Be(0);
+        (await verify.Db.AtomicAuditLogs.CountAsync()).Should().Be(auditCountBefore);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync()).Should().Be(outboxCountBefore);
+    }
+
+    [SkippableFact]
+    public async Task PaymentScanConfirmation_WithoutExplicitLedgerTarget_AllocatesAcrossOldestOpenCharges()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Payment);
+        var rentChargeId = await SeedOpenTenantChargeAsync(
+            75m, TenantLedgerEntryType.RentCharge, dueOnOffsetDays: 0);
+        var lateFeeChargeId = await SeedOpenTenantChargeAsync(
+            50m, TenantLedgerEntryType.LateFeeCharge, dueOnOffsetDays: 5);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "payment-open-charge-target");
+        var command = Command(draftId, ScanConfirmationTargetKind.Payment);
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.LedgerEntryId.Should().BePositive();
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(result.Value);
+        await using var verify = Scope();
+        var receipt = await verify.Db.TenantLedgerEntries.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.LedgerEntryId);
+        receipt.ProviderPaymentAttemptId.Should().NotBeNull();
+        var attempt = await verify.Db.TenantPaymentAttempts.AsNoTracking()
+            .SingleAsync(row => row.Id == receipt.ProviderPaymentAttemptId);
+        attempt.AttemptType.Should().Be(TenantPaymentAttemptType.UnappliedReceipt);
+        attempt.ChargeLedgerEntryId.Should().BeNull();
+        var allocations = await verify.Db.TenantLedgerAllocations.AsNoTracking()
+            .Where(row => row.CreditEntryId == result.Value.LedgerEntryId)
+            .OrderBy(row => row.DebitEntryId)
+            .Select(row => new { row.DebitEntryId, row.Amount })
+            .ToListAsync();
+        allocations.Should().BeEquivalentTo(
+        [
+            new { DebitEntryId = rentChargeId, Amount = 75m },
+            new { DebitEntryId = lateFeeChargeId, Amount = 50m },
+        ]);
+        (await verify.Db.TenantLedgerEntries.CountAsync(row =>
+            row.BusinessKey == $"scan-receipt:{draftId}")).Should().Be(1);
+        (await verify.Db.TenantPaymentAttempts.CountAsync(row =>
+            row.IdempotencyKey == command.DeliveryIdempotencyKey)).Should().Be(1);
+
+        var failedDraftId = await SeedDraftAsync(ScanConfirmationTargetKind.Payment);
+        await SeedOpenTenantChargeAsync(
+            75m, TenantLedgerEntryType.RentCharge, dueOnOffsetDays: 10);
+        await SeedOpenTenantChargeAsync(
+            50m, TenantLedgerEntryType.LateFeeCharge, dueOnOffsetDays: 15);
+        var failedIdentity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, failedDraftId, "payment-allocation-failure");
+        var failedCommand = Command(failedDraftId, ScanConfirmationTargetKind.Payment);
+        failedCommand = failedCommand with
+        {
+            Target = failedCommand.Target with
+            {
+                Payment = failedCommand.Target.Payment! with
+                {
+                    Receipt = failedCommand.Target.Payment.Receipt with { CheckNumber = "1002" },
+                },
+            },
+        };
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_scan_receipt_allocation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'fail scan receipt allocation';
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_scan_receipt_allocation
+                BEFORE INSERT ON "TenantLedgerAllocations"
+                FOR EACH ROW EXECUTE FUNCTION fail_scan_receipt_allocation();
+                """);
+        }
+
+        try
+        {
+            var action = () => ExecuteAtomicAsync(failedIdentity, failedCommand, Codec);
+            await action.Should().ThrowAsync<PostgresException>()
+                .WithMessage("*fail scan receipt allocation*");
+        }
+        finally
+        {
+            await using var cleanup = Scope();
+            await cleanup.Db.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_scan_receipt_allocation ON "TenantLedgerAllocations";
+                DROP FUNCTION IF EXISTS fail_scan_receipt_allocation();
+                """);
+        }
+
+        await using var rolledBack = Scope();
+        (await rolledBack.Db.ScanDrafts.AsNoTracking()
+            .SingleAsync(row => row.Id == failedDraftId)).Status.Should().Be("Reviewing");
+        (await rolledBack.Db.TenantLedgerEntries.CountAsync(row =>
+            row.BusinessKey == $"scan-receipt:{failedDraftId}")).Should().Be(0);
+        (await rolledBack.Db.TenantPaymentAttempts.CountAsync(row =>
+            row.IdempotencyKey == failedCommand.DeliveryIdempotencyKey)).Should().Be(0);
+        (await rolledBack.Db.TenantLedgerAllocations.CountAsync(row =>
+            row.BusinessKey.StartsWith($"scan-receipt:{failedDraftId}:"))).Should().Be(0);
+        (await rolledBack.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == failedIdentity.CommandType
+            && row.IdempotencyKey == failedIdentity.IdempotencyKey)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task RefundedPaymentScan_AllowsCorrectedDraftWithSameSourceToConfirmOnce()
+    {
+        SkipIfDockerUnavailable();
+        const string sourceHash =
+            "d250ed3f24f364bfce871e3da503c6560e5959fd9244785fe7b11de1cdee39af";
+        var chargeId = await SeedOpenTenantChargeAsync(125m);
+        var originalDraftId = await SeedDraftAsync(
+            ScanConfirmationTargetKind.Payment, sourceHash, draftHashOnly: true);
+        var original = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, originalDraftId, "payment-original"),
+            Command(originalDraftId, ScanConfirmationTargetKind.Payment),
+            Codec);
+        var refundCommand = new RefundTenantPaymentCommand(
+            _portfolioId,
+            _tenantAccountId,
+            original.Value.LedgerEntryId!.Value,
+            DateOnly.FromDateTime(CommandTime),
+            "Correct misclassified scanned payment",
+            "Check",
+            "refund-corrected-source",
+            null,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            CapabilityKeys.MoneyPaymentsManage,
+            "tenant-payment-refund:corrected-source",
+            $"tenant-payment-refund:{_portfolioId}:{_tenantAccountId}:corrected-source");
+        var refund = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "tenant-account.payment.refund",
+                refundCommand.DeliveryIdempotencyKey),
+            refundCommand,
+            RefundCodec);
+        refund.Value.Outcome.Should().Be(TenantPaymentRefundOutcome.Refunded);
+
+        var correctedDraftId = await SeedDraftAsync(
+            ScanConfirmationTargetKind.Payment, sourceHash, draftHashOnly: true);
+        var corrected = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, correctedDraftId, "payment-corrected"),
+            Command(correctedDraftId, ScanConfirmationTargetKind.Payment),
+            Codec);
+
+        corrected.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        corrected.Value.LedgerEntryId.Should().NotBe(original.Value.LedgerEntryId);
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.CountAsync(draft =>
+            draft.PortfolioId == _portfolioId
+            && draft.TargetEntityType == nameof(ScanConfirmationTargetKind.Payment)
+            && draft.SourceContentSha256 == sourceHash
+            && draft.Status == "Confirmed")).Should().Be(2);
+        var correctedAllocation = await verify.Db.TenantLedgerAllocations.AsNoTracking()
+            .SingleAsync(row => row.CreditEntryId == corrected.Value.LedgerEntryId);
+        correctedAllocation.DebitEntryId.Should().Be(chargeId);
+        correctedAllocation.Amount.Should().Be(125m);
+    }
+
+    [SkippableFact]
+    public async Task WorkOrderScanConfirmation_PersistsReviewedAccessPacketWithAuditAndOutbox()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.WorkOrder);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "work-order-access-packet-confirm");
+        var command = Command(draftId, ScanConfirmationTargetKind.WorkOrder) with
+        {
+            SourceStoredFileId = await SourceStoredFileIdAsync(draftId),
+        };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var workOrder = await verify.Db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.TargetEntityId);
+        workOrder.RequesterName.Should().Be("Morgan Resident");
+        workOrder.RequesterPhone.Should().Be("555-0134");
+        workOrder.RequesterEmail.Should().Be("morgan@example.test");
+        workOrder.ResidentMustBePresent.Should().BeTrue();
+        workOrder.CallBeforeEntry.Should().BeTrue();
+        workOrder.CallIfNotHome.Should().BeTrue();
+        workOrder.PermissionToEnter.Should().BeTrue();
+        workOrder.EntryNotes.Should().Be("Preferred window Tuesday 10 AM to noon; key under lockbox.");
+        workOrder.PetWarnings.Should().Be("Dog in crate in bedroom.");
+        workOrder.AccessWarnings.Should().Be("Use side gate; front steps are loose.");
+        workOrder.TechnicianAccessInstructions.Should()
+            .Be("Call Morgan before entry, use side gate, and keep the dog crated.");
+        (await verify.Db.WorkOrderStatusEvents.CountAsync(row =>
+            row.WorkOrderId == result.Value.TargetEntityId))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(WorkOrder)
+            && row.EntityId == result.Value.TargetEntityId
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == $"scan-work-order-create:{command.DeliveryIdempotencyKey}"))
+            .Should().Be(1);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == command.SourceStoredFileId!.Value);
+        source.EntityType.Should().Be(nameof(WorkOrder));
+        source.EntityId.Should().Be(result.Value.TargetEntityId);
+    }
+
+    [SkippableFact]
+    public async Task WorkOrderScanConfirmation_ReplayKeepsAccessPacketAuditAndOutboxExact()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.WorkOrder);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "work-order-access-packet-replay");
+        var command = Command(draftId, ScanConfirmationTargetKind.WorkOrder);
+
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        var workOrder = await verify.Db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == first.Value.TargetEntityId);
+        workOrder.RequesterName.Should().Be("Morgan Resident");
+        workOrder.RequesterPhone.Should().Be("555-0134");
+        workOrder.RequesterEmail.Should().Be("morgan@example.test");
+        workOrder.TechnicianAccessInstructions.Should()
+            .Be("Call Morgan before entry, use side gate, and keep the dog crated.");
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(WorkOrder)
+            && row.EntityId == first.Value.TargetEntityId
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == $"scan-work-order-create:{command.DeliveryIdempotencyKey}"))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task WorkOrderScanConfirmation_InvalidPropertyRollsBackPacketDraftAuditReceiptAndOutbox()
+    {
+        SkipIfDockerUnavailable();
+        int foreignPropertyId;
+        await using (var arrange = Scope())
+        {
+            var foreign = new Portfolio
+            {
+                Name = "Foreign work-order access",
+                ManagementCompanyName = "Other Co",
+                TimeZone = "UTC",
+                CreatedAt = CommandTime,
+                UpdatedAt = CommandTime,
+            };
+            arrange.Db.Portfolios.Add(foreign);
+            await arrange.Db.SaveChangesAsync();
+            var property = new Property
+            {
+                PortfolioId = foreign.Id,
+                Name = "Foreign Access House",
+                AddressLine1 = "404 Other St",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+                CreatedAt = CommandTime,
+                UpdatedAt = CommandTime,
+            };
+            arrange.Db.Properties.Add(property);
+            await arrange.Db.SaveChangesAsync();
+            foreignPropertyId = property.Id;
+        }
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.WorkOrder);
+        int workOrderCountBefore;
+        int workOrderAuditCountBefore;
+        await using (var before = Scope())
+        {
+            workOrderCountBefore = await before.Db.WorkOrders.CountAsync(row =>
+                row.PortfolioId == _portfolioId);
+            workOrderAuditCountBefore = await before.Db.AtomicAuditLogs.CountAsync(row =>
+                row.EntityType == nameof(WorkOrder));
+        }
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "work-order-access-packet-foreign-property");
+        var command = Command(draftId, ScanConfirmationTargetKind.WorkOrder) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.WorkOrder,
+                WorkOrder: WorkOrderTargetWithAccessPacket(foreignPropertyId, unitId: null, leaseManagementId: null)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<UnauthorizedAccessException>();
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.WorkOrders.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(workOrderCountBefore);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(WorkOrder)))
+            .Should().Be(workOrderAuditCountBefore);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == $"scan-work-order-create:{command.DeliveryIdempotencyKey}"))
+            .Should().Be(0);
+    }
+
+    [SkippableTheory]
+    [InlineData(ScanConfirmationTargetKind.Expense, nameof(Expense))]
+    [InlineData(ScanConfirmationTargetKind.WorkOrder, nameof(WorkOrder))]
+    public async Task ScanConfirmation_RecordsOneBusinessTargetAuditAndKeepsScanAudit(
+        ScanConfirmationTargetKind kind,
+        string targetEntityType)
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(kind);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, $"single-target-audit-{kind}");
+        var command = Command(draftId, kind) with { SourceStoredFileId = sourceStoredFileId };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var attemptId = result.AttemptId;
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == targetEntityType
+            && row.EntityId == result.Value.TargetEntityId
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == nameof(ScanDraft)
+            && row.EntityId == draftId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(2);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.EntityType == nameof(StoredFile)
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.AttemptId == attemptId
+            && row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LeaseEndingNoticeScanConfirmation_MovesRelationshipLinksSourceAndDoesNotCreateAgreement()
+    {
+        SkipIfDockerUnavailable();
+        await MarkBaseRelationshipOccupiedAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.LeaseEndingNotice);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "lease-ending-notice-confirm");
+        var command = Command(draftId, ScanConfirmationTargetKind.LeaseEndingNotice) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+        };
+        int agreementCountBefore;
+        await using (var before = Scope())
+        {
+            agreementCountBefore = await before.Db.LeaseAgreements.CountAsync(row =>
+                row.PortfolioId == _portfolioId);
+        }
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityType.Should().Be(nameof(ScanConfirmationTargetKind.LeaseEndingNotice));
+        result.Value.TargetEntityId.Should().Be(_leaseManagementId);
+        result.Value.LeaseManagementId.Should().Be(_leaseManagementId);
+        result.Value.UnitId.Should().Be(_unitId);
+        await using var verify = Scope();
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == _leaseManagementId);
+        relationship.EndingDisposition.Should().Be(LeaseManagementEndingDisposition.NonRenewalMoveOut);
+        relationship.NoticeGivenAtUtc.Should().Be(new DateTime(2027, 1, 14, 0, 0, 0, DateTimeKind.Utc));
+        relationship.PlannedMoveOutAtUtc.Should().Be(new DateTime(2027, 2, 28, 0, 0, 0, DateTimeKind.Utc));
+        relationship.EndingDispositionDecidedByUserId.Should().Be(_actorUserId);
+        relationship.EndingDispositionDecidedAtUtc.Should().NotBeNull();
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(LeaseManagement));
+        source.EntityId.Should().Be(_leaseManagementId);
+        (await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(agreementCountBefore);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(LeaseManagement)
+            && row.EntityId == _leaseManagementId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == command.DeliveryIdempotencyKey))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LeaseEndingNoticeScanConfirmation_ReplayDoesNotDuplicateAgreementOrDispositionEffects()
+    {
+        SkipIfDockerUnavailable();
+        await MarkBaseRelationshipOccupiedAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.LeaseEndingNotice);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "lease-ending-notice-replay");
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var command = Command(draftId, ScanConfirmationTargetKind.LeaseEndingNotice) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+        };
+
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        (await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LeaseManagement)
+            && row.EntityId == _leaseManagementId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == command.DeliveryIdempotencyKey))
+            .Should().Be(1);
+        (await verify.Db.StoredFiles.CountAsync(row =>
+            row.EntityType == nameof(LeaseManagement)
+            && row.EntityId == _leaseManagementId))
+            .Should().Be(1);
+    }
+
+    [SkippableTheory]
+    [InlineData("audit")]
+    [InlineData("outbox")]
+    public async Task LeaseEndingNoticeScanConfirmation_AuditOrOutboxFailureRollsBackRelationshipDraftSourceAndReceipt(
+        string failurePoint)
+    {
+        SkipIfDockerUnavailable();
+        await MarkBaseRelationshipOccupiedAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.LeaseEndingNotice);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, $"lease-ending-notice-{failurePoint}-failure");
+        var command = Command(draftId, ScanConfirmationTargetKind.LeaseEndingNotice) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+        };
+        await InstallLeaseEndingNoticeFailureTriggerAsync(failurePoint);
+
+        try
+        {
+            var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+            await action.Should().ThrowAsync<Exception>()
+                .Where(ex => ex.ToString().Contains(
+                    $"fail scan lease ending notice {failurePoint}", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await RemoveLeaseEndingNoticeFailureTriggerAsync(failurePoint);
+        }
+
+        await using var verify = Scope();
+        var draft = await verify.Db.ScanDrafts.AsNoTracking()
+            .SingleAsync(row => row.Id == draftId);
+        draft.Status.Should().Be("Reviewing");
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == _leaseManagementId);
+        relationship.EndingDisposition.Should().Be(LeaseManagementEndingDisposition.Undecided);
+        relationship.EndingDispositionDecidedAtUtc.Should().BeNull();
+        relationship.EndingDispositionDecidedByUserId.Should().BeNull();
+        relationship.NoticeGivenAtUtc.Should().BeNull();
+        relationship.PlannedMoveOutAtUtc.Should().BeNull();
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(ScanConfirmationTargetKind.LeaseEndingNotice));
+        source.EntityId.Should().BeNull();
+        (await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.IdempotencyKey == command.DeliveryIdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task ExpenseScanConfirmation_PersistsOperationalScopeMatchingTargetLocation()
+    {
+        SkipIfDockerUnavailable();
+
+        await AssertExpenseScopeAsync(
+            "property-scope",
+            _propertyId,
+            null,
+            null,
+            ExpenseOperationalScope.Property,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: null,
+            expectedWorkOrderId: null,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Property,
+            expectedAllocationPropertyId: _propertyId,
+            expectedAllocationUnitId: null);
+        await AssertExpenseScopeAsync(
+            "unit-scope",
+            null,
+            _unitId,
+            null,
+            ExpenseOperationalScope.Unit,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: _unitId,
+            expectedWorkOrderId: null,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Unit,
+            expectedAllocationPropertyId: null,
+            expectedAllocationUnitId: _unitId);
+        await AssertExpenseScopeAsync(
+            "work-order-scope",
+            null,
+            null,
+            _workOrderId,
+            ExpenseOperationalScope.WorkOrder,
+            expectedPropertyId: _propertyId,
+            expectedUnitId: _unitId,
+            expectedWorkOrderId: _workOrderId,
+            expectedAllocationTargetKind: ExpenseAllocationTargetKind.Unit,
+            expectedAllocationPropertyId: null,
+            expectedAllocationUnitId: _unitId);
+    }
+
+    [SkippableFact]
     public async Task DuplicateReceipt_ReplaysConcreteWriterResultWithoutSecondTarget()
     {
         SkipIfDockerUnavailable();
@@ -287,14 +1061,1162 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                     Receipt(uniqueVendor), true, _propertyId, _unitId, null)),
         };
 
-        var first = await UnitOfWork.ExecuteAsync(identity, command, Codec);
-        var replay = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
 
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(first.Value);
         await using var verify = Scope();
         (await verify.Db.Expenses.CountAsync(row => row.Description == uniqueVendor))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task PropertyAcquisitionScanConfirmation_EnrichesExistingPropertyOwnershipAndSourceWithoutLoan()
+    {
+        SkipIfDockerUnavailable();
+        var ownerId = await SeedOwnerAsync("Deed Owner");
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.PropertyAcquisition);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "property-acquisition-confirm");
+        var command = Command(draftId, ScanConfirmationTargetKind.PropertyAcquisition) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            CaptureContext = new ScanCaptureContextData(
+                WorkspaceExperience.Management,
+                _accessContextId,
+                _accessRevision,
+                _propertyId,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null),
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.PropertyAcquisition,
+                PropertyAcquisition: PropertyAcquisitionTarget(
+                    _propertyId,
+                    ownerId,
+                    purchasePrice: 315_000m,
+                    landValue: 65_000m)),
+        };
+        int propertyCountBefore;
+        int loanCountBefore;
+        await using (var before = Scope())
+        {
+            propertyCountBefore = await before.Db.Properties.CountAsync(row => row.PortfolioId == _portfolioId);
+            loanCountBefore = await before.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityType.Should().Be(nameof(ScanConfirmationTargetKind.PropertyAcquisition));
+        result.Value.TargetEntityId.Should().Be(_propertyId);
+        await using var verify = Scope();
+        (await verify.Db.Properties.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(propertyCountBefore);
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(loanCountBefore);
+        var property = await verify.Db.Properties.AsNoTracking()
+            .SingleAsync(row => row.Id == _propertyId);
+        property.PurchasePrice.Should().Be(315_000m);
+        property.LandValue.Should().Be(65_000m);
+        property.InServiceDate.Should().Be(CommandTime.Date);
+        property.Notes.Should().Contain("Reviewed deed");
+        var ownership = await verify.Db.PropertyOwnerships.AsNoTracking()
+            .SingleAsync(row => row.PropertyId == _propertyId && row.EffectiveToUtc == null);
+        ownership.OwnerEntityId.Should().Be(ownerId);
+        ownership.OwnershipSharePercent.Should().Be(100m);
+        ownership.EffectiveFromUtc.Should().Be(CommandTime.Date);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(Property));
+        source.EntityId.Should().Be(_propertyId);
+    }
+
+    [SkippableFact]
+    public async Task PropertyAcquisitionScanConfirmation_ReplayDoesNotDuplicatePropertyOwnershipOrLoan()
+    {
+        SkipIfDockerUnavailable();
+        var ownerId = await SeedOwnerAsync("Replay Deed Owner");
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.PropertyAcquisition);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "property-acquisition-replay");
+        var command = Command(draftId, ScanConfirmationTargetKind.PropertyAcquisition) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.PropertyAcquisition,
+                PropertyAcquisition: PropertyAcquisitionTarget(_propertyId, ownerId)),
+        };
+
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        (await verify.Db.Properties.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(1);
+        (await verify.Db.PropertyOwnerships.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.PropertyId == _propertyId
+            && row.OwnerEntityId == ownerId))
+            .Should().Be(1);
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task PropertyAcquisitionScanConfirmation_AuditFailureRollsBackPropertyOwnershipSourceAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var ownerId = await SeedOwnerAsync("Rollback Deed Owner");
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.PropertyAcquisition);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "property-acquisition-audit-failure");
+        var command = Command(draftId, ScanConfirmationTargetKind.PropertyAcquisition) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.PropertyAcquisition,
+                PropertyAcquisition: PropertyAcquisitionTarget(_propertyId, ownerId)),
+        };
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_scan_property_ownership_audit()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."EntityType" = 'PropertyOwnership' THEN
+                        RAISE EXCEPTION 'fail scan property ownership audit';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                DROP TRIGGER IF EXISTS fail_scan_property_ownership_audit ON "AtomicAuditLogs";
+                CREATE TRIGGER fail_scan_property_ownership_audit
+                BEFORE INSERT ON "AtomicAuditLogs"
+                FOR EACH ROW EXECUTE FUNCTION fail_scan_property_ownership_audit();
+                """);
+        }
+
+        try
+        {
+            var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+            await action.Should().ThrowAsync<Exception>()
+                .Where(ex => ex.ToString().Contains(
+                    "fail scan property ownership audit", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await using var cleanup = Scope();
+            await cleanup.Db.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_scan_property_ownership_audit ON "AtomicAuditLogs";
+                DROP FUNCTION IF EXISTS fail_scan_property_ownership_audit();
+                """);
+        }
+
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var property = await verify.Db.Properties.AsNoTracking().SingleAsync(row => row.Id == _propertyId);
+        property.PurchasePrice.Should().BeNull();
+        property.LandValue.Should().BeNull();
+        property.InServiceDate.Should().BeNull();
+        (await verify.Db.PropertyOwnerships.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.PropertyId == _propertyId))
+            .Should().Be(0);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityId.Should().BeNull();
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task PropertyAcquisitionScanConfirmation_WrongCapturedPropertyRejectsAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var ownerId = await SeedOwnerAsync("Wrong Property Owner");
+        int otherPropertyId;
+        await using (var arrange = Scope())
+        {
+            var other = new Property
+            {
+                PortfolioId = _portfolioId,
+                Name = "Other Scan House",
+                AddressLine1 = "2 Main St",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+                CreatedAt = CommandTime,
+                UpdatedAt = CommandTime,
+            };
+            arrange.Db.Properties.Add(other);
+            await arrange.Db.SaveChangesAsync();
+            otherPropertyId = other.Id;
+        }
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.PropertyAcquisition);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "property-acquisition-wrong-property");
+        var command = Command(draftId, ScanConfirmationTargetKind.PropertyAcquisition) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            CaptureContext = new ScanCaptureContextData(
+                WorkspaceExperience.Management,
+                _accessContextId,
+                _accessRevision,
+                _propertyId,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null),
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.PropertyAcquisition,
+                PropertyAcquisition: PropertyAcquisitionTarget(otherPropertyId, ownerId)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*property it was scanned from*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.PropertyOwnerships.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.PropertyId == otherPropertyId))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchesExistingScheduledPaymentWithExactStatementValuesAndDoesNotCreateLoan()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment");
+        int loanCountBefore;
+        await using (var before = Scope())
+        {
+            loanCountBefore = await before.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityId.Should().Be(loanId);
+        result.Value.LoanPaymentId.Should().Be(paymentId);
+        await using var verify = Scope();
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(loanCountBefore);
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.DueDate.Should().Be(new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc));
+        payment.PaidDate.Should().BeNull();
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        var correction = await verify.Db.LoanPaymentCorrections.AsNoTracking()
+            .SingleAsync(row => row.LoanPaymentId == paymentId);
+        correction.AttemptId.Should().Be(result.AttemptId);
+        correction.SourceScanDraftId.Should().Be(draftId);
+        correction.Status.Should().Be(LoanPaymentStatus.Paid);
+        correction.DueDate.Should().Be(StatementDate);
+        correction.PaidDate.Should().Be(StatementDate);
+        correction.PrincipalAmount.Should().Be(StatementPrincipal);
+        correction.InterestAmount.Should().Be(StatementInterest);
+        correction.EscrowAmount.Should().Be(StatementEscrow);
+        correction.TotalAmount.Should().Be(StatementTotal);
+        correction.BalanceAfter.Should().Be(StatementBalanceAfter);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementBalanceAfter);
+        loan.Status.Should().Be(LoanStatus.Active);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityType.Should().Be(nameof(Loan));
+        source.EntityId.Should().Be(loanId);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(Loan)
+            && row.EntityId == loanId
+            && row.Operation == AuditLogOperation.Updated))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == result.AttemptId
+            && row.EntityType == nameof(LoanPaymentCorrection)
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey == $"{command.DeliveryIdempotencyKey}:LoanPayment:{paymentId}:data-update"
+            || row.IdempotencyKey == $"{command.DeliveryIdempotencyKey}:Loan:{loanId}:data-update"))
+            .Should().Be(2);
+        (await verify.Db.JournalEntries.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.SourceType == JournalSourceType.LoanPayment
+            && row.Lines.Any(line => line.SourceLineId == paymentId)))
+            .Should().Be(0);
+
+        var postCommand = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId,
+                _actorUserId,
+                _authSessionId,
+                _accessContextId,
+                _accessRevision),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan,
+            AtomicMoneyOperation.PostPayment,
+            paymentId,
+            "scan-corrected-loan-payment",
+            new PostLoanPaymentRequest { LoanId = loanId, PaidDate = StatementDate },
+            CommandTime.AddMinutes(1));
+        var posted = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(postCommand), postCommand, AtomicMoneyMutation.Codec);
+        posted.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+
+        var postedLines = await verify.Db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.JournalEntry.SourceType == JournalSourceType.LoanPayment
+                && line.JournalEntry.SourceId == correction.Id)
+            .OrderBy(line => line.Id)
+            .Select(line => new
+            {
+                SystemKey = line.LedgerAccount!.SystemKey,
+                line.DebitAmount,
+                line.CreditAmount,
+            })
+            .ToListAsync();
+        postedLines.Should().Equal(
+            new { SystemKey = "mortgage-payable", DebitAmount = StatementPrincipal, CreditAmount = 0m },
+            new { SystemKey = "mortgage-interest", DebitAmount = StatementInterest, CreditAmount = 0m },
+            new { SystemKey = "mortgage-escrow-asset", DebitAmount = StatementEscrow, CreditAmount = 0m },
+            new { SystemKey = "operating-cash", DebitAmount = 0m, CreditAmount = StatementTotal });
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_ArborAndBriarAppendExactEffectiveFebruaryStatementTotals()
+    {
+        SkipIfDockerUnavailable();
+        int arborLoanId;
+        int arborPaymentId;
+        int briarLoanId;
+        int briarPaymentId;
+        await using (var arrange = Scope())
+        {
+            var arborLoan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _propertyId,
+                Lender = "Arbor statement proof",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 125_394m,
+                AnnualInterestRatePct = 4.5m,
+                TermMonths = 360,
+                StartDate = CommandTime.AddYears(-10),
+                DebtServiceAutomationStartDate = CommandTime.AddMonths(-2),
+                DayOfMonthDue = 20,
+                MonthlyPrincipalInterest = 1_046m,
+                MonthlyEscrow = 318m,
+                Status = LoanStatus.Active,
+                CreatedAt = CommandTime.AddMonths(-2),
+                UpdatedAt = CommandTime.AddMonths(-2),
+            };
+            var briarLoan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _propertyId,
+                Lender = "Briar statement proof",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 130_458m,
+                AnnualInterestRatePct = 5.8m,
+                TermMonths = 360,
+                StartDate = CommandTime.AddYears(-10),
+                DebtServiceAutomationStartDate = CommandTime.AddMonths(-2),
+                DayOfMonthDue = 20,
+                MonthlyPrincipalInterest = 1_070m,
+                MonthlyEscrow = 318m,
+                Status = LoanStatus.Active,
+                CreatedAt = CommandTime.AddMonths(-2),
+                UpdatedAt = CommandTime.AddMonths(-2),
+            };
+            arrange.Db.Loans.AddRange(arborLoan, briarLoan);
+            await arrange.Db.SaveChangesAsync();
+
+            var arborPayment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = arborLoan.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 470.23m,
+                PrincipalAmount = 583.77m,
+                EscrowAmount = 318m,
+                TotalAmount = 1_372m,
+                BalanceAfter = 124_810.23m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = CommandTime,
+            };
+            var briarPayment = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = briarLoan.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 633.81m,
+                PrincipalAmount = 444.19m,
+                EscrowAmount = 0m,
+                TotalAmount = 1_078m,
+                BalanceAfter = 130_013.81m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = CommandTime,
+            };
+            arrange.Db.LoanPayments.AddRange(arborPayment, briarPayment);
+            await arrange.Db.SaveChangesAsync();
+            arborLoanId = arborLoan.Id;
+            arborPaymentId = arborPayment.Id;
+            briarLoanId = briarLoan.Id;
+            briarPaymentId = briarPayment.Id;
+        }
+
+        var arborDraftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var briarDraftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var effectiveDate = new DateTime(2027, 2, 20, 0, 0, 0, DateTimeKind.Utc);
+        var arborCommand = Command(arborDraftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    arborLoanId,
+                    arborPaymentId,
+                    openingBalance: 125_394m,
+                    principal: 431m,
+                    interest: 615m,
+                    principalInterest: 1_046m,
+                    escrow: 318m,
+                    total: 1_364m,
+                    effectiveDate: effectiveDate)),
+        };
+        var briarCommand = Command(briarDraftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    briarLoanId,
+                    briarPaymentId,
+                    openingBalance: 130_458m,
+                    principal: 442m,
+                    interest: 628m,
+                    principalInterest: 1_070m,
+                    escrow: 318m,
+                    total: 1_388m,
+                    effectiveDate: effectiveDate)),
+        };
+
+        await using (var before = Scope())
+        {
+            var preConfirmation = await LoanPaymentEffectiveQuery.From(before.Db)
+                .Where(row => row.Id == arborPaymentId || row.Id == briarPaymentId)
+                .GroupBy(_ => 1)
+                .Select(group => new
+                {
+                    Scheduled = group.Count(row => row.Status == LoanPaymentStatus.Scheduled),
+                    PaidCash = group.Sum(row =>
+                        row.Status == LoanPaymentStatus.Paid ? row.TotalAmount : 0m),
+                })
+                .SingleAsync();
+            preConfirmation.Scheduled.Should().Be(2);
+            preConfirmation.PaidCash.Should().Be(0m);
+        }
+
+        var arbor = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, arborDraftId, "ys295-arbor-february-statement"),
+            arborCommand,
+            Codec);
+        var briar = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, briarDraftId, "ys295-briar-february-statement"),
+            briarCommand,
+            Codec);
+
+        await using var verify = Scope();
+        var effectiveRows = await LoanPaymentEffectiveQuery.From(verify.Db)
+            .Where(row => row.Id == arborPaymentId || row.Id == briarPaymentId)
+            .OrderBy(row => row.Id)
+            .ToListAsync();
+        effectiveRows.Should().HaveCount(2);
+        var effectiveArbor = effectiveRows[0];
+        effectiveArbor.Id.Should().Be(arborPaymentId);
+        effectiveArbor.DueDate.Should().Be(effectiveDate);
+        effectiveArbor.Status.Should().Be(LoanPaymentStatus.Paid);
+        effectiveArbor.PrincipalAmount.Should().Be(431m);
+        effectiveArbor.InterestAmount.Should().Be(615m);
+        effectiveArbor.EscrowAmount.Should().Be(318m);
+        effectiveArbor.TotalAmount.Should().Be(1_364m);
+        effectiveArbor.BalanceAfter.Should().Be(124_963m);
+        var effectiveBriar = effectiveRows[1];
+        effectiveBriar.Id.Should().Be(briarPaymentId);
+        effectiveBriar.DueDate.Should().Be(effectiveDate);
+        effectiveBriar.Status.Should().Be(LoanPaymentStatus.Paid);
+        effectiveBriar.PrincipalAmount.Should().Be(442m);
+        effectiveBriar.InterestAmount.Should().Be(628m);
+        effectiveBriar.EscrowAmount.Should().Be(318m);
+        effectiveBriar.TotalAmount.Should().Be(1_388m);
+        effectiveBriar.BalanceAfter.Should().Be(130_016m);
+
+        var totals = await LoanPaymentEffectiveQuery.From(verify.Db)
+            .Where(row => row.Id == arborPaymentId || row.Id == briarPaymentId)
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Cash = group.Sum(row => row.TotalAmount),
+                Principal = group.Sum(row => row.PrincipalAmount),
+                Interest = group.Sum(row => row.InterestAmount),
+                Escrow = group.Sum(row => row.EscrowAmount),
+                Paid = group.Count(row => row.Status == LoanPaymentStatus.Paid),
+            })
+            .SingleAsync();
+        totals.Cash.Should().Be(2_752m);
+        totals.Principal.Should().Be(873m);
+        totals.Interest.Should().Be(1_243m);
+        totals.Escrow.Should().Be(636m);
+        totals.Paid.Should().Be(2);
+        (await verify.Db.LoanPaymentCorrections.CountAsync(row =>
+            row.LoanPaymentId == arborPaymentId || row.LoanPaymentId == briarPaymentId))
+            .Should().Be(2);
+        (await verify.Db.Loans.Where(row => row.Id == arborLoanId)
+            .Select(row => row.CurrentBalance)
+            .SingleAsync()).Should().Be(124_963m);
+        (await verify.Db.Loans.Where(row => row.Id == briarLoanId)
+            .Select(row => row.CurrentBalance)
+            .SingleAsync()).Should().Be(130_016m);
+        arbor.Value.LoanPaymentId.Should().Be(arborPaymentId);
+        briar.Value.LoanPaymentId.Should().Be(briarPaymentId);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_DuplicateLegacySourceHashForSamePropertyRejectsBeforeCreatingSecondActiveLoan()
+    {
+        SkipIfDockerUnavailable();
+        var sourceHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes("same mortgage source content")));
+        var firstDraftId = await SeedDraftAsync(
+            ScanConfirmationTargetKind.Loan,
+            sourceHash,
+            legacyStoredFileHashOnly: true);
+        var firstSourceStoredFileId = await SourceStoredFileIdAsync(firstDraftId);
+        var firstIdentity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, firstDraftId, "loan-duplicate-source-first");
+        var firstCommand = Command(firstDraftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = firstSourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: LoanTarget(_propertyId)),
+        };
+
+        var first = await ExecuteAtomicAsync(firstIdentity, firstCommand, Codec);
+
+        first.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        var secondDraftId = await SeedDraftAsync(
+            ScanConfirmationTargetKind.Loan,
+            sourceHash,
+            legacyStoredFileHashOnly: true);
+        var secondSourceStoredFileId = await SourceStoredFileIdAsync(secondDraftId);
+        var secondIdentity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, secondDraftId, "loan-duplicate-source-second");
+        var secondCommand = Command(secondDraftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = secondSourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: LoanTarget(_propertyId) with { Lender = "Second Copy Bank" }),
+        };
+        int loanCountAfterFirst;
+        await using (var before = Scope())
+        {
+            loanCountAfterFirst = await before.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+
+        var action = () => ExecuteAtomicAsync(secondIdentity, secondCommand, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*already confirmed as active loan*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == secondDraftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(loanCountAfterFirst);
+        var secondSource = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == secondSourceStoredFileId);
+        secondSource.EntityId.Should().BeNull();
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == secondIdentity.CommandType
+            && row.IdempotencyKey == secondIdentity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchReplayDoesNotDoubleMutateOrCreateLoan()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-replay");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+        await using var verify = Scope();
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId && row.Id == loanId))
+            .Should().Be(1);
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(1);
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.DueDate.Should().Be(new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc));
+        payment.PaidDate.Should().BeNull();
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        var correction = await verify.Db.LoanPaymentCorrections.AsNoTracking()
+            .SingleAsync(row => row.LoanPaymentId == paymentId);
+        correction.DueDate.Should().Be(StatementDate);
+        correction.PaidDate.Should().Be(StatementDate);
+        correction.PrincipalAmount.Should().Be(StatementPrincipal);
+        correction.InterestAmount.Should().Be(StatementInterest);
+        correction.EscrowAmount.Should().Be(StatementEscrow);
+        correction.TotalAmount.Should().Be(StatementTotal);
+        correction.BalanceAfter.Should().Be(StatementBalanceAfter);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPaymentCorrection)
+            && row.EntityId == correction.Id
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchAcceptsAlreadyPaidPaymentWhenStatementValuesMatchWithoutRewrite()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var paidDate = StatementDate.AddDays(-2);
+        await using (var arrange = Scope())
+        {
+            var arrangedPayment = await arrange.Db.LoanPayments
+                .Include(row => row.Loan)
+                .SingleAsync(row => row.Id == paymentId);
+            arrangedPayment.DueDate = paidDate;
+            arrangedPayment.PaidDate = paidDate;
+            arrangedPayment.Status = LoanPaymentStatus.Paid;
+            arrangedPayment.PrincipalAmount = 400m;
+            arrangedPayment.InterestAmount = 600m;
+            arrangedPayment.EscrowAmount = 300m;
+            arrangedPayment.TotalAmount = 1_300m;
+            arrangedPayment.BalanceAfter = 125_425m;
+            arrangedPayment.Loan!.CurrentBalance = 125_425m;
+            await arrange.Db.SaveChangesAsync();
+        }
+
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-already-paid");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    loanId,
+                    paymentId,
+                    principal: 400m,
+                    interest: 600m,
+                    principalInterest: 1_000m,
+                    escrow: 300m,
+                    total: 1_300m,
+                    effectiveDate: StatementDate)),
+        };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityId.Should().Be(loanId);
+        result.Value.LoanPaymentId.Should().Be(paymentId);
+        await using var verify = Scope();
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(paidDate);
+        payment.PaidDate.Should().Be(paidDate);
+        payment.PrincipalAmount.Should().Be(400m);
+        payment.InterestAmount.Should().Be(600m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_300m);
+        payment.BalanceAfter.Should().Be(125_425m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(125_425m);
+        var correction = await verify.Db.LoanPaymentCorrections.AsNoTracking()
+            .SingleAsync(row => row.LoanPaymentId == paymentId);
+        correction.DueDate.Should().Be(StatementDate);
+        correction.PaidDate.Should().Be(paidDate);
+        correction.PrincipalAmount.Should().Be(400m);
+        correction.InterestAmount.Should().Be(600m);
+        correction.EscrowAmount.Should().Be(300m);
+        correction.TotalAmount.Should().Be(1_300m);
+        correction.BalanceAfter.Should().Be(125_425m);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPaymentCorrection)
+            && row.EntityId == correction.Id
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchCorrectsAlreadyPaidRoundedStatementSplitWithoutDuplicateCash()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var paidDate = StatementDate.AddDays(-5);
+        await using (var arrange = Scope())
+        {
+            var arrangedPayment = await arrange.Db.LoanPayments
+                .Include(row => row.Loan)
+                .SingleAsync(row => row.Id == paymentId);
+            arrangedPayment.DueDate = paidDate;
+            arrangedPayment.PaidDate = paidDate;
+            arrangedPayment.Status = LoanPaymentStatus.Paid;
+            arrangedPayment.PrincipalAmount = 464.24m;
+            arrangedPayment.InterestAmount = 661.76m;
+            arrangedPayment.EscrowAmount = 318m;
+            arrangedPayment.TotalAmount = 1_444m;
+            arrangedPayment.BalanceAfter = 140_585.76m;
+            arrangedPayment.Loan!.CurrentBalance = 140_585.76m;
+            await arrange.Db.SaveChangesAsync();
+        }
+
+        var initialPostCommand = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId,
+                _actorUserId,
+                _authSessionId,
+                _accessContextId,
+                _accessRevision),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan,
+            AtomicMoneyOperation.PostPayment,
+            paymentId,
+            "scan-paid-loan-payment-original",
+            new PostLoanPaymentRequest { LoanId = loanId, PaidDate = paidDate },
+            CommandTime);
+        var initialPosted = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(initialPostCommand),
+            initialPostCommand,
+            AtomicMoneyMutation.Codec);
+        initialPosted.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-already-paid-rounded-statement");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    loanId,
+                    paymentId,
+                    openingBalance: 141_050m,
+                    principal: 464m,
+                    interest: 662m,
+                    principalInterest: 1_126m,
+                    escrow: 318m,
+                    total: 1_444m,
+                    effectiveDate: StatementDate)),
+        };
+
+        var result = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        result.Value.TargetEntityId.Should().Be(loanId);
+        result.Value.LoanPaymentId.Should().Be(paymentId);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(result.Value);
+        await using var verify = Scope();
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(paidDate);
+        payment.PaidDate.Should().Be(paidDate);
+        payment.PrincipalAmount.Should().Be(464.24m);
+        payment.InterestAmount.Should().Be(661.76m);
+        payment.EscrowAmount.Should().Be(318m);
+        payment.TotalAmount.Should().Be(1_444m);
+        payment.BalanceAfter.Should().Be(140_585.76m);
+        var correction = await verify.Db.LoanPaymentCorrections.AsNoTracking()
+            .SingleAsync(row => row.LoanPaymentId == paymentId);
+        correction.DueDate.Should().Be(StatementDate);
+        correction.PaidDate.Should().Be(paidDate);
+        correction.PrincipalAmount.Should().Be(464m);
+        correction.InterestAmount.Should().Be(662m);
+        correction.EscrowAmount.Should().Be(318m);
+        correction.TotalAmount.Should().Be(1_444m);
+        correction.BalanceAfter.Should().Be(140_586m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(140_586m);
+        (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(1);
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPaymentCorrection)
+            && row.EntityId == correction.Id
+            && row.Operation == AuditLogOperation.Created))
+            .Should().Be(1);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+
+        var entries = await verify.Db.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.LoanPayment
+                && entry.Lines.Any(line => line.SourceLineId == paymentId))
+            .Include(entry => entry.Lines)
+            .ThenInclude(line => line.LedgerAccount)
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        var original = entries.Single(entry => entry.SourceId == paymentId
+            && entry.ReversesJournalEntryId is null);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        var replacement = entries.Single(entry => entry.SourceId == correction.Id
+            && entry.ReversesJournalEntryId is null);
+        reversal.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "operating-cash"
+            && line.DebitAmount == 1_444m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-payable"
+            && line.DebitAmount == 464m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-interest"
+            && line.DebitAmount == 662m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-escrow-asset"
+            && line.DebitAmount == 318m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "operating-cash"
+            && line.DebitAmount == 0m
+            && line.CreditAmount == 1_444m);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsAlreadyPaidPaymentWhenStatementValuesDisagreeAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var paidDate = StatementDate.AddDays(-5);
+        await using (var arrange = Scope())
+        {
+            var arrangedPayment = await arrange.Db.LoanPayments
+                .Include(row => row.Loan)
+                .SingleAsync(row => row.Id == paymentId);
+            arrangedPayment.DueDate = paidDate;
+            arrangedPayment.PaidDate = paidDate;
+            arrangedPayment.Status = LoanPaymentStatus.Paid;
+            arrangedPayment.PrincipalAmount = 400m;
+            arrangedPayment.InterestAmount = 600m;
+            arrangedPayment.EscrowAmount = 300m;
+            arrangedPayment.TotalAmount = 1_300m;
+            arrangedPayment.BalanceAfter = 125_425m;
+            arrangedPayment.Loan!.CurrentBalance = 125_425m;
+            await arrange.Db.SaveChangesAsync();
+        }
+
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-already-paid-mismatch");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(
+                    _propertyId,
+                    loanId,
+                    paymentId,
+                    principal: 401m,
+                    interest: 599m,
+                    principalInterest: 1_000m,
+                    escrow: 300m,
+                    total: 1_300m,
+                    effectiveDate: StatementDate)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*already-paid loan payment*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Paid);
+        payment.DueDate.Should().Be(paidDate);
+        payment.PaidDate.Should().Be(paidDate);
+        payment.PrincipalAmount.Should().Be(400m);
+        payment.InterestAmount.Should().Be(600m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_300m);
+        payment.BalanceAfter.Should().Be(125_425m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(125_425m);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsWhenEarlierPaymentIsUnpaidAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, _, laterPaymentId) = await SeedExistingLoanWithPaymentsAsync(includeEarlierUnpaid: true);
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-earlier-unpaid");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, laterPaymentId)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*Earlier scheduled loan payments must be posted first*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == laterPaymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsMismatchedStatementComponentsAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-invalid-components");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId, total: StatementTotal + 1m)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*Statement total must equal principal plus interest plus escrow*");
+        await AssertLoanPaymentMatchRolledBackAsync(draftId, identity, loanId, paymentId);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_MatchRejectsOpeningBalanceMismatchAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-stale-balance");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId, openingBalance: StatementOpeningBalance - 1m)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*opening unpaid principal must match the loan's current live balance*");
+        await AssertLoanPaymentMatchRolledBackAsync(draftId, identity, loanId, paymentId);
+    }
+
+    [SkippableFact]
+    public async Task LoanScanConfirmation_AuditFailureRollsBackDraftPaymentLoanAuditAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var (loanId, paymentId) = await SeedExistingLoanWithPaymentsAsync();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
+        var sourceStoredFileId = await SourceStoredFileIdAsync(draftId);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "match-existing-loan-payment-audit-failure");
+        var command = Command(draftId, ScanConfirmationTargetKind.Loan) with
+        {
+            SourceStoredFileId = sourceStoredFileId,
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Loan,
+                Loan: MatchExistingLoanTarget(_propertyId, loanId, paymentId)),
+        };
+        await using (var arrange = Scope())
+        {
+            await arrange.Db.Database.ExecuteSqlRawAsync("""
+                CREATE OR REPLACE FUNCTION fail_scan_loan_payment_audit()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."EntityType" = 'LoanPaymentCorrection' THEN
+                        RAISE EXCEPTION 'fail scan loan payment audit';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                DROP TRIGGER IF EXISTS fail_scan_loan_payment_audit ON "AtomicAuditLogs";
+                CREATE TRIGGER fail_scan_loan_payment_audit
+                BEFORE INSERT ON "AtomicAuditLogs"
+                FOR EACH ROW EXECUTE FUNCTION fail_scan_loan_payment_audit();
+                """);
+        }
+
+        try
+        {
+            var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+            await action.Should().ThrowAsync<Exception>()
+                .Where(ex => ex.ToString().Contains(
+                    "fail scan loan payment audit", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await using var cleanup = Scope();
+            await cleanup.Db.Database.ExecuteSqlRawAsync("""
+                    DROP TRIGGER IF EXISTS fail_scan_loan_payment_audit ON "AtomicAuditLogs";
+                    DROP FUNCTION IF EXISTS fail_scan_loan_payment_audit();
+                    """);
+        }
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementOpeningBalance);
+        var source = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == sourceStoredFileId);
+        source.EntityId.Should().BeNull();
+        (await verify.Db.AtomicAuditLogs.CountAsync(row =>
+            row.EntityType == nameof(LoanPaymentCorrection)))
+            .Should().Be(0);
+        (await verify.Db.LoanPaymentCorrections.CountAsync(row => row.LoanPaymentId == paymentId))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task ExpenseScanConfirmation_MissingRequiredReviewFactsRejectsAndRollsBackClaimTargetAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "expense-missing-required-review-facts");
+        var incompleteReceipt = Receipt(" ") with
+        {
+            TransactionDate = null,
+            Subtotal = 0m,
+            Total = null,
+            Category = null,
+        };
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Expense,
+                Expense: new ScanExpenseTargetData(
+                    incompleteReceipt, true, null, null, null)),
+        };
+        int expenseCountBefore;
+        await using (var before = Scope())
+        {
+            expenseCountBefore = await before.Db.Expenses.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*vendor*transaction date*positive total or subtotal*category*property, unit, or work order*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.Expenses.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(expenseCountBefore);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
     }
 
     [SkippableFact]
@@ -308,7 +2230,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             _tenantId,
             leaseManagementId: _leaseManagementId,
             tenantAccountId: _tenantAccountId);
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             ScanConfirmationCommandIdentity.Create(
                 _portfolioId, source.DraftId, "signed-zillow-import"),
             LeaseCommand(source, target),
@@ -349,7 +2271,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ReviewDisposition = LeaseScanReviewDisposition.NeedsSignatures,
         };
 
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             ScanConfirmationCommandIdentity.Create(
                 _portfolioId, source.DraftId, "lease-needs-signatures"),
             LeaseCommand(source, target),
@@ -402,8 +2324,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             _portfolioId, source.DraftId, "empty-portfolio-bootstrap");
         var command = LeaseCommand(source, target);
 
-        var first = await UnitOfWork.ExecuteAsync(identity, command, Codec);
-        var replay = await UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var first = await ExecuteAtomicAsync(identity, command, Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, Codec);
 
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(first.Value);
@@ -430,6 +2352,84 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         (await verify.Db.Properties.CountAsync(row =>
             row.PortfolioId == _portfolioId
             && row.AddressLine1 == "55 Maple Avenue")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task HistoricalSignedLeaseImport_PersistsReviewedPossessionAndProjectsOccupied()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Historical signed lease");
+        var possessionGivenAtUtc = CommandTime.AddMonths(-1);
+        var target = LeaseTarget(
+            propertyId: 0,
+            unitId: null,
+            tenantId: null,
+            propertyName: "Possession House",
+            propertyAddress: "71 Possession Avenue",
+            propertyCity: "Akron",
+            propertyState: "OH",
+            propertyPostalCode: "44308",
+            rentalStructure: RentalStructure.SingleRental,
+            unitNumber: null,
+            startDate: possessionGivenAtUtc,
+            endDate: CommandTime.AddMonths(11),
+            possessionGivenAtUtc: possessionGivenAtUtc);
+
+        var outcome = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, source.DraftId, "historical-possession"),
+            LeaseCommand(source, target),
+            Codec);
+
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.TargetEntityId);
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == agreement.LeaseManagementId);
+        relationship.PossessionGivenAtUtc.Should().Be(possessionGivenAtUtc);
+        var lifecycle = await verify.Db.LeaseManagementLifecycleProjections.AsNoTracking()
+            .SingleAsync(row => row.LeaseManagementId == relationship.Id);
+        lifecycle.Lifecycle.Should().Be("Occupied");
+        lifecycle.HasGoverningAgreementWithoutPossession.Should().BeFalse();
+        lifecycle.HasReconciliationException.Should().BeFalse();
+    }
+
+    [SkippableFact]
+    public async Task HistoricalSignedLeaseImport_WithoutPossessionRejectsAndRollsBackWholeGraph()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Contradictory historical signed lease");
+        var target = LeaseTarget(
+            propertyId: 0,
+            unitId: null,
+            tenantId: null,
+            propertyName: "Rollback House",
+            propertyAddress: "72 Rollback Avenue",
+            propertyCity: "Akron",
+            propertyState: "OH",
+            propertyPostalCode: "44308",
+            rentalStructure: RentalStructure.SingleRental,
+            unitNumber: null,
+            startDate: CommandTime.AddMonths(-1),
+            endDate: CommandTime.AddMonths(11));
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, source.DraftId, "historical-missing-possession");
+        var command = LeaseCommand(source, target);
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*requires the reviewed possession date*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == source.DraftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.Properties.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.AddressLine1 == "72 Rollback Avenue"))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
     }
 
     [SkippableFact]
@@ -478,7 +2478,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 Loan: LoanTarget(foreignPropertyId)),
         };
 
-        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
 
         await action.Should().ThrowAsync<UnauthorizedAccessException>();
         await using var verify = Scope();
@@ -486,6 +2486,63 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             .Should().Be("Reviewing");
         (await verify.Db.Loans.CountAsync(row => row.PortfolioId == _portfolioId))
             .Should().Be(loanCountBefore);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task PropertyAcquisitionScanConfirmation_CrossPortfolioPropertyIsUnauthorizedAndRollsBack()
+    {
+        SkipIfDockerUnavailable();
+        var ownerId = await SeedOwnerAsync("Cross Portfolio Owner");
+        int foreignPropertyId;
+        await using (var arrange = Scope())
+        {
+            var foreign = new Portfolio
+            {
+                Name = "Foreign acquisition",
+                ManagementCompanyName = "Other Co",
+                TimeZone = "UTC",
+                CreatedAt = CommandTime,
+                UpdatedAt = CommandTime,
+            };
+            arrange.Db.Portfolios.Add(foreign);
+            await arrange.Db.SaveChangesAsync();
+            var property = new Property
+            {
+                PortfolioId = foreign.Id,
+                Name = "Foreign Acquisition House",
+                AddressLine1 = "991 Other St",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+                CreatedAt = CommandTime,
+                UpdatedAt = CommandTime,
+            };
+            arrange.Db.Properties.Add(property);
+            await arrange.Db.SaveChangesAsync();
+            foreignPropertyId = property.Id;
+        }
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.PropertyAcquisition);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "property-acquisition-foreign-property");
+        var command = Command(draftId, ScanConfirmationTargetKind.PropertyAcquisition) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.PropertyAcquisition,
+                PropertyAcquisition: PropertyAcquisitionTarget(foreignPropertyId, ownerId)),
+        };
+
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<UnauthorizedAccessException>();
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.PropertyOwnerships.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.PropertyId == foreignPropertyId))
+            .Should().Be(0);
         (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
             .Should().Be(0);
@@ -508,10 +2565,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
                 Payment: new ScanPaymentTargetData(Receipt("Rent payer"), _tenantAccountId)),
             ScanConfirmationTargetKind.WorkOrder => new ScanConfirmationTargetData(
                 kind,
-                WorkOrder: new ScanWorkOrderTargetData(
-                    _propertyId, _unitId, _tenantId, _leaseManagementId, _vendorId,
-                    "Leaking sink", "Water under sink", "Plumbing",
-                    WorkOrderPriority.High, 150m)),
+                WorkOrder: WorkOrderTargetWithAccessPacket(_propertyId)),
             ScanConfirmationTargetKind.Application => new ScanConfirmationTargetData(
                 kind,
                 Application: new ScanApplicationTargetData(
@@ -522,12 +2576,46 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ScanConfirmationTargetKind.Loan => new ScanConfirmationTargetData(
                 kind,
                 Loan: LoanTarget(_propertyId)),
+            ScanConfirmationTargetKind.PropertyAcquisition => new ScanConfirmationTargetData(
+                kind,
+                PropertyAcquisition: PropertyAcquisitionTarget(
+                    _propertyId,
+                    _ownerEntityId)),
+            ScanConfirmationTargetKind.LeaseEndingNotice => new ScanConfirmationTargetData(
+                kind,
+                LeaseEndingNotice: LeaseEndingNoticeTarget(_leaseManagementId, _unitId)),
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         },
         AuthSessionId: _authSessionId,
         AccessContextId: _accessContextId,
         ExpectedAccessRevision: _accessRevision,
         DeliveryIdempotencyKey: $"scan-confirm:{_portfolioId}:{draftId}:{kind}");
+
+    private ScanWorkOrderTargetData WorkOrderTargetWithAccessPacket(
+        int propertyId,
+        int? unitId = null,
+        int? leaseManagementId = null) => new(
+        propertyId,
+        unitId ?? _unitId,
+        _tenantId,
+        leaseManagementId ?? _leaseManagementId,
+        _vendorId,
+        "Leaking sink",
+        "Water under sink",
+        "Call Morgan before entry, use side gate, and keep the dog crated.",
+        "Morgan Resident",
+        "555-0134",
+        "morgan@example.test",
+        true,
+        true,
+        true,
+        true,
+        "Preferred window Tuesday 10 AM to noon; key under lockbox.",
+        "Dog in crate in bedroom.",
+        "Use side gate; front steps are loose.",
+        "Plumbing",
+        WorkOrderPriority.High,
+        150m);
 
     private ConfirmScanDraftCommand LeaseCommand(
         LeaseDraftSource source,
@@ -548,6 +2636,60 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         SourceContentSha256: source.Sha256,
         SourceLabel: source.SourceLabel);
 
+    private async Task AssertExpenseScopeAsync(
+        string idempotencyKey,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        ExpenseOperationalScope expectedScope,
+        int? expectedPropertyId,
+        int? expectedUnitId,
+        int? expectedWorkOrderId,
+        ExpenseAllocationTargetKind? expectedAllocationTargetKind,
+        int? expectedAllocationPropertyId,
+        int? expectedAllocationUnitId)
+    {
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Expense,
+                Expense: new ScanExpenseTargetData(
+                    Receipt($"Expense {idempotencyKey}"), true, propertyId, unitId, workOrderId)),
+            DeliveryIdempotencyKey = $"scan-confirm:{_portfolioId}:{draftId}:{idempotencyKey}",
+        };
+
+        var result = await ExecuteAtomicAsync(
+            ScanConfirmationCommandIdentity.Create(_portfolioId, draftId, idempotencyKey),
+            command,
+            Codec);
+
+        result.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var expense = await verify.Db.Expenses.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.TargetEntityId);
+        expense.OperationalScope.Should().Be(expectedScope);
+        expense.PropertyId.Should().Be(expectedPropertyId);
+        expense.UnitId.Should().Be(expectedUnitId);
+        expense.WorkOrderId.Should().Be(expectedWorkOrderId);
+        var allocations = await verify.Db.ExpenseAllocations.AsNoTracking()
+            .Where(row => row.ExpenseId == expense.Id)
+            .ToListAsync();
+        if (expectedAllocationTargetKind is null)
+        {
+            allocations.Should().BeEmpty();
+        }
+        else
+        {
+            var allocation = allocations.Should().ContainSingle().Subject;
+            allocation.TargetKind.Should().Be(expectedAllocationTargetKind);
+            allocation.PropertyId.Should().Be(expectedAllocationPropertyId);
+            allocation.UnitId.Should().Be(expectedAllocationUnitId);
+            allocation.OwnerEntityId.Should().BeNull();
+            allocation.Amount.Should().Be(expense.Amount);
+        }
+    }
+
     private static ScanLeaseTargetData LeaseTarget(
         int propertyId,
         int? unitId,
@@ -560,7 +2702,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         string? propertyState = null,
         string? propertyPostalCode = null,
         RentalStructure? rentalStructure = null,
-        string? unitNumber = "1") => new(
+        string? unitNumber = "1",
+        DateTime? startDate = null,
+        DateTime? endDate = null,
+        DateTime? possessionGivenAtUtc = null) => new(
         propertyId,
         unitId,
         tenantId,
@@ -580,8 +2725,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         UnitBathrooms: 1m,
         UnitSquareFeet: 900,
         LeaseNumber: "EXT-LEASE-1",
-        StartDate: new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
-        EndDate: new DateTime(2027, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+        StartDate: startDate ?? new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+        EndDate: endDate ?? new DateTime(2027, 7, 31, 0, 0, 0, DateTimeKind.Utc),
         MonthlyRent: 1_250m,
         SecurityDeposit: 1_250m,
         LateFee: 50m,
@@ -590,7 +2735,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         LeaseManagementId: leaseManagementId,
         TenantAccountId: tenantAccountId,
         TermsSchemaVersion: 1,
-        TermsPayload: "{}");
+        TermsPayload: "{}",
+        PossessionGivenAtUtc: possessionGivenAtUtc);
 
     private static ScanLoanTargetData LoanTarget(int propertyId) => new(
         propertyId,
@@ -607,6 +2753,74 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         true,
         "Imported statement");
 
+    private static ScanPropertyAcquisitionTargetData PropertyAcquisitionTarget(
+        int propertyId,
+        int ownerEntityId,
+        decimal purchasePrice = 250_000m,
+        decimal landValue = 50_000m) => new(
+        propertyId,
+        CommandTime.Date,
+        purchasePrice,
+        landValue,
+        CommandTime.Date,
+        "Reviewed deed",
+        [
+            new ScanPropertyAcquisitionOwnerData(
+                ownerEntityId,
+                100m,
+                "Deed Owner",
+                "deed-owner@example.test",
+                "Deed Owner")
+        ]);
+
+    private static ScanLeaseEndingNoticeTargetData LeaseEndingNoticeTarget(
+        int leaseManagementId,
+        int unitId) => new(
+        leaseManagementId,
+        unitId,
+        new DateTime(2027, 1, 14, 0, 0, 0, DateTimeKind.Utc),
+        new DateTime(2027, 2, 28, 0, 0, 0, DateTimeKind.Utc),
+        "tenant non-renewal notice",
+        "Tenant will not renew.");
+
+    private static ScanLoanTargetData MatchExistingLoanTarget(int propertyId, int loanId, int paymentId) =>
+        LoanTarget(propertyId) with
+        {
+            ExistingLoanId = loanId,
+            ExistingLoanPaymentId = paymentId,
+            CurrentBalance = StatementOpeningBalance,
+            MonthlyPrincipalInterest = StatementPrincipalInterest,
+            StatementPrincipalAmount = StatementPrincipal,
+            StatementInterestAmount = StatementInterest,
+            StatementEscrowAmount = StatementEscrow,
+            StatementTotalAmount = StatementTotal,
+            StatementEffectiveDate = StatementDate,
+        };
+
+    private static ScanLoanTargetData MatchExistingLoanTarget(
+        int propertyId,
+        int loanId,
+        int paymentId,
+        decimal openingBalance = StatementOpeningBalance,
+        decimal principal = StatementPrincipal,
+        decimal interest = StatementInterest,
+        decimal principalInterest = StatementPrincipalInterest,
+        decimal escrow = StatementEscrow,
+        decimal total = StatementTotal,
+        DateTime? effectiveDate = null) =>
+        LoanTarget(propertyId) with
+        {
+            ExistingLoanId = loanId,
+            ExistingLoanPaymentId = paymentId,
+            CurrentBalance = openingBalance,
+            MonthlyPrincipalInterest = principalInterest,
+            StatementPrincipalAmount = principal,
+            StatementInterestAmount = interest,
+            StatementEscrowAmount = escrow,
+            StatementTotalAmount = total,
+            StatementEffectiveDate = effectiveDate ?? StatementDate,
+        };
+
     private static ScanReceiptData Receipt(string vendorName) => new(
         vendorName, null, null, null, null, "R-1", CommandTime,
         120m, 5m, null, null, null, null, 125m, "Check", null,
@@ -614,7 +2828,11 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         [new ScanReceiptLineData("Part", 1m, 120m, 120m)],
         "Rent payer", "1001", "Test Bank", []);
 
-    private async Task<int> SeedDraftAsync(ScanConfirmationTargetKind kind)
+    private async Task<int> SeedDraftAsync(
+        ScanConfirmationTargetKind kind,
+        string? sourceContentSha256 = null,
+        bool legacyStoredFileHashOnly = false,
+        bool draftHashOnly = false)
     {
         await using var scope = Scope();
         var path = $"scan/{kind.ToString().ToLowerInvariant()}-{Guid.NewGuid():N}.jpg";
@@ -625,6 +2843,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             FilePath = path,
             ContentType = "image/jpeg",
             FileSize = 100,
+            ContentSha256 = draftHashOnly ? null : sourceContentSha256,
             EntityType = kind.ToString(),
             UploadedAt = CommandTime.AddMinutes(-5),
         };
@@ -633,6 +2852,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             PortfolioId = _portfolioId,
             FilePath = path,
             SourceStoredFile = source,
+            SourceContentSha256 = legacyStoredFileHashOnly ? null : sourceContentSha256,
             TargetEntityType = kind.ToString(),
             Status = "Reviewing",
             ExtractedFields = "{\"source\":\"integration-test\"}",
@@ -641,8 +2861,226 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         scope.Db.AddRange(source, draft);
         await scope.Db.SaveChangesAsync();
         _preparedFingerprints[draft.Id] = ScanConfirmationDraftFingerprint.Create(
-            draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
+            draft.TargetEntityType,
+            draft.SourceStoredFileId,
+            draft.ExtractedFields,
+            draft.SourceContentSha256);
         return draft.Id;
+    }
+
+    private async Task<int> SourceStoredFileIdAsync(int draftId)
+    {
+        await using var scope = Scope();
+        return await scope.Db.ScanDrafts.AsNoTracking()
+            .Where(row => row.Id == draftId)
+            .Select(row => row.SourceStoredFileId!.Value)
+            .SingleAsync();
+    }
+
+    private async Task<long> SeedOpenTenantChargeAsync(
+        decimal amount,
+        TenantLedgerEntryType entryType = TenantLedgerEntryType.RentCharge,
+        int dueOnOffsetDays = 0)
+    {
+        await using var scope = Scope();
+        var charge = new TenantLedgerEntry
+        {
+            PortfolioId = _portfolioId,
+            TenantAccountId = _tenantAccountId,
+            EntryType = entryType,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(CommandTime),
+            DueOn = DateOnly.FromDateTime(CommandTime.AddDays(dueOnOffsetDays)),
+            PostedAtUtc = CommandTime,
+            Description = $"Open {entryType} for scan payment",
+            BusinessKey = $"scan-open-charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = _leaseAgreementId,
+            CreatedByUserId = _actorUserId,
+        };
+        scope.Db.TenantLedgerEntries.Add(charge);
+        await scope.Db.SaveChangesAsync();
+        return charge.Id;
+    }
+
+    private async Task MarkBaseRelationshipOccupiedAsync()
+    {
+        await using var scope = Scope();
+        await scope.Db.LeaseManagements
+            .Where(row => row.Id == _leaseManagementId && row.PortfolioId == _portfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.PossessionGivenAtUtc, (DateTime?)CommandTime.AddDays(-30))
+                .SetProperty(row => row.PossessionReturnedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.AccountClosedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.CanceledAtUtc, (DateTime?)null)
+                .SetProperty(row => row.EndingDisposition, LeaseManagementEndingDisposition.Undecided)
+                .SetProperty(row => row.EndingDispositionDecidedAtUtc, (DateTime?)null)
+                .SetProperty(row => row.EndingDispositionDecidedByUserId, (int?)null)
+                .SetProperty(row => row.NoticeGivenAtUtc, (DateTime?)null)
+                .SetProperty(row => row.PlannedMoveOutAtUtc, (DateTime?)null));
+    }
+
+    private async Task InstallLeaseEndingNoticeFailureTriggerAsync(string failurePoint)
+    {
+        await using var scope = Scope();
+        switch (failurePoint)
+        {
+            case "audit":
+                await scope.Db.Database.ExecuteSqlRawAsync("""
+                    CREATE OR REPLACE FUNCTION fail_scan_lease_ending_notice_audit()
+                    RETURNS trigger AS $$
+                    BEGIN
+                        IF NEW."EntityType" = 'LeaseManagement' THEN
+                            RAISE EXCEPTION 'fail scan lease ending notice audit';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                    DROP TRIGGER IF EXISTS fail_scan_lease_ending_notice_audit ON "AtomicAuditLogs";
+                    CREATE TRIGGER fail_scan_lease_ending_notice_audit
+                    BEFORE INSERT ON "AtomicAuditLogs"
+                    FOR EACH ROW EXECUTE FUNCTION fail_scan_lease_ending_notice_audit();
+                    """);
+                break;
+            case "outbox":
+                await scope.Db.Database.ExecuteSqlRawAsync("""
+                    CREATE OR REPLACE FUNCTION fail_scan_lease_ending_notice_outbox()
+                    RETURNS trigger AS $$
+                    BEGIN
+                        IF NEW."MessageType" = 'data-update' THEN
+                            RAISE EXCEPTION 'fail scan lease ending notice outbox';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                    DROP TRIGGER IF EXISTS fail_scan_lease_ending_notice_outbox ON "OutboxMessages";
+                    CREATE TRIGGER fail_scan_lease_ending_notice_outbox
+                    BEFORE INSERT ON "OutboxMessages"
+                    FOR EACH ROW EXECUTE FUNCTION fail_scan_lease_ending_notice_outbox();
+                    """);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(failurePoint));
+        }
+    }
+
+    private async Task RemoveLeaseEndingNoticeFailureTriggerAsync(string failurePoint)
+    {
+        await using var scope = Scope();
+        switch (failurePoint)
+        {
+            case "audit":
+                await scope.Db.Database.ExecuteSqlRawAsync("""
+                    DROP TRIGGER IF EXISTS fail_scan_lease_ending_notice_audit ON "AtomicAuditLogs";
+                    DROP FUNCTION IF EXISTS fail_scan_lease_ending_notice_audit();
+                    """);
+                break;
+            case "outbox":
+                await scope.Db.Database.ExecuteSqlRawAsync("""
+                    DROP TRIGGER IF EXISTS fail_scan_lease_ending_notice_outbox ON "OutboxMessages";
+                    DROP FUNCTION IF EXISTS fail_scan_lease_ending_notice_outbox();
+                    """);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(failurePoint));
+        }
+    }
+
+    private async Task<(int LoanId, int PaymentId)> SeedExistingLoanWithPaymentsAsync()
+    {
+        var (loanId, _, secondPaymentId) = await SeedExistingLoanWithPaymentsAsync(includeEarlierUnpaid: false);
+        return (loanId, secondPaymentId);
+    }
+
+    private async Task<(int LoanId, int FirstPaymentId, int SecondPaymentId)> SeedExistingLoanWithPaymentsAsync(
+        bool includeEarlierUnpaid)
+    {
+        await using var scope = Scope();
+        var loan = new Loan
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            Lender = "Existing Match Bank",
+            OriginalAmount = 200_000m,
+            CurrentBalance = StatementOpeningBalance,
+            AnnualInterestRatePct = 6.125m,
+            TermMonths = 360,
+            StartDate = CommandTime.AddYears(-1),
+            DebtServiceAutomationStartDate = CommandTime.AddMonths(-2),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 1_250m,
+            MonthlyEscrow = 300m,
+            EscrowCoversTaxes = true,
+            EscrowCoversInsurance = true,
+            Status = LoanStatus.Active,
+            CreatedAt = CommandTime.AddMonths(-2),
+            UpdatedAt = CommandTime.AddMonths(-2),
+        };
+        scope.Db.Loans.Add(loan);
+        await scope.Db.SaveChangesAsync();
+
+        var first = new LoanPayment
+        {
+            PortfolioId = _portfolioId,
+            LoanId = loan.Id,
+            PeriodKey = "2026-06",
+            DueDate = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = includeEarlierUnpaid ? null : CommandTime.AddMonths(-1),
+            InterestAmount = 1_000m,
+            PrincipalAmount = 250m,
+            EscrowAmount = 300m,
+            TotalAmount = 1_550m,
+            BalanceAfter = 199_750m,
+            Status = includeEarlierUnpaid ? LoanPaymentStatus.Scheduled : LoanPaymentStatus.Paid,
+            CreatedAt = CommandTime.AddMonths(-2),
+        };
+        var second = new LoanPayment
+        {
+            PortfolioId = _portfolioId,
+            LoanId = loan.Id,
+            PeriodKey = "2026-07",
+            DueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc),
+            InterestAmount = 995m,
+            PrincipalAmount = 255m,
+            EscrowAmount = 300m,
+            TotalAmount = 1_550m,
+            BalanceAfter = 199_495m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = CommandTime.AddMonths(-2),
+        };
+        scope.Db.LoanPayments.AddRange(first, second);
+        await scope.Db.SaveChangesAsync();
+        return (loan.Id, first.Id, second.Id);
+    }
+
+    private async Task AssertLoanPaymentMatchRolledBackAsync(
+        int draftId,
+        AtomicCommandIdentity identity,
+        int loanId,
+        int paymentId)
+    {
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        var payment = await verify.Db.LoanPayments.AsNoTracking()
+            .SingleAsync(row => row.Id == paymentId);
+        payment.Status.Should().Be(LoanPaymentStatus.Scheduled);
+        payment.PaidDate.Should().BeNull();
+        payment.DueDate.Should().Be(new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc));
+        payment.PrincipalAmount.Should().Be(255m);
+        payment.InterestAmount.Should().Be(995m);
+        payment.EscrowAmount.Should().Be(300m);
+        payment.TotalAmount.Should().Be(1_550m);
+        payment.BalanceAfter.Should().Be(199_495m);
+        var loan = await verify.Db.Loans.AsNoTracking().SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(StatementOpeningBalance);
+        (await verify.Db.LoanPaymentCorrections.CountAsync(row => row.LoanPaymentId == paymentId))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
     }
 
     private async Task<LeaseDraftSource> SeedLeaseDraftAsync(string sourceLabel)
@@ -700,11 +3138,42 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ScanConfirmationTargetKind.WorkOrder => db.WorkOrders.AnyAsync(row => row.Id == id),
             ScanConfirmationTargetKind.Application => db.RentalApplications.AnyAsync(row => row.Id == id),
             ScanConfirmationTargetKind.Loan => db.Loans.AnyAsync(row => row.Id == id),
+            ScanConfirmationTargetKind.PropertyAcquisition => db.Properties.AnyAsync(row => row.Id == id),
+            ScanConfirmationTargetKind.LeaseEndingNotice => db.LeaseManagements.AnyAsync(row => row.Id == id),
             _ => Task.FromResult(false),
         };
 
-    private IAtomicUnitOfWork UnitOfWork =>
-        (_services ?? throw new InvalidOperationException()).GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<int> SeedOwnerAsync(string name)
+    {
+        await using var scope = Scope();
+        var owner = new OwnerEntity
+        {
+            PortfolioId = _portfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = name,
+            Email = $"{name.Replace(" ", "-", StringComparison.Ordinal).ToLowerInvariant()}@example.test",
+            CreatedAt = CommandTime,
+            UpdatedAt = CommandTime,
+        };
+        scope.Db.OwnerEntities.Add(owner);
+        await scope.Db.SaveChangesAsync();
+        return owner.Id;
+    }
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope =
+            (_services ?? throw new InvalidOperationException()).CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec, ct);
+    }
 
     private TestScope Scope() => TestScope.Create(_services ?? throw new InvalidOperationException());
 

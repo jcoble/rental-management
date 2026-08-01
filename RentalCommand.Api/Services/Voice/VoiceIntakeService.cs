@@ -88,7 +88,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         var capturePropertyId = ReadPositiveIntField(classification.ExtractedFieldsJson, "property_id");
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         if (!await ScanDraftAuthorizationQuery.CanCreateDraftAsync(
-                _db, scope, classification.TargetEntityType, capturePropertyId, utcNow, ct))
+                _db, scope, classification.TargetEntityType, capturePropertyId, utcNow, ct: ct))
             throw new UnauthorizedAccessException();
 
         var operationDigest = Digest(operationKey);

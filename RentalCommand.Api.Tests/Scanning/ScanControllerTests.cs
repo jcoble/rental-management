@@ -1,10 +1,12 @@
 using System.Data.Common;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
@@ -20,36 +22,36 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
-public class ScanControllerTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ScanControllerTests : IAsyncLifetime
 {
     private static readonly Guid SessionId =
         Guid.Parse("11111111-1111-1111-1111-111111111111");
 
-    private readonly SqliteConnection _conn;
-    private readonly RentalCommandDbContext _db;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
     private readonly List<string> _executedSql = [];
-    private readonly CanonicalScanTestAuthorization _authorization;
+    private readonly List<RecordedCommand> _executedCommands = [];
+    private CanonicalScanTestAuthorization _authorization = null!;
 
-    public ScanControllerTests()
+    public ScanControllerTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new ScanControllerTestDbContext(options);
-        _db.Database.EnsureCreated();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(_executedSql, _executedCommands)]);
+        _db = _ctx.Db;
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, portfolioId: 42, userId: 7, sessionId: SessionId);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -320,6 +322,15 @@ public class ScanControllerTests : IDisposable
             UpdatedAt = now,
             SubmittedAtUtc = now,
         });
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 16,
+            PortfolioId = 42,
+            FileName = "security-deposit-receipt.jpg",
+            FilePath = "uploads/security-deposit-receipt.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 256,
+        });
         _db.ScanDrafts.AddRange(
             new ScanDraft
             {
@@ -328,6 +339,7 @@ public class ScanControllerTests : IDisposable
                 TargetEntityType = "Payment",
                 Status = "Confirmed",
                 ConfirmedEntityId = 14,
+                SourceStoredFileId = 16,
                 FilePath = "uploads/payment.jpg",
                 CreatedAt = now,
             },
@@ -354,7 +366,8 @@ public class ScanControllerTests : IDisposable
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Payment" &&
             i.CreatedEntityId == 17 &&
-            i.CreatedUnitId == 11);
+            i.CreatedUnitId == 11 &&
+            i.SourceStoredFileId == 16);
         body.Items.Should().Contain(i =>
             i.CreatedEntityType == "Application" &&
             i.CreatedEntityId == 15 &&
@@ -363,6 +376,51 @@ public class ScanControllerTests : IDisposable
         _executedSql[1].Should().ContainEquivalentOf("ORDER BY");
         _executedSql[1].Should().ContainEquivalentOf("LIMIT");
         _executedSql[1].Should().NotContain("StoredFiles");
+    }
+
+    [Fact]
+    public async Task List_DoesNotExecuteDiscardedTotalCountQuery()
+    {
+        SeedAuthorizedDraft(23);
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+        var controller = CreateController(Mock.Of<IScanService>());
+
+        _executedSql.Clear();
+        _executedCommands.Clear();
+        var result = await controller.List(null, skip: 0, take: 20, CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var body = ok.Value.Should().BeAssignableTo<IReadOnlyList<ScanDraftResponse>>().Subject;
+        body.Should().ContainSingle(item => item.Id == 23);
+        _executedSql.Should().ContainSingle(
+            "the array endpoint must execute only its authorized, sorted, DB-paged item query");
+        _executedSql[0].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[0].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[0].Should().NotContainEquivalentOf("COUNT(*)");
+        _executedSql[0].Length.Should().BeLessThan(
+            150_000,
+            "scan authorization must not re-expand its permission graph for every captured relationship");
+        Regex.Matches(
+            _executedSql[0],
+            @"FROM public\.rc_api_effective_capability_scopes\(",
+            RegexOptions.IgnoreCase).Count.Should().BeLessThanOrEqualTo(
+            12,
+            "each scan target should evaluate one cohesive property scope, with assigned-work scope only where supported");
+
+        var itemCommand = _executedCommands.Should().ContainSingle().Subject;
+        await using var explain = _db.Database.GetDbConnection().CreateCommand();
+        explain.CommandText = "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + itemCommand.CommandText;
+        explain.Transaction = _db.Database.CurrentTransaction?.GetDbTransaction();
+        foreach (var parameter in itemCommand.Parameters)
+            explain.Parameters.Add(CloneParameter(parameter));
+
+        var planJson = (string)(await explain.ExecuteScalarAsync())!;
+        using var plan = JsonDocument.Parse(planJson);
+        var planningMs = plan.RootElement[0].GetProperty("Planning Time").GetDouble();
+        var executionMs = plan.RootElement[0].GetProperty("Execution Time").GetDouble();
+        (planningMs + executionMs).Should().BeLessThan(
+            5_000,
+            "the canonical PostgreSQL plan must remain comfortably inside the mobile request timeout");
     }
 
     [Fact]
@@ -463,6 +521,36 @@ public class ScanControllerTests : IDisposable
         Property(body, "entityType").Should().Be("Payment");
         scan.VerifyAll();
     }
+
+    [Fact]
+    public async Task Confirm_LoanMatchResponseIncludesLoanAndPaymentIds()
+    {
+        SeedAuthorizedDraft(17, "Loan");
+        var scan = ReadyScan(LoanCommand(17));
+        var atomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed, 17, "Loan", 91,
+                    LoanPaymentId: 901),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(scan.Object, atomic: atomic);
+
+        var result = await controller.Confirm(
+            17,
+            new ConfirmScanRequest { ClientOperationId = "loan-match" },
+            CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject.Value!;
+        Property(body, "loanId").Should().Be(91);
+        Property(body, "loanPaymentId").Should().Be(901);
+        Property(body, "entityId").Should().Be(91);
+        Property(body, "entityType").Should().Be("Loan");
+        scan.VerifyAll();
+    }
+
 
     [Fact]
     public async Task Confirm_MapsNotFoundRejectedAndValidationResponses()
@@ -596,6 +684,31 @@ public class ScanControllerTests : IDisposable
                 null,
                 null)));
 
+    private static ConfirmScanDraftCommand LoanCommand(int draftId) => new(
+        42,
+        draftId,
+        7,
+        DateTime.UtcNow,
+        ScanConfirmationDraftFingerprint.Create("Loan", null, null),
+        new ScanConfirmationTargetData(
+            ScanConfirmationTargetKind.Loan,
+            Loan: new ScanLoanTargetData(
+                10,
+                "Existing Match Bank",
+                200_000m,
+                199_500m,
+                6.125m,
+                360,
+                DateTime.UtcNow.AddYears(-1),
+                1,
+                1_250m,
+                300m,
+                true,
+                true,
+                "Scanned statement",
+                ExistingLoanId: 91,
+                ExistingLoanPaymentId: 901)));
+
     private static object? Property(object value, string name) =>
         value.GetType().GetProperty(name)!.GetValue(value);
 
@@ -610,7 +723,7 @@ public class ScanControllerTests : IDisposable
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
@@ -624,14 +737,32 @@ public class ScanControllerTests : IDisposable
         }
     }
 
-    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    private sealed record RecordedCommand(
+        string CommandText,
+        IReadOnlyList<DbParameter> Parameters);
+
+    private static DbParameter CloneParameter(DbParameter parameter) =>
+        parameter is ICloneable cloneable
+            ? (DbParameter)cloneable.Clone()
+            : throw new InvalidOperationException(
+                $"Database parameter type {parameter.GetType().Name} cannot be cloned for EXPLAIN.");
+
+    private sealed class RecordingCommandInterceptor(
+        List<string> commands,
+        List<RecordedCommand> recordedCommands) : DbCommandInterceptor
     {
+        private static RecordedCommand Snapshot(DbCommand command) =>
+            new(
+                command.CommandText,
+                command.Parameters.Cast<DbParameter>().Select(CloneParameter).ToArray());
+
         public override InterceptionResult<DbDataReader> ReaderExecuting(
             DbCommand command,
             CommandEventData eventData,
             InterceptionResult<DbDataReader> result)
         {
             commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
             return base.ReaderExecuting(command, eventData, result);
         }
 
@@ -642,12 +773,8 @@ public class ScanControllerTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             commands.Add(command.CommandText);
+            recordedCommands.Add(Snapshot(command));
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
-}
-
-internal sealed class ScanControllerTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-{
-    public ScanControllerTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }

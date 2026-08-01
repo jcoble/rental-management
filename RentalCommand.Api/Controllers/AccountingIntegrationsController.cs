@@ -251,7 +251,7 @@ public class AccountingIntegrationsController : ManagementControllerBase
 
         try
         {
-            return Ok(await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct));
+            return Ok(await _service.ConfirmMappingAsync(GetWorkspaceReadScope(), parsed, request, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -273,7 +273,7 @@ public class AccountingIntegrationsController : ManagementControllerBase
         try
         {
             return Ok(await _service.ContinueMappingPromotionAsync(
-                GetPortfolioId(), parsed, GetUserId(), continuationId, request, ct));
+                GetWorkspaceReadScope(), parsed, continuationId, request, ct));
         }
         catch (InvalidOperationException ex)
         {

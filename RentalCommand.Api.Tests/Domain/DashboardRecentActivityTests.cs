@@ -1,12 +1,10 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -17,113 +15,31 @@ namespace RentalCommand.Api.Tests.Domain;
 /// labels, authorization, ordering, and the row limit must be resolved by ONE translated audit
 /// projection — never a materialize/ID-set/follow-up lookup (the hard data-access rule).
 /// </summary>
-public class DashboardRecentActivityTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class DashboardRecentActivityTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly DashboardService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommand.Data.RentalCommandDbContext _db = null!;
+    private DashboardService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public DashboardRecentActivityTests()
+    public DashboardRecentActivityTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new ReportsServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        _scope = SeedAdministratorScope();
-
+        _context = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _context.Db;
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(DashboardRecentActivityTests));
+        await _context.ActivateApiScopeAsync(_scope);
         _sut = new DashboardService(_db, new AuditDescriber(), TimeProvider.System);
     }
 
-    private WorkspaceReadScope SeedAdministratorScope()
-    {
-        var now = DateTime.UtcNow;
-        var user = new ApplicationUser
-        {
-            UserName = "dashboard@example.test",
-            NormalizedUserName = "DASHBOARD@EXAMPLE.TEST",
-            Email = "dashboard@example.test",
-            NormalizedEmail = "DASHBOARD@EXAMPLE.TEST",
-            DisplayName = "Dashboard Test Administrator",
-            SecurityStamp = Guid.NewGuid().ToString("N"),
-            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
-            CreatedAt = now,
-        };
-        var accessContext = new WorkspaceAccessContext
-        {
-            User = user,
-            PortfolioId = PortfolioId,
-            Status = WorkspaceAccessContextStatus.Active,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var membership = new WorkspaceMembership
-        {
-            AccessContext = accessContext,
-            PortfolioId = PortfolioId,
-            Status = WorkspaceMembershipStatus.Active,
-            DefaultExperience = WorkspaceExperience.Management,
-            EffectiveFromUtc = now.AddMinutes(-1),
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var assignment = new MembershipRoleAssignment
-        {
-            WorkspaceMembership = membership,
-            PortfolioId = PortfolioId,
-            RoleProfileId = AccessCatalog.Roles.Single(role =>
-                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
-            Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = now.AddMinutes(-1),
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        var session = new AuthSession
-        {
-            Id = Guid.NewGuid(),
-            User = user,
-            ActiveAccessContext = accessContext,
-            Status = AuthSessionStatus.Active,
-            CreatedAtUtc = now,
-            LastSeenAtUtc = now,
-            ExpiresAtUtc = now.AddHours(1),
-        };
-
-        _db.AddRange(assignment, session);
-        _db.SaveChanges();
-
-        return new WorkspaceReadScope(
-            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
-    }
-
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _context.DisposeAsync();
 
     [Fact]
     public async Task RecentActivity_NamesEachEntityAndCarriesEntityId()
@@ -178,8 +94,7 @@ public class DashboardRecentActivityTests : IDisposable
 
         auditQueries.Should().ContainSingle(
             "recent activity plus every correlated label/Unit lookup must execute as one reader command");
-        auditQueries[0].Should().Contain("AuthSessions");
-        auditQueries[0].Should().Contain("CapabilityDefinitions");
+        auditQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
         auditQueries[0].Should().Contain("ORDER BY");
         auditQueries[0].Should().Contain("LIMIT");
         auditQueries[0].Should().Contain("Tenants");
@@ -257,7 +172,7 @@ public class DashboardRecentActivityTests : IDisposable
 
         var dashboard = await _sut.GetDashboardAsync(_scope);
 
-        dashboard!.RecentActivity.Should().BeEmpty();
+        dashboard.Should().BeNull();
     }
 
     private SeededActivityGraph SeedActivityGraph()
@@ -320,6 +235,7 @@ public class DashboardRecentActivityTests : IDisposable
         var expense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             Property = property,
             Unit = unit,
             Description = "Plumbing parts",

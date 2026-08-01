@@ -1,7 +1,7 @@
 class WorkOrder {
   final int id;
-  final int portfolioId;
-  final int propertyId;
+  final int? portfolioId;
+  final int? propertyId;
   final int? unitId;
   final int? tenantId;
   final int? leaseId;
@@ -28,11 +28,22 @@ class WorkOrder {
   final String? unitNumber;
   final String? tenantName;
   final String? vendorName;
+  final String? submittedByLabel;
+  final String? requesterName;
+  final String? requesterPhone;
+  final String? requesterEmail;
+  final bool? residentMustBePresent;
+  final bool? callBeforeEntry;
+  final bool? callIfNotHome;
+  final bool? permissionToEnter;
+  final String? entryNotes;
+  final String? petWarnings;
+  final String? accessWarnings;
 
   const WorkOrder({
     required this.id,
-    required this.portfolioId,
-    required this.propertyId,
+    this.portfolioId,
+    this.propertyId,
     this.unitId,
     this.tenantId,
     this.leaseId,
@@ -55,13 +66,24 @@ class WorkOrder {
     this.unitNumber,
     this.tenantName,
     this.vendorName,
+    this.submittedByLabel,
+    this.requesterName,
+    this.requesterPhone,
+    this.requesterEmail,
+    this.residentMustBePresent,
+    this.callBeforeEntry,
+    this.callIfNotHome,
+    this.permissionToEnter,
+    this.entryNotes,
+    this.petWarnings,
+    this.accessWarnings,
   });
 
   factory WorkOrder.fromJson(Map<String, dynamic> json) {
     return WorkOrder(
       id: (json['id'] as num).toInt(),
-      portfolioId: (json['portfolioId'] as num).toInt(),
-      propertyId: (json['propertyId'] as num).toInt(),
+      portfolioId: (json['portfolioId'] as num?)?.toInt(),
+      propertyId: (json['propertyId'] as num?)?.toInt(),
       unitId: (json['unitId'] as num?)?.toInt(),
       tenantId: (json['tenantId'] as num?)?.toInt(),
       leaseId: (json['leaseId'] as num?)?.toInt(),
@@ -90,13 +112,24 @@ class WorkOrder {
       unitNumber: json['unitNumber'] as String?,
       tenantName: json['tenantName'] as String?,
       vendorName: json['vendorName'] as String?,
+      submittedByLabel: json['submittedByLabel'] as String?,
+      requesterName: json['requesterName'] as String?,
+      requesterPhone: json['requesterPhone'] as String?,
+      requesterEmail: json['requesterEmail'] as String?,
+      residentMustBePresent: json['residentMustBePresent'] as bool?,
+      callBeforeEntry: json['callBeforeEntry'] as bool?,
+      callIfNotHome: json['callIfNotHome'] as bool?,
+      permissionToEnter: json['permissionToEnter'] as bool?,
+      entryNotes: json['entryNotes'] as String?,
+      petWarnings: json['petWarnings'] as String?,
+      accessWarnings: json['accessWarnings'] as String?,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'portfolioId': portfolioId,
-      'propertyId': propertyId,
+      if (portfolioId != null) 'portfolioId': portfolioId,
+      if (propertyId != null) 'propertyId': propertyId,
       if (unitId != null) 'unitId': unitId,
       if (tenantId != null) 'tenantId': tenantId,
       if (leaseId != null) 'leaseId': leaseId,
@@ -115,6 +148,18 @@ class WorkOrder {
       if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
       if (estimatedCost != null) 'estimatedCost': estimatedCost,
       if (actualCost != null) 'actualCost': actualCost,
+      if (submittedByLabel != null) 'submittedByLabel': submittedByLabel,
+      if (requesterName != null) 'requesterName': requesterName,
+      if (requesterPhone != null) 'requesterPhone': requesterPhone,
+      if (requesterEmail != null) 'requesterEmail': requesterEmail,
+      if (residentMustBePresent != null)
+        'residentMustBePresent': residentMustBePresent,
+      if (callBeforeEntry != null) 'callBeforeEntry': callBeforeEntry,
+      if (callIfNotHome != null) 'callIfNotHome': callIfNotHome,
+      if (permissionToEnter != null) 'permissionToEnter': permissionToEnter,
+      if (entryNotes != null) 'entryNotes': entryNotes,
+      if (petWarnings != null) 'petWarnings': petWarnings,
+      if (accessWarnings != null) 'accessWarnings': accessWarnings,
     };
   }
 }

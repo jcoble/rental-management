@@ -254,3 +254,31 @@ class VendorDispatchResult {
     );
   }
 }
+
+/// Result of cancelling an open vendor dispatch.
+class VendorDispatchCancellationResult {
+  const VendorDispatchCancellationResult({
+    required this.id,
+    required this.workOrderId,
+    required this.vendorId,
+    required this.status,
+    this.reason,
+  });
+
+  final int id;
+  final int workOrderId;
+  final int vendorId;
+  final String status;
+  final String? reason;
+
+  factory VendorDispatchCancellationResult.fromJson(Map<String, dynamic> json) {
+    final raw = json['reason'];
+    return VendorDispatchCancellationResult(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      workOrderId: (json['workOrderId'] as num?)?.toInt() ?? 0,
+      vendorId: (json['vendorId'] as num?)?.toInt() ?? 0,
+      status: json['status'] as String? ?? 'Cancelled',
+      reason: (raw is String && raw.isNotEmpty) ? raw : null,
+    );
+  }
+}

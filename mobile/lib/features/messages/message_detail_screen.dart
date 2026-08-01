@@ -224,7 +224,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     );
 
     final headerTitle = convoAsync.maybeWhen(
-      data: (c) => c.tenantName,
+      data: (c) => c.displayName,
       orElse: () => widget.title ?? 'Conversation',
     );
     final headerSubtitle = convoAsync.maybeWhen(

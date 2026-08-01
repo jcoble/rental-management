@@ -196,7 +196,7 @@ test.describe('Unit Command Center — functional', () => {
 					description: marker,
 					paymentMethodSummary: 'Check',
 					externalReference: marker,
-					allocateOldestCharges: false,
+					targetChargeEntryId: null,
 				},
 			});
 			expect(createRes.ok(), `seed receipt failed: ${createRes.status()}`).toBeTruthy();

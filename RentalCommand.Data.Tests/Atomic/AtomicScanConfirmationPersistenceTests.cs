@@ -4,11 +4,29 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Data.Tests.Atomic;
 
 public sealed class AtomicScanConfirmationPersistenceTests
 {
+    [Fact]
+    public void RejectAuthorizedAsync_BindsTheExactTrackedUpdateOperation()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "RentalCommand.Data",
+            "Scanning",
+            "AtomicScanConfirmationPersistence.cs"));
+        var rejectionMethod = source[
+            source.IndexOf("public async Task<bool> RejectAuthorizedAsync", StringComparison.Ordinal)..];
+        rejectionMethod = rejectionMethod[
+            ..rejectionMethod.IndexOf("private static string? Truncate", StringComparison.Ordinal)];
+
+        rejectionMethod.Should().Contain("AuditLogOperation.Updated");
+        rejectionMethod.Should().NotContain("AuditLogOperation.Rejected");
+    }
+
     [Fact]
     public void Fingerprint_IsStableAcrossPostgresJsonbNormalization()
     {
@@ -28,9 +46,9 @@ public sealed class AtomicScanConfirmationPersistenceTests
             draft.TargetEntityType, draft.SourceStoredFileId, draft.ExtractedFields);
         db.ChangeTracker.Clear();
 
-        var (persistence, auditScope) = CreatePersistence(db);
+        var (persistence, auditScope, _) = CreatePersistence(db);
         using var attempt = auditScope.BeginAttempt(
-            new AtomicCommandIdentity("scan.confirm", "exact"), Guid.NewGuid());
+            new AtomicCommandIdentity("scan.confirm", "exact"), Guid.NewGuid(), db);
 
         var claim = await persistence.TryClaimAsync(
             draft.PortfolioId, draft.Id, "Expense", expected, confirmedByUserId: 7);
@@ -67,9 +85,9 @@ public sealed class AtomicScanConfirmationPersistenceTests
 
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
-        var (persistence, auditScope) = CreatePersistence(db);
+        var (persistence, auditScope, _) = CreatePersistence(db);
         using var attempt = auditScope.BeginAttempt(
-            new AtomicCommandIdentity("scan.confirm", $"stale-{changedFact}"), Guid.NewGuid());
+            new AtomicCommandIdentity("scan.confirm", $"stale-{changedFact}"), Guid.NewGuid(), db);
 
         var claim = await persistence.TryClaimAsync(
             draft.PortfolioId, draft.Id, "Expense", expected, confirmedByUserId: 7);
@@ -117,14 +135,28 @@ public sealed class AtomicScanConfirmationPersistenceTests
         return draft;
     }
 
-    private static (AtomicScanConfirmationPersistence Persistence, AtomicAuditScope AuditScope)
+    private static (
+        AtomicScanConfirmationPersistence Persistence,
+        AtomicAuditScope AuditScope,
+        IAtomicCommandContext Context)
         CreatePersistence(RentalCommandDbContext db)
     {
         var auditScope = new AtomicAuditScope(
-            new AtomicPersistenceMode(AllowUnconvertedWrites: true),
             TimeProvider.System);
-        var locking = new AtomicLockingPersistence(db);
-        return (new AtomicScanConfirmationPersistence(db, auditScope, locking), auditScope);
+        var context = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        return (new AtomicScanConfirmationPersistence(db, auditScope, context), auditScope, context);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RentalCommand.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 
     private sealed class TestDbContext(DbContextOptions<RentalCommandDbContext> options)

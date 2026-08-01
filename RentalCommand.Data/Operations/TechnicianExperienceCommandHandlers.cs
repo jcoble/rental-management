@@ -10,23 +10,26 @@ using RentalCommand.Core.Operations;
 namespace RentalCommand.Data.Operations;
 
 public sealed class RecordTechnicianWorkEntryHandler
-    : IAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>,
-      IAtomicReplayAuthorizer<RecordTechnicianWorkEntryCommand>
+    : IAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public RecordTechnicianWorkEntryHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<RecordTechnicianWorkEntryResult> HandleAsync(
-        RecordTechnicianWorkEntryCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         var responsibility = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            attempt.Persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkTimeMaterialsManage, now, ct);
 
         if (command.Kind == TechnicianWorkEntryKind.Photo)
         {
-            var fileExists = await attempt.Persistence.Query<StoredFile>().AsNoTracking().AnyAsync(file =>
+            var fileExists = await _db.Set<StoredFile>().AsNoTracking().AnyAsync(file =>
                 file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId &&
                 file.EntityType == nameof(WorkOrder) && file.EntityId == command.WorkOrderId &&
                 file.DeletedAt == null && file.ContentType.StartsWith("image/"), ct);
@@ -49,10 +52,10 @@ public sealed class RecordTechnicianWorkEntryHandler
             OccurredAtUtc = command.OccurredAtUtc == default ? now : command.OccurredAtUtc,
             CreatedAtUtc = now,
         };
-        attempt.Persistence.Add(entry);
-        await attempt.FlushBusinessAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+        _db.Add(entry);
+        await context.FlushBusinessAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(TechnicianWorkEntry), entry.Id, AuditLogOperation.Created, command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new
             {
@@ -62,7 +65,7 @@ public sealed class RecordTechnicianWorkEntryHandler
                 entry.Unit,
                 entry.StoredFileId,
             }), ChangeReason: "Assigned technician recorded an operational field entry."), now);
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -74,12 +77,11 @@ public sealed class RecordTechnicianWorkEntryHandler
         return new(entry.Id, entry.WorkOrderId, entry.Kind, now);
     }
 
-    public async Task AuthorizeReplayAsync(RecordTechnicianWorkEntryCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(RecordTechnicianWorkEntryCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkTimeMaterialsManage, now, ct);
     }
@@ -107,11 +109,14 @@ public sealed class RecordTechnicianWorkEntryHandler
 }
 
 public sealed class SendTechnicianAssignmentMessageHandler
-    : IAtomicCommandHandler<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>,
-      IAtomicReplayAuthorizer<SendTechnicianAssignmentMessageCommand>
+    : IAtomicCommandHandler<SendTechnicianAssignmentMessageCommand, SendTechnicianAssignmentMessageResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public SendTechnicianAssignmentMessageHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<SendTechnicianAssignmentMessageResult> HandleAsync(
-        SendTechnicianAssignmentMessageCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0 || command.ActorSessionId == Guid.Empty ||
             command.ActorAccessContextId <= 0 || command.ActorAccessRevision <= 0 || command.WorkOrderId <= 0 ||
@@ -119,20 +124,20 @@ public sealed class SendTechnicianAssignmentMessageHandler
             string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey))
             throw new DomainValidationException("A message is required.");
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         var responsibility = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            attempt.Persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkConverse, now, ct);
-        var work = await attempt.Persistence.Query<WorkOrder>()
+        var work = await _db.Set<WorkOrder>()
             .Where(item => item.Id == command.WorkOrderId && item.PortfolioId == command.PortfolioId)
             .Select(item => new { item.TenantId, item.PropertyId, item.Title })
             .SingleAsync(ct);
         if (work.TenantId is null)
             throw new DomainValidationException("This assignment has no permitted tenant contact.");
 
-        var conversation = await attempt.Persistence.Query<Conversation>()
+        var conversation = await _db.Set<Conversation>()
             .SingleOrDefaultAsync(item => item.PortfolioId == command.PortfolioId &&
                 item.WorkOrderId == command.WorkOrderId, ct);
         if (conversation is null)
@@ -151,7 +156,7 @@ public sealed class SendTechnicianAssignmentMessageHandler
                 LandlordUnreadCount = 1,
                 TenantUnreadCount = 1,
             };
-            attempt.Persistence.Add(conversation);
+            _db.Add(conversation);
         }
         else
         {
@@ -168,10 +173,10 @@ public sealed class SendTechnicianAssignmentMessageHandler
             Body = command.Body.Trim(),
             CreatedAt = now,
         };
-        attempt.Persistence.Add(message);
-        await attempt.FlushBusinessAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+        _db.Add(message);
+        await context.FlushBusinessAsync(ct);
+        context.UseDatabaseWallClockForAudit(now);
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(ConversationMessage), message.Id, AuditLogOperation.Created, command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new
             {
@@ -180,7 +185,7 @@ public sealed class SendTechnicianAssignmentMessageHandler
                 Sender = ConversationSenderRole.Technician,
                 ResponsibilityId = responsibility.Id,
             }), ChangeReason: "Assigned technician added an assignment conversation message."), now);
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -192,12 +197,11 @@ public sealed class SendTechnicianAssignmentMessageHandler
         return new(conversation.Id, message.Id, now);
     }
 
-    public async Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(SendTechnicianAssignmentMessageCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkConverse, now, ct);
     }
@@ -209,34 +213,36 @@ public sealed class SendTechnicianAssignmentMessageHandler
 
 public sealed class MarkTechnicianAssignmentConversationReadHandler
     : IAtomicCommandHandler<MarkTechnicianAssignmentConversationReadCommand,
-        MarkTechnicianAssignmentConversationReadResult>,
-      IAtomicReplayAuthorizer<MarkTechnicianAssignmentConversationReadCommand>
+        MarkTechnicianAssignmentConversationReadResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public MarkTechnicianAssignmentConversationReadHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<MarkTechnicianAssignmentConversationReadResult> HandleAsync(
-        MarkTechnicianAssignmentConversationReadCommand command, IAtomicWriteAttempt attempt,
+        MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.WorkOrderId <= 0 || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey))
             throw new DomainValidationException("A valid assignment is required.");
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            attempt.Persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkConverse, now, ct);
-        var conversation = await attempt.Persistence.Query<Conversation>().SingleOrDefaultAsync(item =>
+        var conversation = await _db.Set<Conversation>().SingleOrDefaultAsync(item =>
             item.PortfolioId == command.PortfolioId && item.WorkOrderId == command.WorkOrderId, ct);
         if (conversation is null) return new(null, false);
         conversation.TechnicianUnreadCount = 0;
         return new(conversation.Id, true);
     }
 
-    public async Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(MarkTechnicianAssignmentConversationReadCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
-            persistence, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
+            _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
             CapabilityKeys.AssignedWorkConverse, now, ct);
     }
@@ -245,11 +251,11 @@ public sealed class MarkTechnicianAssignmentConversationReadHandler
 internal static class AssignedTechnicianCommandAuthorization
 {
     internal static async Task<WorkOrderResponsibility> RequireResponsibilityAsync(
-        IAtomicPersistenceSession persistence, int portfolioId, int userId, Guid sessionId,
+        RentalCommandDbContext db, int portfolioId, int userId, Guid sessionId,
         int accessContextId, long accessRevision, int workOrderId, string capabilityKey,
         DateTime now, CancellationToken ct)
     {
-        var responsibility = await persistence.Query<WorkOrderResponsibility>()
+        var responsibility = await db.Set<WorkOrderResponsibility>()
             .Where(item => item.PortfolioId == portfolioId && item.WorkOrderId == workOrderId &&
                 item.EffectiveFromUtc <= now && (item.EffectiveToUtc == null || item.EffectiveToUtc > now) &&
                 item.WorkspaceMembership != null &&
@@ -273,7 +279,7 @@ internal static class AssignedTechnicianCommandAuthorization
                     profileCapability.CapabilityDefinition!.Key == capabilityKey &&
                     profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
                         CapabilityAuthorizationTargetKind.WorkOrder) &&
-                persistence.Query<AuthSession>().Any(session => session.Id == sessionId &&
+                db.Set<AuthSession>().Any(session => session.Id == sessionId &&
                     session.UserId == userId && session.ActiveAccessContextId == accessContextId &&
                     session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null &&
                     session.ExpiresAtUtc > now))

@@ -13,7 +13,8 @@ function positiveIntegerString(value: string | null): string {
 export function prepareMoveInHrefForApprovedTenant(
 	tenantId: number | string,
 	applicationId: number | string = '',
-	unitId: number | string = ''
+	unitId: number | string = '',
+	basePath = '/applications'
 ): string {
 	const params = new URLSearchParams({ prepareMoveIn: '1' });
 	const normalizedTenantId = positiveIntegerString(String(tenantId));
@@ -22,7 +23,7 @@ export function prepareMoveInHrefForApprovedTenant(
 	if (normalizedApplicationId) params.set('applicationId', normalizedApplicationId);
 	const normalizedUnitId = positiveIntegerString(String(unitId));
 	if (normalizedUnitId) params.set('unitId', normalizedUnitId);
-	return `/applications?${params.toString()}`;
+	return `${basePath}?${params.toString()}`;
 }
 
 export function readPrepareMoveInPrefill(params: URLSearchParams): PrepareMoveInPrefill | null {

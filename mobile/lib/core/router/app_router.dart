@@ -22,6 +22,8 @@ import '../../features/money/expense_detail_screen.dart';
 import '../../features/notifications/notifications_inbox_screen.dart';
 import '../../features/owners/owners_list_screen.dart';
 import '../../features/payments/payment_detail_screen.dart';
+import '../../features/portal/tenant_account_history_screen.dart';
+import '../../features/scan/scan_list_screen.dart';
 import '../../features/scan/scan_review_screen.dart';
 import '../../features/settings/my_alerts_screen.dart';
 import '../../features/settings/settings_screen.dart';
@@ -134,7 +136,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       }
 
       if (authState is AuthStateAuthenticated &&
-          !_canOpenRoute(authState, state.matchedLocation)) {
+          !_canOpenRoute(authState, state.uri.path)) {
         return _accessDeniedPath;
       }
 
@@ -274,9 +276,27 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
+        path: '/portal/tenant-accounts/:tenantAccountId',
+        builder: (context, state) => TenantAccountHistoryScreen(
+          initialTenantAccountId: _idParam(state, 'tenantAccountId'),
+        ),
+      ),
+      GoRoute(
+        path:
+            '/portal/tenant-accounts/:tenantAccountId/entries/:tenantLedgerEntryId',
+        builder: (context, state) => TenantAccountHistoryScreen(
+          initialTenantAccountId: _idParam(state, 'tenantAccountId'),
+          initialTenantLedgerEntryId: _idParam(state, 'tenantLedgerEntryId'),
+        ),
+      ),
+      GoRoute(
         path: '/expenses/:id',
         builder: (context, state) =>
             ExpenseDetailScreen(expenseId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/scans',
+        builder: (context, state) => const ScanListScreen(),
       ),
       GoRoute(
         path: '/scan/:draftId',

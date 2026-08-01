@@ -44,12 +44,15 @@ public sealed class TechnicianExperienceContractTests
             .ToQueryString();
 
         sql.Should().Contain("WorkOrderResponsibilities");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("WorkspaceMemberships");
-        sql.Should().Contain("WorkspaceAccessContexts");
-        sql.Should().Contain("RoleProfileCapabilities");
-        sql.Should().Contain("CapabilityDefinitions");
-        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("public.rc_api_effective_capability_scopes(");
+        sql.Should().Contain("public.rc_api_assigned_work_order_detail_context(");
+        sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("MembershipRoleAssignments");
+        sql.Should().NotContain("WorkspaceMemberships");
+        sql.Should().NotContain("WorkspaceAccessContexts");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("CapabilityDefinitions");
+        sql.Should().NotContain("AuthSessions");
         sql.Should().Contain(CapabilityKeys.AssignedWorkRead);
         sql.Should().Contain("AssignedWorkOrders");
         sql.Should().Contain("Conversations");
@@ -142,8 +145,8 @@ public sealed class TechnicianExperienceContractTests
         var statusSource = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Data",
             "Operations", "WorkOrderResponsibilityMutationHandlers.cs"));
 
-        entrySource.Should().Contain("IAtomicReplayAuthorizer<RecordTechnicianWorkEntryCommand>");
-        entrySource.Should().Contain("IAtomicReplayAuthorizer<SendTechnicianAssignmentMessageCommand>");
+        entrySource.Should().Contain("AuthorizeReplayAsync(");
+        entrySource.Should().Contain("AuthorizeReplayAsync(");
         entrySource.Should().Contain("CapabilityKeys.AssignedWorkTimeMaterialsManage");
         entrySource.Should().Contain("CapabilityKeys.AssignedWorkConverse");
         entrySource.Should().Contain("CapabilityAuthorizationTargetKind.WorkOrder");
@@ -155,9 +158,10 @@ public sealed class TechnicianExperienceContractTests
         entrySource.Should().NotContain("Expense");
         entrySource.Should().NotContain("Vendor");
 
-        statusSource.Should().Contain("IAtomicReplayAuthorizer<UpdateAssignedWorkOrderCommand>");
+        statusSource.Should().Contain("AuthorizeReplayAsync(");
         statusSource.Should().Contain("CapabilityKeys.AssignedWorkUpdate");
-        statusSource.Should().Contain("AuthorizeAndLoadAsync(command, persistence, now, tracking: false");
+        statusSource.Should().Contain(
+            "AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false, ct)");
         statusSource.Should().Contain("WorkOrderStatus.InProgress");
         statusSource.Should().Contain("WorkOrderStatus.Completed");
     }

@@ -86,6 +86,24 @@ internal static class CanonicalScopeTestFixture
         int portfolioId,
         int propertyId,
         string fixtureName)
+        => db.SeedSelectedPropertyScope(
+            portfolioId, propertyId, fixtureName, RoleProfileKeys.PropertyManager, "Property Manager");
+
+    internal static WorkspaceReadScope SeedLeasingAgentScope(
+        this RentalCommandDbContext db,
+        int portfolioId,
+        int propertyId,
+        string fixtureName)
+        => db.SeedSelectedPropertyScope(
+            portfolioId, propertyId, fixtureName, RoleProfileKeys.LeasingAgent, "Leasing Agent");
+
+    private static WorkspaceReadScope SeedSelectedPropertyScope(
+        this RentalCommandDbContext db,
+        int portfolioId,
+        int propertyId,
+        string fixtureName,
+        string roleProfileKey,
+        string actorLabel)
     {
         db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
@@ -98,7 +116,7 @@ internal static class CanonicalScopeTestFixture
             NormalizedUserName = email.ToUpperInvariant(),
             Email = email,
             NormalizedEmail = email.ToUpperInvariant(),
-            DisplayName = $"{fixtureName} Property Manager",
+            DisplayName = $"{fixtureName} {actorLabel}",
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = now,
@@ -125,7 +143,7 @@ internal static class CanonicalScopeTestFixture
         {
             WorkspaceMembership = membership,
             PortfolioId = portfolioId,
-            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.PropertyManager).Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleProfileKey).Id,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
             EffectiveFromUtc = now.AddMinutes(-1),

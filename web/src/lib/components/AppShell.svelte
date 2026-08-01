@@ -293,6 +293,7 @@
 		{ href: '/portal', label: 'Home', icon: Home },
 		{ href: '/portal/account', label: 'Account & lease', icon: FileText },
 		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
+		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
 		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
 		{ href: '/portal/profile', label: 'Profile', icon: UserRound }
 	];
@@ -301,7 +302,6 @@
 		{ href: '/portal/payments', label: 'Account & lease', icon: FileText },
 		{ href: '/portal/lease', label: 'Account & lease', icon: FileText },
 		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
-		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
 		{ href: '/portal/security', label: 'Profile', icon: Shield },
 		{ href: '/settings/notifications/my-alerts', label: 'Profile', icon: BellRing }
 	];

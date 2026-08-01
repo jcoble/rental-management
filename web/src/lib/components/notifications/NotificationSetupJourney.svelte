@@ -72,7 +72,10 @@
 	});
 </script>
 
-<div class="mx-auto max-w-5xl space-y-6" data-testid="notification-setup-journey">
+<div
+	class="mx-auto box-border h-full w-full max-w-5xl space-y-6 overflow-y-auto p-4 pb-20 sm:p-6"
+	data-testid="notification-setup-journey"
+>
 	<header class="space-y-5">
 		<a
 			href={returnHref}

@@ -8,6 +8,8 @@ public static class RoleProfileKeys
     public const string PropertyManager = "property-manager";
     public const string LeasingAgent = "leasing-agent";
     public const string MaintenanceTechnician = "maintenance-technician";
+    public const string OwnerPortal = "owner-portal";
+    public const string TenantPortal = "tenant-portal";
 }
 
 public static class CapabilityKeys
@@ -86,6 +88,12 @@ public static class AccessCatalog
         new(4, RoleProfileKeys.MaintenanceTechnician, "Maintenance Technician",
             "Assigned-work-only maintenance access with no general property or Unit browsing.",
             WorkspaceExperience.Maintenance, MembershipRoleAssignmentScopeKind.AssignedWorkOrders),
+        new(5, RoleProfileKeys.OwnerPortal, "Owner Portal",
+            "Owner relationship access only. Grants no management, leasing, maintenance, or workspace capabilities.",
+            WorkspaceExperience.Owner, MembershipRoleAssignmentScopeKind.AllProperties),
+        new(6, RoleProfileKeys.TenantPortal, "Tenant Portal",
+            "Tenant relationship access only. Grants no management, leasing, maintenance, or workspace capabilities.",
+            WorkspaceExperience.Tenant, MembershipRoleAssignmentScopeKind.AllProperties),
     ];
 
     public static readonly IReadOnlyList<CapabilitySeed> Capabilities =
@@ -137,5 +145,7 @@ public static class AccessCatalog
             [2] = Enumerable.Range(1, 13).Append(38).ToArray(),
             [3] = Enumerable.Range(14, 7).Prepend(1).Append(36).Append(38).ToArray(),
             [4] = Enumerable.Range(21, 4).ToArray(),
+            [5] = [],
+            [6] = [],
         };
 }

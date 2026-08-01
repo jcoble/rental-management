@@ -586,6 +586,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                     child: DropdownButtonFormField<int?>(
                       key: const Key('property-owner-field'),
                       initialValue: _selectedOwnerEntityId,
+                      isExpanded: true,
                       decoration: InputDecoration(
                         labelText: 'Owner',
                         helperText: _ownersLoading ? 'Loading owners...' : null,
@@ -598,7 +599,11 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                         for (final owner in _ownerItems)
                           DropdownMenuItem<int?>(
                             value: owner.id,
-                            child: Text(owner.name),
+                            child: Text(
+                              owner.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                       ],
                       onChanged: _ownersLoading

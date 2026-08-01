@@ -2,46 +2,56 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Time;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public sealed record PrepareAccountingConnectCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AccountingProvider Provider,
     string RedirectUri,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record PrepareAccountingConnectResult(
     string StateToken,
     string RedirectUri,
-    DateTime ExpiresAtUtc) : IAtomicResultData;
+    DateTime ExpiresAtUtc);
 
 public sealed class PrepareAccountingConnectHandler
-    : IAtomicCommandHandler<PrepareAccountingConnectCommand, PrepareAccountingConnectResult>,
-      IAtomicReplayAuthorizer<PrepareAccountingConnectCommand>
+    : IAtomicCommandHandler<PrepareAccountingConnectCommand, PrepareAccountingConnectResult>
 {
-    private static readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
+    private readonly RentalCommandDbContext _db;
+
+    public PrepareAccountingConnectHandler(RentalCommandDbContext db) => _db = db;
+
+    private readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
 
     public async Task<PrepareAccountingConnectResult> HandleAsync(
         PrepareAccountingConnectCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, attempt.Persistence, now, ct))
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or no longer permits accounting integrations.");
@@ -49,13 +59,13 @@ public sealed class PrepareAccountingConnectHandler
 
         // One provider row exists at most. Removing a stale Pending row and staging the new
         // single-use OAuth state happen under the receipt owner's transaction.
-        var stalePending = await attempt.Persistence.Query<AccountingConnection>()
+        var stalePending = await _db.Set<AccountingConnection>()
             .SingleOrDefaultAsync(connection => connection.PortfolioId == command.PortfolioId
                 && connection.Provider == command.Provider
                 && connection.Status == AccountingConnectionStatus.Pending, ct);
         if (stalePending is not null)
         {
-            attempt.Persistence.Remove(stalePending);
+            _db.Remove(stalePending);
             attempt.UseDatabaseWallClockForAudit(now);
             attempt.BindSemanticAudit(stalePending, new AtomicSemanticAudit(
                 command.PortfolioId,
@@ -68,7 +78,7 @@ public sealed class PrepareAccountingConnectHandler
 
         var stateToken = GenerateBase64UrlToken(32);
         var expiresAtUtc = now.Add(StateTtl);
-        attempt.Persistence.Add(new OAuthState
+        _db.Add(new OAuthState
         {
             PortfolioId = command.PortfolioId,
             Provider = command.Provider,
@@ -86,24 +96,24 @@ public sealed class PrepareAccountingConnectHandler
 
     public async Task AuthorizeReplayAsync(
         PrepareAccountingConnectCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await IsAuthorizedAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "Workspace access changed or no longer permits accounting integrations.");
         }
     }
 
-    private static Task<bool> IsAuthorizedAsync(
+    private Task<bool> IsAuthorizedAsync(
         PrepareAccountingConnectCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null
@@ -119,7 +129,7 @@ public sealed class PrepareAccountingConnectHandler
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId
                 && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
@@ -127,7 +137,7 @@ public sealed class PrepareAccountingConnectHandler
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId
                 && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
@@ -139,7 +149,7 @@ public sealed class PrepareAccountingConnectHandler
                 && grant.CapabilityDefinition.AuthorizationTargetKind
                     == CapabilityAuthorizationTargetKind.Workspace), ct);
 
-    private static void Validate(PrepareAccountingConnectCommand command)
+    private void Validate(PrepareAccountingConnectCommand command)
     {
         if (command.PortfolioId <= 0
             || command.ActorUserId <= 0
@@ -157,7 +167,7 @@ public sealed class PrepareAccountingConnectHandler
         }
     }
 
-    private static string GenerateBase64UrlToken(int byteLength)
+    private string GenerateBase64UrlToken(int byteLength)
     {
         var bytes = RandomNumberGenerator.GetBytes(byteLength);
         return Convert.ToBase64String(bytes)
@@ -175,32 +185,36 @@ public sealed record CancelTenantAutopayCommand(
     long TenantAccessRevision,
     int TenantId,
     int TenantAccountId,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record CancelTenantAutopayResult(
     bool Found,
     bool Applied,
-    int TenantAccountId) : IAtomicResultData;
+    int TenantAccountId);
 
 public sealed class CancelTenantAutopayHandler
-    : IAtomicCommandHandler<CancelTenantAutopayCommand, CancelTenantAutopayResult>,
-      IAtomicReplayAuthorizer<CancelTenantAutopayCommand>
+    : IAtomicCommandHandler<CancelTenantAutopayCommand, CancelTenantAutopayResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CancelTenantAutopayHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CancelTenantAutopayResult> HandleAsync(
         CancelTenantAutopayCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.AuthSession, command.TenantAuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.TenantAccessContextId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.TenantAccount, command.TenantAccountId, ct);
+        await attempt.AcquireLockAsync(
+            "AuthSession", command.TenantAuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.TenantAccessContextId, ct);
+        await attempt.AcquireLockAsync(
+            "TenantAccount", command.TenantAccountId, ct);
 
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var target = await AuthorizedAccount(command, attempt.Persistence, times)
+        var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var target = await AuthorizedAccount(command, _db, times)
             .FirstOrDefaultAsync(ct);
         if (target is null)
         {
@@ -261,30 +275,30 @@ public sealed class CancelTenantAutopayHandler
 
     public async Task AuthorizeReplayAsync(
         CancelTenantAutopayCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var times = await persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        if (!await AuthorizedAccount(command, persistence, times).AnyAsync(ct))
+        var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        if (!await AuthorizedAccount(command, _db, times).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException(
                 "The tenant relationship no longer authorizes this autopay account.");
         }
     }
 
-    private static IQueryable<AuthorizedAutopayAccount> AuthorizedAccount(
+    private IQueryable<AuthorizedAutopayAccount> AuthorizedAccount(
         CancelTenantAutopayCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         AtomicCommandTimes times) =>
-        from account in persistence.Query<TenantAccount>()
-        join party in persistence.Query<LeaseManagementParty>()
+        from account in db.Set<TenantAccount>()
+        join party in db.Set<LeaseManagementParty>()
             on new { account.LeaseManagementId, account.PortfolioId }
             equals new { party.LeaseManagementId, party.PortfolioId }
-        join access in persistence.Query<TenantUserAccess>()
+        join access in db.Set<TenantUserAccess>()
             on new { LeaseManagementPartyId = party.Id, party.PortfolioId }
             equals new { access.LeaseManagementPartyId, access.PortfolioId }
-        from enrollment in persistence.Query<TenantAutopayEnrollment>()
+        from enrollment in db.Set<TenantAutopayEnrollment>()
             .Where(item => item.TenantAccountId == account.Id
                 && item.PortfolioId == account.PortfolioId
                 && item.CanceledAtUtc == null)
@@ -307,7 +321,7 @@ public sealed class CancelTenantAutopayHandler
             && access.AccessContext.Status == WorkspaceAccessContextStatus.Active
             && access.AccessContext.SuspendedAtUtc == null
             && access.AccessContext.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.TenantAuthSessionId
                 && session.UserId == command.TenantUserId
                 && session.ActiveAccessContextId == command.TenantAccessContextId
@@ -317,7 +331,7 @@ public sealed class CancelTenantAutopayHandler
         orderby party.Id
         select new AuthorizedAutopayAccount(account.Id, enrollment);
 
-    private static void Validate(CancelTenantAutopayCommand command)
+    private void Validate(CancelTenantAutopayCommand command)
     {
         if (command.PortfolioId <= 0
             || command.TenantUserId <= 0

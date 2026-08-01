@@ -19,6 +19,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Banking;
 using RentalCommand.TestCommon;
 
@@ -49,6 +50,9 @@ public class BankingServiceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(1);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
         _scope = _ctx.Db.SeedAdministratorScope(1, nameof(BankingServiceTests));
         _sut = CreateService();
     }
@@ -117,6 +121,84 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ImportAsync_StatementOnly_PersistsMonthlyAccountControlsWithoutSyntheticTransactions()
+    {
+        var securityDepositRequest = new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Blue Door Synthetic Bank",
+            AccountName = "Security deposits",
+            AccountMask = "1818",
+            Statement = new ImportBankStatementControl
+            {
+                PeriodStart = new DateOnly(2027, 1, 1),
+                PeriodEnd = new DateOnly(2027, 1, 31),
+                OpeningBalance = 54250m,
+                ClosingBalance = 55925m,
+                IsoCurrencyCode = "usd",
+            },
+        };
+        var reserveRequest = new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Blue Door Synthetic Bank",
+            AccountName = "Reserve",
+            AccountMask = "7070",
+            Statement = new ImportBankStatementControl
+            {
+                PeriodStart = new DateOnly(2027, 1, 1),
+                PeriodEnd = new DateOnly(2027, 1, 31),
+                OpeningBalance = 50000m,
+                ClosingBalance = 50000m,
+            },
+        };
+
+        var securityDeposit = await _sut.ImportAsync(1, securityDepositRequest);
+        var replay = await _sut.ImportAsync(1, securityDepositRequest);
+        var reserve = await _sut.ImportAsync(1, reserveRequest);
+
+        replay.Statement.Should().BeEquivalentTo(securityDeposit.Statement);
+        securityDeposit.Statement!.StatementMovement.Should().Be(1675m);
+        securityDeposit.Statement.IsoCurrencyCode.Should().Be("USD");
+        reserve.Statement!.StatementMovement.Should().Be(0m);
+        securityDeposit.Transactions.Should().BeEmpty();
+        reserve.Transactions.Should().BeEmpty();
+        var controls = await _ctx.Db.BankStatements.AsNoTracking()
+            .Where(row => row.PortfolioId == 1
+                && row.PeriodStart == new DateOnly(2027, 1, 1)
+                && row.PeriodEnd == new DateOnly(2027, 1, 31))
+            .OrderBy(row => row.BankConnection!.AccountMask)
+            .Select(row => new
+            {
+                row.BankConnection!.AccountMask,
+                row.OpeningBalance,
+                row.ClosingBalance,
+                row.StatementMovement,
+                TransactionCount = row.BankConnection.Transactions.Count,
+            })
+            .ToListAsync();
+        controls.Should().BeEquivalentTo(
+        [
+            new
+            {
+                AccountMask = "1818",
+                OpeningBalance = 54250m,
+                ClosingBalance = 55925m,
+                StatementMovement = 1675m,
+                TransactionCount = 0,
+            },
+            new
+            {
+                AccountMask = "7070",
+                OpeningBalance = 50000m,
+                ClosingBalance = 50000m,
+                StatementMovement = 0m,
+                TransactionCount = 0,
+            },
+        ]);
+    }
+
+    [Fact]
     public async Task MatchAndClearMatch_UpdateTransactionReconciliationState()
     {
         var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
@@ -139,13 +221,14 @@ public class BankingServiceTests : IAsyncLifetime
         var transactionId = imported.Transactions.Single().Id;
         AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
 
-        var matched = await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
+        var matchRequest = new MatchBankTransactionRequest
         {
             OperationKey = "match-payment",
             ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
             TenantAccountId = payment.TenantAccountId,
             TenantLedgerEntryId = payment.Id,
-        });
+        };
+        var matched = await _sut.MatchAsync(_scope, transactionId, matchRequest);
         matched.Should().NotBeNull();
         matched!.MatchStatus.Should().Be("Matched");
         var matchedState = await _ctx.Db.BankTransactions.AsNoTracking()
@@ -164,7 +247,9 @@ public class BankingServiceTests : IAsyncLifetime
         var cleared = await _sut.ClearMatchAsync(_scope, transactionId, Mutation(transactionId, "clear-match"));
         cleared.Should().NotBeNull();
         cleared!.MatchStatus.Should().Be("Unmatched");
-        cleared.MatchedTenantLedgerEntryId.Should().BeNull();
+        var replay = await _sut.MatchAsync(_scope, transactionId, matchRequest);
+        replay.Should().NotBeNull();
+        replay!.MatchStatus.Should().Be("Matched");
         var clearedState = await _ctx.Db.BankTransactions.AsNoTracking()
             .Where(row => row.Id == transactionId)
             .Select(row => new
@@ -177,6 +262,64 @@ public class BankingServiceTests : IAsyncLifetime
         clearedState.MatchStatus.Should().Be("Unmatched");
         clearedState.MatchedTenantAccountId.Should().BeNull();
         clearedState.MatchedTenantLedgerEntryId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MatchAsync_DifferentBankTransactions_CannotClaimSameReceiptTarget()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Receipt Duplicate Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "receipt-duplicate-first",
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Rent deposit first",
+                    Amount = payment.Amount,
+                },
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "receipt-duplicate-second",
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Rent deposit second",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionIds = imported.Transactions
+            .OrderBy(row => row.ProviderTransactionId)
+            .Select(row => row.Id)
+            .ToArray();
+        foreach (var transactionId in transactionIds)
+            AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+
+        var first = await _sut.MatchAsync(_scope, transactionIds[0], new MatchBankTransactionRequest
+        {
+            OperationKey = "receipt-duplicate-first-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionIds[0]),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        });
+        var second = await _sut.MatchAsync(_scope, transactionIds[1], new MatchBankTransactionRequest
+        {
+            OperationKey = "receipt-duplicate-second-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionIds[1]),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        });
+
+        first.Should().NotBeNull();
+        second.Should().BeNull();
+        var matchedRows = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.PortfolioId == 1 && row.MatchedTenantLedgerEntryId == payment.Id)
+            .Select(row => row.Id)
+            .ToListAsync();
+        matchedRows.Should().Equal([transactionIds[0]]);
     }
 
     [Fact]
@@ -283,7 +426,13 @@ public class BankingServiceTests : IAsyncLifetime
             .Should().Be(1);
         (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == "banking.transaction.reconcile" &&
-            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
+            audit.EntityType == nameof(BankTransaction)))
+            .Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == "banking.transaction.reconcile" &&
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
+            audit.EntityType == nameof(JournalEntry)))
             .Should().Be(1);
     }
 
@@ -556,6 +705,7 @@ public class BankingServiceTests : IAsyncLifetime
         });
         var transactionId = imported.Transactions.Single().Id;
         AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        await _ctx.ActivateApiScopeAsync(_scope);
 
         // A suggested match shows up in the review queue.
         var queue = await _sut.GetReviewQueueAsync(_scope);
@@ -603,6 +753,7 @@ public class BankingServiceTests : IAsyncLifetime
         });
         var transactionId = imported.Transactions.Single().Id;
         AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        await _ctx.ActivateApiScopeAsync(_scope);
         (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(1);
 
         var dismissed = await _sut.DismissMatchAsync(_scope, transactionId, Mutation(transactionId, "dismiss-match"));
@@ -618,6 +769,10 @@ public class BankingServiceTests : IAsyncLifetime
     public async Task ConfirmMatch_WithExplicitExpenseId_LinksExpense()
     {
         var expense = SeedExpense(new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc), 84.25m);
+        var bankEffectiveAt = expense.IncurredAt.AddDays(1).AddHours(9);
+        expense.Status = ExpenseStatus.Approved;
+        expense.PaidAt = null;
+        _ctx.Db.SaveChanges();
         var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
         {
             Provider = "Manual",
@@ -628,7 +783,7 @@ public class BankingServiceTests : IAsyncLifetime
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "queue-txn-3",
-                    PostedAt = expense.PaidAt!.Value,
+                    PostedAt = bankEffectiveAt,
                     Description = "HARDWARE STORE",
                     Amount = -expense.Amount,
                 },
@@ -637,21 +792,429 @@ public class BankingServiceTests : IAsyncLifetime
         var transactionId = imported.Transactions.Single().Id;
         AssignRoute(_ctx, transactionId, expense.PropertyId!.Value);
 
-        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest
+        var request = new ConfirmBankMatchRequest
         {
             OperationKey = "confirm-expense",
             ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
             ExpenseId = expense.Id,
-        });
+        };
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
+        var replay = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
 
         confirmed.Should().NotBeNull();
+        replay.Should().BeEquivalentTo(confirmed);
+        confirmed!.MatchStatus.Should().Be("Matched");
+        var confirmedRow = await (
+            from transaction in _ctx.Db.BankTransactions.AsNoTracking()
+            join paidExpense in _ctx.Db.Expenses.AsNoTracking()
+                on transaction.MatchedExpenseId equals paidExpense.Id
+            where transaction.Id == transactionId
+            select new
+            {
+                transaction.MatchedExpenseId,
+                transaction.MatchedTenantLedgerEntryId,
+                ExpenseStatus = paidExpense.Status,
+                paidExpense.PaidAt,
+            })
+            .SingleAsync();
+        confirmedRow.MatchedExpenseId.Should().Be(expense.Id);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().BeNull();
+        confirmedRow.ExpenseStatus.Should().Be(ExpenseStatus.Paid);
+        confirmedRow.PaidAt.Should().Be(bankEffectiveAt);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithRejectedExpense_DoesNotMutateEitherRecord()
+    {
+        var effectiveAt = new DateTime(2026, 06, 02, 9, 0, 0, DateTimeKind.Utc);
+        var expense = SeedExpense(effectiveAt, 84.25m);
+        expense.Status = ExpenseStatus.Rejected;
+        expense.PaidAt = null;
+        _ctx.Db.SaveChanges();
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "rejected-expense",
+            effectiveAt,
+            "HARDWARE STORE",
+            -expense.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, expense.PropertyId!.Value);
+
+        var result = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest
+        {
+            OperationKey = "reject-ineligible-expense",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            ExpenseId = expense.Id,
+        });
+
+        result.Should().BeNull();
+        var state = await (
+            from transaction in _ctx.Db.BankTransactions.AsNoTracking()
+            from rejectedExpense in _ctx.Db.Expenses.AsNoTracking()
+            where transaction.Id == transactionId && rejectedExpense.Id == expense.Id
+            select new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedExpenseId,
+                ExpenseStatus = rejectedExpense.Status,
+                rejectedExpense.PaidAt,
+            })
+            .SingleAsync();
+        state.MatchStatus.Should().Be("Unmatched");
+        state.MatchedExpenseId.Should().BeNull();
+        state.ExpenseStatus.Should().Be(ExpenseStatus.Rejected);
+        state.PaidAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithSuggestedTenantTransfer_LinksTransferLedgerEntryAtomically()
+    {
+        var executedSql = new List<string>();
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-transfer-match");
+        var date = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
+        var transfer = SeedTenantTransfer(ctx, date, 325.15m, TenantLedgerEntryType.TransferOut, TenantLedgerDirection.Debit);
+        var imported = await sut.ImportAsync(1, BankImport(
+            "tenant-transfer-match",
+            date,
+            transfer.TenantAccount!.AccountNumber,
+            -transfer.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(ctx, transactionId, transfer.TenantAccount!.LeaseManagement!.PropertyId);
+        executedSql.Clear();
+        await ctx.ActivateApiScopeAsync(scope);
+
+        var queue = await sut.GetReviewQueueAsync(scope);
+        var item = queue.Items.Should().ContainSingle().Subject;
+        item.Transaction.Id.Should().Be(transactionId);
+        item.Suggestion.Label.Should().Contain("tenant-account transfer");
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("TransferOut", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
+            "tenant transfer suggestions must be narrowed, scored, and ranked by the DB-side suggestion query");
+
+        var request = new ConfirmBankMatchRequest
+        {
+            OperationKey = "confirm-tenant-transfer",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(ctx, transactionId),
+        };
+
+        var confirmed = await sut.ConfirmMatchAsync(scope, transactionId, request);
+        var replay = await sut.ConfirmMatchAsync(scope, transactionId, request);
+
+        confirmed.Should().NotBeNull();
+        replay.Should().NotBeNull();
+        replay!.MatchStatus.Should().Be("Matched");
+        var confirmedRow = await ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new
+            {
+                row.MatchStatus,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+                row.MatchedExpenseId,
+            })
+            .SingleAsync();
+        confirmedRow.MatchStatus.Should().Be("Matched");
+        confirmedRow.MatchedTenantAccountId.Should().Be(transfer.TenantAccountId);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().Be(transfer.Id);
+        confirmedRow.MatchedExpenseId.Should().BeNull();
+        (await sut.GetReviewQueueAsync(scope)).Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithSuggestedBankFeeExpense_LinksExpense()
+    {
+        var date = new DateTime(2026, 06, 04, 0, 0, 0, DateTimeKind.Utc);
+        var fee = SeedExpense(date, 12.50m, "Monthly Bank Fee", "Bank service fee");
+        fee.PropertyId = null;
+        fee.Property = null;
+        fee.OperationalScope = ExpenseOperationalScope.Portfolio;
+        _ctx.Db.SaveChanges();
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "bank-fee-match",
+            date,
+            "Monthly Bank Fee",
+            -fee.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle(row => row.Id == transactionId).Subject
+            .SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("Expense");
+        suggestion.EntityId.Should().Be(fee.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var request = new ConfirmBankMatchRequest
+        {
+            OperationKey = "confirm-bank-fee-expense",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        };
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
+        var replay = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
+
+        confirmed.Should().NotBeNull();
+        replay.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
         var confirmedRow = await _ctx.Db.BankTransactions.AsNoTracking()
             .Where(row => row.Id == transactionId)
             .Select(row => new { row.MatchedExpenseId, row.MatchedTenantLedgerEntryId })
             .SingleAsync();
-        confirmedRow.MatchedExpenseId.Should().Be(expense.Id);
+        confirmedRow.MatchedExpenseId.Should().Be(fee.Id);
         confirmedRow.MatchedTenantLedgerEntryId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task MatchAsync_DifferentBankTransactions_CannotClaimSameExpenseTarget()
+    {
+        var date = new DateTime(2026, 06, 04, 0, 0, 0, DateTimeKind.Utc);
+        var fee = SeedExpense(date, 12.50m, "Duplicate Bank Fee", "Duplicate bank service fee");
+        fee.PropertyId = null;
+        fee.Property = null;
+        fee.OperationalScope = ExpenseOperationalScope.Portfolio;
+        _ctx.Db.SaveChanges();
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Expense Duplicate Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "expense-duplicate-first",
+                    PostedAt = date,
+                    Description = "Monthly Bank Fee first",
+                    Amount = -fee.Amount,
+                },
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "expense-duplicate-second",
+                    PostedAt = date,
+                    Description = "Monthly Bank Fee second",
+                    Amount = -fee.Amount,
+                },
+            ],
+        });
+        var transactionIds = imported.Transactions
+            .OrderBy(row => row.ProviderTransactionId)
+            .Select(row => row.Id)
+            .ToArray();
+
+        var first = await _sut.MatchAsync(_scope, transactionIds[0], new MatchBankTransactionRequest
+        {
+            OperationKey = "expense-duplicate-first-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionIds[0]),
+            ExpenseId = fee.Id,
+        });
+        var second = await _sut.MatchAsync(_scope, transactionIds[1], new MatchBankTransactionRequest
+        {
+            OperationKey = "expense-duplicate-second-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionIds[1]),
+            ExpenseId = fee.Id,
+        });
+
+        first.Should().NotBeNull();
+        second.Should().BeNull();
+        var matchedRows = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.PortfolioId == 1 && row.MatchedExpenseId == fee.Id)
+            .Select(row => row.Id)
+            .ToListAsync();
+        matchedRows.Should().Equal([transactionIds[0]]);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithSuggestedLoanPayment_LinksPaidInstallmentAndReplaysExactly()
+    {
+        var date = new DateTime(2026, 06, 20, 0, 0, 0, DateTimeKind.Utc);
+        var payment = SeedLoanPayment(date, 1054m);
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "loan-payment-match",
+            date,
+            payment.Loan!.Lender,
+            -payment.TotalAmount));
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.Loan.PropertyId);
+
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle(row => row.Id == transactionId).Subject
+            .SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("LoanPayment");
+        suggestion.EntityId.Should().Be(payment.Id);
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var request = new ConfirmBankMatchRequest
+        {
+            OperationKey = "confirm-loan-payment",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        };
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
+        var replay = await _sut.ConfirmMatchAsync(_scope, transactionId, request);
+
+        confirmed.Should().NotBeNull();
+        replay.Should().NotBeNull();
+        replay!.MatchStatus.Should().Be("Matched");
+        var row = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => new
+            {
+                transaction.MatchedLoanPaymentId,
+                transaction.MatchedExpenseId,
+                transaction.MatchedOwnerDistributionId,
+            })
+            .SingleAsync();
+        row.MatchedLoanPaymentId.Should().Be(payment.Id);
+        row.MatchedExpenseId.Should().BeNull();
+        row.MatchedOwnerDistributionId.Should().BeNull();
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":confirm-loan-payment"))).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithPortfolioOwnerDistribution_RequiresAllPropertiesAuthority()
+    {
+        var date = new DateTime(2026, 06, 25, 0, 0, 0, DateTimeKind.Utc);
+        var distribution = SeedOwnerDistribution(date, 3050m);
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "owner-distribution-match",
+            date,
+            distribution.OwnerEntity!.Name,
+            -distribution.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle(row => row.Id == transactionId).Subject
+            .SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("OwnerDistribution");
+
+        var property = SeedRouteProperty(_ctx, "Limited manager property");
+        var limited = _ctx.Db.SeedPropertyManagerScope(1, property.Id, "owner-distribution-limited");
+        await _ctx.ActivateApiScopeAsync(limited);
+        Func<Task> denied = async () => await _sut.MatchAsync(limited, transactionId, new MatchBankTransactionRequest
+        {
+            OperationKey = "owner-distribution-denied",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            OwnerDistributionId = distribution.Id,
+        });
+        await denied.Should().ThrowAsync<UnauthorizedAccessException>(
+            "portfolio-wide money must be denied to a selected-property operator");
+        await _ctx.Db.Database.CloseConnectionAsync();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var request = new ConfirmBankMatchRequest
+        {
+            OperationKey = "owner-distribution-confirm",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        };
+        (await _sut.ConfirmMatchAsync(_scope, transactionId, request)).Should().NotBeNull();
+        (await _sut.ConfirmMatchAsync(_scope, transactionId, request)).Should().NotBeNull();
+        var row = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => new
+            {
+                transaction.MatchStatus,
+                transaction.MatchedOwnerDistributionId,
+            })
+            .SingleAsync();
+        row.MatchStatus.Should().Be("Matched");
+        row.MatchedOwnerDistributionId.Should().Be(distribution.Id);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithInternalTransfer_UpdatesBothStatementLinesInOneReceipt()
+    {
+        var date = new DateTime(2026, 06, 30, 0, 0, 0, DateTimeKind.Utc);
+        var operating = SeedBankConnectionInto(_ctx);
+        var reserve = new BankConnection
+        {
+            PortfolioId = 1,
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Reserve savings",
+            AccountMask = "7070",
+            Status = "Active",
+            CreatedAt = date,
+            UpdatedAt = date,
+        };
+        _ctx.Db.BankConnections.Add(reserve);
+        _ctx.Db.SaveChanges();
+        var outgoing = new BankTransaction
+        {
+            PortfolioId = 1,
+            BankConnectionId = operating.Id,
+            ProviderTransactionId = "reserve-transfer-out",
+            PostedAt = date,
+            Description = "Transfer to reserve",
+            Amount = -500m,
+            MatchStatus = "Unmatched",
+            CreatedAt = date,
+            UpdatedAt = date,
+        };
+        var incoming = new BankTransaction
+        {
+            PortfolioId = 1,
+            BankConnectionId = reserve.Id,
+            ProviderTransactionId = "reserve-transfer-in",
+            PostedAt = date.AddDays(1),
+            Description = "Transfer from operating",
+            Amount = 500m,
+            MatchStatus = "Unmatched",
+            CreatedAt = date,
+            UpdatedAt = date,
+        };
+        _ctx.Db.BankTransactions.AddRange(outgoing, incoming);
+        _ctx.Db.SaveChanges();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        var request = new ConfirmBankMatchRequest
+        {
+            OperationKey = "confirm-reserve-transfer",
+            ExpectedUpdatedAtUtc = outgoing.UpdatedAt,
+        };
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, outgoing.Id, request);
+        var replay = await _sut.ConfirmMatchAsync(_scope, outgoing.Id, request);
+
+        confirmed.Should().NotBeNull();
+        replay.Should().NotBeNull();
+        var pair = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == outgoing.Id || row.Id == incoming.Id)
+            .OrderBy(row => row.Id)
+            .Select(row => new { row.Id, row.MatchStatus, row.MatchedBankTransactionId })
+            .ToListAsync();
+        pair.Should().HaveCount(2);
+        pair.Should().OnlyContain(row => row.MatchStatus == "Matched");
+        pair.Single(row => row.Id == outgoing.Id).MatchedBankTransactionId.Should().Be(incoming.Id);
+        pair.Single(row => row.Id == incoming.Id).MatchedBankTransactionId.Should().Be(outgoing.Id);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":confirm-reserve-transfer"))).Should().Be(1);
+
+        var clearRequest = new BankTransactionMutationRequest
+        {
+            OperationKey = "clear-reserve-transfer",
+            ExpectedUpdatedAtUtc = confirmed!.UpdatedAt,
+        };
+        var cleared = await _sut.ClearMatchAsync(_scope, outgoing.Id, clearRequest);
+        var clearReplay = await _sut.ClearMatchAsync(_scope, outgoing.Id, clearRequest);
+
+        cleared.Should().NotBeNull();
+        clearReplay.Should().NotBeNull();
+        var clearedPair = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == outgoing.Id || row.Id == incoming.Id)
+            .Select(row => new { row.MatchStatus, row.MatchedBankTransactionId })
+            .ToListAsync();
+        clearedPair.Should().OnlyContain(row =>
+            row.MatchStatus == "Unmatched" && row.MatchedBankTransactionId == null);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":clear-reserve-transfer"))).Should().Be(1);
     }
 
     [Fact]
@@ -936,6 +1499,7 @@ public class BankingServiceTests : IAsyncLifetime
         AssignRoute(ctx, imported.Transactions.Single().Id,
             payment.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
+        await ctx.ActivateApiScopeAsync(scope);
 
         var queue = await sut.GetReviewQueueAsync(scope);
 
@@ -988,6 +1552,7 @@ public class BankingServiceTests : IAsyncLifetime
         AssignRoute(ctx, rankedImport.Transactions.Single().Id,
             carlos.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
+        await ctx.ActivateApiScopeAsync(scope);
 
         var queue = await sut.GetReviewQueueAsync(scope);
 
@@ -1024,6 +1589,7 @@ public class BankingServiceTests : IAsyncLifetime
         AssignRoute(ctx, second.Transactions.Single().Id, carlos.TenantAccount!.LeaseManagement!.PropertyId);
         AssignRoute(ctx, third.Transactions.Single().Id, maya.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
+        await ctx.ActivateApiScopeAsync(scope);
 
         var queue = await sut.GetReviewQueueAsync(scope, skip: 1, take: 1);
 
@@ -1064,6 +1630,7 @@ public class BankingServiceTests : IAsyncLifetime
         AssignRoute(ctx, deniedImport.Transactions.Single().Id,
             denied.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
+        await ctx.ActivateApiScopeAsync(scope);
 
         var queue = await sut.GetReviewQueueAsync(scope, skip: 0, take: 20);
 
@@ -1093,7 +1660,7 @@ public class BankingServiceTests : IAsyncLifetime
 
         executedSql.Should().Contain(sql =>
             sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
             "property capability and selected-property scope must be part of the paged bank-line SQL");
     }
@@ -1178,7 +1745,7 @@ public class BankingServiceTests : IAsyncLifetime
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PlaidExchangeResult("access-sandbox-token", "item-id-1", "request-id-1"));
 
-        var result = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        var result = await _sut.ExchangePlaidPublicTokenAsync(_scope, new ExchangePlaidPublicTokenRequest
         {
             ClientOperationId = "exchange-store-encrypted",
             PublicToken = "public-sandbox-token",
@@ -1208,6 +1775,7 @@ public class BankingServiceTests : IAsyncLifetime
     {
         await using var ctx = await _fixture.CreateContextAsync();
         var sut = CreateServiceFor(ctx);
+        var scope = ctx.Db.SeedAdministratorScope(1, "plaid-relink");
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
@@ -1216,7 +1784,7 @@ public class BankingServiceTests : IAsyncLifetime
             .ReturnsAsync((PlaidRuntimeSettings _, string publicToken, CancellationToken _) =>
                 new PlaidExchangeResult("access-sandbox-token", "item-id-1", $"request-{publicToken}"));
 
-        await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        await sut.ExchangePlaidPublicTokenAsync(scope, new ExchangePlaidPublicTokenRequest
         {
             ClientOperationId = "exchange-relink-1",
             PublicToken = "public-sandbox-token-1",
@@ -1224,7 +1792,7 @@ public class BankingServiceTests : IAsyncLifetime
             AccountId = "account-id-1",
             AccountName = "Operating Checking",
         });
-        await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        await sut.ExchangePlaidPublicTokenAsync(scope, new ExchangePlaidPublicTokenRequest
         {
             ClientOperationId = "exchange-relink-2",
             PublicToken = "public-sandbox-token-2",
@@ -1251,8 +1819,8 @@ public class BankingServiceTests : IAsyncLifetime
             AccountName = "Operating",
         };
 
-        var first = await _sut.ExchangePlaidPublicTokenAsync(1, request);
-        var replay = await _sut.ExchangePlaidPublicTokenAsync(1, request);
+        var first = await _sut.ExchangePlaidPublicTokenAsync(_scope, request);
+        var replay = await _sut.ExchangePlaidPublicTokenAsync(_scope, request);
 
         replay.Id.Should().Be(first.Id);
         _plaid.Verify(p => p.ExchangePublicTokenAsync(
@@ -1275,9 +1843,9 @@ public class BankingServiceTests : IAsyncLifetime
             AccountName = "Operating",
         };
 
-        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(_scope, request))
             .Should().ThrowAsync<HttpRequestException>();
-        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(_scope, request))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*will not be exchanged again*");
         _plaid.Verify(p => p.ExchangePublicTokenAsync(
@@ -1313,7 +1881,7 @@ public class BankingServiceTests : IAsyncLifetime
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(It.IsAny<PlaidRuntimeSettings>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
-        var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        var connection = await _sut.ExchangePlaidPublicTokenAsync(_scope, new ExchangePlaidPublicTokenRequest
         {
             ClientOperationId = "exchange-sync-import",
             PublicToken = "public-token",
@@ -1394,7 +1962,7 @@ public class BankingServiceTests : IAsyncLifetime
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(It.IsAny<PlaidRuntimeSettings>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
-        var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        var connection = await _sut.ExchangePlaidPublicTokenAsync(_scope, new ExchangePlaidPublicTokenRequest
         {
             ClientOperationId = "exchange-sync-modify",
             PublicToken = "public-token",
@@ -1661,7 +2229,7 @@ public class BankingServiceTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, TestActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
         services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
@@ -1706,7 +2274,44 @@ public class BankingServiceTests : IAsyncLifetime
         };
     }
 
-    private Expense SeedExpense(DateTime paidAt, decimal amount)
+    private static TenantLedgerEntry SeedTenantTransfer(
+        MigratedPostgreSqlTestContext ctx,
+        DateTime postedAt,
+        decimal amount,
+        TenantLedgerEntryType entryType,
+        TenantLedgerDirection direction)
+    {
+        var accountSeed = SeedRentPaymentInto(
+            ctx,
+            "Transfer",
+            "Tenant",
+            9999.99m,
+            postedAt.AddMonths(-1),
+            $"L-XFER-{Guid.NewGuid():N}"[..14]);
+        var transfer = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = accountSeed.TenantAccountId,
+            EntryType = entryType,
+            Direction = direction,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(postedAt),
+            PostedAtUtc = postedAt,
+            Description = "Tenant account transfer",
+            BusinessKey = $"test-transfer:{Guid.NewGuid():N}",
+            TransferPublicId = Guid.NewGuid(),
+            CreatedByUserId = 1,
+        };
+        ctx.Db.TenantLedgerEntries.Add(transfer);
+        ctx.Db.SaveChanges();
+        ctx.Db.Entry(transfer).Reference(row => row.TenantAccount).Load();
+        ctx.Db.Entry(transfer.TenantAccount!).Reference(row => row.LeaseManagement).Load();
+        ctx.Db.Entry(transfer.TenantAccount!.LeaseManagement!).Reference(row => row.Property).Load();
+        return transfer;
+    }
+
+    private Expense SeedExpense(DateTime paidAt, decimal amount, string vendorName = "Hardware Store", string description = "Hardware supply")
     {
         var property = new Property
         {
@@ -1722,17 +2327,18 @@ public class BankingServiceTests : IAsyncLifetime
         var vendor = new Vendor
         {
             PortfolioId = 1,
-            Name = "Hardware Store",
+            Name = vendorName,
             CreatedAt = paidAt,
             UpdatedAt = paidAt,
         };
         var expense = new Expense
         {
             PortfolioId = 1,
+            OperationalScope = ExpenseOperationalScope.Property,
             Property = property,
             Vendor = vendor,
             Category = ScheduleECategory.Repairs,
-            Description = "Hardware supply",
+            Description = description,
             Status = ExpenseStatus.Paid,
             Amount = amount,
             IncurredAt = paidAt,
@@ -1743,6 +2349,74 @@ public class BankingServiceTests : IAsyncLifetime
         _ctx.Db.Expenses.Add(expense);
         _ctx.Db.SaveChanges();
         return expense;
+    }
+
+    private LoanPayment SeedLoanPayment(DateTime paidAt, decimal amount)
+    {
+        var property = SeedRouteProperty(_ctx, $"Loan property {Guid.NewGuid():N}");
+        var loan = new Loan
+        {
+            PortfolioId = 1,
+            PropertyId = property.Id,
+            Lender = "First QA Mortgage",
+            OriginalAmount = 200000m,
+            CurrentBalance = 180000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = paidAt.AddYears(-1),
+            DayOfMonthDue = paidAt.Day,
+            MonthlyPrincipalInterest = amount,
+            Status = LoanStatus.Active,
+            CreatedAt = paidAt.AddYears(-1),
+            UpdatedAt = paidAt,
+        };
+        var payment = new LoanPayment
+        {
+            PortfolioId = 1,
+            Loan = loan,
+            PeriodKey = paidAt.ToString("yyyy-MM"),
+            DueDate = paidAt,
+            PaidDate = paidAt,
+            InterestAmount = 600m,
+            PrincipalAmount = amount - 600m,
+            TotalAmount = amount,
+            BalanceAfter = 180000m - (amount - 600m),
+            Status = LoanPaymentStatus.Paid,
+            CreatedAt = paidAt,
+        };
+        _ctx.Db.LoanPayments.Add(payment);
+        _ctx.Db.SaveChanges();
+        return payment;
+    }
+
+    private OwnerDistribution SeedOwnerDistribution(DateTime paidAt, decimal amount)
+    {
+        var owner = new OwnerEntity
+        {
+            PortfolioId = 1,
+            OwnerEntityType = OwnerEntityType.LLC,
+            Name = "Blue Door Residential LLC",
+            CreatedAt = paidAt.AddYears(-1),
+            UpdatedAt = paidAt,
+        };
+        var distribution = new OwnerDistribution
+        {
+            PortfolioId = 1,
+            OwnerEntity = owner,
+            Date = paidAt,
+            Amount = amount,
+            Method = DistributionMethod.Ach,
+            Status = OwnerDistributionStatus.Approved,
+            ApprovedAt = paidAt,
+            ApprovedBusinessDate = paidAt,
+            ApprovedByUserId = 1,
+            BankReference = "DIST-202606-O01",
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        _ctx.Db.OwnerDistributions.Add(distribution);
+        _ctx.Db.SaveChanges();
+        return distribution;
     }
 
     private BankingService CreateService(PlaidOptions? options = null) => CreateServiceFor(_ctx, options);

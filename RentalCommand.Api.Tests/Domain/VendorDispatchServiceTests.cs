@@ -1,6 +1,8 @@
+using System.Data.Common;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -24,16 +26,25 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Covers vendor SMS dispatch (creates an open dispatch + enqueues the job SMS), a vendor DONE reply
 /// closing the work order + dispatch, and ratings updating the scorecard aggregates.
 /// </summary>
-public class VendorDispatchServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class VendorDispatchServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly ServiceProvider _services;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ServiceProvider _services = null!;
+    private WorkspaceReadScope _scope;
 
-    public VendorDispatchServiceTests()
+    public VendorDispatchServiceTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync()
     {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorDispatchServiceTests));
+        await _ctx.ActivateApiScopeAsync(_scope);
+
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
@@ -43,6 +54,10 @@ public class VendorDispatchServiceTests : IDisposable
             DispatchWorkOrderToVendorResult,
             DispatchWorkOrderToVendorHandler>();
         services.AddAtomicCommandHandler<
+            CancelVendorDispatchCommand,
+            CancelVendorDispatchResult,
+            CancelVendorDispatchHandler>();
+        services.AddAtomicCommandHandler<
             CompleteVendorDispatchFromInboundCommand,
             CompleteVendorDispatchFromInboundResult,
             CompleteVendorDispatchFromInboundHandler>();
@@ -51,17 +66,16 @@ public class VendorDispatchServiceTests : IDisposable
             VendorRatingMutationResult,
             CreateVendorRatingHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(_ctx.ConnectionString)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+            builder.UseNpgsql(_ctx.ConnectionString)
+                .AddInterceptors(new RequestGucConnectionInterceptor(_scope))
                 .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
-        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorDispatchServiceTests));
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     private VendorDispatchService CreateDispatchSut() => new(
@@ -413,14 +427,14 @@ public class VendorDispatchServiceTests : IDisposable
         int workOrderId,
         int vendorId,
         DateTime dispatchedAtUtc) => new()
-    {
-        PortfolioId = PortfolioId,
-        WorkOrderId = workOrderId,
-        VendorId = vendorId,
-        Status = VendorDispatchStatus.Dispatched,
-        DispatchedAtUtc = dispatchedAtUtc,
-        Message = "Reply DONE when complete.",
-    };
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = workOrderId,
+            VendorId = vendorId,
+            Status = VendorDispatchStatus.Dispatched,
+            DispatchedAtUtc = dispatchedAtUtc,
+            Message = "Reply DONE when complete.",
+        };
 
     private void SeedScopedMember(int userId, int propertyId, int roleProfileId)
     {
@@ -597,5 +611,38 @@ public class VendorDispatchServiceTests : IDisposable
         };
         _ctx.Db.WorkOrders.Add(workOrder);
         return workOrder;
+    }
+
+    private sealed class RequestGucConnectionInterceptor(WorkspaceReadScope scope) : DbConnectionInterceptor
+    {
+        public override async Task ConnectionOpenedAsync(
+            DbConnection connection,
+            ConnectionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SET SESSION AUTHORIZATION rentalcommand_api;
+                SELECT set_config('app.current_portfolio_id', @portfolio_id, false),
+                       set_config('app.auth_session_id', @auth_session_id, false),
+                       set_config('app.current_user_id', @user_id, false),
+                       set_config('app.current_access_context_id', @access_context_id, false),
+                       set_config('app.access_revision', @access_revision, false);
+                """;
+            AddParameter(command, "portfolio_id", scope.PortfolioId.ToString());
+            AddParameter(command, "auth_session_id", scope.SessionId.ToString());
+            AddParameter(command, "user_id", scope.UserId.ToString());
+            AddParameter(command, "access_context_id", scope.AccessContextId.ToString());
+            AddParameter(command, "access_revision", scope.AccessRevision.ToString());
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        private static void AddParameter(DbCommand command, string name, string value)
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = $"@{name}";
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
     }
 }

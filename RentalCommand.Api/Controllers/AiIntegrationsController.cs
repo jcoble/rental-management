@@ -31,21 +31,48 @@ public sealed class AiIntegrationsController : ManagementControllerBase
     }
 
     [HttpPut]
-    public Task<AiIntegrationStatusDto> Activate(
+    public async Task<ActionResult<AiIntegrationStatusDto>> Activate(
         [FromBody] ActivateAiCredentialRequest request,
-        CancellationToken ct) =>
-        _credentials.ActivateAsync(GetActiveAccessContext(), request, ct);
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var key = RequireIdempotencyKey(idempotencyKey, request.ClientOperationId);
+        if (key is null) return BadRequest("Idempotency-Key is required and must be at most 128 characters.");
+        return Ok(await _credentials.ActivateAsync(
+            GetActiveAccessContext(),
+            request with { ClientOperationId = key },
+            ct));
+    }
 
     [HttpPut("rotate")]
-    public Task<AiIntegrationStatusDto> Rotate(
+    public async Task<ActionResult<AiIntegrationStatusDto>> Rotate(
         [FromBody] RotateAiCredentialRequest request,
-        CancellationToken ct) =>
-        _credentials.RotateAsync(GetActiveAccessContext(), request, ct);
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var key = RequireIdempotencyKey(idempotencyKey, request.ClientOperationId);
+        if (key is null) return BadRequest("Idempotency-Key is required and must be at most 128 characters.");
+        return Ok(await _credentials.RotateAsync(
+            GetActiveAccessContext(),
+            request with { ClientOperationId = key },
+            ct));
+    }
 
     [HttpDelete]
-    public async Task<IActionResult> Remove(CancellationToken ct)
+    public async Task<IActionResult> Remove(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        await _credentials.RemoveAsync(GetActiveAccessContext(), ct);
+        var key = RequireIdempotencyKey(idempotencyKey, null);
+        if (key is null) return BadRequest("Idempotency-Key is required and must be at most 128 characters.");
+        await _credentials.RemoveAsync(GetActiveAccessContext(), key, ct);
         return NoContent();
+    }
+
+    private static string? RequireIdempotencyKey(string? header, string? clientOperationId)
+    {
+        var value = string.IsNullOrWhiteSpace(header) ? clientOperationId : header;
+        value = value?.Trim();
+        return value is { Length: > 0 and <= 128 } ? value : null;
     }
 }

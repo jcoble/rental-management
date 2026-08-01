@@ -698,44 +698,13 @@ class _LedgerLoadingBody extends StatelessWidget {
   const _LedgerLoadingBody();
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
-    return ListView(
-      key: const Key('ledger-loading'),
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      children: [
-        MobileM3ListItem(
-          position: MobileM3ListItemPosition.single,
-          leading: MobileM3LeadingIcon(
-            icon: Icons.receipt_long_outlined,
-            backgroundColor: colors.primaryContainer,
-            foregroundColor: colors.onPrimaryContainer,
-          ),
-          title: Text(
-            'Loading ledger',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          supporting: [
-            Text(
-              'Payments, expenses, sources, and dates',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-          ],
-          trailing: const SizedBox.square(
-            dimension: 22,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => const Center(
+    child: SizedBox.square(
+      key: Key('ledger-loading'),
+      dimension: 32,
+      child: CircularProgressIndicator(strokeWidth: 3),
+    ),
+  );
 }
 
 String _emptyMessageFor(MoneyScreenView view) => switch (view) {
@@ -843,7 +812,7 @@ class _TransactionCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Text(
-            '${isPayment ? '+' : '-'}${moneyFmt(tx.amount)}',
+            '${isPayment ? '+' : '-'}${moneyFmt(tx.amount.abs())}',
             style: theme.textTheme.bodyMedium?.copyWith(
               fontWeight: FontWeight.w700,
               color: signColor,

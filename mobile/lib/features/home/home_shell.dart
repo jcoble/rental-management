@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../../core/theme/app_recipes.dart';
+import '../../core/time/app_clock.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
@@ -2206,8 +2207,8 @@ class _HomeTab extends ConsumerWidget {
   static const _workTabIndex = 3;
   static const _inboxTabIndex = 4;
 
-  String get _greeting {
-    final hour = DateTime.now().hour;
+  String _greeting(DateTime now) {
+    final hour = now.hour;
     if (hour < 12) return 'Good morning';
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
@@ -2229,6 +2230,11 @@ class _HomeTab extends ConsumerWidget {
     final messagesAsync = ref.watch(homeLatestMessagesProvider);
     final fieldQueueAsync = ref.watch(homeFieldQueueProvider);
     final moneyAsync = ref.watch(moneySnapshotProvider);
+    final appNowAsync = ref.watch(appNowProvider);
+    final greeting = switch (appNowAsync) {
+      AsyncData(:final value) => _greeting(value),
+      _ => 'Hello',
+    };
 
     return Scaffold(
       appBar: AppBar(
@@ -2239,6 +2245,7 @@ class _HomeTab extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(homeBriefingProvider);
           ref.invalidate(moneySnapshotProvider);
+          ref.invalidate(appNowProvider);
         },
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -2252,9 +2259,13 @@ class _HomeTab extends ConsumerWidget {
                     // ── Greeting (art band header, §7.7) ──────────────────
                     M3ArtBand(
                       pattern: 6,
-                      eyebrow: _formattedDate(),
+                      eyebrow: appNowAsync.when(
+                        data: _formattedDate,
+                        loading: () => 'Loading date…',
+                        error: (_, _) => 'Date unavailable',
+                      ),
                       title:
-                          '$_greeting${_displayName.isNotEmpty ? ", $_displayName" : ""}!',
+                          '$greeting${_displayName.isNotEmpty ? ", $_displayName" : ""}!',
                       subtitle: "Here's your command center for today.",
                     ),
                     const SizedBox(height: 24),
@@ -2360,8 +2371,7 @@ class _HomeTab extends ConsumerWidget {
     );
   }
 
-  String _formattedDate() {
-    final now = DateTime.now();
+  String _formattedDate(DateTime now) {
     const months = [
       'January',
       'February',
@@ -2506,7 +2516,7 @@ class _MessageCard extends StatelessWidget {
         onTap: () {
           Widget detailBuilder(BuildContext _) => MessageDetailScreen(
             conversationId: conversation.id,
-            title: conversation.tenantName,
+            title: conversation.displayName,
             subtitle: conversation.subject,
           );
           final shellNavigator = mobileShellNavigatorOf(context);
@@ -2537,7 +2547,7 @@ class _MessageCard extends StatelessWidget {
           ),
         ),
         title: Text(
-          conversation.tenantName,
+          conversation.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium?.copyWith(

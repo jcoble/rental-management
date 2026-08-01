@@ -20,6 +20,7 @@ export function scanDocumentTypesForCapabilities(
 	}
 	if (capabilities.has(CAPABILITY.leasingApplicationsManage)) allowed.push('Application');
 	if (capabilities.has(CAPABILITY.moneyExpensesManage)) allowed.push('Loan');
+	if (capabilities.has(CAPABILITY.rentalsManage)) allowed.push('LeaseEndingNotice');
 	return allowed;
 }
 

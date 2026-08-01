@@ -2,14 +2,17 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed partial class AtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
-    public async Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
+    public static async Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         TransferLeaseManagementCommand command,
         int destinationDocumentSourceVersionId,
         DateTime changedAtUtc,
@@ -18,12 +21,40 @@ internal sealed partial class AtomicLeaseMutationPersistence
         // The clean baseline names each overlap FK/exclusion DEFERRABLE. Deferring all deferrable
         // constraints is deliberate here: source possession closes and destination possession may
         // open in the same transaction, while final-state validation still runs before commit.
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "SET CONSTRAINTS ALL DEFERRED",
             cancellationToken: ct);
 
-        var parameters = new NpgsqlParameter[]
-        {
+        var parameters = CreateTransferParameters(
+            command, destinationDocumentSourceVersionId, changedAtUtc);
+
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
+            new("LeaseManagements", AtomicRawDmlOperation.Update),
+            new("LeaseManagements", AtomicRawDmlOperation.Insert),
+            new("LeaseManagementParties", AtomicRawDmlOperation.Update),
+            new("LeaseManagementParties", AtomicRawDmlOperation.Insert),
+            new("TenantAccounts", AtomicRawDmlOperation.Insert),
+            new("LeaseAgreements", AtomicRawDmlOperation.Insert),
+            new("LeaseAgreementSigners", AtomicRawDmlOperation.Insert),
+            new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
+            new("TenantLedgerAllocations", AtomicRawDmlOperation.Insert),
+            new("SecurityDepositAccounts", AtomicRawDmlOperation.Insert),
+            new("SecurityDepositEntries", AtomicRawDmlOperation.Insert),
+            new("TenantUserAccesses", AtomicRawDmlOperation.Update),
+            new("TenantUserAccesses", AtomicRawDmlOperation.Insert),
+            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
+            new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
+
+        var row = await db.Database.SingleTopLevelResultAsync<TransferLeaseManagementRow>(
+            TransferSql, parameters, ct);
+        return MapTransferResult(row);
+    }
+
+    private static NpgsqlParameter[] CreateTransferParameters(
+        TransferLeaseManagementCommand command,
+        int destinationDocumentSourceVersionId,
+        DateTime changedAtUtc) =>
+        [
             Integer("portfolioId", command.PortfolioId),
             Integer("sourceLeaseManagementId", command.SourceLeaseManagementId),
             Integer("sourceUnitId", command.SourceUnitId),
@@ -50,28 +81,11 @@ internal sealed partial class AtomicLeaseMutationPersistence
             Integer("invalidTemplate", (int)TransferLeaseManagementOutcome.InvalidTemplate),
             Integer("invalidHousehold", (int)TransferLeaseManagementOutcome.InvalidHousehold),
             Integer("invalidFinancial", (int)TransferLeaseManagementOutcome.InvalidFinancialState),
-        };
+        ];
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
-            new("LeaseManagements", AtomicRawDmlOperation.Update),
-            new("LeaseManagements", AtomicRawDmlOperation.Insert),
-            new("LeaseManagementParties", AtomicRawDmlOperation.Update),
-            new("LeaseManagementParties", AtomicRawDmlOperation.Insert),
-            new("TenantAccounts", AtomicRawDmlOperation.Insert),
-            new("LeaseAgreements", AtomicRawDmlOperation.Insert),
-            new("LeaseAgreementSigners", AtomicRawDmlOperation.Insert),
-            new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
-            new("TenantLedgerAllocations", AtomicRawDmlOperation.Insert),
-            new("SecurityDepositAccounts", AtomicRawDmlOperation.Insert),
-            new("SecurityDepositEntries", AtomicRawDmlOperation.Insert),
-            new("TenantUserAccesses", AtomicRawDmlOperation.Update),
-            new("TenantUserAccesses", AtomicRawDmlOperation.Insert),
-            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
-            new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
-
-        var row = await _db.Database.SingleTopLevelResultAsync<TransferLeaseManagementRow>(
-            TransferSql, parameters, ct);
-        return new(
+    private static AtomicTransferLeaseManagementMutationResult MapTransferResult(
+        TransferLeaseManagementRow row) =>
+        new(
             (TransferLeaseManagementOutcome)row.Outcome,
             row.TransferPublicId,
             row.SourceTenantAccountId,
@@ -92,7 +106,6 @@ internal sealed partial class AtomicLeaseMutationPersistence
             DeserializeIds(row.DestinationAccessIdsJson),
             DeserializeLongIds(row.TenantLedgerEntryIdsJson),
             DeserializeLongIds(row.SecurityDepositEntryIdsJson));
-    }
 
     private static NpgsqlParameter NullableTimestamp(string name, DateTime? value) =>
         new(name, NpgsqlDbType.TimestampTz) { Value = value is null ? DBNull.Value : value };

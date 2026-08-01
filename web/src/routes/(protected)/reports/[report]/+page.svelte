@@ -96,11 +96,10 @@
 	const propertyList = $derived(propertiesQuery.data ?? []);
 
 	// --- Param state ---------------------------------------------------------------------------------
-	const currentYear = new Date().getFullYear();
 	let rangeStart = $state('');
 	let rangeEnd = $state('');
 	let selectedPropertyIds = $state<number[]>([]); // empty = all properties
-	let year = $state(String(currentYear));
+	let year = $state('');
 	let days = $state('90');
 	let reportSkip = $state(0);
 	let reportTake = $state(20);
@@ -116,7 +115,7 @@
 		rangeStart = '';
 		rangeEnd = '';
 		selectedPropertyIds = [];
-		year = String(currentYear);
+		year = '';
 		days = '90';
 		reportSkip = 0;
 		reportTake = 20;
@@ -132,7 +131,7 @@
 		if (accepts.has('propertyIds') && selectedPropertyIds.length) p.propertyIds = [...selectedPropertyIds];
 		// A single-property report (general-ledger) reuses the same multi-select; send the first pick.
 		if (accepts.has('propertyId') && selectedPropertyIds.length) p.propertyId = selectedPropertyIds[0];
-		if (accepts.has('year') && year) p.year = Number(year);
+		if (accepts.has('year') && year.trim()) p.year = Number(year);
 		if (accepts.has('days') && days) p.days = Number(days);
 		if (accepts.has('skip')) p.skip = reportSkip;
 		if (accepts.has('take')) p.take = reportTake;
@@ -203,7 +202,7 @@
 	const periodLabel = $derived.by(() => {
 		const data = reportQuery.data as Record<string, unknown> | undefined;
 		if (!data) return '';
-		if (accepts.has('year')) return `Year ${applied.year ?? currentYear}`;
+		if (accepts.has('year')) return `Year ${String(data.year ?? applied.year ?? '')}`;
 		if (accepts.has('days')) return `Next ${applied.days ?? 90} days`;
 		if (data.from && data.to) return `${formatDateOnly(data.from as string)} – ${formatDateOnly(data.to as string)}`;
 		if (data.asOf) return `As of ${formatDateOnly(data.asOf as string)}`;

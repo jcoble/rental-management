@@ -60,12 +60,14 @@ class _PrepareMoveInSheetState extends ConsumerState<_PrepareMoveInSheet> {
   String? _templateQuery;
   String _role = 'PrimaryTenant';
   String _termType = 'FixedTerm';
+  String _rentTrackingStartMode = 'ForwardOnly';
   bool _createDepositAccount = true;
   bool _includeOpeningBalance = false;
   late DateTime _partyEffectiveFrom;
   late DateTime _termStart;
   DateTime? _termEnd;
   DateTime? _plannedPossession;
+  DateTime? _rentTrackingStartOn;
   DateTime? _openingEffectiveOn;
   bool _saving = false;
   String? _error;
@@ -166,6 +168,10 @@ class _PrepareMoveInSheetState extends ConsumerState<_PrepareMoveInSheet> {
               securityDepositObligation: double.parse(_deposit.text.trim()),
               lateFeeAmount: double.parse(_lateFee.text.trim()),
               gracePeriodDays: int.parse(_grace.text.trim()),
+              rentTrackingStartMode: _rentTrackingStartMode,
+              rentTrackingStartOn: _rentTrackingStartMode == 'CustomCutoffDate'
+                  ? _rentTrackingStartOn
+                  : null,
               createSecurityDepositAccount: _createDepositAccount,
               openingBalanceAmount: opening,
               openingBalanceEffectiveOn: _includeOpeningBalance
@@ -220,7 +226,9 @@ class _PrepareMoveInSheetState extends ConsumerState<_PrepareMoveInSheet> {
         TabbedFormStepSpec(
           label: 'Money',
           validate: () =>
-              !_includeOpeningBalance || _openingEffectiveOn != null,
+              (_rentTrackingStartMode != 'CustomCutoffDate' ||
+                  _rentTrackingStartOn != null) &&
+              (!_includeOpeningBalance || _openingEffectiveOn != null),
           child: _moneyStep(),
         ),
       ],
@@ -493,6 +501,37 @@ class _PrepareMoveInSheetState extends ConsumerState<_PrepareMoveInSheet> {
 
   Widget _moneyStep() => Column(
     children: [
+      DropdownButtonFormField<String>(
+        key: ValueKey(_rentTrackingStartMode),
+        initialValue: _rentTrackingStartMode,
+        decoration: const InputDecoration(labelText: 'Begin rent charges'),
+        items: const [
+          DropdownMenuItem(
+            value: 'ForwardOnly',
+            child: Text('Start from the current date'),
+          ),
+          DropdownMenuItem(
+            value: 'BackfillFromLeaseStart',
+            child: Text('Backfill from the lease start'),
+          ),
+          DropdownMenuItem(
+            value: 'CustomCutoffDate',
+            child: Text('Start from a custom date'),
+          ),
+        ],
+        onChanged: (value) => setState(() {
+          _rentTrackingStartMode = value ?? 'ForwardOnly';
+          if (_rentTrackingStartMode != 'CustomCutoffDate') {
+            _rentTrackingStartOn = null;
+          }
+        }),
+      ),
+      if (_rentTrackingStartMode == 'CustomCutoffDate')
+        _dateTile(
+          'Custom rent start date',
+          _rentTrackingStartOn,
+          (value) => _rentTrackingStartOn = value,
+        ),
       _number(_rent, 'Monthly rent', min: 0),
       _number(_dueDay, 'Rent due day', min: 1, max: 31, integer: true),
       _number(_deposit, 'Security deposit obligation', min: 0),

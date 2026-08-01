@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -176,6 +177,25 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
                 on new { account.PortfolioId, TenantAccountId = account.Id }
                 equals new { balance.PortfolioId, balance.TenantAccountId }
+            from scheduledPrimaryTenantName in _db.LeaseManagementParties.AsNoTracking()
+                .Where(party => party.PortfolioId == management.PortfolioId
+                    && party.LeaseManagementId == management.Id
+                    && party.Role == LeaseManagementPartyRole.PrimaryTenant
+                    && party.EffectiveFrom > lifecycle.BusinessDate
+                    && party.EffectiveThrough == null
+                    && !_db.LeaseManagementParties.AsNoTracking().Any(other =>
+                        other.PortfolioId == party.PortfolioId
+                        && other.LeaseManagementId == party.LeaseManagementId
+                        && other.Role == LeaseManagementPartyRole.PrimaryTenant
+                        && other.EffectiveFrom > lifecycle.BusinessDate
+                        && other.EffectiveThrough == null
+                        && (other.EffectiveFrom < party.EffectiveFrom
+                            || (other.EffectiveFrom == party.EffectiveFrom && other.Id < party.Id))))
+                .OrderBy(party => party.EffectiveFrom)
+                .ThenBy(party => party.Id)
+                .Select(party => party.Tenant!.FirstName + " " + party.Tenant.LastName)
+                .Take(1)
+                .DefaultIfEmpty()
             select new TenantAccountListItemResponse
             {
                 TenantAccountId = account.Id,
@@ -188,7 +208,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 UnitNumber = management.Unit!.UnitNumber,
                 AccountNumber = account.AccountNumber,
                 RelationshipNumber = management.RelationshipNumber,
-                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName ?? scheduledPrimaryTenantName,
                 Lifecycle = lifecycle.Lifecycle,
                 Currency = balance.Currency,
                 OpenedAtUtc = account.OpenedAtUtc,
@@ -339,6 +359,25 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
                 on new { deposit.PortfolioId, SecurityDepositAccountId = deposit.Id }
                 equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+            from scheduledPrimaryTenantName in _db.LeaseManagementParties.AsNoTracking()
+                .Where(party => party.PortfolioId == management.PortfolioId
+                    && party.LeaseManagementId == management.Id
+                    && party.Role == LeaseManagementPartyRole.PrimaryTenant
+                    && party.EffectiveFrom > balance.BusinessDate
+                    && party.EffectiveThrough == null
+                    && !_db.LeaseManagementParties.AsNoTracking().Any(other =>
+                        other.PortfolioId == party.PortfolioId
+                        && other.LeaseManagementId == party.LeaseManagementId
+                        && other.Role == LeaseManagementPartyRole.PrimaryTenant
+                        && other.EffectiveFrom > balance.BusinessDate
+                        && other.EffectiveThrough == null
+                        && (other.EffectiveFrom < party.EffectiveFrom
+                            || (other.EffectiveFrom == party.EffectiveFrom && other.Id < party.Id))))
+                .OrderBy(party => party.EffectiveFrom)
+                .ThenBy(party => party.Id)
+                .Select(party => party.Tenant!.FirstName + " " + party.Tenant.LastName)
+                .Take(1)
+                .DefaultIfEmpty()
             select new TenantAccountDepositListItemResponse
             {
                 SecurityDepositAccountId = deposit.Id,
@@ -351,7 +390,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 UnitNumber = management.Unit!.UnitNumber,
                 AccountNumber = account.AccountNumber,
                 RelationshipNumber = management.RelationshipNumber,
-                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName ?? scheduledPrimaryTenantName,
                 Currency = balance.Currency,
                 CreatedAtUtc = deposit.CreatedAtUtc,
                 EffectiveNowUtc = balance.EffectiveNowUtc,
@@ -465,9 +504,29 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 .Select(row => new
                 {
                     row.CurrentPrimaryTenantName,
+                    row.BusinessDate,
                     SeedId = seed.SecurityDepositAccountId,
                 })
                 .Take(1)
+            from scheduledPrimaryTenantName in _db.LeaseManagementParties.AsNoTracking()
+                .Where(party => party.PortfolioId == seed.PortfolioId
+                    && party.LeaseManagementId == seed.LeaseManagementId
+                    && party.Role == LeaseManagementPartyRole.PrimaryTenant
+                    && party.EffectiveFrom > lifecycle.BusinessDate
+                    && party.EffectiveThrough == null
+                    && !_db.LeaseManagementParties.AsNoTracking().Any(other =>
+                        other.PortfolioId == party.PortfolioId
+                        && other.LeaseManagementId == party.LeaseManagementId
+                        && other.Role == LeaseManagementPartyRole.PrimaryTenant
+                        && other.EffectiveFrom > lifecycle.BusinessDate
+                        && other.EffectiveThrough == null
+                        && (other.EffectiveFrom < party.EffectiveFrom
+                            || (other.EffectiveFrom == party.EffectiveFrom && other.Id < party.Id))))
+                .OrderBy(party => party.EffectiveFrom)
+                .ThenBy(party => party.Id)
+                .Select(party => party.Tenant!.FirstName + " " + party.Tenant.LastName)
+                .Take(1)
+                .DefaultIfEmpty()
             from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
                 .Where(row => row.PortfolioId == seed.PortfolioId
                     && row.SecurityDepositAccountId == seed.SecurityDepositAccountId)
@@ -505,7 +564,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 UnitNumber = unit.UnitNumber,
                 AccountNumber = seed.AccountNumber,
                 RelationshipNumber = seed.RelationshipNumber,
-                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName ?? scheduledPrimaryTenantName,
                 Currency = balance.Currency,
                 CreatedAtUtc = seed.CreatedAtUtc,
                 EffectiveNowUtc = balance.EffectiveNowUtc,
@@ -637,6 +696,10 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 LeaseAgreementId = entry.LeaseAgreementId,
                 LeaseAddendumId = entry.LeaseAddendumId,
                 ReversesEntryId = entry.ReversesEntryId,
+                HasReversal = _db.TenantLedgerEntries.AsNoTracking().Any(reversal =>
+                    reversal.PortfolioId == entry.PortfolioId
+                    && reversal.TenantAccountId == entry.TenantAccountId
+                    && reversal.ReversesEntryId == entry.Id),
                 ProviderPaymentAttemptId = entry.ProviderPaymentAttemptId,
                 SourceStoredFileId = entry.SourceStoredFileId,
                 CreatedByUserId = entry.CreatedByUserId,
@@ -827,6 +890,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 }
                 equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
             where account.Id == tenantAccountId
+                && balance.OpenAmount > 0m
             select new TenantChargeResponse
             {
                 TenantAccountId = account.Id,
@@ -875,7 +939,9 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
 
     internal IQueryable<TenantAccountDepositResponse> BuildDepositQuery(
         WorkspaceReadScope scope,
-        int tenantAccountId) =>
+        int tenantAccountId)
+    {
+        return
         from account in BuildAuthorizedDepositAccountQuery(scope)
         join management in _db.LeaseManagements.AsNoTracking()
             on new { account.PortfolioId, Id = account.LeaseManagementId }
@@ -889,6 +955,25 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
             on new { deposit.PortfolioId, SecurityDepositAccountId = deposit.Id }
             equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+        from scheduledPrimaryTenantName in _db.LeaseManagementParties.AsNoTracking()
+            .Where(party => party.PortfolioId == management.PortfolioId
+                && party.LeaseManagementId == management.Id
+                && party.Role == LeaseManagementPartyRole.PrimaryTenant
+                && party.EffectiveFrom > balance.BusinessDate
+                && party.EffectiveThrough == null
+                && !_db.LeaseManagementParties.AsNoTracking().Any(other =>
+                    other.PortfolioId == party.PortfolioId
+                    && other.LeaseManagementId == party.LeaseManagementId
+                    && other.Role == LeaseManagementPartyRole.PrimaryTenant
+                    && other.EffectiveFrom > balance.BusinessDate
+                    && other.EffectiveThrough == null
+                    && (other.EffectiveFrom < party.EffectiveFrom
+                        || (other.EffectiveFrom == party.EffectiveFrom && other.Id < party.Id))))
+            .OrderBy(party => party.EffectiveFrom)
+            .ThenBy(party => party.Id)
+            .Select(party => party.Tenant!.FirstName + " " + party.Tenant.LastName)
+            .Take(1)
+            .DefaultIfEmpty()
         where account.Id == tenantAccountId
         select new TenantAccountDepositResponse
         {
@@ -902,7 +987,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             UnitNumber = management.Unit!.UnitNumber,
             AccountNumber = account.AccountNumber,
             RelationshipNumber = management.RelationshipNumber,
-            PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+            PrimaryTenantName = lifecycle.CurrentPrimaryTenantName ?? scheduledPrimaryTenantName,
             Currency = balance.Currency,
             CreatedAtUtc = deposit.CreatedAtUtc,
             EffectiveNowUtc = balance.EffectiveNowUtc,
@@ -916,6 +1001,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             HeldBalance = balance.HeldBalance,
             Status = balance.DepositStatus,
         };
+    }
 
     internal IQueryable<TenantAccount> BuildAuthorizedAccountQuery(WorkspaceReadScope scope)
     {
@@ -1182,4 +1268,5 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         public string RelationshipNumber { get; init; } = string.Empty;
         public DateTime CreatedAtUtc { get; init; }
     }
+
 }

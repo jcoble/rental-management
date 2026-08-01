@@ -27,5 +27,6 @@ public interface IInspectionService
     Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, ReorderInspectionItemsRequest request, string operationKey, CancellationToken ct = default);
     Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, int storedFileId, string operationKey, CancellationToken ct = default);
     Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAuthorizedAsync(WorkspaceReadScope scope, int id, int userId, string operationKey, CancellationToken ct = default);
+    Task<(RecoverInspectionChronologyResponse? Result, string? Error)> RecoverChronologyAuthorizedAsync(WorkspaceReadScope scope, int id, RecoverInspectionChronologyRequest request, string operationKey, CancellationToken ct = default);
     Task<(Stream Stream, string FileName, string ContentType)?> GetReportAuthorizedAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 }

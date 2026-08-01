@@ -97,6 +97,7 @@ export interface ScanDraftResponse {
 		rentalListingId?: number | null;
 		sourceLabel?: string | null;
 	} | null;
+	sourceStoredFileId?: number | null;
 	sourceContentSha256?: string | null;
 }
 
@@ -115,6 +116,7 @@ export interface ScanConfirmResponse {
 	agreementId?: number | null;
 	applicationId?: number | null;
 	loanId?: number | null;
+	loanPaymentId?: number | null;
 	unitId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;

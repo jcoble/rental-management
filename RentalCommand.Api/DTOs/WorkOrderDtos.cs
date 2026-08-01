@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -8,16 +9,34 @@ namespace RentalCommand.Api.DTOs;
 public class WorkOrderResponse
 {
     public int Id { get; set; }
-    public int PortfolioId { get; set; }
-    public int PropertyId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PortfolioId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PropertyId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? UnitId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? TenantId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? LeaseManagementId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? VendorId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public string? TechnicianAccessInstructions { get; set; }
+    public string? SubmittedByLabel { get; set; }
+    public string? RequesterName { get; set; }
+    public string? RequesterPhone { get; set; }
+    public string? RequesterEmail { get; set; }
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+    public string? EntryNotes { get; set; }
+    public string? PetWarnings { get; set; }
+    public string? AccessWarnings { get; set; }
     public string Category { get; set; } = "General";
     public WorkOrderPriority Priority { get; set; }
     public WorkOrderStatus Status { get; set; }
@@ -28,8 +47,11 @@ public class WorkOrderResponse
     public DateTime? ScheduledWindowEnd { get; set; }
 
     public DateTime? CompletedAt { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? EstimatedCost { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? ActualCost { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CreatedBy { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -61,6 +83,17 @@ public class WorkOrderResponse
         Title = e.Title,
         Description = e.Description,
         TechnicianAccessInstructions = e.TechnicianAccessInstructions,
+        SubmittedByLabel = e.SubmittedByLabel,
+        RequesterName = e.RequesterName,
+        RequesterPhone = e.RequesterPhone,
+        RequesterEmail = e.RequesterEmail,
+        ResidentMustBePresent = e.ResidentMustBePresent,
+        CallBeforeEntry = e.CallBeforeEntry,
+        CallIfNotHome = e.CallIfNotHome,
+        PermissionToEnter = e.PermissionToEnter,
+        EntryNotes = e.EntryNotes,
+        PetWarnings = e.PetWarnings,
+        AccessWarnings = e.AccessWarnings,
         Category = e.Category,
         Priority = e.Priority,
         Status = e.Status,
@@ -107,6 +140,8 @@ public class WorkOrderListQuery : ListQuery
 public class WorkOrderStatusEventResponse
 {
     public int Id { get; set; }
+    public string Kind { get; set; } = "Status";
+    public string Visibility { get; set; } = "Public";
 
     /// <summary>Status moved away from; null for the initial create event.</summary>
     public WorkOrderStatus? FromStatus { get; set; }
@@ -124,6 +159,8 @@ public class WorkOrderStatusEventResponse
     public static WorkOrderStatusEventResponse FromEntity(WorkOrderStatusEvent e) => new()
     {
         Id = e.Id,
+        Kind = e.Kind,
+        Visibility = e.Visibility,
         FromStatus = e.FromStatus,
         ToStatus = e.ToStatus,
         Note = e.Note,
@@ -138,7 +175,12 @@ public class WorkOrderStatusEventResponse
 /// </summary>
 public class WorkOrderDetailResponse : WorkOrderResponse
 {
+    public string DetailRole { get; set; } = "manager";
+    public WorkOrderDetailCapabilities Capabilities { get; set; } = new();
+    public IReadOnlyList<string> ResidentNames { get; set; } = [];
+    public string? PrivateManagementNotes { get; set; }
     public IReadOnlyList<WorkOrderStatusEventResponse> Timeline { get; set; } = [];
+    public IReadOnlyList<WorkOrderActivityResponse> Activity { get; set; } = [];
 
     /// <summary>True when a scanned source document is attached to this work order (drives the detail-page viewer).</summary>
     public bool HasScan { get; set; }
@@ -152,6 +194,13 @@ public class WorkOrderDetailResponse : WorkOrderResponse
     /// reflects a real dispatch, not a mere vendor assignment. Computed DB-side; see the GET handler.
     /// </summary>
     public bool HasActiveDispatch { get; set; }
+
+    /// <summary>The current open dispatch id, when <see cref="HasActiveDispatch"/> is true.</summary>
+    public int? ActiveDispatchId { get; set; }
+
+    public int? ActiveDispatchVendorId { get; set; }
+
+    public string? ActiveDispatchVendorName { get; set; }
 
     public static WorkOrderDetailResponse FromEntity(WorkOrder e, IEnumerable<WorkOrderStatusEvent> events)
     {
@@ -168,6 +217,17 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             Title = e.Title,
             Description = e.Description,
             TechnicianAccessInstructions = e.TechnicianAccessInstructions,
+            SubmittedByLabel = e.SubmittedByLabel,
+            RequesterName = e.RequesterName,
+            RequesterPhone = e.RequesterPhone,
+            RequesterEmail = e.RequesterEmail,
+            ResidentMustBePresent = e.ResidentMustBePresent,
+            CallBeforeEntry = e.CallBeforeEntry,
+            CallIfNotHome = e.CallIfNotHome,
+            PermissionToEnter = e.PermissionToEnter,
+            EntryNotes = e.EntryNotes,
+            PetWarnings = e.PetWarnings,
+            AccessWarnings = e.AccessWarnings,
             Category = e.Category,
             Priority = e.Priority,
             Status = e.Status,
@@ -183,10 +243,207 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             UnitNumber = e.Unit?.UnitNumber,
             VendorName = e.Vendor?.Name,
             TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
+            DetailRole = "manager",
+            Capabilities = WorkOrderDetailCapabilities.Manager(e.Status),
             Timeline = events.Select(WorkOrderStatusEventResponse.FromEntity).ToList(),
         };
         return detail;
     }
+}
+
+public sealed class WorkOrderActivityResponse
+{
+    public int Id { get; set; }
+    public string Kind { get; set; } = "Status";
+    public WorkOrderStatus? FromStatus { get; set; }
+    public WorkOrderStatus ToStatus { get; set; }
+    public string? Note { get; set; }
+    public string ActorLabel { get; set; } = "System";
+    public string Visibility { get; set; } = "Public";
+    public DateTime CreatedAtUtc { get; set; }
+}
+
+public sealed class WorkOrderMutationReceipt
+{
+    public int EntityId { get; set; }
+    public string Outcome { get; set; } = "Applied";
+    public int? ActivityId { get; set; }
+    public DateTime CommittedAtUtc { get; set; }
+}
+
+public sealed class WorkOrderCommentRequest
+{
+    [Required]
+    [MaxLength(2000)]
+    public string Body { get; set; } = string.Empty;
+
+    public bool IsPrivate { get; set; }
+}
+
+public sealed class TenantWorkOrderUpdateRequest
+{
+    [MaxLength(200)]
+    public string? Title { get; set; }
+
+    [MaxLength(4000)]
+    public string? Description { get; set; }
+
+    [MaxLength(200)]
+    public string? RequesterName { get; set; }
+
+    [MaxLength(64)]
+    public string? RequesterPhone { get; set; }
+
+    [MaxLength(320)]
+    public string? RequesterEmail { get; set; }
+
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+
+    [MaxLength(2000)]
+    public string? EntryNotes { get; set; }
+
+    [MaxLength(2000)]
+    public string? PetWarnings { get; set; }
+
+    [MaxLength(2000)]
+    public string? AccessWarnings { get; set; }
+}
+
+public sealed class TenantWorkOrderCancelRequest
+{
+    [MaxLength(2000)]
+    public string? Note { get; set; }
+}
+
+public sealed class WorkOrderDetailCapabilities
+{
+    public bool CanViewTenantContact { get; set; }
+    public bool CanViewResidents { get; set; }
+    public bool CanViewAccessInstructions { get; set; }
+    public bool CanViewPrivateManagementNotes { get; set; }
+    public bool CanViewCosts { get; set; }
+    public bool CanCommentPublicly { get; set; }
+    public bool CanCommentPrivately { get; set; }
+    public bool CanUploadPhoto { get; set; }
+    public bool CanDeletePhoto { get; set; }
+    public bool CanCancel { get; set; }
+    public bool CanEditRequestFields { get; set; }
+    public bool CanEditManagementFields { get; set; }
+    public bool CanAssignTechnician { get; set; }
+    public bool CanDispatchVendor { get; set; }
+    public IReadOnlyList<WorkOrderStatus> AllowedStatusTransitions { get; set; } = [];
+
+    public static WorkOrderDetailCapabilities Tenant(WorkOrderStatus status) => new()
+    {
+        CanViewTenantContact = true,
+        CanViewAccessInstructions = true,
+        CanCommentPublicly = true,
+        CanUploadPhoto = true,
+        CanDeletePhoto = false,
+        CanCancel = TenantCanCancel(status),
+        CanEditRequestFields = TenantCanEdit(status),
+        AllowedStatusTransitions = TenantCanCancel(status) ? [WorkOrderStatus.Cancelled] : [],
+    };
+
+    public static WorkOrderDetailCapabilities Maintenance(WorkOrderStatus status) => new()
+    {
+        CanViewTenantContact = true,
+        CanViewResidents = true,
+        CanViewAccessInstructions = true,
+        CanCommentPublicly = true,
+        CanUploadPhoto = true,
+        CanDeletePhoto = false,
+        AllowedStatusTransitions = TechnicianTransitions(status),
+    };
+
+    public static WorkOrderDetailCapabilities Manager(WorkOrderStatus status) => new()
+    {
+        CanViewTenantContact = true,
+        CanViewResidents = true,
+        CanViewAccessInstructions = true,
+        CanViewPrivateManagementNotes = true,
+        CanViewCosts = true,
+        CanCommentPublicly = true,
+        CanCommentPrivately = true,
+        CanUploadPhoto = true,
+        CanDeletePhoto = true,
+        CanCancel = true,
+        CanEditRequestFields = true,
+        CanEditManagementFields = true,
+        CanAssignTechnician = true,
+        CanDispatchVendor = true,
+        AllowedStatusTransitions = ManagerTransitions(status),
+    };
+
+    private static bool IsOpen(WorkOrderStatus status) =>
+        status != WorkOrderStatus.Completed &&
+        status != WorkOrderStatus.Cancelled &&
+        status != WorkOrderStatus.Archived;
+
+    private static bool TenantCanEdit(WorkOrderStatus status) =>
+        status is WorkOrderStatus.New or WorkOrderStatus.Scheduled;
+
+    private static bool TenantCanCancel(WorkOrderStatus status) =>
+        status is WorkOrderStatus.New or WorkOrderStatus.Scheduled;
+
+    private static IReadOnlyList<WorkOrderStatus> TechnicianTransitions(WorkOrderStatus status) => status switch
+    {
+        WorkOrderStatus.New =>
+        [
+            WorkOrderStatus.Scheduled, WorkOrderStatus.InProgress, WorkOrderStatus.OnHold,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.Scheduled =>
+        [
+            WorkOrderStatus.InProgress, WorkOrderStatus.WaitingParts, WorkOrderStatus.OnHold,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.InProgress =>
+        [
+            WorkOrderStatus.WaitingParts, WorkOrderStatus.OnHold, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.WaitingParts =>
+        [
+            WorkOrderStatus.InProgress, WorkOrderStatus.OnHold, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.OnHold =>
+        [
+            WorkOrderStatus.Scheduled, WorkOrderStatus.InProgress, WorkOrderStatus.WaitingParts,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        _ => [],
+    };
+
+    private static IReadOnlyList<WorkOrderStatus> ManagerTransitions(WorkOrderStatus status) => status switch
+    {
+        WorkOrderStatus.New =>
+        [
+            WorkOrderStatus.Scheduled, WorkOrderStatus.InProgress, WorkOrderStatus.OnHold,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.Scheduled =>
+        [
+            WorkOrderStatus.InProgress, WorkOrderStatus.WaitingParts, WorkOrderStatus.OnHold,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.InProgress =>
+        [
+            WorkOrderStatus.WaitingParts, WorkOrderStatus.OnHold, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.WaitingParts =>
+        [
+            WorkOrderStatus.InProgress, WorkOrderStatus.OnHold, WorkOrderStatus.Completed,
+        ],
+        WorkOrderStatus.OnHold =>
+        [
+            WorkOrderStatus.Scheduled, WorkOrderStatus.InProgress, WorkOrderStatus.WaitingParts,
+            WorkOrderStatus.Cancelled, WorkOrderStatus.Completed,
+        ],
+        _ => [],
+    };
 }
 
 public class CreateWorkOrderRequest
@@ -221,6 +478,32 @@ public class CreateWorkOrderRequest
     /// </summary>
     [MaxLength(2000)]
     public string? TechnicianAccessInstructions { get; set; }
+
+    [MaxLength(120)]
+    public string? SubmittedByLabel { get; set; }
+
+    [MaxLength(200)]
+    public string? RequesterName { get; set; }
+
+    [MaxLength(64)]
+    public string? RequesterPhone { get; set; }
+
+    [MaxLength(320)]
+    public string? RequesterEmail { get; set; }
+
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+
+    [MaxLength(2000)]
+    public string? EntryNotes { get; set; }
+
+    [MaxLength(2000)]
+    public string? PetWarnings { get; set; }
+
+    [MaxLength(2000)]
+    public string? AccessWarnings { get; set; }
 
     [MaxLength(120)]
     public string Category { get; set; } = "General";
@@ -288,6 +571,32 @@ public class UpdateWorkOrderRequest
     /// <summary>Replacement access details shown to the assigned technician.</summary>
     [MaxLength(2000)]
     public string? TechnicianAccessInstructions { get; set; }
+
+    [MaxLength(120)]
+    public string? SubmittedByLabel { get; set; }
+
+    [MaxLength(200)]
+    public string? RequesterName { get; set; }
+
+    [MaxLength(64)]
+    public string? RequesterPhone { get; set; }
+
+    [MaxLength(320)]
+    public string? RequesterEmail { get; set; }
+
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+
+    [MaxLength(2000)]
+    public string? EntryNotes { get; set; }
+
+    [MaxLength(2000)]
+    public string? PetWarnings { get; set; }
+
+    [MaxLength(2000)]
+    public string? AccessWarnings { get; set; }
 
     [MaxLength(120)]
     public string? Category { get; set; }

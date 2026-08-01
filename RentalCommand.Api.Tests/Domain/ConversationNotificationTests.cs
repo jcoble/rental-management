@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -40,7 +42,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             SendConversationMessageCommand,
             SendConversationMessageResult,
@@ -49,6 +51,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
             AtomicNotificationMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicNoticeDeliveryCommand,
+            AtomicNoticeDeliveryResult,
+            AtomicNoticeDeliveryHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -61,9 +67,9 @@ public class ConversationNotificationTests : IAsyncLifetime
         await _ctx.DisposeAsync();
     }
 
-    private ConversationService CreateSut() => new(
+    private ConversationService CreateSut(RecordingRealtimeInvalidationQueue? realtimeQueue = null) => new(
         _ctx.Db,
-        new NoopDataUpdateService(),
+        realtimeQueue ?? new RecordingRealtimeInvalidationQueue(),
         new NoopFairHousingReviewService(),
         NullLogger<ConversationService>.Instance,
         TimeProvider.System,
@@ -96,7 +102,8 @@ public class ConversationNotificationTests : IAsyncLifetime
         });
         _ctx.Db.TeamRoutingRules.Add(routingRule);
         _ctx.Db.SaveChanges();
-        var sut = CreateSut();
+        var realtimeQueue = new RecordingRealtimeInvalidationQueue();
+        var sut = CreateSut(realtimeQueue);
 
         var result = await sut.TenantStartAsync(
             1, tenant.Id, "Sink leak", "Water under the cabinet", "tenant-start-sink-leak");
@@ -112,6 +119,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.NavigationAccessContextId.Should().BePositive();
         notification.NavigationAccessRevision.Should().BePositive();
         _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
+        realtimeQueue.Batches.Should().ContainSingle();
+        realtimeQueue.Batches[0].Should().Contain(update =>
+            update.EntityType == "Conversation" && update.EntityId == result!.Id);
+        realtimeQueue.Batches[0].Should().Contain(update =>
+            update.EntityType == "Notification" && update.EntityId == notification.Id);
     }
 
     [Fact]
@@ -209,6 +221,55 @@ public class ConversationNotificationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TenantMarkReadAsync_WhenUnread_UpdatesOnceAndSecondReadIsNoOp()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        SeedConversation(
+            tenant.Id,
+            "HVAC appointment confirmed",
+            now.AddMinutes(-1),
+            tenantUnreadCount: 2);
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = 20,
+            ActiveAccessContextId = tenantContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var conversationId = await _ctx.Db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.TenantId == tenant.Id
+                && conversation.Subject == "HVAC appointment confirmed")
+            .Select(conversation => conversation.Id)
+            .SingleAsync();
+        var scope = new WorkspaceReadScope(
+            1, 20, session.Id, tenantContext.Id, tenantContext.AccessRevision);
+        var sut = CreateSut();
+
+        (await sut.MarkReadForTenantAsync(scope, tenant.Id, conversationId, "tenant-read-hvac-first"))
+            .Should().BeTrue();
+        (await sut.MarkReadForTenantAsync(scope, tenant.Id, conversationId, "tenant-read-hvac-second"))
+            .Should().BeTrue();
+
+        (await _ctx.Db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.Id == conversationId)
+            .Select(conversation => conversation.TenantUnreadCount)
+            .SingleAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(log =>
+            log.EntityType == nameof(Conversation)
+            && log.EntityId == conversationId
+            && log.ChangeReason == "Tenant conversation marked read")).Should().Be(1);
+    }
+
+    [Fact]
     public async Task ListAsync_HidesTenantMessageNotificationsFromTenantOnlyUsers()
     {
         SeedTenantWithStaffAndTenantUsers();
@@ -224,6 +285,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             new Notification
             {
                 PortfolioId = 1,
+                UserId = 20,
                 Type = "System",
                 Title = "Pool closed",
                 Message = "Shared system notice",
@@ -238,6 +300,396 @@ public class ConversationNotificationTests : IAsyncLifetime
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
         var staffItems = await sut.ListAsync(1, userId: 10);
         staffItems.Select(n => n.Title).Should().Contain("New message from Emily Chen");
+    }
+
+    [Fact]
+    public async Task ListAsync_ProjectsTenantLedgerEntryIntentOnlyForOwnedTenantAccount()
+    {
+        SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var tenantAccountId = await _ctx.Db.TenantAccounts
+            .Where(account => account.PortfolioId == 1)
+            .Select(account => account.Id)
+            .SingleAsync();
+        var ownedLedgerEntry = await SeedTenantLedgerEntryAsync(
+            tenantAccountId,
+            "owned-rent-charge",
+            now);
+        var foreignLedgerEntry = await SeedForeignTenantLedgerEntryAsync(now);
+        _ctx.Db.Notifications.AddRange(
+            TenantLedgerNotification(
+                userId: 20,
+                title: "Pay January rent",
+                tenantContext,
+                tenantAccountId,
+                ownedLedgerEntry.Id,
+                now),
+            TenantLedgerNotification(
+                userId: 20,
+                title: "Foreign account charge",
+                tenantContext,
+                foreignLedgerEntry.TenantAccountId,
+                foreignLedgerEntry.Id,
+                now.AddMinutes(1)));
+        await _ctx.Db.SaveChangesAsync();
+        var scope = new WorkspaceReadScope(
+            1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        _commands.Clear();
+        var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
+
+        var owned = items.Should().ContainSingle(item => item.Title == "Pay January rent").Subject;
+        owned.NavigationIntent.Should().NotBeNull();
+        owned.NavigationIntent!.Destination.Should().Be(NavigationDestination.TenantLedgerEntry);
+        owned.NavigationIntent.Resource.Should().BeEquivalentTo(new NavigationResourceDto
+        {
+            Kind = nameof(TenantLedgerEntry),
+            Id = checked((int)ownedLedgerEntry.Id),
+        });
+        owned.NavigationIntent.ParentResource.Should().BeEquivalentTo(new NavigationResourceDto
+        {
+            Kind = nameof(TenantAccount),
+            Id = tenantAccountId,
+        });
+        items.Should().ContainSingle(item => item.Title == "Foreign account charge")
+            .Which.NavigationIntent.Should().BeNull();
+        _commands.Should().Contain(command =>
+            command.Contains("vw_effective_tenant_access", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("\"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("\"TenantAccountId\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListGetAndUnreadCount_HideFutureLedgerNotificationsButKeepAdvanceReminders()
+    {
+        SeedTenantWithStaffAndTenantUsers();
+        var businessNow = new DateTime(2027, 1, 31, 17, 0, 0, DateTimeKind.Utc);
+        var clock = await _ctx.Db.SimulationClocks.SingleAsync(row => row.Id == 1);
+        clock.Mode = RentalCommand.Core.Time.ClockMode.Frozen;
+        clock.SimAnchorUtc = businessNow;
+        clock.RealAnchorUtc = DateTime.UtcNow;
+        clock.TimeZoneId = "America/New_York";
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var tenantAccountId = await _ctx.Db.TenantAccounts
+            .Where(account => account.PortfolioId == 1)
+            .Select(account => account.Id)
+            .SingleAsync();
+        var currentCharge = await SeedTenantLedgerEntryAsync(
+            tenantAccountId,
+            "current-rent-charge",
+            businessNow,
+            new DateOnly(2027, 1, 31),
+            new DateOnly(2027, 1, 31));
+        var futureCharge = await SeedTenantLedgerEntryAsync(
+            tenantAccountId,
+            "future-rent-charge",
+            businessNow,
+            new DateOnly(2027, 2, 1),
+            new DateOnly(2027, 2, 1));
+        var currentNotification = TenantLedgerNotification(
+            userId: 20,
+            title: "Current charge posted",
+            tenantContext,
+            tenantAccountId,
+            currentCharge.Id,
+            businessNow,
+            type: "ScheduledRentCharge");
+        var futureNotification = TenantLedgerNotification(
+            userId: 20,
+            title: "Future charge posted",
+            tenantContext,
+            tenantAccountId,
+            futureCharge.Id,
+            businessNow.AddMinutes(1),
+            type: "ScheduledRentCharge");
+        var reminderNotification = new Notification
+        {
+            PortfolioId = 1,
+            UserId = 20,
+            Type = "TenantNotice",
+            Title = "Rent due soon",
+            Message = "Rent of $1,650.00 is due Feb 1, 2027.",
+            Severity = "Info",
+            NavigationExperience = NavigationExperience.Tenant,
+            NavigationDestination = NavigationDestination.TenantAccount,
+            NavigationAccessContextId = tenantContext.Id,
+            NavigationAccessRevision = tenantContext.AccessRevision,
+            NavigationResourceKind = nameof(TenantAccount),
+            NavigationResourceId = tenantAccountId,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = businessNow.AddDays(30),
+            NavigationFallbackDestination = NavigationDestination.Home,
+            RelatedEntityType = nameof(TenantLedgerEntry),
+            RelatedEntityId = checked((int)futureCharge.Id),
+            CreatedAt = businessNow.AddMinutes(2),
+        };
+        _ctx.Db.Notifications.AddRange(currentNotification, futureNotification, reminderNotification);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var scope = new WorkspaceReadScope(
+            1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        _commands.Clear();
+        var items = await sut.ListAsync(scope, NavigationExperience.Tenant);
+
+        items.Select(item => item.Title).Should().Equal("Rent due soon", "Current charge posted");
+        (await sut.GetAsync(scope, NavigationExperience.Tenant, futureNotification.Id)).Should().BeNull();
+        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(2);
+        _commands.Should().Contain(command =>
+            command.Contains("rc_business_date", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("\"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListGetAndUnreadCount_HideWorkspaceBroadcastsFromTenantExperience()
+    {
+        SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        var adminContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var tenantAccountId = await _ctx.Db.TenantAccounts
+            .Where(account => account.PortfolioId == 1)
+            .Select(account => account.Id)
+            .SingleAsync();
+        var bankBroadcast = new Notification
+        {
+            PortfolioId = 1,
+            Type = "BankImportCompleted",
+            Title = "Bank transactions imported",
+            Message = "81 bank transactions are ready for review.",
+            Severity = "Info",
+            RelatedEntityType = nameof(BankConnection),
+            RelatedEntityId = 42,
+            CreatedAt = now,
+        };
+        var tenantNotice = new Notification
+        {
+            PortfolioId = 1,
+            UserId = 20,
+            Type = "TenantNotice",
+            Title = "Rent due soon",
+            Message = "Rent of $1,200.00 is due tomorrow.",
+            Severity = "Info",
+            NavigationExperience = NavigationExperience.Tenant,
+            NavigationDestination = NavigationDestination.TenantAccount,
+            NavigationAccessContextId = tenantContext.Id,
+            NavigationAccessRevision = tenantContext.AccessRevision,
+            NavigationResourceKind = nameof(TenantAccount),
+            NavigationResourceId = tenantAccountId,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(7),
+            NavigationFallbackDestination = NavigationDestination.Home,
+            CreatedAt = now.AddMinutes(1),
+        };
+        _ctx.Db.Notifications.AddRange(bankBroadcast, tenantNotice);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var tenantScope = new WorkspaceReadScope(
+            1, 20, Guid.NewGuid(), tenantContext.Id, tenantContext.AccessRevision);
+        var adminScope = new WorkspaceReadScope(
+            1, 10, Guid.NewGuid(), adminContext.Id, adminContext.AccessRevision);
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        _commands.Clear();
+        var tenantItems = await sut.ListAsync(tenantScope, NavigationExperience.Tenant);
+
+        tenantItems.Select(item => item.Title).Should().Equal("Rent due soon");
+        (await sut.GetAsync(tenantScope, NavigationExperience.Tenant, bankBroadcast.Id)).Should().BeNull();
+        (await sut.GetUnreadCountAsync(tenantScope, NavigationExperience.Tenant)).Should().Be(1);
+        _commands.Should().Contain(command =>
+            command.Contains("\"WorkspaceMemberships\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("\"Notifications\"", StringComparison.OrdinalIgnoreCase));
+
+        var adminItems = await sut.ListAsync(adminScope, NavigationExperience.Management);
+
+        adminItems.Select(item => item.Title).Should().Contain("Bank transactions imported");
+        (await sut.GetUnreadCountAsync(adminScope, NavigationExperience.Management)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task NoticeDeliveryApprovedReplay_ReconcilesStalePaymentNotificationWithoutDuplicatingGraph()
+    {
+        var graph = await SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync("approved-payment-reconcile");
+        var command = AtomicNoticeDelivery.Command(
+            graph.ApprovalContext,
+            graph.DraftId,
+            [NoticeDeliveryChannel.TenantPortal],
+            null,
+            "approved-payment-reconcile-key");
+        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
+
+        var first = await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command),
+            command,
+            AtomicNoticeDelivery.Codec);
+        _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>()
+            .ChangeTracker.Clear();
+        var replay = await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command),
+            command,
+            AtomicNoticeDelivery.Codec);
+        _services.GetRequiredService<RentalCommand.Data.RentalCommandDbContext>()
+            .ChangeTracker.Clear();
+        var finalReplayCommand = AtomicNoticeDelivery.Command(
+            graph.ApprovalContext,
+            graph.DraftId,
+            [NoticeDeliveryChannel.TenantPortal],
+            null,
+            "approved-payment-final-replay-key");
+        var finalReplay = await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(finalReplayCommand),
+            finalReplayCommand,
+            AtomicNoticeDelivery.Codec);
+
+        first.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
+        replay.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
+        finalReplay.Value.RenderedNoticeId.Should().Be(graph.RenderedNoticeId);
+        _ctx.Db.ChangeTracker.Clear();
+        var notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(item => item.Id == graph.NotificationId);
+        notification.NavigationDestination.Should().Be(NavigationDestination.TenantLedgerEntry);
+        notification.NavigationResourceKind.Should().Be(nameof(TenantLedgerEntry));
+        notification.NavigationResourceId.Should().Be(checked((int)graph.TenantLedgerEntryId));
+        notification.NavigationParentResourceKind.Should().Be(nameof(TenantAccount));
+        notification.NavigationParentResourceId.Should().Be(graph.TenantAccountId);
+        notification.RelatedEntityType.Should().Be(nameof(TenantLedgerEntry));
+        notification.RelatedEntityId.Should().Be(checked((int)graph.TenantLedgerEntryId));
+        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task NoticeDeliveryApprovedReplay_WithWrongStaleNavigationFailsBeforeMutation()
+    {
+        var graph = await SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync("approved-payment-wrong-stale");
+        var notification = await _ctx.Db.Notifications.SingleAsync(item => item.Id == graph.NotificationId);
+        notification.NavigationResourceId = graph.ConversationId + 1000;
+        notification.RelatedEntityId = graph.ConversationId + 1000;
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var command = AtomicNoticeDelivery.Command(
+            graph.ApprovalContext,
+            graph.DraftId,
+            [NoticeDeliveryChannel.TenantPortal],
+            null,
+            "approved-payment-wrong-stale-key");
+        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
+
+        Func<Task> act = async () => await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command),
+            command,
+            AtomicNoticeDelivery.Codec);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Approved tenant notice is not a recoverable delivery graph.");
+        _ctx.Db.ChangeTracker.Clear();
+        notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(item => item.Id == graph.NotificationId);
+        notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+        notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+        notification.NavigationResourceId.Should().Be(graph.ConversationId + 1000);
+        notification.RelatedEntityType.Should().Be(nameof(Conversation));
+        notification.RelatedEntityId.Should().Be(graph.ConversationId + 1000);
+        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task NoticeDeliveryApprovedReplay_WithExtraDeliveryEvidenceFailsBeforeMutation()
+    {
+        var graph = await SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync("approved-payment-extra-evidence");
+        var now = DateTime.UtcNow;
+        var extraKey = DeliveryKey(graph.RenderedNoticeId, graph.LeaseManagementPartyId, NoticeDeliveryChannel.Email, "extra@example.test");
+        var outbox = new OutboxMessage
+        {
+            PortfolioId = 1,
+            MessageType = "email",
+            Payload = "{}",
+            IdempotencyKey = extraKey,
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        };
+        _ctx.Db.NoticeDeliveryEvidence.Add(new NoticeDeliveryEvidence
+        {
+            PortfolioId = 1,
+            RenderedNoticeId = graph.RenderedNoticeId,
+            RecipientLeaseManagementPartyId = graph.LeaseManagementPartyId,
+            RecipientRole = NoticeRecipientRole.PrimaryTenant,
+            Channel = NoticeDeliveryChannel.Email,
+            Destination = "extra@example.test",
+            OutboxMessage = outbox,
+            IdempotencyKey = extraKey,
+            CreatedAtUtc = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var command = AtomicNoticeDelivery.Command(
+            graph.ApprovalContext,
+            graph.DraftId,
+            [NoticeDeliveryChannel.TenantPortal],
+            null,
+            "approved-payment-extra-evidence-key");
+        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
+
+        Func<Task> act = async () => await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command),
+            command,
+            AtomicNoticeDelivery.Codec);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Approved tenant notice is not a recoverable delivery graph.");
+        _ctx.Db.ChangeTracker.Clear();
+        var notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(item => item.Id == graph.NotificationId);
+        notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+        notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+        notification.NavigationResourceId.Should().Be(graph.ConversationId);
+        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(2);
+        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task NoticeDeliveryApprovedReplay_WithDifferentChannelsFailsClosed()
+    {
+        var graph = await SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync("approved-payment-channel-mismatch");
+        var command = AtomicNoticeDelivery.Command(
+            graph.ApprovalContext,
+            graph.DraftId,
+            [NoticeDeliveryChannel.Email],
+            null,
+            "approved-payment-wrong-channel-key");
+        var atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
+
+        Func<Task> act = async () => await atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command),
+            command,
+            AtomicNoticeDelivery.Codec);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Existing approved notice does not match this approval request.");
+        _ctx.Db.ChangeTracker.Clear();
+        var notification = await _ctx.Db.Notifications.AsNoTracking()
+            .SingleAsync(item => item.Id == graph.NotificationId);
+        notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+        notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+        notification.NavigationResourceId.Should().Be(graph.ConversationId);
+        (await _ctx.Db.RenderedNotices.CountAsync()).Should().Be(1);
+        (await _ctx.Db.NoticeDeliveryEvidence.CountAsync()).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(1);
+        (await _ctx.Db.Notifications.CountAsync()).Should().Be(1);
     }
 
     [Fact]
@@ -323,10 +775,10 @@ public class ConversationNotificationTests : IAsyncLifetime
 
         (await sut.ListAsync(1, 10)).Should().ContainSingle().Which.IsRead.Should().BeTrue();
         (await sut.ListAsync(1, 30)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
-        (await sut.ListAsync(1, 20)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
+        (await sut.ListAsync(1, 20)).Should().BeEmpty();
         (await sut.GetUnreadCountAsync(1, 10)).Should().Be(0);
         (await sut.GetUnreadCountAsync(1, 30)).Should().Be(1);
-        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(1);
+        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(0);
 
         var secondStaffContext = contexts[30];
         var secondStaffScope = new WorkspaceReadScope(
@@ -334,7 +786,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         await sut.MarkAllAsReadAsync(secondStaffScope, "read-all-water-interruption");
 
         (await sut.GetUnreadCountAsync(1, 30)).Should().Be(0);
-        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(1);
+        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(0);
         (await _ctx.Db.NotificationReadStates.AsNoTracking()
             .OrderBy(readState => readState.UserId)
             .Select(readState => readState.UserId)
@@ -489,6 +941,61 @@ public class ConversationNotificationTests : IAsyncLifetime
             sql.Contains("TenantId", StringComparison.Ordinal) &&
             sql.Contains("TenantUnreadCount", StringComparison.Ordinal) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListAndGetAsync_ProjectViewerAwareCounterpartyNames()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        portfolio.ManagementCompanyName = " Jordan QA Admin ";
+        await _ctx.Db.SaveChangesAsync();
+        SeedConversation(tenant.Id, "Portal question", DateTime.UtcNow.AddMinutes(-1));
+        var conversationId = await _ctx.Db.Conversations
+            .Where(conversation => conversation.Subject == "Portal question")
+            .Select(conversation => conversation.Id)
+            .SingleAsync();
+
+        var sut = CreateSut();
+
+        _commands.Clear();
+        var tenantPage = await sut.ListPageForTenantAsync(
+            1, tenant.Id, new ConversationListQuery { Take = 20 });
+        var tenantSummary = tenantPage.Items.Should().ContainSingle().Which;
+        tenantSummary.TenantName.Should().Be("Emily Chen");
+        tenantSummary.CounterpartyName.Should().Be("Jordan QA Admin");
+        var tenantDetail = await sut.GetForTenantAsync(1, tenant.Id, conversationId);
+        tenantDetail.Should().NotBeNull();
+        tenantDetail!.CounterpartyName.Should().Be("Jordan QA Admin");
+        tenantDetail.TenantName.Should().Be("Emily Chen");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ManagementCompanyName", StringComparison.Ordinal) &&
+            sql.Contains("FROM \"Conversations\"", StringComparison.OrdinalIgnoreCase));
+
+        var staffPage = await sut.ListPageAsync(1, new ConversationListQuery { Take = 20 });
+        var staffSummary = staffPage.Items.Should().ContainSingle().Which;
+        staffSummary.TenantName.Should().Be("Emily Chen");
+        staffSummary.CounterpartyName.Should().Be("Emily Chen");
+        var staffDetail = await sut.GetAsync(1, conversationId);
+        staffDetail.Should().NotBeNull();
+        staffDetail!.CounterpartyName.Should().Be("Emily Chen");
+    }
+
+    [Fact]
+    public async Task ListPageForTenantAsync_FallsBackToGenericCounterpartyWhenManagementNameIsBlank()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        portfolio.ManagementCompanyName = "   ";
+        await _ctx.Db.SaveChangesAsync();
+        SeedConversation(tenant.Id, "Office question", DateTime.UtcNow.AddMinutes(-1));
+
+        var page = await CreateSut().ListPageForTenantAsync(
+            1, tenant.Id, new ConversationListQuery { Take = 20 });
+
+        var summary = page.Items.Should().ContainSingle().Which;
+        summary.TenantName.Should().Be("Emily Chen");
+        summary.CounterpartyName.Should().Be("Property management");
     }
 
     [Fact]
@@ -847,13 +1354,338 @@ public class ConversationNotificationTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
     }
 
-    private sealed class NoopDataUpdateService : IDataUpdateService
+    private async Task<ApprovedNoticeGraph> SeedApprovedPaymentNoticeWithStaleMessageNotificationAsync(
+        string businessKey)
     {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        var approvedAt = DateTime.SpecifyKind(now.AddMinutes(-10), DateTimeKind.Utc);
+        var adminContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 10);
+        var tenantContext = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(context =>
+            context.PortfolioId == 1 && context.UserId == 20);
+        var lease = await _ctx.Db.LeaseManagements.SingleAsync(lease => lease.PortfolioId == 1);
+        var party = await _ctx.Db.LeaseManagementParties.SingleAsync(party => party.PortfolioId == 1);
+        var tenantAccount = await _ctx.Db.TenantAccounts.SingleAsync(account => account.PortfolioId == 1);
+        var ledgerEntry = await SeedTenantLedgerEntryAsync(
+            tenantAccount.Id,
+            $"{businessKey}-charge",
+            now);
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = 10,
+            ActiveAccessContextId = adminContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
 
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
+        var systemTemplate = new SystemNoticeTemplateVersion
+        {
+            SystemKey = $"rent-reminder-{businessKey}",
+            Version = 1,
+            Classification = NoticeClassification.Operational,
+            Subject = "Pay January rent",
+            Body = "Please pay January rent from the tenant portal.",
+            Provenance = "test",
+            PublishedAtUtc = now,
+        };
+        var workspaceTemplate = new WorkspaceNoticeTemplateVersion
+        {
+            PortfolioId = 1,
+            SystemKey = systemTemplate.SystemKey,
+            Version = 1,
+            BasedOnSystemTemplateVersion = systemTemplate,
+            Subject = systemTemplate.Subject,
+            Body = systemTemplate.Body,
+            CreatedByUserId = 10,
+            CreatedAtUtc = now,
+        };
+        var policy = new TenantNoticePolicy
+        {
+            PortfolioId = 1,
+            AutomationKey = $"policy-{businessKey}",
+            Mode = TenantNoticeMode.Draft,
+            Classification = NoticeClassification.Operational,
+            SendTenantPortal = true,
+            SendEmail = true,
+            IncludePrimaryTenant = true,
+            TemplateVersion = workspaceTemplate,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.TenantNoticePolicies.Add(policy);
+        await _ctx.Db.SaveChangesAsync();
+        var draft = new NoticeDraft
+        {
+            PortfolioId = 1,
+            LeaseManagementId = lease.Id,
+            TenantAccountId = tenantAccount.Id,
+            RecipientLeaseManagementPartyId = party.Id,
+            TenantLedgerEntryId = ledgerEntry.Id,
+            PropertyId = lease.PropertyId,
+            NoticeType = "rent-reminder",
+            Status = "Approved",
+            Subject = systemTemplate.Subject,
+            Body = systemTemplate.Body,
+            Reason = "Payment reminder",
+            TriggerDate = DateTime.SpecifyKind(now.Date, DateTimeKind.Utc),
+            TenantNoticePolicyId = policy.Id,
+            WorkspaceNoticeTemplateVersionId = workspaceTemplate.Id,
+            ApprovedChannels = NoticeDeliveryChannel.TenantPortal.ToString(),
+            CreatedAt = now,
+            UpdatedAt = approvedAt,
+            ApprovedAt = approvedAt,
+        };
+        _ctx.Db.NoticeDrafts.Add(draft);
+        await _ctx.Db.SaveChangesAsync();
+
+        var contentHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(draft.Subject + "\n" + draft.Body)))
+            .ToLowerInvariant();
+        var rendered = new RenderedNotice
+        {
+            PortfolioId = 1,
+            NoticeDraftId = draft.Id,
+            WorkspaceNoticeTemplateVersionId = workspaceTemplate.Id,
+            LeaseManagementId = lease.Id,
+            Subject = draft.Subject,
+            Body = draft.Body,
+            ContentSha256 = contentHash,
+            TemplateProvenance = $"{workspaceTemplate.SystemKey}:workspace-v1:system-v1",
+            RenderedAtUtc = approvedAt,
+            ApprovedByUserId = 10,
+            ApprovedAtUtc = approvedAt,
+        };
+        _ctx.Db.RenderedNotices.Add(rendered);
+        await _ctx.Db.SaveChangesAsync();
+
+        var conversation = new Conversation
+        {
+            PortfolioId = 1,
+            TenantId = tenant.Id,
+            Subject = rendered.Subject,
+            PropertyId = lease.PropertyId,
+            StartedByLandlord = true,
+            CreatedAt = approvedAt,
+            LastMessageAt = approvedAt,
+            LastMessagePreview = rendered.Body,
+            TenantUnreadCount = 1,
+        };
+        var message = new ConversationMessage
+        {
+            Conversation = conversation,
+            SenderRole = ConversationSenderRole.Landlord,
+            Body = rendered.Body,
+            Channels = "Portal",
+            CreatedAt = approvedAt,
+        };
+        _ctx.Db.ConversationMessages.Add(message);
+        await _ctx.Db.SaveChangesAsync();
+
+        var deliveryKey = DeliveryKey(rendered.Id, party.Id, NoticeDeliveryChannel.TenantPortal, "20");
+        var outbox = new OutboxMessage
+        {
+            PortfolioId = 1,
+            MessageType = "data-update",
+            Payload = "{}",
+            IdempotencyKey = deliveryKey,
+            CreatedAtUtc = approvedAt,
+            NextAttemptAtUtc = approvedAt,
+        };
+        var evidence = new NoticeDeliveryEvidence
+        {
+            PortfolioId = 1,
+            RenderedNoticeId = rendered.Id,
+            RecipientLeaseManagementPartyId = party.Id,
+            RecipientRole = NoticeRecipientRole.PrimaryTenant,
+            Channel = NoticeDeliveryChannel.TenantPortal,
+            Destination = "20",
+            OutboxMessage = outbox,
+            ConversationMessageId = message.Id,
+            IdempotencyKey = deliveryKey,
+            CreatedAtUtc = approvedAt,
+        };
+        var notification = new Notification
+        {
+            PortfolioId = 1,
+            UserId = 20,
+            Type = "TenantNotice",
+            Title = rendered.Subject,
+            Message = rendered.Body,
+            Severity = "Info",
+            NavigationExperience = NavigationExperience.Tenant,
+            NavigationDestination = NavigationDestination.Message,
+            NavigationAccessContextId = tenantContext.Id,
+            NavigationAccessRevision = tenantContext.AccessRevision,
+            NavigationResourceKind = nameof(Conversation),
+            NavigationResourceId = conversation.Id,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = approvedAt.AddDays(7),
+            NavigationFallbackDestination = NavigationDestination.Home,
+            RelatedEntityType = nameof(Conversation),
+            RelatedEntityId = conversation.Id,
+            CreatedAt = approvedAt,
+        };
+        draft.RenderedNoticeId = rendered.Id;
+        draft.ConversationId = conversation.Id;
+        _ctx.Db.AddRange(evidence, notification);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        return new ApprovedNoticeGraph(
+            draft.Id,
+            rendered.Id,
+            notification.Id,
+            conversation.Id,
+            party.Id,
+            tenantAccount.Id,
+            ledgerEntry.Id,
+            new NoticeApprovalExecutionContext(1, 10, session.Id, adminContext.Id, adminContext.AccessRevision));
+    }
+
+    private async Task<TenantLedgerEntry> SeedTenantLedgerEntryAsync(
+        int tenantAccountId,
+        string businessKey,
+        DateTime now,
+        DateOnly? effectiveOn = null,
+        DateOnly? dueOn = null)
+    {
+        var entry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            TenantAccountId = tenantAccountId,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = effectiveOn ?? DateOnly.FromDateTime(now),
+            DueOn = dueOn ?? DateOnly.FromDateTime(now.AddDays(5)),
+            PostedAtUtc = now,
+            Description = "January rent",
+            BusinessKey = businessKey,
+            CreatedByUserId = 10,
+        };
+        _ctx.Db.TenantLedgerEntries.Add(entry);
+        await _ctx.Db.SaveChangesAsync();
+        return entry;
+    }
+
+    private async Task<TenantLedgerEntry> SeedForeignTenantLedgerEntryAsync(DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Foreign tenant home",
+            AddressLine1 = "9 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "9A",
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1250,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = "LM-FOREIGN-NOTIFICATION",
+            PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            AccountNumber = "TA-FOREIGN-NOTIFICATION",
+            Currency = "USD",
+            OpenedAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = 10,
+        };
+        _ctx.Db.AddRange(property, unit, relationship, account);
+        await _ctx.Db.SaveChangesAsync();
+        return await SeedTenantLedgerEntryAsync(account.Id, "foreign-rent-charge", now);
+    }
+
+    private static string DeliveryKey(
+        long renderedNoticeId,
+        int partyId,
+        NoticeDeliveryChannel channel,
+        string destination) =>
+        $"notice:{renderedNoticeId}:party:{partyId}:{channel}:{DestinationHash(destination)}";
+
+    private static string DestinationHash(string destination) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(destination)))
+            .ToLowerInvariant()[..16];
+
+    private sealed record ApprovedNoticeGraph(
+        int DraftId,
+        long RenderedNoticeId,
+        int NotificationId,
+        int ConversationId,
+        int LeaseManagementPartyId,
+        int TenantAccountId,
+        long TenantLedgerEntryId,
+        NoticeApprovalExecutionContext ApprovalContext);
+
+    private static Notification TenantLedgerNotification(
+        int userId,
+        string title,
+        WorkspaceAccessContext tenantContext,
+        int tenantAccountId,
+        long tenantLedgerEntryId,
+        DateTime now,
+        string type = "TenantNotice") => new()
+        {
+            PortfolioId = 1,
+            UserId = userId,
+            Type = type,
+            Title = title,
+            Message = "A rent charge needs attention.",
+            Severity = "Info",
+            NavigationExperience = NavigationExperience.Tenant,
+            NavigationDestination = NavigationDestination.TenantLedgerEntry,
+            NavigationAccessContextId = tenantContext.Id,
+            NavigationAccessRevision = tenantContext.AccessRevision,
+            NavigationResourceKind = nameof(TenantLedgerEntry),
+            NavigationResourceId = checked((int)tenantLedgerEntryId),
+            NavigationParentResourceKind = nameof(TenantAccount),
+            NavigationParentResourceId = tenantAccountId,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(7),
+            NavigationFallbackDestination = NavigationDestination.Home,
+            RelatedEntityType = nameof(TenantLedgerEntry),
+            RelatedEntityId = checked((int)tenantLedgerEntryId),
+            CreatedAt = now,
+        };
+
+    private sealed class RecordingRealtimeInvalidationQueue : IRealtimeInvalidationQueue
+    {
+        public List<IReadOnlyList<EntityUpdateBroadcast>> Batches { get; } = [];
+
+        public void EnqueueEntityUpdates(IReadOnlyList<EntityUpdateBroadcast> updates) =>
+            Batches.Add(updates.ToArray());
     }
 
     // These tests exercise the TENANT send path (TenantStartAsync), which is not Fair-Housing gated,

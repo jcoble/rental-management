@@ -28,6 +28,7 @@ void main() {
       expect(sheet, contains('Stepper('));
       expect(sheet, contains('signed correction or restatement'));
       expect(sheet, contains('sameRelationshipConfirmed'));
+      expect(detail, contains('party.canGrantTenantPortalAccess'));
       expect(detail, contains("auth.hasCapability('rentals.manage')"));
       expect(
         detail,

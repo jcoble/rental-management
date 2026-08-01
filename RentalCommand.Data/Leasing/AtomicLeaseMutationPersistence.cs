@@ -2,23 +2,17 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly AtomicAuditScope _auditScope;
-
-    public AtomicLeaseMutationPersistence(RentalCommandDbContext db, AtomicAuditScope auditScope)
-    {
-        _db = db;
-        _auditScope = auditScope;
-    }
-
-    public async Task<bool> ValidateAgreementDraftSignerScopeAsync(
+    public static async Task<bool> ValidateAgreementDraftSignerScopeAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
@@ -29,7 +23,8 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             lease_management_party_id = signer.LeaseManagementPartyId,
             tenant_id = signer.TenantId,
         }));
-        var row = await _db.Database.SqlQueryRaw<SignerScopeValidationRow>(
+        RequireAuditScope(db, context);
+        var row = await db.Database.SqlQueryRaw<SignerScopeValidationRow>(
                 ValidateAgreementDraftSignerScopeSql,
                 JsonParameter("signers", payload),
                 Integer("portfolioId", portfolioId),
@@ -38,7 +33,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         return row.InputValid;
     }
 
-    public async Task<AtomicRenewalAddendumDraftResult> CreateRenewalAddendumDraftsAsync(
+    public static async Task<AtomicRenewalAddendumDraftResult> CreateRenewalAddendumDraftsAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int sourceAgreementId,
@@ -68,12 +65,12 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("incorporate", 1),
             Integer("reissue", 2),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAddenda", AtomicRawDmlOperation.Insert),
             new("LeaseAddendumSigners", AtomicRawDmlOperation.Insert),
             new("LeaseAddendumFinancialEffects", AtomicRawDmlOperation.Insert),
             new("LeaseRenewalAddendumDecisions", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SingleTopLevelResultAsync<RenewalAddendumDraftRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<RenewalAddendumDraftRow>(
             CreateRenewalAddendumDraftsSql, parameters, ct);
         return new(
             row.InputValid,
@@ -83,7 +80,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             DeserializeIds(row.ReplacementFinancialEffectIdsJson));
     }
 
-    public async Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
+    public static async Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int leaseAgreementId,
@@ -109,10 +108,10 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("leaseAgreementId", leaseAgreementId),
             Integer("requiredDraftRevision", requiredDraftRevision),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAgreementSigners", AtomicRawDmlOperation.Delete),
             new("LeaseAgreementSigners", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerReplacementRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<AgreementSignerReplacementRow>(
             ReplaceAgreementDraftSignersSql, parameters, ct);
         if (!row.Eligible)
         {
@@ -122,7 +121,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         return new(DeserializeIds(row.DeletedSignerIdsJson), DeserializeIds(row.CreatedSignerIdsJson));
     }
 
-    public async Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
+    public static async Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int sourceAgreementId,
@@ -136,9 +137,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("sourceAgreementId", sourceAgreementId),
             Integer("successorAgreementId", successorAgreementId),
         };
-        using var lease = _auditScope.BeginInternalRawDml(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDml(
             "LeaseAgreementSigners", AtomicRawDmlOperation.Insert);
-        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
             CopyAgreementDraftSignersSql, parameters, ct);
         if (!row.Eligible)
         {
@@ -148,7 +149,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         return DeserializeIds(row.CreatedSignerIdsJson);
     }
 
-    public async Task<IReadOnlyList<int>> CopyIssuedAgreementReplacementDraftSignersAsync(
+    public static async Task<IReadOnlyList<int>> CopyIssuedAgreementReplacementDraftSignersAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int sourceAgreementId,
@@ -162,9 +165,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("sourceAgreementId", sourceAgreementId),
             Integer("replacementAgreementId", replacementAgreementId),
         };
-        using var lease = _auditScope.BeginInternalRawDml(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDml(
             "LeaseAgreementSigners", AtomicRawDmlOperation.Insert);
-        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
             CopyIssuedAgreementReplacementDraftSignersSql, parameters, ct);
         if (!row.Eligible)
         {
@@ -174,7 +177,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         return DeserializeIds(row.CreatedSignerIdsJson);
     }
 
-    public async Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
+    public static async Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int sourceAddendumId,
@@ -188,10 +193,10 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("sourceAddendumId", sourceAddendumId),
             Integer("correctionAddendumId", correctionAddendumId),
         };
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAddendumSigners", AtomicRawDmlOperation.Insert),
             new("LeaseAddendumFinancialEffects", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SingleTopLevelResultAsync<AddendumCorrectionChildCopyRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<AddendumCorrectionChildCopyRow>(
             CopyAddendumCorrectionChildrenSql, parameters, ct);
         return new(
             row.Eligible,
@@ -199,7 +204,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             DeserializeIds(row.CreatedFinancialEffectIdsJson));
     }
 
-    public async Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
+    public static async Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         IReadOnlyList<AtomicTenantAccessTransition> transitions,
@@ -232,10 +239,10 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("continue", (int)AtomicTenantAccessTransitionKind.ContinueOnReplacement),
         };
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SingleTopLevelResultAsync<AccessTransitionRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<AccessTransitionRow>(
             AccessTransitionSql, parameters, ct);
         if (!row.InputValid)
         {
@@ -248,7 +255,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             DeserializeIds(row.CreatedAccessIdsJson));
     }
 
-    public async Task<AtomicReturnPossessionMutationResult> ReturnPossessionAsync(
+    public static async Task<AtomicReturnPossessionMutationResult> ReturnPossessionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int unitId,
@@ -292,12 +301,12 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("turnoverOpen", (int)ReturnPossessionOutcome.TurnoverAlreadyOpen),
         };
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseManagementParties", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update),
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
-        var row = await _db.Database.SingleTopLevelResultAsync<ReturnPossessionRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<ReturnPossessionRow>(
             ReturnPossessionSql, parameters, ct);
         return new(
             (ReturnPossessionOutcome)row.Outcome,
@@ -307,7 +316,9 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             DeserializeIds(row.RevokedAccessIdsJson));
     }
 
-    public async Task<AtomicCancelPlannedRelationshipMutationResult> CancelPlannedRelationshipAsync(
+    public static async Task<AtomicCancelPlannedRelationshipMutationResult> CancelPlannedRelationshipAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         IReadOnlyList<AtomicCancelPlannedAccessInput> accesses,
@@ -346,13 +357,14 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             Integer("invalidAccess", (int)CancelPlannedRelationshipOutcome.InvalidAccessPolicy),
         };
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAgreements", AtomicRawDmlOperation.Update),
             new("LeaseAddenda", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
+            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
             new("TenantAccounts", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update));
-        var row = await _db.Database.SingleTopLevelResultAsync<CancelPlannedRelationshipRow>(
+        var row = await db.Database.SingleTopLevelResultAsync<CancelPlannedRelationshipRow>(
             CancelPlannedRelationshipSql, parameters, ct);
         return new(
             (CancelPlannedRelationshipOutcome)row.Outcome,
@@ -1168,20 +1180,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                       AND addendum."IssuedAtUtc" IS NOT NULL
                       AND addendum."VoidedAtUtc" IS NULL)
                     AS unresolved_issued_artifacts,
-                EXISTS (
-                    SELECT 1
-                    FROM "TenantLedgerEntries" AS entry
-                    WHERE entry."PortfolioId" = @portfolioId
-                      AND entry."TenantAccountId" = account."Id")
-                OR EXISTS (
-                    SELECT 1
-                    FROM "SecurityDepositEntries" AS entry
-                    INNER JOIN "SecurityDepositAccounts" AS deposit
-                        ON deposit."Id" = entry."SecurityDepositAccountId"
-                       AND deposit."PortfolioId" = entry."PortfolioId"
-                    WHERE deposit."PortfolioId" = @portfolioId
-                      AND deposit."TenantAccountId" = account."Id")
-                OR COALESCE((
+                COALESCE((
                     SELECT sum(CASE WHEN entry."Direction" = 'Debit' THEN entry."Amount" ELSE -entry."Amount" END)
                     FROM "TenantLedgerEntries" AS entry
                     WHERE entry."PortfolioId" = @portfolioId
@@ -1199,7 +1198,20 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                     FROM "TenantPaymentAttempts" AS attempt
                     WHERE attempt."PortfolioId" = @portfolioId
                       AND attempt."TenantAccountId" = account."Id"
-                      AND attempt."State" NOT IN ('Failed', 'Canceled'))
+                      AND attempt."State" IN ('Prepared', 'Submitted', 'Unknown'))
+                OR EXISTS (
+                    SELECT 1
+                    FROM "TenantLedgerAllocations" AS allocation
+                    WHERE allocation."PortfolioId" = @portfolioId
+                      AND allocation."TenantAccountId" = account."Id"
+                      AND allocation."ReversesAllocationId" IS NULL
+                      AND allocation."Amount" > 0
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "TenantLedgerAllocations" AS reversal
+                          WHERE reversal."PortfolioId" = allocation."PortfolioId"
+                            AND reversal."TenantAccountId" = allocation."TenantAccountId"
+                            AND reversal."ReversesAllocationId" = allocation."Id"))
                 OR EXISTS (
                     SELECT 1
                     FROM "TenantAutopayEnrollments" AS enrollment

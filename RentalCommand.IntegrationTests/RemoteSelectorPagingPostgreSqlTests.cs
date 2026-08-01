@@ -102,6 +102,126 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TenantSelector_SearchFiltersCountAndPageInPostgreSql()
+    {
+        var scope = await SeedAdministratorScopeAsync();
+        var now = DateTime.UtcNow;
+        var matchToken = $"Remote{Guid.NewGuid():N}";
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Selector property {Guid.NewGuid():N}",
+            AddressLine1 = "100 Selector Way",
+            City = "Testville",
+            State = "NY",
+            PostalCode = "10001",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var matchingTenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = matchToken,
+            LastName = "Needle",
+            Email = $"{matchToken.ToLowerInvariant()}@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var haystackTenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Selector",
+            LastName = "Haystack",
+            Email = $"haystack-{Guid.NewGuid():N}@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var matchingUnit = TenantSelectorUnit(property, "A");
+        var haystackUnit = TenantSelectorUnit(property, "B");
+        var matchingManagement = TenantSelectorLeaseManagement(scope, property, matchingUnit, matchingTenant, now);
+        var haystackManagement = TenantSelectorLeaseManagement(scope, property, haystackUnit, haystackTenant, now);
+        _context.Db.AddRange(
+            property,
+            matchingUnit,
+            haystackUnit,
+            matchingTenant,
+            haystackTenant,
+            matchingManagement,
+            haystackManagement);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+        await _context.ActivateApiScopeAsync(scope);
+
+        var service = new TenantService(
+            _context.Db,
+            Mock.Of<IDataUpdateService>(),
+            TimeProvider.System);
+        _commands.Clear();
+
+        var result = await service.ListPageAuthorizedAsync(
+            scope,
+            new TenantListQuery
+            {
+                Search = matchToken,
+                Sort = "lastName",
+                Skip = 0,
+                Take = 40,
+            });
+
+        result.TotalCount.Should().Be(1);
+        result.Items.Should().ContainSingle(item => item.FirstName == matchToken);
+        AssertSelectorSql("TENANT_SELECTOR_SEARCH");
+    }
+
+    private static Unit TenantSelectorUnit(Property property, string unitNumber)
+    {
+        var now = DateTime.UtcNow;
+        return new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = unitNumber,
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1200,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+    }
+
+    private static LeaseManagement TenantSelectorLeaseManagement(
+        WorkspaceReadScope scope,
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        DateTime now)
+    {
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"RS-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            CreatedByUserId = scope.UserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        management.Parties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now),
+            ChangeReason = "Selector test fixture",
+            CreatedAtUtc = now,
+            CreatedByUserId = scope.UserId,
+        });
+        return management;
+    }
+
+    [Fact]
     public async Task LeaseManagementSelector_PagesInPostgreSql()
     {
         var scope = await SeedAdministratorScopeAsync();
@@ -236,12 +356,14 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         var countSql = _commands.Single(IsTopLevelCountCommand);
         var pageSql = _commands.Single(IsBoundedPageCommand);
 
-        countSql.Should().Contain("AuthSessions");
+        ContainsAuthorizationSql(countSql).Should().BeTrue(
+            "selector authorization must remain in the top-level count SQL");
         countSql.Should().Contain("WHERE");
         countSql.Should().ContainEquivalentOf("join");
         ContainsTranslatedSearch(countSql).Should().BeTrue(
             "selector filtering must remain in the top-level count SQL");
-        pageSql.Should().Contain("AuthSessions");
+        ContainsAuthorizationSql(pageSql).Should().BeTrue(
+            "selector authorization must remain in the bounded page SQL");
         pageSql.Should().Contain("WHERE");
         ContainsTranslatedSearch(pageSql).Should().BeTrue(
             "selector filtering must remain in the bounded page SQL");
@@ -259,6 +381,10 @@ public sealed class RemoteSelectorPagingPostgreSqlTests : IAsyncLifetime
         && sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
         && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
         && sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsAuthorizationSql(string sql) =>
+        sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase)
+        || sql.Contains("rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsTranslatedSearch(string sql) =>
         sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase)

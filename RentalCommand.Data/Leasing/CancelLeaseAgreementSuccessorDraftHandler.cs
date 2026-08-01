@@ -7,25 +7,28 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CancelLeaseAgreementSuccessorDraftHandler
-    : IAtomicCommandHandler<CancelLeaseAgreementSuccessorDraftCommand, CancelLeaseAgreementSuccessorDraftResult>,
-      IAtomicReplayAuthorizer<CancelLeaseAgreementSuccessorDraftCommand>
+    : IAtomicCommandHandler<CancelLeaseAgreementSuccessorDraftCommand, CancelLeaseAgreementSuccessorDraftResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CancelLeaseAgreementSuccessorDraftHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CancelLeaseAgreementSuccessorDraftResult> HandleAsync(
         CancelLeaseAgreementSuccessorDraftCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+        await context.AcquireLockAsync(
+            "AuthSession", command.AuthSessionId, ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
 
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var nowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var agreement = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
-                command, attempt.Persistence, nowUtc)
+                command, _db, nowUtc)
             .SelectMany(relationship => relationship.Agreements)
             .SingleOrDefaultAsync(candidate =>
                 candidate.Id == command.LeaseAgreementId
@@ -73,10 +76,10 @@ public sealed class CancelLeaseAgreementSuccessorDraftHandler
         agreement.DraftCancellationReason = command.CancellationReason.Trim();
         agreement.UpdatedAtUtc = nowUtc;
 
-        attempt.BindSemanticAudit(agreement, LeaseAgreementDraftCommandSupport.Updated(
+        context.BindSemanticAudit(agreement, LeaseAgreementDraftCommandSupport.Updated(
             command, agreement.Id, "Canceled an abandoned successor Agreement draft."));
         LeaseAgreementDraftCommandSupport.StageOutbox(
-            attempt, command, nowUtc, agreement.Id, "agreement-successor-draft-canceled");
+            context, command, nowUtc, agreement.Id, "agreement-successor-draft-canceled");
 
         return new(
             CancelLeaseAgreementSuccessorDraftOutcome.Canceled,
@@ -89,12 +92,10 @@ public sealed class CancelLeaseAgreementSuccessorDraftHandler
     }
 
     public Task AuthorizeReplayAsync(
-        CancelLeaseAgreementSuccessorDraftCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        CancelLeaseAgreementSuccessorDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        return LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        return LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, _db, ct);
     }
 
     private static void Validate(CancelLeaseAgreementSuccessorDraftCommand command)

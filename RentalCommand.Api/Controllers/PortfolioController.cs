@@ -61,7 +61,7 @@ public class PortfolioController : ManagementControllerBase
     /// so web/mobile do not need to download list pages just to count/sum them.
     /// </summary>
     [HttpGet("getting-started")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.SecurityManage)]
     [ProducesResponseType(typeof(GettingStartedSignalsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<GettingStartedSignalsResponse>> GettingStarted(CancellationToken ct)

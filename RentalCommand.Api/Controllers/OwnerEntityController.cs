@@ -1,6 +1,9 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -77,6 +80,80 @@ public class OwnerEntityController : ManagementControllerBase
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Owner entity not found" }) : Ok(updated);
+    }
+
+    [HttpPost("{id:int}/portal-access/activate")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
+    [ProducesResponseType(typeof(ActivateOwnerPortalAccessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<ActivateOwnerPortalAccessResponse>> ActivatePortalAccess(
+        int id,
+        [FromBody] ActivateOwnerPortalAccessRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+
+        try
+        {
+            var result = await _service.ActivateOwnerPortalAccessAsync(
+                scope,
+                id,
+                request,
+                operationKey,
+                ct);
+            return result.Outcome switch
+            {
+                ActivateOwnerPortalAccessOutcome.Activated or
+                    ActivateOwnerPortalAccessOutcome.InvitationPending or
+                    ActivateOwnerPortalAccessOutcome.AlreadyActive => Ok(result),
+                ActivateOwnerPortalAccessOutcome.NotFound => NotFound(result),
+                ActivateOwnerPortalAccessOutcome.Invalid or
+                    ActivateOwnerPortalAccessOutcome.PrimaryOwnerNotSupported => BadRequest(result),
+                _ => Conflict(result),
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpPost("{id:int}/portal-access/revoke")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
+    [ProducesResponseType(typeof(RevokeOwnerPortalAccessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<RevokeOwnerPortalAccessResponse>> RevokePortalAccess(
+        int id,
+        [FromBody] RevokeOwnerPortalAccessRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+
+        try
+        {
+            var result = await _service.RevokeOwnerPortalAccessAsync(
+                scope,
+                id,
+                request,
+                operationKey,
+                ct);
+            return result.Outcome == RevokeOwnerPortalAccessOutcome.NotFound
+                ? NotFound(result)
+                : Ok(result);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
     }
 
     [HttpDelete("{id:int}")]

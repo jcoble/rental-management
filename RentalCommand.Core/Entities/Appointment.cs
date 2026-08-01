@@ -12,6 +12,7 @@ public class Appointment : IAuditable, IPortfolioScoped
     public int? LeaseManagementId { get; set; }
     public int? RentalApplicationId { get; set; }
     public int? TenantId { get; set; }
+    public int? WorkOrderId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? ProspectName { get; set; }
     public string? ProspectEmail { get; set; }
@@ -30,4 +31,5 @@ public class Appointment : IAuditable, IPortfolioScoped
     public LeaseManagement? LeaseManagement { get; set; }
     public RentalApplication? RentalApplication { get; set; }
     public Tenant? Tenant { get; set; }
+    public WorkOrder? WorkOrder { get; set; }
 }

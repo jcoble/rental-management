@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using RentalCommand.Api.Services.Auth;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -42,7 +43,10 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         var scope = SeedSelectedPropertyScope(selected.Id, RoleProfileKeys.WorkspaceAdministrator);
         await _ctx.Db.SaveChangesAsync();
 
-        var sut = new AnalyticsService(_ctx.Db, new FixedTimeProvider(Now));
+        var sut = new AnalyticsService(
+            _ctx.Db,
+            new FixedTimeProvider(Now),
+            new FixedAuthSecurityClock(Now.UtcDateTime));
         _commands.Clear();
 
         var result = await sut.GetOverviewAsync(scope);
@@ -81,7 +85,10 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         var scope = SeedSelectedPropertyScope(property.Id, RoleProfileKeys.LeasingAgent);
         await _ctx.Db.SaveChangesAsync();
 
-        var sut = new AnalyticsService(_ctx.Db, new FixedTimeProvider(Now));
+        var sut = new AnalyticsService(
+            _ctx.Db,
+            new FixedTimeProvider(Now),
+            new FixedAuthSecurityClock(Now.UtcDateTime));
         _commands.Clear();
 
         var result = await sut.GetOverviewAsync(scope);
@@ -92,6 +99,38 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         result.Trend.Should().OnlyContain(point =>
             point.Income == 0m && point.Expenses == 0m && point.Net == 0m);
         _commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GetOverviewAsync_UsesSecurityClockForAccessChecksAndBusinessClockForMetrics()
+    {
+        var property = SeedProperty(
+            "Simulation Property", "404", WorkOrderPriority.High, 125m, 1_200m, 1_050m, 400m);
+        var scope = SeedSelectedPropertyScope(property.Id, RoleProfileKeys.WorkspaceAdministrator);
+        await _ctx.Db.SaveChangesAsync();
+
+        var simulatedBusinessNow = new DateTimeOffset(2027, 1, 18, 12, 0, 0, TimeSpan.Zero);
+        var sut = new AnalyticsService(
+            _ctx.Db,
+            new FixedTimeProvider(simulatedBusinessNow),
+            new FixedAuthSecurityClock(Now.UtcDateTime));
+        _commands.Clear();
+
+        var result = await sut.GetOverviewAsync(scope);
+
+        result.TotalUnits.Should().Be(1);
+        result.OccupiedUnits.Should().Be(1);
+        result.MonthRentScheduled.Should().Be(0m);
+        result.MonthRentCollected.Should().Be(0m);
+        result.MonthlyRecurringRent.Should().Be(1_050m);
+        result.OpenWorkOrders.Should().ContainSingle();
+        result.Trend.Should().Contain(point => point.Month == "2027-01");
+        _commands.Should().ContainSingle();
+        _commands[0].Should().Contain("authorized_properties");
+        _commands[0].Should().Contain("session.\"ExpiresAtUtc\"");
+        _commands[0].Should().Contain("membership.\"EffectiveFromUtc\"");
+        _commands[0].Should().Contain("assignment.\"EffectiveFromUtc\"");
+        _commands[0].Should().Contain("generate_series");
     }
 
     private Property SeedProperty(
@@ -429,6 +468,11 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

@@ -23,7 +23,7 @@ public sealed class LeaseEndingDispositionRouteContractTests
             parameter.GetCustomAttributes<FromHeaderAttribute>()
                 .Any(attribute => attribute.Name == "Idempotency-Key"));
         typeof(RecordLeaseEndingDispositionHandler).Should()
-            .Implement<IAtomicReplayAuthorizer<RecordLeaseEndingDispositionCommand>>();
+            .Implement<IAtomicCommandHandler<RecordLeaseEndingDispositionCommand, RecordLeaseEndingDispositionResult>>();
     }
 
     [Fact]

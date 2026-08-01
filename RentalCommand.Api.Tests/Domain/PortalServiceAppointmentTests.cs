@@ -33,6 +33,8 @@ public sealed class PortalServiceAppointmentTests : IDisposable
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");
+        sql.Should().NotContain("FROM \"WorkOrders\"");
+        sql.Should().NotContain("UNION ALL");
         sql.Should().NotContain("FROM \"Leases\"");
         sql.Should().NotContain("LeaseTenants");
     }

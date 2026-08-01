@@ -1,17 +1,25 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Money;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
+using RentalCommand.Data.Auth;
 using RentalCommand.Data.Authorization;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -32,6 +40,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         new("workspace-team.membership.create.v1");
     private static readonly AtomicJsonResultCodec<WorkspaceTeamMutationResult> TeamMutationCodec =
         new("workspace-team.mutation.v1");
+    private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartSessionCodec =
+        new("auth-session-start-result:v1");
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private bool _dockerAvailable;
@@ -95,17 +105,13 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             AtomicMoneyMutationResult,
             AtomicMoneyMutationHandler>();
         services.AddAtomicCommandHandler<
-            ChangeWorkspaceAssignmentScopeCommand,
-            WorkspaceAccessMutationResult,
-            ChangeWorkspaceAssignmentScopeHandler>();
-        services.AddAtomicCommandHandler<
-            ChangeWorkspaceAssignmentEndCommand,
-            WorkspaceAccessMutationResult,
-            ChangeWorkspaceAssignmentEndHandler>();
-        services.AddAtomicCommandHandler<
             CreateWorkspaceMembershipCommand,
             CreateWorkspaceMembershipResult,
             CreateWorkspaceMembershipHandler>();
+        services.AddAtomicCommandHandler<
+            StartAuthSessionCommand,
+            StartAuthSessionResult,
+            StartAuthSessionHandler>();
         services.AddAtomicCommandHandler<
             AddWorkspaceRoleAssignmentCommand,
             WorkspaceTeamMutationResult,
@@ -122,6 +128,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             ChangeWorkspaceMembershipStatusCommand,
             WorkspaceTeamMutationResult,
             ChangeWorkspaceMembershipStatusHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicCoreCrudMutationCommand,
+            AtomicCoreCrudMutationResult,
+            AtomicCoreCrudMutationHandler>();
         services.AddAtomicCommandHandler<
             UnsafeWorkspaceAssignmentMutationCommand,
             WorkspaceAccessMutationResult,
@@ -181,7 +191,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await db.SaveChangesAsync();
 
         var option = (await new EffectiveAccessContextSelectionQuery(db)
-                .ListAsync(_userId, null, _now.AddMinutes(1)))
+                .ListAsync(_userId, null))
             .Single(item => item.AccessContextId == _accessContextId);
 
         option.DefaultExperience.Should().Be(
@@ -430,10 +440,11 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var scope = new WorkspaceReadScope(
             _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 6);
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stale-test", ValidLoanRequest(_managerPropertyId));
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stale-test",
+            ValidLoanRequest(_managerPropertyId), _now);
         var identity = AtomicMoneyMutation.Identity(command);
 
-        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        var act = () => ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
         await act.Should().ThrowAsync<UnauthorizedAccessException>();
 
         await using var verify = NewContext();
@@ -449,10 +460,11 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var scope = new WorkspaceReadScope(
             _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "cross-scope-test", ValidLoanRequest(_unscopedPropertyId));
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "cross-scope-test",
+            ValidLoanRequest(_unscopedPropertyId), _now);
         var identity = AtomicMoneyMutation.Identity(command);
 
-        var outcome = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        var outcome = await ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
         outcome.Value.Should().Be(new AtomicMoneyMutationResult(
             Found: false, Applied: false, EntityId: 0));
 
@@ -460,6 +472,49 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         (await verify.Loans.CountAsync(row => row.PropertyId == _unscopedPropertyId)).Should().Be(0);
         (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task AtomicCoreCrudMutation_VendorCreate_AllowsSelectedPropertyWorkManageScope()
+    {
+        SkipIfNoDocker();
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Vendor,
+            AtomicCoreCrudMutationOperation.Create, 0, "selected-work-vendor-create",
+            new CreateVendorRequest
+            {
+                Name = "Summit Roofing",
+                ServiceType = "Roofing",
+                Email = "summit@example.test",
+                Phone = "555-0100",
+                Is1099Eligible = true,
+                Preferred = true,
+            },
+            createdAtUtc: _now);
+        var identity = AtomicCoreCrudMutation.Identity(command);
+
+        var outcome = await ExecuteAtomicAsync(
+            identity, command, AtomicCoreCrudMutation.Codec);
+
+        outcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        outcome.Value.Found.Should().BeTrue();
+        outcome.Value.Applied.Should().BeTrue();
+        outcome.Value.EntityId.Should().BePositive();
+        await using var verify = NewContext();
+        var persisted = await verify.Vendors.AsNoTracking()
+            .Where(row => row.Id == outcome.Value.EntityId && row.PortfolioId == _portfolioId)
+            .Select(row => new { row.Name, row.ServiceType, row.Email })
+            .SingleAsync();
+        persisted.Should().BeEquivalentTo(new
+        {
+            Name = "Summit Roofing",
+            ServiceType = "Roofing",
+            Email = "summit@example.test",
+        });
+        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
     }
 
     [SkippableFact]
@@ -471,10 +526,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var request = ValidLoanRequest(_managerPropertyId);
         request.Lender = null!;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "rollback-test", request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "rollback-test", request, _now);
         var identity = AtomicMoneyMutation.Identity(command);
 
-        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        var act = () => ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
         await act.Should().ThrowAsync<DbUpdateException>();
 
         await using var verify = NewContext();
@@ -491,11 +546,11 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
         var request = ValidLoanRequest(_managerPropertyId);
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create", request);
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create", request, _now);
         var identity = AtomicMoneyMutation.Identity(command);
 
-        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
-        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        var first = await ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
+        var replay = await ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
@@ -504,8 +559,9 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var changedRequest = ValidLoanRequest(_managerPropertyId);
         changedRequest.Lender = "Different lender";
         var changedCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create", changedRequest);
-        var conflictAct = async () => await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "stable-loan-create",
+            changedRequest, _now);
+        var conflictAct = async () => await ExecuteAtomicAsync(
             AtomicMoneyMutation.Identity(changedCommand), changedCommand, AtomicMoneyMutation.Codec);
 
         await conflictAct.Should().ThrowAsync<AtomicIdempotencyConflictException>();
@@ -518,22 +574,735 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task AtomicMoneyMutation_ManualLoanCreateUsesSimulationBusinessDateForDebtServiceBoundary()
+    {
+        SkipIfNoDocker();
+        var simulatedBusinessDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        await using (var setup = NewContext())
+        {
+            var clock = await setup.SimulationClocks.SingleAsync(row => row.Id == 1);
+            clock.Mode = ClockMode.Frozen;
+            clock.SimAnchorUtc = simulatedBusinessDate;
+            clock.RealAnchorUtc = _now;
+            clock.TimeZoneId = "UTC";
+            clock.UpdatedAtRealUtc = _now;
+            await setup.SaveChangesAsync();
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var request = ValidLoanRequest(_managerPropertyId);
+        request.StartDate = new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc);
+        request.CurrentBalance = 125_825m;
+        request.DayOfMonthDue = 12;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "simulated-loan-create",
+            request, simulatedBusinessDate);
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var result = await ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec);
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        await using var verify = NewContext();
+        var loan = await verify.Loans.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.EntityId && row.PortfolioId == _portfolioId);
+        loan.StartDate.Should().Be(request.StartDate);
+        loan.CurrentBalance.Should().Be(request.CurrentBalance);
+        loan.DebtServiceAutomationStartDate.Should().Be(simulatedBusinessDate);
+        loan.CreatedAt.Should().Be(simulatedBusinessDate);
+        loan.UpdatedAt.Should().Be(simulatedBusinessDate);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_PostLoanPayment_IsIdempotentAndRollsBackEveryRowOnFailure()
+    {
+        SkipIfNoDocker();
+        int loanId;
+        int firstPaymentId;
+        int secondPaymentId;
+        await using (var seed = NewContext())
+        {
+            var loan = new Loan
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Lender = "Posting proof lender",
+                OriginalAmount = 200_000m,
+                CurrentBalance = 200_000m,
+                AnnualInterestRatePct = 6m,
+                TermMonths = 360,
+                StartDate = _now,
+                DayOfMonthDue = 1,
+                MonthlyPrincipalInterest = 1_200m,
+                MonthlyEscrow = 300m,
+                Status = LoanStatus.Active,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Loans.Add(loan);
+            await seed.SaveChangesAsync();
+            var first = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2027-01",
+                DueDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 1_000m,
+                PrincipalAmount = 200m,
+                EscrowAmount = 300m,
+                TotalAmount = 1_500m,
+                BalanceAfter = 199_800m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = _now,
+            };
+            var second = new LoanPayment
+            {
+                PortfolioId = _portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2027-02",
+                DueDate = new DateTime(2027, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 999m,
+                PrincipalAmount = 201m,
+                EscrowAmount = 300m,
+                TotalAmount = 1_500m,
+                BalanceAfter = 199_599m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = _now,
+            };
+            seed.LoanPayments.AddRange(first, second);
+            await seed.SaveChangesAsync();
+            loanId = loan.Id;
+            firstPaymentId = first.Id;
+            secondPaymentId = second.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var sourceUpdateCommand = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan,
+            AtomicMoneyOperation.Update,
+            loanId,
+            "loan-source-due-day-and-escrow",
+            new UpdateLoanRequest
+            {
+                DayOfMonthDue = 20,
+                MonthlyEscrow = 318m,
+            },
+            _now.AddHours(1));
+        var sourceUpdateIdentity = AtomicMoneyMutation.Identity(sourceUpdateCommand);
+        var sourceUpdateOutboxKey =
+            $"money:{_portfolioId}:{_accessContextId}:{AtomicMoneyDomain.Loan}:" +
+            $"{AtomicMoneyOperation.Update}:{nameof(Loan)}:{loanId}:" +
+            $"{sourceUpdateCommand.IdempotencyKey}:data-update";
+
+        var sourceUpdate = await ExecuteAtomicAsync(
+            sourceUpdateIdentity, sourceUpdateCommand, AtomicMoneyMutation.Codec);
+        sourceUpdate.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+
+        DateTime sourceUpdatedAt;
+        await using (var verify = NewContext())
+        {
+            var source = await verify.Loans.AsNoTracking()
+                .Where(row => row.Id == loanId)
+                .Select(row => new
+                {
+                    row.DayOfMonthDue,
+                    row.MonthlyEscrow,
+                    row.UpdatedAt,
+                })
+                .SingleAsync();
+            source.DayOfMonthDue.Should().Be(20);
+            source.MonthlyEscrow.Should().Be(318m);
+            sourceUpdatedAt = source.UpdatedAt;
+            (await verify.Loans.CountAsync(row => row.Id == loanId)).Should().Be(1);
+            var receipt = await verify.AtomicCommandReceipts.AsNoTracking()
+                .SingleAsync(row =>
+                    row.CommandType == sourceUpdateIdentity.CommandType &&
+                    row.IdempotencyKey == sourceUpdateIdentity.IdempotencyKey);
+            receipt.AttemptId.Should().Be(sourceUpdate.AttemptId);
+            (await verify.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == sourceUpdateIdentity.CommandType &&
+                row.CommandIdempotencyKey == sourceUpdateIdentity.IdempotencyKey &&
+                row.EntityType == nameof(Loan) &&
+                row.EntityId == loanId)).Should().Be(1);
+            (await verify.OutboxMessages.CountAsync(row =>
+                row.IdempotencyKey == sourceUpdateOutboxKey &&
+                row.MessageType == "data-update")).Should().Be(1);
+        }
+
+        var sourceUpdateReplay = await ExecuteAtomicAsync(
+            sourceUpdateIdentity, sourceUpdateCommand, AtomicMoneyMutation.Codec);
+        sourceUpdateReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        sourceUpdateReplay.Value.Should().Be(sourceUpdate.Value);
+        sourceUpdateReplay.AttemptId.Should().Be(sourceUpdate.AttemptId);
+
+        await using (var verify = NewContext())
+        {
+            var source = await verify.Loans.AsNoTracking()
+                .Where(row => row.Id == loanId)
+                .Select(row => new
+                {
+                    row.DayOfMonthDue,
+                    row.MonthlyEscrow,
+                    row.UpdatedAt,
+                })
+                .SingleAsync();
+            source.DayOfMonthDue.Should().Be(20);
+            source.MonthlyEscrow.Should().Be(318m);
+            source.UpdatedAt.Should().Be(sourceUpdatedAt);
+            (await verify.Loans.CountAsync(row => row.Id == loanId)).Should().Be(1);
+            (await verify.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == sourceUpdateIdentity.CommandType &&
+                row.IdempotencyKey == sourceUpdateIdentity.IdempotencyKey)).Should().Be(1);
+            (await verify.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == sourceUpdateIdentity.CommandType &&
+                row.CommandIdempotencyKey == sourceUpdateIdentity.IdempotencyKey &&
+                row.EntityType == nameof(Loan) &&
+                row.EntityId == loanId)).Should().Be(1);
+            (await verify.OutboxMessages.CountAsync(row =>
+                row.IdempotencyKey == sourceUpdateOutboxKey &&
+                row.MessageType == "data-update")).Should().Be(1);
+        }
+
+        var paidDate = new DateTime(2027, 1, 15, 0, 0, 0, DateTimeKind.Utc);
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, firstPaymentId,
+            "post-loan-payment-once",
+            new PostLoanPaymentRequest { LoanId = loanId, PaidDate = paidDate }, _now);
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var firstOutcome = await ExecuteAtomicAsync(
+            identity, command, AtomicMoneyMutation.Codec);
+        var replay = await ExecuteAtomicAsync(
+            identity, command, AtomicMoneyMutation.Codec);
+
+        firstOutcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(firstOutcome.Value);
+        await using (var verify = NewContext())
+        {
+            var original = await verify.LoanPayments.AsNoTracking()
+                .SingleAsync(payment => payment.Id == firstPaymentId);
+            original.Status.Should().Be(LoanPaymentStatus.Scheduled);
+            original.PaidDate.Should().BeNull();
+            var correction = await verify.LoanPaymentCorrections.AsNoTracking()
+                .SingleAsync(row => row.LoanPaymentId == firstPaymentId);
+            correction.AttemptId.Should().Be(firstOutcome.AttemptId);
+            correction.Status.Should().Be(LoanPaymentStatus.Paid);
+            correction.PaidDate.Should().Be(paidDate);
+            correction.BalanceAfter.Should().Be(199_800m);
+            (await verify.Loans.Where(row => row.Id == loanId)
+                .Select(row => row.CurrentBalance)
+                .SingleAsync()).Should().Be(199_800m);
+            (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+                receipt.CommandType == identity.CommandType &&
+                receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+            (await verify.AtomicAuditLogs.CountAsync(audit =>
+                audit.AttemptId == firstOutcome.AttemptId)).Should().Be(3);
+            (await verify.OutboxMessages.CountAsync(message =>
+                message.IdempotencyKey.EndsWith(
+                    $":{command.IdempotencyKey}:data-update"))).Should().Be(2);
+        }
+
+        await using (var inject = NewContext())
+        {
+            await inject.Database.ExecuteSqlRawAsync($"""
+                CREATE OR REPLACE FUNCTION fail_loan_payment_correction_insert() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."LoanPaymentId" = {secondPaymentId} THEN
+                        RAISE EXCEPTION 'injected loan payment correction failure';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_loan_payment_correction_insert
+                BEFORE INSERT ON "LoanPaymentCorrections"
+                FOR EACH ROW EXECUTE FUNCTION fail_loan_payment_correction_insert();
+                """);
+        }
+
+        var failedCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.PostPayment, secondPaymentId,
+            "post-loan-payment-failure", new PostLoanPaymentRequest
+            {
+                LoanId = loanId,
+                PaidDate = paidDate.AddMonths(1),
+            }, _now);
+        var failedIdentity = AtomicMoneyMutation.Identity(failedCommand);
+        try
+        {
+            var act = () => ExecuteAtomicAsync(
+                failedIdentity, failedCommand, AtomicMoneyMutation.Codec);
+            await act.Should().ThrowAsync<Exception>();
+        }
+        finally
+        {
+            await using var cleanup = NewContext();
+            await cleanup.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_loan_payment_correction_insert ON "LoanPaymentCorrections";
+                DROP FUNCTION IF EXISTS fail_loan_payment_correction_insert();
+                """);
+        }
+
+        await using (var verify = NewContext())
+        {
+            var state = await verify.LoanPayments
+                .Where(payment => payment.Id == secondPaymentId)
+                .Select(payment => new
+                {
+                    payment.Status,
+                    payment.PaidDate,
+                    payment.Loan!.CurrentBalance,
+                })
+                .SingleAsync();
+            state.Status.Should().Be(LoanPaymentStatus.Scheduled);
+            state.PaidDate.Should().BeNull();
+            state.CurrentBalance.Should().Be(199_800m);
+            (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+                receipt.CommandType == failedIdentity.CommandType &&
+                receipt.IdempotencyKey == failedIdentity.IdempotencyKey)).Should().Be(0);
+            (await verify.LoanPaymentCorrections.CountAsync(correction =>
+                correction.LoanPaymentId == secondPaymentId)).Should().Be(0);
+            (await verify.AtomicAuditLogs.CountAsync(audit =>
+                audit.CommandType == failedIdentity.CommandType &&
+                audit.CommandIdempotencyKey == failedIdentity.IdempotencyKey)).Should().Be(0);
+            (await verify.OutboxMessages.CountAsync(message =>
+                message.IdempotencyKey.EndsWith(
+                    $":{failedCommand.IdempotencyKey}:data-update"))).Should().Be(0);
+        }
+    }
+
+    [SkippableFact]
+    public async Task CapitalizePaidExpenseReversesExpenseAndPostsOneCapitalPurchase()
+    {
+        SkipIfNoDocker();
+        int expenseId;
+        await using (var seed = NewContext())
+        {
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = _managerPropertyId,
+                Category = ScheduleECategory.Repairs,
+                Description = "Replace roof with capital improvement",
+                Status = ExpenseStatus.Paid,
+                Amount = 8_500m,
+                IncurredAt = new DateTime(2027, 1, 10, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2027, 1, 11, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Expenses.Add(expense);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+                    seed, context, expense, _userId, ct),
+                "capitalize-paid-expense-seed");
+            expenseId = expense.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.CapitalizeExpense,
+            expenseId,
+            "capitalize-paid-expense",
+            new CapitalizeExpenseRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc),
+                Description = "Roof replacement",
+            },
+            _now.AddHours(1));
+        var result = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var replay = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(result.Value);
+        await using var verify = NewContext();
+        var asset = await verify.CapitalAssets.AsNoTracking()
+            .SingleAsync(row => row.SourceExpenseId == expenseId);
+        asset.CostBasis.Should().Be(8_500m);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.CapitalPurchase
+            && entry.SourceId == asset.Id)).Should().Be(1);
+        var expenseLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.LedgerAccount!.SystemKey == "repairs-and-maintenance"
+                && line.SourceLineId == expenseId)
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        expenseLines.Debit.Should().Be(expenseLines.Credit);
+        var cashLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.LedgerAccount!.SystemKey == "operating-cash"
+                && (line.JournalEntry.SourceType == JournalSourceType.ExpensePayment
+                    || line.JournalEntry.SourceType == JournalSourceType.CapitalPurchase)
+                && (line.SourceLineId == expenseId || line.SourceLineId == asset.Id))
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        (cashLines.Credit - cashLines.Debit).Should().Be(8_500m);
+    }
+
+    [SkippableFact]
+    public async Task CapitalizeExpenseJournalFailureRollsBackAssetLinkJournalAndCompanions()
+    {
+        SkipIfNoDocker();
+        int expenseId;
+        await using (var seed = NewContext())
+        {
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = _managerPropertyId,
+                Category = ScheduleECategory.Repairs,
+                Description = "Capitalization failure expense",
+                Status = ExpenseStatus.Paid,
+                Amount = 6_400m,
+                IncurredAt = new DateTime(2027, 1, 16, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2027, 1, 16, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Expenses.Add(expense);
+            await seed.SaveChangesAsync();
+            expenseId = expense.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.CapitalizeExpense,
+            expenseId,
+            "capitalize-expense-journal-failure",
+            new CapitalizeExpenseRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 17, 0, 0, 0, DateTimeKind.Utc),
+                Description = "Failed roof capitalization",
+            },
+            _now.AddHours(1));
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        await using (var inject = NewContext())
+        {
+            await inject.Database.ExecuteSqlRawAsync($"""
+                CREATE OR REPLACE FUNCTION fail_capital_purchase_insert() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."SourceType" = {(int)JournalSourceType.CapitalPurchase} THEN
+                        RAISE EXCEPTION 'injected capital purchase failure';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_capital_purchase_insert
+                BEFORE INSERT ON "JournalEntries"
+                FOR EACH ROW EXECUTE FUNCTION fail_capital_purchase_insert();
+                """);
+        }
+
+        try
+        {
+            await FluentActions.Invoking(() =>
+                    ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec))
+                .Should().ThrowAsync<Exception>();
+        }
+        finally
+        {
+            await using var cleanup = NewContext();
+            await cleanup.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_capital_purchase_insert ON "JournalEntries";
+                DROP FUNCTION IF EXISTS fail_capital_purchase_insert();
+                """);
+        }
+
+        await using var verify = NewContext();
+        (await verify.Expenses.CountAsync(row => row.Id == expenseId
+            && row.CapitalizedAssetId == null)).Should().Be(1);
+        (await verify.CapitalAssets.CountAsync(row => row.SourceExpenseId == expenseId)).Should().Be(0);
+        (await verify.JournalEntries.CountAsync(row => row.PortfolioId == _portfolioId
+            && row.SourceType == JournalSourceType.CapitalPurchase)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey.EndsWith($":{command.IdempotencyKey}:data-update"))).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetFactUpdateReversesAndRepostsWhileDescriptionOnlyUpdateDoesNotPost()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                UnitId = _managerUnitId,
+                Description = "Original asset",
+                CostBasis = 700m,
+                InServiceDate = new DateTime(2027, 1, 13, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-update-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var dimensionOnly = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-dimension-only",
+            new UpdateCapitalAssetRequest { ClearUnit = true },
+            _now.AddMinutes(30));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(dimensionOnly), dimensionOnly, AtomicMoneyMutation.Codec);
+        await using (var afterDimension = NewContext())
+        {
+            (await afterDimension.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(3);
+            var activeDimensionUnitIds = await afterDimension.JournalLines
+                .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                    && line.JournalEntry.SourceType == JournalSourceType.CapitalPurchase
+                    && line.JournalEntry.ReversesJournalEntryId == null
+                    && !afterDimension.JournalEntries.Any(reversal =>
+                        reversal.ReversesJournalEntryId == line.JournalEntryId)
+                    && line.SourceLineId == assetId)
+                .Select(line => line.UnitId)
+                .ToListAsync();
+            activeDimensionUnitIds.Should().OnlyContain(unitId => unitId == null);
+        }
+
+        var descriptionOnly = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-description-only",
+            new UpdateCapitalAssetRequest { Description = "Descriptive edit" },
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(descriptionOnly), descriptionOnly, AtomicMoneyMutation.Codec);
+        await using (var afterDescription = NewContext())
+        {
+            (await afterDescription.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(3);
+        }
+
+        var factUpdate = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-cost-correction",
+            new UpdateCapitalAssetRequest { CostBasis = 850m },
+            _now.AddHours(2));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(factUpdate), factUpdate, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(5);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        entries.Should().Contain(entry => entry.ReversesJournalEntryId == original.Id);
+        entries.Should().Contain(entry => entry.SourceId != assetId
+            && entry.ReversesJournalEntryId == null);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetDateUpdateReversesAndRepostsCapitalPurchase()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Description = "Date-corrected asset",
+                CostBasis = 725m,
+                InServiceDate = new DateTime(2027, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-date-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-date-correction",
+            new UpdateCapitalAssetRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 18, 0, 0, 0, DateTimeKind.Utc),
+            },
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        entries.Should().Contain(entry => entry.ReversesJournalEntryId == original.Id);
+        entries.Should().Contain(entry => entry.SourceId != assetId
+            && entry.ReversesJournalEntryId == null);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetDeleteReversesPostedCapitalPurchaseBeforeSoftDelete()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Description = "Asset to delete",
+                CostBasis = 900m,
+                InServiceDate = new DateTime(2027, 1, 14, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-delete-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Delete,
+            assetId,
+            "capital-asset-delete",
+            new object(),
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        (await verify.CapitalAssets.CountAsync(asset => asset.Id == assetId)).Should().Be(0);
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .ToListAsync();
+        entries.Should().HaveCount(2);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        var originalLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == original.Id)
+            .Select(line => new { line.LedgerAccountId, line.DebitAmount, line.CreditAmount })
+            .ToListAsync();
+        var reversalLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == reversal.Id)
+            .Select(line => new { line.LedgerAccountId, line.DebitAmount, line.CreditAmount })
+            .ToListAsync();
+        reversalLines.Should().HaveSameCount(originalLines);
+        foreach (var originalLine in originalLines)
+        {
+            reversalLines.Should().Contain(reversalLine =>
+                reversalLine.LedgerAccountId == originalLine.LedgerAccountId
+                && reversalLine.DebitAmount == originalLine.CreditAmount
+                && reversalLine.CreditAmount == originalLine.DebitAmount);
+        }
+    }
+
+    [SkippableFact]
     public async Task AtomicMoneyMutation_DeleteReplaysAfterTheBusinessRowIsSoftDeleted()
     {
         SkipIfNoDocker();
         var scope = new WorkspaceReadScope(
             _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
         var createCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "loan-before-delete", ValidLoanRequest(_managerPropertyId));
-        var created = await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "loan-before-delete",
+            ValidLoanRequest(_managerPropertyId), _now);
+        var created = await ExecuteAtomicAsync(
             AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
         var deleteCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, created.Value.EntityId, "stable-loan-delete", new object());
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, created.Value.EntityId,
+            "stable-loan-delete", new object(), _now);
         var deleteIdentity = AtomicMoneyMutation.Identity(deleteCommand);
 
-        var firstDelete = await AtomicUnitOfWork.ExecuteAsync(
+        var firstDelete = await ExecuteAtomicAsync(
             deleteIdentity, deleteCommand, AtomicMoneyMutation.Codec);
-        var replayedDelete = await AtomicUnitOfWork.ExecuteAsync(
+        var replayedDelete = await ExecuteAtomicAsync(
             deleteIdentity, deleteCommand, AtomicMoneyMutation.Codec);
 
         firstDelete.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -590,14 +1359,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             IncurredAt = _now,
         };
         var createCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, "effective-expense-create", createRequest);
-        var created = await AtomicUnitOfWork.ExecuteAsync(
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, "effective-expense-create",
+            createRequest, _now);
+        var created = await ExecuteAtomicAsync(
             AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
 
         var patchCommand = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, created.Value.EntityId,
-            "effective-expense-invalid-patch", new UpdateExpenseRequest { PropertyId = _leasingPropertyId });
-        var patchOutcome = await AtomicUnitOfWork.ExecuteAsync(
+            "effective-expense-invalid-patch",
+            new UpdateExpenseRequest { PropertyId = _leasingPropertyId }, _now);
+        var patchOutcome = await ExecuteAtomicAsync(
             AtomicMoneyMutation.Identity(patchCommand), patchCommand, AtomicMoneyMutation.Codec);
 
         patchOutcome.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -612,6 +1383,69 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         unchanged.PropertyId.Should().Be(_managerPropertyId);
         unchanged.UnitId.Should().Be(_managerUnitId);
         unchanged.WorkOrderId.Should().Be(unitWorkOrderId);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_ExpensePatchUsesBusinessClockAndReplaysExactCommit()
+    {
+        SkipIfNoDocker();
+        var createdAtUtc = new DateTime(2027, 1, 30, 5, 0, 0, DateTimeKind.Utc);
+        var updatedAtUtc = new DateTime(2027, 1, 31, 5, 0, 0, DateTimeKind.Utc);
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var createCommand = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Create,
+            0,
+            "expense-clock-create",
+            new CreateExpenseRequest
+            {
+                PropertyId = _managerPropertyId,
+                Category = ScheduleECategory.Repairs,
+                Description = "Business-clock repair",
+                Status = ExpenseStatus.Pending,
+                Amount = 125m,
+                IncurredAt = createdAtUtc,
+            },
+            createdAtUtc);
+        var created = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(createCommand), createCommand, AtomicMoneyMutation.Codec);
+        created.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        created.Value.EntityId.Should().BePositive(
+            "future frozen business time must not expire present-day session authority");
+        var updateCommand = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Update,
+            created.Value.EntityId,
+            "expense-clock-update",
+            new UpdateExpenseRequest { Notes = "Frozen-clock update" },
+            updatedAtUtc);
+        var updateIdentity = AtomicMoneyMutation.Identity(updateCommand);
+
+        var first = await ExecuteAtomicAsync(
+            updateIdentity, updateCommand, AtomicMoneyMutation.Codec);
+        var replay = await ExecuteAtomicAsync(
+            updateIdentity, updateCommand, AtomicMoneyMutation.Codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(first.Value);
+
+        await using var verify = NewContext();
+        var persisted = await verify.Expenses.AsNoTracking()
+            .Where(row => row.Id == created.Value.EntityId && row.PortfolioId == _portfolioId)
+            .Select(row => new { row.CreatedAt, row.UpdatedAt, row.Notes })
+            .SingleAsync();
+        persisted.CreatedAt.Should().Be(createdAtUtc);
+        persisted.UpdatedAt.Should().Be(updatedAtUtc);
+        persisted.Notes.Should().Be("Frozen-clock update");
+        (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
+            row.CommandType == updateIdentity.CommandType &&
+            row.IdempotencyKey == updateIdentity.IdempotencyKey)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -772,7 +1606,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task AtomicBoundary_RejectsAuthorityHandlerThatForgetsRevisionAdvance()
+    public async Task WorkspaceAuthorityGuard_RejectsHandlerThatForgetsRevisionAdvance()
     {
         SkipIfNoDocker();
         int assignmentId;
@@ -785,8 +1619,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             originalUpdatedAt = assignment.UpdatedAtUtc;
         }
 
-        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
-            Identity(nameof(AtomicBoundary_RejectsAuthorityHandlerThatForgetsRevisionAdvance)),
+        var act = async () => await ExecuteAtomicAsync(
+            Identity(nameof(WorkspaceAuthorityGuard_RejectsHandlerThatForgetsRevisionAdvance)),
             new UnsafeWorkspaceAssignmentMutationCommand(
                 _accessContextId,
                 ExpectedRevision: 7,
@@ -807,144 +1641,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 .Select(assignment => assignment.UpdatedAtUtc)
                 .SingleAsync())
             .Should().Be(originalUpdatedAt);
-    }
-
-    [SkippableFact]
-    public async Task MutationBoundary_RollsBackRevisionAndAuthorityRowsWhenStoredScopeIsInvalid()
-    {
-        SkipIfNoDocker();
-        int leasingAssignmentId;
-        await using (var db = NewContext())
-        {
-            leasingAssignmentId = await db.MembershipRoleAssignments
-                .Where(assignment => assignment.WorkspaceMembershipId == _membershipId &&
-                                     assignment.RoleProfileId == 3)
-                .Select(assignment => assignment.Id)
-                .SingleAsync();
-            var act = async () => await AtomicUnitOfWork.ExecuteAsync(
-                Identity(nameof(MutationBoundary_RollsBackRevisionAndAuthorityRowsWhenStoredScopeIsInvalid)),
-                new ChangeWorkspaceAssignmentScopeCommand(
-                    _accessContextId,
-                    ExpectedRevision: 7,
-                    leasingAssignmentId,
-                    MembershipRoleAssignmentScopeKind.AllProperties,
-                    _now.AddMinutes(1)),
-                MutationCodec);
-
-            await act.Should().ThrowAsync<DomainValidationException>();
-        }
-
-        await using var verificationDb = NewContext();
-        (await verificationDb.WorkspaceAccessContexts
-                .Where(context => context.Id == _accessContextId)
-                .Select(context => context.AccessRevision)
-                .SingleAsync())
-            .Should().Be(7);
-        (await verificationDb.MembershipRoleAssignments
-                .Where(assignment => assignment.Id == leasingAssignmentId)
-                .Select(assignment => assignment.ScopeKind)
-                .SingleAsync())
-            .Should().Be(MembershipRoleAssignmentScopeKind.SelectedProperties);
-    }
-
-    [SkippableFact]
-    public async Task MutationBoundary_RollsBackMisScopedMaintenanceAndRevisionForEveryBadScope()
-    {
-        SkipIfNoDocker();
-        foreach (var badScope in new[]
-                 {
-                     MembershipRoleAssignmentScopeKind.AllProperties,
-                     MembershipRoleAssignmentScopeKind.SelectedProperties,
-                 })
-        {
-            int assignmentId;
-            await using (var db = NewContext())
-            {
-                assignmentId = await db.MembershipRoleAssignments
-                    .Where(assignment => assignment.WorkspaceMembershipId == _membershipId &&
-                                         assignment.RoleProfileId == 4)
-                    .Select(assignment => assignment.Id)
-                    .SingleAsync();
-
-                var mutationAct = async () => await AtomicUnitOfWork.ExecuteAsync(
-                    Identity($"{nameof(MutationBoundary_RollsBackMisScopedMaintenanceAndRevisionForEveryBadScope)}-{badScope}"),
-                    new ChangeWorkspaceAssignmentScopeCommand(
-                        _accessContextId,
-                        ExpectedRevision: 7,
-                        assignmentId,
-                        badScope,
-                        _now.AddMinutes(1)),
-                    MutationCodec);
-
-                await mutationAct.Should().ThrowAsync<DomainValidationException>();
-            }
-
-            await using var verificationDb = NewContext();
-            var persisted = await verificationDb.MembershipRoleAssignments
-                .Where(assignment => assignment.Id == assignmentId)
-                .Select(assignment => new
-                {
-                    assignment.ScopeKind,
-                    SelectedCount = assignment.SelectedProperties.Count(),
-                    Revision = assignment.WorkspaceMembership!.AccessContext!.AccessRevision,
-                })
-                .SingleAsync();
-            persisted.ScopeKind.Should().Be(MembershipRoleAssignmentScopeKind.AssignedWorkOrders);
-            persisted.SelectedCount.Should().Be(0);
-            persisted.Revision.Should().Be(7);
-        }
-    }
-
-    [SkippableFact]
-    public async Task ConcurrentMutationWithStaleExpectedRevision_RollsBack()
-    {
-        SkipIfNoDocker();
-        IsolatedAccessRoot isolated;
-        await using (var seedDb = NewContext())
-        {
-            isolated = await SeedIsolatedAccessRootAsync(seedDb, Guid.NewGuid().ToString("N"));
-        }
-
-        try
-        {
-            await AtomicUnitOfWork.ExecuteAsync(
-                Identity($"{nameof(ConcurrentMutationWithStaleExpectedRevision_RollsBack)}-winner"),
-                new ChangeWorkspaceAssignmentEndCommand(
-                    isolated.AccessContextId,
-                    ExpectedRevision: 1,
-                    isolated.AssignmentId,
-                    _now.AddDays(30),
-                    _now.AddMinutes(1)),
-                MutationCodec);
-
-            var staleAct = async () => await AtomicUnitOfWork.ExecuteAsync(
-                Identity($"{nameof(ConcurrentMutationWithStaleExpectedRevision_RollsBack)}-stale"),
-                new ChangeWorkspaceAssignmentEndCommand(
-                    isolated.AccessContextId,
-                    ExpectedRevision: 1,
-                    isolated.AssignmentId,
-                    _now.AddDays(60),
-                    _now.AddMinutes(2)),
-                MutationCodec);
-
-            await staleAct.Should().ThrowAsync<StaleAccessRevisionException>();
-
-            await using var verificationDb = NewContext();
-            (await verificationDb.WorkspaceAccessContexts
-                    .Where(context => context.Id == isolated.AccessContextId)
-                    .Select(context => context.AccessRevision)
-                    .SingleAsync())
-                .Should().Be(2);
-            (await verificationDb.MembershipRoleAssignments
-                    .Where(assignment => assignment.Id == isolated.AssignmentId)
-                    .Select(assignment => assignment.EffectiveToUtc)
-                    .SingleAsync())
-                .Should().Be(_now.AddDays(30));
-        }
-        finally
-        {
-            await DeleteIsolatedAccessRootAsync(isolated);
-        }
     }
 
     [SkippableFact]
@@ -1022,8 +1718,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             RoleProfileKeys.LeasingAgent, MembershipRoleAssignmentScopeKind.SelectedProperties,
             [_leasingPropertyId], _now, "https://localhost:5667");
 
-        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamCreateCodec);
-        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command with
+        var first = await ExecuteAtomicAsync(identity, command, TeamCreateCodec);
+        var replay = await ExecuteAtomicAsync(identity, command with
         {
             ActorAuthSessionId = pair.ActorSessionId,
             ActorAccessRevision = 1,
@@ -1034,6 +1730,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await using var db = NewContext();
         (await db.WorkspaceMemberships.CountAsync(item =>
             item.AccessContextId == first.Value.AccessContextId)).Should().Be(1);
+        (await db.WorkspaceAccessContexts
+            .Where(item => item.Id == first.Value.AccessContextId)
+            .Select(item => item.LastAuthorizedExperience)
+            .SingleAsync()).Should().Be(WorkspaceExperience.Leasing);
         (await db.MembershipRoleAssignments.CountAsync(item =>
             item.WorkspaceMembershipId == first.Value.WorkspaceMembershipId)).Should().Be(1);
         var invitation = await db.WorkspaceInvitations.SingleAsync(item =>
@@ -1045,6 +1745,90 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             message.IdempotencyKey ==
             $"workspace-invitation:{first.Value.WorkspaceMembershipId}:activation-v1"))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task TeamInvite_UsesRealSecurityClockForImmediateActivationAndLoginUnderSimAhead()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"sim-ahead-invite-{Guid.NewGuid():N}");
+        var simAheadUtc = new DateTime(2027, 1, 18, 15, 0, 0, DateTimeKind.Utc);
+        var lowerBoundUtc = DateTime.UtcNow.AddMinutes(-1);
+        var email = $"sim-ahead-member-{Guid.NewGuid():N}@example.test";
+        var created = await ExecuteAtomicAsync(
+            Identity("test.team.sim-ahead.membership.create"),
+            new CreateWorkspaceMembershipCommand(
+                pair.PortfolioId,
+                pair.ActorUserId,
+                pair.ActorSessionId,
+                pair.ActorContextId,
+                1,
+                email,
+                "Simulation Ahead Member",
+                RoleProfileKeys.PropertyManager,
+                MembershipRoleAssignmentScopeKind.SelectedProperties,
+                [_managerPropertyId],
+                simAheadUtc,
+                "https://localhost:5667"),
+            TeamCreateCodec);
+        var upperBoundUtc = DateTime.UtcNow.AddMinutes(1);
+
+        string invitationToken;
+        long invitationId;
+        await using (var db = NewContext())
+        {
+            var membership = await db.WorkspaceMemberships.AsNoTracking()
+                .SingleAsync(item => item.Id == created.Value.WorkspaceMembershipId);
+            var assignment = await db.MembershipRoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.Id == created.Value.AssignmentId);
+            var option = await new EffectiveAccessContextSelectionQuery(db)
+                .ListAsync(created.Value.UserId, created.Value.AccessContextId);
+            var invitation = await db.WorkspaceInvitations.AsNoTracking()
+                .SingleAsync(item => item.WorkspaceMembershipId == created.Value.WorkspaceMembershipId);
+            var outbox = await db.OutboxMessages.AsNoTracking()
+                .SingleAsync(message =>
+                    message.IdempotencyKey ==
+                    $"workspace-invitation:{created.Value.WorkspaceMembershipId}:activation-v1");
+
+            membership.EffectiveFromUtc.Should().BeOnOrAfter(lowerBoundUtc);
+            membership.EffectiveFromUtc.Should().BeBefore(upperBoundUtc);
+            membership.EffectiveFromUtc.Should().BeBefore(simAheadUtc);
+            assignment.EffectiveFromUtc.Should().BeOnOrAfter(lowerBoundUtc);
+            assignment.EffectiveFromUtc.Should().BeBefore(upperBoundUtc);
+            assignment.EffectiveFromUtc.Should().BeBefore(simAheadUtc);
+            option.Should().ContainSingle(item =>
+                item.AccessContextId == created.Value.AccessContextId &&
+                item.DefaultExperience == WorkspaceExperience.Management);
+
+            invitationId = invitation.Id;
+            invitationToken = ReadActivationToken(outbox.Payload);
+        }
+
+        var activated = await ActivateInvitationAsApiAsync(
+            invitationId,
+            created.Value.UserId,
+            CreateWorkspaceMembershipHandler.HashInvitationToken(invitationToken));
+        var issuedAtUtc = DateTime.UtcNow;
+        var started = await ExecuteAtomicAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            new StartAuthSessionCommand(
+                created.Value.UserId,
+                created.Value.AccessContextId,
+                created.Value.AccessRevision,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                LowerSha256(Guid.NewGuid().ToString("N")),
+                issuedAtUtc,
+                issuedAtUtc.AddDays(30),
+                issuedAtUtc.AddDays(7),
+                issuedAtUtc.AddDays(30)),
+            StartSessionCodec);
+
+        activated.InvitedUserId.Should().Be(created.Value.UserId);
+        activated.AccessContextId.Should().Be(created.Value.AccessContextId);
+        started.Value.Started.Should().BeTrue(
+            "team access created during simulation must be immediately login-eligible on the real security clock");
     }
 
     [SkippableFact]
@@ -1101,7 +1885,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             relationshipContextId = context.Id;
         }
 
-        var result = await AtomicUnitOfWork.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             Identity("test.team.relationship-context-reuse"),
             new CreateWorkspaceMembershipCommand(
                 pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
@@ -1133,7 +1917,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 .SingleAsync();
         }
 
-        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("test.team.duplicate-membership"),
             new CreateWorkspaceMembershipCommand(
                 pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
@@ -1157,8 +1941,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var identity = new AtomicCommandIdentity("test.team.assignment.add", Guid.NewGuid().ToString("N"));
         var command = TeamAddCommand(pair, expectedTargetRevision: 1, _managerPropertyId);
 
-        var first = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamMutationCodec);
-        var replay = await AtomicUnitOfWork.ExecuteAsync(identity, command, TeamMutationCodec);
+        var first = await ExecuteAtomicAsync(identity, command, TeamMutationCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, TeamMutationCodec);
 
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.Should().Be(first.Value);
@@ -1182,7 +1966,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             await db.SaveChangesAsync();
         }
 
-        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("test.team.stale-actor"), TeamAddCommand(pair, 1, _managerPropertyId), TeamMutationCodec);
         await act.Should().ThrowAsync<StaleAccessRevisionException>();
 
@@ -1203,7 +1987,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             pair.ActorContextId, 1, RoleProfileKeys.PropertyManager,
             MembershipRoleAssignmentScopeKind.SelectedProperties, [_managerPropertyId], _now);
 
-        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("test.team.self-expand"), command, TeamMutationCodec);
 
         await act.Should().ThrowAsync<UnauthorizedAccessException>()
@@ -1222,10 +2006,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var pair = await SeedTeamAuthorityPairAsync($"stale-target-{Guid.NewGuid():N}");
-        await AtomicUnitOfWork.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity("test.team.target-winner"), TeamAddCommand(pair, 1, _managerPropertyId), TeamMutationCodec);
 
-        var stale = async () => await AtomicUnitOfWork.ExecuteAsync(
+        var stale = async () => await ExecuteAtomicAsync(
             Identity("test.team.target-stale"), TeamAddCommand(pair, 1, _unscopedPropertyId), TeamMutationCodec);
         await stale.Should().ThrowAsync<StaleAccessRevisionException>();
 
@@ -1249,7 +2033,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
             pair.TargetContextId, 1, pair.TargetAssignmentId, [_otherWorkspacePropertyId]);
 
-        var act = async () => await AtomicUnitOfWork.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             Identity("test.team.decoy-scope"), command, TeamMutationCodec);
         await act.Should().ThrowAsync<DomainValidationException>();
 
@@ -1264,6 +2048,35 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task PropertyScopeReplacement_OverlappingSelectedPropertiesReplacesScopeAndWritesReceipt()
+    {
+        SkipIfNoDocker();
+        var pair = await SeedTeamAuthorityPairAsync($"replace-scope-{Guid.NewGuid():N}");
+        var command = new ReplaceWorkspaceAssignmentPropertyScopeCommand(
+            pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
+            pair.TargetContextId, 1, pair.TargetAssignmentId, [_leasingPropertyId, _managerPropertyId]);
+
+        var result = await ExecuteAtomicAsync(
+            Identity("test.team.replace-overlap"), command, TeamMutationCodec);
+
+        result.Value.AccessRevision.Should().Be(2);
+        result.Value.AssignmentId.Should().Be(pair.TargetAssignmentId);
+
+        await using var db = NewContext();
+        (await db.WorkspaceAccessContexts.Where(item => item.Id == pair.TargetContextId)
+            .Select(item => item.AccessRevision).SingleAsync()).Should().Be(2);
+        var propertyIds = await db.MembershipRoleAssignmentProperties
+            .Where(scope => scope.MembershipRoleAssignmentId == pair.TargetAssignmentId)
+            .OrderBy(scope => scope.PropertyId)
+            .Select(scope => scope.PropertyId)
+            .ToListAsync();
+        propertyIds.Should().Equal(_leasingPropertyId, _managerPropertyId);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "test.team.replace-overlap" &&
+            receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task RevokingMembership_InvalidatesTargetSessionImmediately()
     {
         SkipIfNoDocker();
@@ -1272,7 +2085,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
             pair.TargetContextId, 1, WorkspaceMembershipStatusAction.Revoke);
 
-        var result = await AtomicUnitOfWork.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             Identity("test.team.revoke"), command, TeamMutationCodec);
         result.Value.AccessRevision.Should().Be(2);
         result.Value.ContextStatus.Should().Be(WorkspaceAccessContextStatus.Revoked);
@@ -1291,7 +2104,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var suspend = new ChangeWorkspaceMembershipStatusCommand(
             pair.PortfolioId, pair.ActorUserId, pair.ActorSessionId, pair.ActorContextId, 1,
             pair.TargetContextId, 1, WorkspaceMembershipStatusAction.Suspend);
-        await AtomicUnitOfWork.ExecuteAsync(
+        await ExecuteAtomicAsync(
             Identity("test.team.suspend"), suspend, TeamMutationCodec);
 
         var reactivate = suspend with
@@ -1299,7 +2112,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             ExpectedRevision = 2,
             Action = WorkspaceMembershipStatusAction.Reactivate,
         };
-        var result = await AtomicUnitOfWork.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             Identity("test.team.reactivate"), reactivate, TeamMutationCodec);
 
         result.Value.AccessRevision.Should().Be(3);
@@ -1514,6 +2327,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _managerUnitId = managerUnit.Id;
         _leasingApplicationId = leasingApplication.Id;
         _managerApplicationId = managerApplication.Id;
+        await new ChartOfAccountsSeedService(db).SeedAsync(_portfolioId);
+        await db.SaveChangesAsync();
     }
 
     private async Task<TeamAuthorityPair> SeedTeamAuthorityPairAsync(string suffix)
@@ -1661,16 +2476,16 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         int portfolioId,
         int roleProfileId,
         MembershipRoleAssignmentScopeKind scopeKind) => new()
-    {
-        WorkspaceMembershipId = membershipId,
-        PortfolioId = portfolioId,
-        RoleProfileId = roleProfileId,
-        Status = MembershipRoleAssignmentStatus.Active,
-        ScopeKind = scopeKind,
-        EffectiveFromUtc = _now.AddHours(-1),
-        CreatedAtUtc = _now,
-        UpdatedAtUtc = _now,
-    };
+        {
+            WorkspaceMembershipId = membershipId,
+            PortfolioId = portfolioId,
+            RoleProfileId = roleProfileId,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = scopeKind,
+            EffectiveFromUtc = _now.AddHours(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
 
     private Portfolio Portfolio(string name) => new()
     {
@@ -1720,34 +2535,64 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         Status = LoanStatus.Active,
     };
 
-    private IAtomicUnitOfWork AtomicUnitOfWork =>
-        _services?.GetRequiredService<IAtomicUnitOfWork>()
-        ?? throw new InvalidOperationException("Atomic access services are unavailable.");
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = Services.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
 
     private sealed record UnsafeWorkspaceAssignmentMutationCommand(
         int AccessContextId,
         long ExpectedRevision,
         int AssignmentId,
-        DateTime ChangedAtUtc) : IWorkspaceAccessMutationCommand;
+        DateTime ChangedAtUtc) : IAtomicCommandData;
 
     private sealed class UnsafeWorkspaceAssignmentMutationHandler
         : IAtomicCommandHandler<UnsafeWorkspaceAssignmentMutationCommand, WorkspaceAccessMutationResult>
     {
+        private readonly RentalCommandDbContext _db;
+        private readonly WorkspaceAccessRevisionGuard _accessRevisionGuard;
+
+        public UnsafeWorkspaceAssignmentMutationHandler(
+            RentalCommandDbContext db,
+            WorkspaceAccessRevisionGuard accessRevisionGuard)
+        {
+            _db = db;
+            _accessRevisionGuard = accessRevisionGuard;
+        }
+
         public async Task<WorkspaceAccessMutationResult> HandleAsync(
             UnsafeWorkspaceAssignmentMutationCommand command,
-            IAtomicWriteAttempt attempt,
+            IAtomicCommandContext context,
             CancellationToken ct)
         {
-            var assignment = await attempt.Persistence.Query<MembershipRoleAssignment>()
+            var assignment = await _db.MembershipRoleAssignments
                 .SingleAsync(item => item.Id == command.AssignmentId &&
                                      item.WorkspaceMembership!.AccessContextId == command.AccessContextId, ct);
             assignment.UpdatedAtUtc = command.ChangedAtUtc;
+            await _accessRevisionGuard.ValidatePendingMutationAsync(
+                _db,
+                command.AccessContextId,
+                command.ExpectedRevision,
+                ct);
 
             return new WorkspaceAccessMutationResult(
                 command.AccessContextId,
                 command.AssignmentId,
                 command.ExpectedRevision);
         }
+
+        public Task AuthorizeReplayAsync(
+            UnsafeWorkspaceAssignmentMutationCommand command,
+            IAtomicCommandContext context,
+            CancellationToken ct) => Task.CompletedTask;
     }
 
     private IServiceProvider Services =>
@@ -1755,6 +2600,29 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
     private static AtomicCommandIdentity Identity(string commandType) =>
         new(commandType, Guid.NewGuid().ToString("N"));
+
+    private static string ReadActivationToken(string outboxPayload)
+    {
+        using var document = JsonDocument.Parse(outboxPayload);
+        var body = document.RootElement.GetProperty("body").GetString()
+            ?? throw new InvalidOperationException("Invitation email body is missing.");
+        const string marker = "activate-team?token=";
+        var markerIndex = body.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            throw new InvalidOperationException("Invitation email body is missing the activation token.");
+        }
+
+        var tokenStart = markerIndex + marker.Length;
+        var tokenEnd = body.IndexOfAny(['\r', '\n', ' '], tokenStart);
+        var token = tokenEnd < 0
+            ? body[tokenStart..]
+            : body[tokenStart..tokenEnd];
+        return Uri.UnescapeDataString(token.Trim());
+    }
+
+    private static string LowerSha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private AuthSessionRefreshTokenFamily RefreshFamily() => new()
     {
@@ -1852,10 +2720,46 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await new ActiveAccessContextResolver(db).ResolveAsync(
             _sessionId, _userId, _accessContextId, presentedRevision, _now);
 
+    private static async Task CommitDirectPostingAsync<T>(
+        RentalCommandDbContext db,
+        Func<IAtomicCommandContext, CancellationToken, Task<T>> post,
+        string operationKey)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        commandContext.BeginAttempt(attemptId);
+        commandContext.BindReceipt(Guid.NewGuid());
+        using var attempt = auditScope.BeginAttempt(
+            new AtomicCommandIdentity("test.accounting.post", operationKey), attemptId, db);
+        await post(commandContext, CancellationToken.None);
+        await commandContext.FlushBusinessAsync();
+        await transaction.CommitAsync();
+        commandContext.EndAttempt();
+    }
+
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseNpgsql(_connectionString)
             .Options);
+
+    private async Task<WorkspaceInvitationActivationRow> ActivateInvitationAsApiAsync(
+        long invitationId,
+        int invitedUserId,
+        string tokenHash)
+    {
+        await using var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_apiConnectionString)
+                .Options);
+        return await db.Database.SqlQuery<WorkspaceInvitationActivationRow>($"""
+                SELECT * FROM rc_activate_workspace_invitation(
+                    {invitationId}, {invitedUserId}, {tokenHash}, {"hashed-password-for-test"},
+                    {Guid.NewGuid().ToString("N")}, {Guid.NewGuid().ToString("N")})
+                """)
+            .SingleAsync();
+    }
 
     private async Task<RentalCommandDbContext> NewAuthorizationQueryContextAsync()
     {
@@ -1876,6 +2780,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; workspace authorization kernel test skipped.");
+
+    private sealed class WorkspaceInvitationActivationRow
+    {
+        public int PortfolioId { get; set; }
+        public int WorkspaceMembershipId { get; set; }
+        public int AccessContextId { get; set; }
+        public int InvitedUserId { get; set; }
+        public DateTime AcceptedAtUtc { get; set; }
+    }
 
     private sealed class AccessTestActor : ICurrentActor
     {

@@ -64,9 +64,8 @@ export interface GettingStartedSignals {
 	/** Server-projected readiness for the user's personal alert setup. */
 	hasPersonalAlerts: boolean;
 	/**
-	 * The user deliberately switched on an automation that defaults OFF (rent charges or late fees).
-	 * Lease-expiry reminders are intentionally excluded — they default ON, so counting them would
-	 * auto-check this task for a brand-new account that never touched Settings.
+	 * The user configured at least one optional follow-up automation. Rent charges are not a setting:
+	 * every active lease drives them automatically from its chosen rent-tracking start.
 	 */
 	hasAutomations: boolean;
 }
@@ -212,8 +211,8 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		// No matching wizard step: automations are configured in Settings, not the wizard, so this
 		// carries its own copy rather than pulling from the registry.
 		key: 'automations',
-		label: 'Turn on automatic reminders',
-		eli5: 'Let the app charge rent, add late fees, and warn about expiring leases on its own — so you do not have to remember.',
+		label: 'Configure optional follow-ups',
+		eli5: 'Rent charges already follow every active lease. Choose any extra late fees, tenant notices, renewal reminders, maintenance reminders, or briefings you want.',
 		icon: SlidersHorizontal,
 		route: '/settings',
 		hash: 'automations',

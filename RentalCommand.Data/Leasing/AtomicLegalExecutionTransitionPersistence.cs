@@ -1,14 +1,21 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Leasing;
 
-internal sealed partial class AtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
-    public async Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
+    public static async Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int leaseManagementId,
         int? leaseAgreementId,
@@ -24,7 +31,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
 
         // Both the overlap exclusion and reciprocal-lineage validators must inspect the final
         // transaction state. This removes any dependency on EF/PostgreSQL statement ordering.
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "SET CONSTRAINTS \"EX_LeaseAgreements_GoverningPeriod\", " +
             "\"TR_LeaseAgreements_ValidateReciprocalLineage\", " +
             "\"TR_LeaseAddenda_ValidateReciprocalLineage\" DEFERRED",
@@ -46,17 +53,327 @@ internal sealed partial class AtomicLeaseMutationPersistence
                 (int)AtomicLegalExecutionTransitionOutcome.RenewalAddendumStateChanged),
         };
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        LegalExecutionTransitionRow row;
+        using (var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
             new("LeaseAgreements", AtomicRawDmlOperation.Update),
-            new("LeaseAddenda", AtomicRawDmlOperation.Update));
-        var row = await _db.Database.SingleTopLevelResultAsync<LegalExecutionTransitionRow>(
-            ExecuteLegalArtifactTransitionSql, parameters, ct);
+            new("LeaseAddenda", AtomicRawDmlOperation.Update)))
+        {
+            row = await db.Database.SingleTopLevelResultAsync<LegalExecutionTransitionRow>(
+                ExecuteLegalArtifactTransitionSql, parameters, ct);
+        }
+
+        if (row.Outcome == (int)AtomicLegalExecutionTransitionOutcome.Applied
+            && leaseAgreementId.HasValue)
+        {
+            await ReconcileInitialSecurityDepositChargeAsync(
+                db, context, portfolioId, leaseAgreementId.Value, executedAtUtc, ct);
+        }
 
         return new(
             (AtomicLegalExecutionTransitionOutcome)row.Outcome,
             row.PredecessorId,
             DeserializeIds(row.SupersededAddendumIdsJson),
             DeserializeIds(row.ReissuedAddendumIdsJson));
+    }
+
+    public static async Task<int> ReconcileInitialSecurityDepositChargeAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        int portfolioId,
+        int leaseAgreementId,
+        DateTime postedAtUtc,
+        CancellationToken ct = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(leaseAgreementId);
+        if (postedAtUtc.Kind != DateTimeKind.Utc)
+            throw new ArgumentException("Posted time must be UTC.", nameof(postedAtUtc));
+
+        var charges = await ReconcileInitialSecurityDepositChargesForAgreementAsync(
+            db, context, portfolioId, leaseAgreementId, postedAtUtc, ct);
+        await PostInitialSecurityDepositChargeJournalsAsync(db, context, charges, ct);
+        StageInitialSecurityDepositChargeAudits(db, context, charges);
+        return charges.Count;
+    }
+
+    public static async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
+        ReconcileCompletedNativeEsignInitialSecurityDepositChargesAsync(
+            RentalCommandDbContext db,
+            IAtomicCommandContext context,
+            int batchSize,
+            CancellationToken ct = default)
+    {
+        if (batchSize is <= 0 or > 100) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
+            new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
+            new("OutboxMessages", AtomicRawDmlOperation.Insert));
+        var charges = await db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
+            WITH candidate AS MATERIALIZED (
+                SELECT agreement."PortfolioId",
+                       account."Id" AS tenant_account_id,
+                       agreement."Id" AS lease_agreement_id,
+                       agreement."SecurityDepositObligation" AS amount,
+                       agreement."Currency",
+                       account."CreatedByUserId",
+                       rc_business_date(agreement."PortfolioId") AS business_date,
+                       rc_effective_now_utc(agreement."PortfolioId") AS posted_at_utc,
+                       'security-deposit:agreement:' || agreement."PublicId"::text AS business_key
+                FROM "SignatureRequests" AS request
+                JOIN "LeaseAgreements" AS agreement
+                  ON agreement."Id" = request."LeaseAgreementId"
+                 AND agreement."PortfolioId" = request."PortfolioId"
+                JOIN "LeaseManagements" AS management
+                  ON management."Id" = agreement."LeaseManagementId"
+                 AND management."PortfolioId" = agreement."PortfolioId"
+                JOIN "TenantAccounts" AS account
+                  ON account."LeaseManagementId" = management."Id"
+                 AND account."PortfolioId" = management."PortfolioId"
+                WHERE request."Status" = 'Completed'
+                  AND request."ExecutedArtifactId" IS NOT NULL
+                  AND request."LeaseAgreementId" IS NOT NULL
+                  AND request."LeaseAddendumId" IS NULL
+                  AND agreement."ChangeType" = 'Initial'
+                  AND agreement."ReplacesAgreementId" IS NULL
+                  AND agreement."RenewsAgreementId" IS NULL
+                  AND agreement."FullyExecutedAtUtc" IS NOT NULL
+                  AND agreement."ExecutedArtifactId" IS NOT NULL
+                  AND agreement."VoidedAtUtc" IS NULL
+                  AND agreement."DraftCanceledAtUtc" IS NULL
+                  AND agreement."SecurityDepositObligation" > 0
+                  AND management."CanceledAtUtc" IS NULL
+                  AND account."ClosedAtUtc" IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM "TenantLedgerEntries" AS existing
+                      WHERE existing."TenantAccountId" = account."Id"
+                        AND existing."BusinessKey" =
+                            'security-deposit:agreement:' || agreement."PublicId"::text)
+                ORDER BY request."CompletedAtUtc" NULLS LAST, request."Id"
+                FOR UPDATE OF request SKIP LOCKED
+                LIMIT {batchSize}
+            ), inserted AS (
+                INSERT INTO "TenantLedgerEntries" (
+                    "PortfolioId", "TenantAccountId", "EntryType", "Direction", "Amount",
+                    "Currency", "EffectiveOn", "DueOn", "PostedAtUtc", "Description",
+                    "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
+                SELECT candidate."PortfolioId", candidate.tenant_account_id,
+                       'DepositCharge', 'Debit', candidate.amount,
+                       candidate."Currency", candidate.business_date, candidate.business_date,
+                       candidate.posted_at_utc,
+                       'Security deposit due at lease execution',
+                       candidate.business_key, candidate.lease_agreement_id,
+                       candidate."CreatedByUserId"
+                FROM candidate
+                ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
+                RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
+                          "Amount", "Currency", "EffectiveOn", "DueOn", "Description",
+                          "BusinessKey", "CreatedByUserId", "PostedAtUtc"
+            ), outbox AS (
+                INSERT INTO "OutboxMessages" (
+                    "PortfolioId", "MessageType", "Payload", "IdempotencyKey", "AttemptCount",
+                    "CreatedAtUtc", "NextAttemptAtUtc")
+                SELECT inserted."PortfolioId",
+                       'data-update',
+                       jsonb_build_object(
+                           'entityType', 'TenantLedgerEntry',
+                           'entityId', inserted."Id",
+                           'data', jsonb_build_object(
+                               'TenantAccountId', inserted."TenantAccountId",
+                               'LeaseAgreementId', inserted."LeaseAgreementId",
+                               'EntryType', 'DepositCharge')),
+                       'native-esign-deposit-charge:' || md5(
+                           inserted."TenantAccountId"::text || chr(31)
+                               || inserted."BusinessKey"),
+                       0,
+                       inserted."PostedAtUtc",
+                       inserted."PostedAtUtc"
+                FROM inserted
+                ON CONFLICT ("IdempotencyKey") DO NOTHING
+                RETURNING 1
+            )
+            SELECT inserted."Id" AS "LedgerEntryId",
+                   inserted."PortfolioId",
+                   inserted."TenantAccountId",
+                   inserted."LeaseAgreementId",
+                   inserted."Amount",
+                   inserted."Currency",
+                   inserted."EffectiveOn",
+                   inserted."DueOn",
+                   inserted."Description",
+                   inserted."BusinessKey",
+                   inserted."CreatedByUserId",
+                   inserted."PostedAtUtc"
+            FROM inserted
+            ORDER BY inserted."Id"
+            """).ToListAsync(ct);
+        await PostInitialSecurityDepositChargeJournalsAsync(db, context, charges, ct);
+        StageInitialSecurityDepositChargeAudits(db, context, charges);
+        return charges;
+    }
+
+    private static async Task<IReadOnlyList<AtomicInitialSecurityDepositCharge>>
+        ReconcileInitialSecurityDepositChargesForAgreementAsync(
+            RentalCommandDbContext db,
+            IAtomicCommandContext context,
+            int portfolioId,
+            int leaseAgreementId,
+            DateTime postedAtUtc,
+            CancellationToken ct)
+    {
+        using var lease = RequireAuditScope(db, context).BeginInternalRawDmlBatch(
+            new("TenantLedgerEntries", AtomicRawDmlOperation.Insert),
+            new("OutboxMessages", AtomicRawDmlOperation.Insert));
+        return await db.Database.SqlQuery<AtomicInitialSecurityDepositCharge>($"""
+            WITH candidate AS MATERIALIZED (
+                SELECT agreement."PortfolioId",
+                       account."Id" AS tenant_account_id,
+                       agreement."Id" AS lease_agreement_id,
+                       agreement."SecurityDepositObligation" AS amount,
+                       agreement."Currency",
+                       account."CreatedByUserId",
+                       rc_business_date(agreement."PortfolioId") AS business_date,
+                       'security-deposit:agreement:' || agreement."PublicId"::text AS business_key
+                FROM "LeaseAgreements" AS agreement
+                JOIN "LeaseManagements" AS management
+                  ON management."Id" = agreement."LeaseManagementId"
+                 AND management."PortfolioId" = agreement."PortfolioId"
+                JOIN "TenantAccounts" AS account
+                  ON account."LeaseManagementId" = management."Id"
+                 AND account."PortfolioId" = management."PortfolioId"
+                WHERE agreement."PortfolioId" = {portfolioId}
+                  AND agreement."Id" = {leaseAgreementId}
+                  AND agreement."ChangeType" = 'Initial'
+                  AND agreement."ReplacesAgreementId" IS NULL
+                  AND agreement."RenewsAgreementId" IS NULL
+                  AND agreement."FullyExecutedAtUtc" IS NOT NULL
+                  AND agreement."ExecutedArtifactId" IS NOT NULL
+                  AND agreement."VoidedAtUtc" IS NULL
+                  AND agreement."DraftCanceledAtUtc" IS NULL
+                  AND agreement."SecurityDepositObligation" > 0
+                  AND management."CanceledAtUtc" IS NULL
+                  AND account."ClosedAtUtc" IS NULL
+            ), inserted AS (
+                INSERT INTO "TenantLedgerEntries" (
+                    "PortfolioId", "TenantAccountId", "EntryType", "Direction", "Amount",
+                    "Currency", "EffectiveOn", "DueOn", "PostedAtUtc", "Description",
+                    "BusinessKey", "LeaseAgreementId", "CreatedByUserId")
+                SELECT candidate."PortfolioId", candidate.tenant_account_id,
+                       'DepositCharge', 'Debit', candidate.amount,
+                       candidate."Currency", candidate.business_date, candidate.business_date,
+                       {postedAtUtc},
+                       'Security deposit due at lease execution',
+                       candidate.business_key, candidate.lease_agreement_id,
+                       candidate."CreatedByUserId"
+                FROM candidate
+                ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
+                RETURNING "Id", "PortfolioId", "TenantAccountId", "LeaseAgreementId",
+                          "Amount", "Currency", "EffectiveOn", "DueOn", "Description",
+                          "BusinessKey", "CreatedByUserId", "PostedAtUtc"
+            ), outbox AS (
+                INSERT INTO "OutboxMessages" (
+                    "PortfolioId", "MessageType", "Payload", "IdempotencyKey", "AttemptCount",
+                    "CreatedAtUtc", "NextAttemptAtUtc")
+                SELECT inserted."PortfolioId",
+                       'data-update',
+                       jsonb_build_object(
+                           'entityType', 'TenantLedgerEntry',
+                           'entityId', inserted."Id",
+                           'data', jsonb_build_object(
+                               'TenantAccountId', inserted."TenantAccountId",
+                               'LeaseAgreementId', inserted."LeaseAgreementId",
+                               'EntryType', 'DepositCharge')),
+                       'native-esign-deposit-charge:' || md5(
+                           inserted."TenantAccountId"::text || chr(31)
+                               || inserted."BusinessKey"),
+                       0,
+                       inserted."PostedAtUtc",
+                       inserted."PostedAtUtc"
+                FROM inserted
+                ON CONFLICT ("IdempotencyKey") DO NOTHING
+                RETURNING 1
+            )
+            SELECT inserted."Id" AS "LedgerEntryId",
+                   inserted."PortfolioId",
+                   inserted."TenantAccountId",
+                   inserted."LeaseAgreementId",
+                   inserted."Amount",
+                   inserted."Currency",
+                   inserted."EffectiveOn",
+                   inserted."DueOn",
+                   inserted."Description",
+                   inserted."BusinessKey",
+                   inserted."CreatedByUserId",
+                   inserted."PostedAtUtc"
+            FROM inserted
+            ORDER BY inserted."Id"
+            """).ToListAsync(ct);
+    }
+
+    private static async Task PostInitialSecurityDepositChargeJournalsAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyList<AtomicInitialSecurityDepositCharge> charges,
+        CancellationToken ct)
+    {
+        // The tenant-ledger rows were created by the guarded set-based statement above. Build the
+        // same source models the normal tenant charge flow uses, then attach all journals through
+        // one batch preflight in this command's existing transaction.
+        await TenantAccountingPosting.PostInitialSecurityDepositChargesAsync(
+            db,
+            context,
+            charges.Select(charge => new TenantLedgerEntry
+            {
+                Id = charge.LedgerEntryId,
+                PortfolioId = charge.PortfolioId,
+                TenantAccountId = charge.TenantAccountId,
+                LeaseAgreementId = charge.LeaseAgreementId,
+                EntryType = TenantLedgerEntryType.DepositCharge,
+                Direction = TenantLedgerDirection.Debit,
+                Amount = charge.Amount,
+                Currency = charge.Currency,
+                EffectiveOn = charge.EffectiveOn,
+                Description = charge.Description,
+                BusinessKey = charge.BusinessKey,
+                CreatedByUserId = charge.CreatedByUserId,
+                PostedAtUtc = charge.PostedAtUtc,
+            }).ToArray(),
+            ct);
+
+        // Direct legal-transition callers and the normal atomic runner share this persistence
+        // method. Flush the journal graph while the caller's explicit transaction is still open;
+        // the runner's final flush then persists the staged audit/outbox companions.
+        if (charges.Count != 0)
+            await context.FlushBusinessAsync(ct);
+    }
+
+    private static void StageInitialSecurityDepositChargeAudits(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyList<AtomicInitialSecurityDepositCharge> charges)
+    {
+        foreach (var charge in charges)
+        {
+            RequireAuditScope(db, context).StageSemanticEvent(new AtomicSemanticAudit(
+                charge.PortfolioId,
+                nameof(TenantAccount),
+                charge.TenantAccountId,
+                AuditLogOperation.Updated,
+                UserId: charge.CreatedByUserId,
+                ActorLabel: "native-esign",
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    charge.LedgerEntryId,
+                    charge.LeaseAgreementId,
+                    EntryType = nameof(TenantLedgerEntryType.DepositCharge),
+                    charge.Amount,
+                    charge.EffectiveOn,
+                    charge.DueOn,
+                    charge.BusinessKey,
+                }),
+                ChangeReason: "Posted initial security-deposit charge at Agreement execution."),
+                charge.PostedAtUtc);
+        }
     }
 
     private static NpgsqlParameter NullableInteger(string name, int? value) =>

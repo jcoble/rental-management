@@ -5,22 +5,25 @@ import 'package:rental_command/features/properties/property_workspace_sections.d
 
 void main() {
   group('SingleRental workspace', () {
-    test('opens the server-selected canonical Unit directly', () {
-      final entry = resolvePropertyWorkspaceEntry(
-        propertyId: 41,
-        rentalStructure: 'SingleRental',
-        serverEntry: const PropertyWorkspaceEntry(
-          destination: PropertyWorkspaceDestination.unit,
+    test(
+      'opens property details while preserving the server-selected canonical Unit',
+      () {
+        final entry = resolvePropertyWorkspaceEntry(
           propertyId: 41,
-          unitId: 89,
-          areas: [],
-        ),
-      );
+          rentalStructure: 'SingleRental',
+          serverEntry: const PropertyWorkspaceEntry(
+            destination: PropertyWorkspaceDestination.unit,
+            propertyId: 41,
+            unitId: 89,
+            areas: [],
+          ),
+        );
 
-      expect(entry.destination, PropertyWorkspaceDestination.unit);
-      expect(entry.unitId, 89);
-      expect(entry.areas, isEmpty);
-    });
+        expect(entry.destination, PropertyWorkspaceDestination.property);
+        expect(entry.unitId, 89);
+        expect(entry.areas, isEmpty);
+      },
+    );
 
     test('does not invent a Unit id when setup is incomplete', () {
       final entry = resolvePropertyWorkspaceEntry(
@@ -29,7 +32,7 @@ void main() {
         serverEntry: null,
       );
 
-      expect(entry.destination, PropertyWorkspaceDestination.unit);
+      expect(entry.destination, PropertyWorkspaceDestination.property);
       expect(entry.unitId, isNull);
     });
   });
@@ -74,6 +77,9 @@ void main() {
       final detail = File(
         'lib/features/properties/property_detail_screen.dart',
       ).readAsStringSync();
+      final list = File(
+        'lib/features/properties/properties_list_screen.dart',
+      ).readAsStringSync();
       final documents = File(
         'lib/features/properties/property_documents_section.dart',
       ).readAsStringSync();
@@ -88,6 +94,13 @@ void main() {
         contains("ValueKey('property-documents-history-surface')"),
       );
       expect(detail, isNot(contains('property-documents-history-tabs')));
+      expect(detail, contains("tooltip: 'Edit property'"));
+      expect(
+        detail,
+        isNot(contains('UnitCommandCenterLoaderScreen(unitId: unitId)')),
+      );
+      expect(list, contains('PropertyDetailScreen(property: property)'));
+      expect(list, contains("tooltip: 'Open unit command center'"));
       expect(documents, contains('uploadPropertyDocument'));
       expect(documents, contains('downloadPropertyDocument'));
       expect(repository, contains("'entityType': 'Property'"));

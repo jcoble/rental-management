@@ -4,9 +4,10 @@
 	import { page } from '$app/state';
 	import type { UnitDashboard } from '$lib/types';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
+	import type { TenantLedgerEntry } from '$lib/api/endpoints/tenant-accounts';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money, unitMoneyIdentity } from '../money';
+	import { canReverseTenantLedgerEntry, money, tenantLedgerReversalReason, unitMoneyIdentity } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
@@ -17,7 +18,7 @@
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
-	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2 } from '@lucide/svelte';
+	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2, Undo2 } from '@lucide/svelte';
 
 	let { dashboard, onScan, tabQuery = 'rent', ledgerQuery }: {
 		dashboard: UnitDashboard;
@@ -127,12 +128,14 @@
 		queryClient.invalidateQueries({ queryKey: ['accounting'] });
 	}
 
-	type FormKind = 'receipt' | 'charge' | null;
+	type FormKind = 'receipt' | 'charge' | 'reversal' | null;
 	let formKind = $state<FormKind>(null);
 	let operationKey = $state<string | null>(null);
 	let errors = $state<Record<string, string>>({});
-	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' });
+	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '', targetChargeEntryId: '' });
 	let chargeForm = $state({ amount: '', effectiveOn: today(), dueOn: today(), description: '' });
+	let reversalTarget = $state<TenantLedgerEntry | null>(null);
+	let reversalForm = $state({ effectiveOn: today(), reason: '' });
 
 	function clearCreateError(field: string) {
 		const next = clearFieldError(errors, field);
@@ -152,6 +155,9 @@
 		if (formKind === 'receipt' && receiptForm.method) clearCreateError('method');
 	});
 	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.targetChargeEntryId) clearCreateError('targetChargeEntryId');
+	});
+	$effect(() => {
 		if (formKind === 'charge' && Number(chargeForm.amount) > 0) clearCreateError('amount');
 	});
 	$effect(() => {
@@ -163,18 +169,35 @@
 	$effect(() => {
 		if (formKind === 'charge' && chargeForm.description.trim()) clearCreateError('description');
 	});
+	$effect(() => {
+		if (formKind === 'reversal' && reversalForm.effectiveOn) clearCreateError('effectiveOn');
+	});
+	$effect(() => {
+		if (formKind === 'reversal' && reversalForm.reason.trim()) clearCreateError('reason');
+	});
 
 	function openForm(kind: Exclude<FormKind, null>) {
 		formKind = kind;
 		operationKey = null;
 		errors = {};
-		if (kind === 'receipt') receiptForm = { amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' };
-		else chargeForm = { amount: '', effectiveOn: today(), dueOn: today(), description: '' };
+		if (kind === 'receipt') receiptForm = { amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '', targetChargeEntryId: '' };
+		else if (kind === 'charge') chargeForm = { amount: '', effectiveOn: today(), dueOn: today(), description: '' };
+	}
+	function openReversal(entry: TenantLedgerEntry) {
+		formKind = 'reversal';
+		operationKey = null;
+		errors = {};
+		reversalTarget = entry;
+		reversalForm = {
+			effectiveOn: today(),
+			reason: tenantLedgerReversalReason(entry)
+		};
 	}
 	function closeForm() {
 		formKind = null;
 		operationKey = null;
 		errors = {};
+		reversalTarget = null;
 	}
 
 	const receiptMutation = createMutation(() => ({
@@ -188,12 +211,17 @@
 				paymentMethodSummary: receiptForm.method,
 				externalReference: receiptForm.reference.trim() || undefined,
 				payerName: receiptForm.payerName.trim() || undefined,
-				allocateOldestCharges: true
+				targetChargeEntryId: receiptTargetChargeEntryId()
 			});
 		},
 		onSuccess: () => { showSuccess('Receipt recorded.'); closeForm(); invalidateMoney(); },
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
+
+	function receiptTargetChargeEntryId(): number | null {
+		if (receiptForm.targetChargeEntryId === 'unapplied') return null;
+		return Number(receiptForm.targetChargeEntryId);
+	}
 
 	const chargeMutation = createMutation(() => ({
 		mutationFn: () => {
@@ -210,12 +238,28 @@
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
 
+	const reversalMutation = createMutation(() => ({
+		mutationFn: () => {
+			if (!tenantAccountId) throw new Error('This rental does not have a tenant account.');
+			if (!reversalTarget) throw new Error('Choose a ledger entry to reverse.');
+			operationKey ??= crypto.randomUUID();
+			return tenantAccounts.reverseEntry(tenantAccountId, operationKey, {
+				reversesEntryId: reversalTarget.tenantLedgerEntryId,
+				effectiveOn: reversalForm.effectiveOn,
+				reason: reversalForm.reason.trim()
+			});
+		},
+		onSuccess: () => { showSuccess('Ledger entry reversed.'); closeForm(); invalidateMoney(); },
+		onError: (error) => showError(apiErrorMessage(error))
+	}));
+
 	function submitReceipt() {
 		errors = {};
 		if (!(Number(receiptForm.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
 		if (!receiptForm.effectiveOn) errors.effectiveOn = 'Pick the date received.';
 		if (!receiptForm.description.trim()) errors.description = 'Describe this receipt.';
 		if (!receiptForm.method) errors.method = 'Choose a payment method.';
+		if (!receiptForm.targetChargeEntryId) errors.targetChargeEntryId = 'Choose one charge or leave the receipt unapplied.';
 		if (Object.keys(errors).length === 0) receiptMutation.mutate();
 	}
 	function submitCharge() {
@@ -225,6 +269,13 @@
 		if (!chargeForm.dueOn) errors.dueOn = 'Pick the due date.';
 		if (!chargeForm.description.trim()) errors.description = 'Describe this charge.';
 		if (Object.keys(errors).length === 0) chargeMutation.mutate();
+	}
+	function submitReversal() {
+		errors = {};
+		if (!reversalTarget) errors.entry = 'Choose a ledger entry to reverse.';
+		if (!reversalForm.effectiveOn) errors.effectiveOn = 'Pick the reversal date.';
+		if (!reversalForm.reason.trim()) errors.reason = 'Describe why this entry is being reversed.';
+		if (Object.keys(errors).length === 0) reversalMutation.mutate();
 	}
 </script>
 
@@ -246,7 +297,7 @@
 
 	{#if formKind && tenantAccountId}
 		<div class="rounded-xl bg-card p-4" data-testid="rent-create-form">
-			<div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">{formKind === 'receipt' ? 'Record a payment' : 'Add a manual charge'}</h3><Button variant="ghost" size="icon" onclick={closeForm}><X class="h-4 w-4" /></Button></div>
+			<div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">{formKind === 'receipt' ? 'Record a payment' : formKind === 'charge' ? 'Add a manual charge' : 'Reverse ledger entry'}</h3><Button variant="ghost" size="icon" onclick={closeForm}><X class="h-4 w-4" /></Button></div>
 			{#if formKind === 'receipt'}
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={receiptForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
@@ -255,9 +306,22 @@
 					<label class="text-xs font-medium text-muted-foreground">Reference<Input bind:value={receiptForm.reference} placeholder="Check or confirmation number" /></label>
 					<label class="text-xs font-medium text-muted-foreground">Payer<Input bind:value={receiptForm.payerName} placeholder="Optional" /></label>
 					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Description<Input bind:value={receiptForm.description} />{#if errors.description}<span class="text-destructive">{errors.description}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">
+						Apply payment to
+						<Select.Root type="single" bind:value={receiptForm.targetChargeEntryId}>
+							<Select.Trigger class="w-full">{receiptForm.targetChargeEntryId === 'unapplied' ? 'Leave unapplied/advance receipt' : receiptForm.targetChargeEntryId ? `Charge #${receiptForm.targetChargeEntryId}` : 'Choose a charge or leave unapplied'}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="unapplied" label="Leave unapplied/advance receipt">Leave unapplied/advance receipt</Select.Item>
+								{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} - ${money(charge.openAmount)} still owed`}>{charge.description} - {money(charge.openAmount)} still owed</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						{#if errors.targetChargeEntryId}<span class="text-destructive">{errors.targetChargeEntryId}</span>{/if}
+					</label>
 				</div>
 				<div class="mt-3 flex justify-end"><Button onclick={submitReceipt} disabled={receiptMutation.isPending}>{receiptMutation.isPending ? 'Recording…' : 'Record payment'}</Button></div>
-			{:else}
+			{:else if formKind === 'charge'}
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={chargeForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
 					<label class="text-xs font-medium text-muted-foreground">Effective date<DatePicker bind:value={chargeForm.effectiveOn} />{#if errors.effectiveOn}<span class="text-destructive">{errors.effectiveOn}</span>{/if}</label>
@@ -266,6 +330,23 @@
 				</div>
 				<p class="mt-2 text-xs text-muted-foreground">Rent, late fees, deposits, and addenda come from their own workflows. Use this only for a true one-off charge.</p>
 				<div class="mt-3 flex justify-end"><Button onclick={submitCharge} disabled={chargeMutation.isPending}>{chargeMutation.isPending ? 'Adding…' : 'Add charge'}</Button></div>
+			{:else}
+				<div class="space-y-3" data-testid="rent-reversal-form">
+					{#if reversalTarget}
+						<div class="rounded-lg border bg-background p-3 text-sm">
+							<div class="flex items-center justify-between gap-3">
+								<span><span class="font-medium">{formatStatusLabel(reversalTarget.entryType)}</span><span class="ml-2 text-muted-foreground">{reversalTarget.description}</span></span>
+								<span class="font-semibold">{money(reversalTarget.amount)}</span>
+							</div>
+						</div>
+					{/if}
+					{#if errors.entry}<p class="text-xs text-destructive" role="alert">{errors.entry}</p>{/if}
+					<div class="grid gap-3 sm:grid-cols-2">
+						<label class="text-xs font-medium text-muted-foreground">Reversal date<DatePicker bind:value={reversalForm.effectiveOn} />{#if errors.effectiveOn}<span class="text-destructive">{errors.effectiveOn}</span>{/if}</label>
+						<label class="text-xs font-medium text-muted-foreground">Reason<Input bind:value={reversalForm.reason} maxlength={500} />{#if errors.reason}<span class="text-destructive">{errors.reason}</span>{/if}</label>
+					</div>
+				</div>
+				<div class="mt-3 flex justify-end"><Button onclick={submitReversal} disabled={reversalMutation.isPending}>{reversalMutation.isPending ? 'Reversing…' : 'Reverse entry'}</Button></div>
 			{/if}
 		</div>
 	{/if}
@@ -296,7 +377,12 @@
 							{:else}
 								<div class="flex items-center justify-between gap-3 p-3">
 									<span><span class="font-medium">{formatStatusLabel(entry.entryType)}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
-									<span class="font-semibold">{money(entry.amount)}</span>
+									<span class="flex items-center gap-2">
+										<span class="font-semibold">{money(entry.amount)}</span>
+										{#if canReverseTenantLedgerEntry(entry)}
+											<Button variant="outline" size="sm" class="gap-1" onclick={() => openReversal(entry)} aria-label={`Reverse ${formatStatusLabel(entry.entryType)} entry ${entry.tenantLedgerEntryId}`} data-testid={`rent-reverse-ledger-entry-${entry.tenantLedgerEntryId}`}><Undo2 class="h-4 w-4" /> Reverse</Button>
+										{/if}
+									</span>
 								</div>
 							{/if}
 						</li>

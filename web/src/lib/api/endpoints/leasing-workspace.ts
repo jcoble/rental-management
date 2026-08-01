@@ -25,6 +25,7 @@ export interface LeasingPipelineItem {
 export interface LeasingRental {
 	propertyId: number;
 	unitId: number;
+	leaseManagementId?: number | null;
 	propertyName: string;
 	unitNumber: string;
 	address: string;
@@ -86,6 +87,7 @@ export interface LeasingApplicationDetail {
 	notes?: string | null;
 	consentGiven: boolean;
 	submittedAtUtc: string;
+	approvedTenantId?: number | null;
 }
 
 export interface LeasingAppointmentDetail extends LeasingCalendarItem {

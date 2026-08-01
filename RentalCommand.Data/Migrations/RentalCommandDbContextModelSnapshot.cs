@@ -218,6 +218,87 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("AccountingConnections");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingConversionReconciliation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("ApprovedOpeningBalanceJournalEntryId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<decimal>("ImbalanceAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool>("IsApproved")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("MissingMappingCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("PostedCreditTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("PostedDebitTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("PostingRuleVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("SourceTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<int>("UnsupportedSourceCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApprovedOpeningBalanceJournalEntryId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "IsApproved");
+
+                    b.HasIndex("PortfolioId", "SourceType", "Currency", "PostingRuleVersion")
+                        .IsUnique();
+
+                    b.ToTable("AccountingConversionReconciliations", t =>
+                        {
+                            t.HasCheckConstraint("CK_AccountingConversionReconciliations_Counts", "\"MissingMappingCount\" >= 0 AND \"UnsupportedSourceCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_AccountingConversionReconciliations_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+
+                            t.HasCheckConstraint("CK_AccountingConversionReconciliations_PostingRuleVersion", "\"PostingRuleVersion\" > 0");
+                        });
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingEntityMapping", b =>
                 {
                     b.Property<int>("Id")
@@ -1006,6 +1087,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("WorkOrderId")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("LeaseManagementId");
@@ -1023,6 +1107,10 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("TenantId");
 
                     b.HasIndex("UnitId");
+
+                    b.HasIndex("WorkOrderId")
+                        .IsUnique()
+                        .HasFilter("\"WorkOrderId\" IS NOT NULL");
 
                     b.ToTable("Appointments");
                 });
@@ -1332,7 +1420,9 @@ namespace RentalCommand.Data.Migrations
                         .HasDefaultValue(true);
 
                     b.Property<bool>("EnableRentCharges")
-                        .HasColumnType("boolean");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
 
                     b.Property<int>("LateFeeGraceDays")
                         .ValueGeneratedOnAdd()
@@ -1368,7 +1458,10 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId")
                         .IsUnique();
 
-                    b.ToTable("AutomationSettings");
+                    b.ToTable("AutomationSettings", t =>
+                        {
+                            t.HasCheckConstraint("CK_AutomationSettings_RentChargesAlwaysEnabled", "\"EnableRentCharges\" = TRUE");
+                        });
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.BankConnection", b =>
@@ -1458,6 +1551,64 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("BankConnections");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.BankStatement", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("BankConnectionId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("ClosingBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ImportedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("IsoCurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<decimal>("OpeningBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateOnly>("PeriodEnd")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("PeriodStart")
+                        .HasColumnType("date");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("StatementMovement")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("BankConnectionId", "PortfolioId");
+
+                    b.HasIndex("BankConnectionId", "PeriodStart", "PeriodEnd")
+                        .IsUnique();
+
+                    b.ToTable("BankStatements");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.BankTransaction", b =>
                 {
                     b.Property<int>("Id")
@@ -1488,6 +1639,18 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<DateTime?>("ExpenseMatchAppliedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ExpenseMatchPreviousPaidAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ExpenseMatchPreviousStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ExpenseMatchPreviousUpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("IsoCurrencyCode")
                         .IsRequired()
                         .HasMaxLength(8)
@@ -1502,7 +1665,16 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
+                    b.Property<int?>("MatchedBankTransactionId")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("MatchedExpenseId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("MatchedLoanPaymentId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("MatchedOwnerDistributionId")
                         .HasColumnType("integer");
 
                     b.Property<int?>("MatchedTenantAccountId")
@@ -1545,7 +1717,13 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("MatchStatus");
 
+                    b.HasIndex("MatchedBankTransactionId");
+
                     b.HasIndex("MatchedExpenseId");
+
+                    b.HasIndex("MatchedLoanPaymentId");
+
+                    b.HasIndex("MatchedOwnerDistributionId");
 
                     b.HasIndex("PortfolioId");
 
@@ -1555,6 +1733,26 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.HasIndex("MatchedTenantAccountId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "MatchedBankTransactionId")
+                        .IsUnique()
+                        .HasFilter("\"MatchedBankTransactionId\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "MatchedExpenseId")
+                        .IsUnique()
+                        .HasFilter("\"MatchedExpenseId\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "MatchedLoanPaymentId")
+                        .IsUnique()
+                        .HasFilter("\"MatchedLoanPaymentId\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "MatchedOwnerDistributionId")
+                        .IsUnique()
+                        .HasFilter("\"MatchedOwnerDistributionId\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "MatchedTenantLedgerEntryId")
+                        .IsUnique()
+                        .HasFilter("\"MatchedTenantLedgerEntryId\" IS NOT NULL");
 
                     b.HasIndex("PropertyId", "PortfolioId");
 
@@ -2071,7 +2269,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Token")
+                    b.HasIndex("PortfolioId", "Token")
                         .IsUnique();
 
                     b.HasIndex("PortfolioId", "UserId");
@@ -2500,17 +2698,17 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
+                    b.Property<string>("OperationalScope")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.Property<DateTime?>("PaidAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("PaymentMethod")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
-
-                    b.Property<string>("OperationalScope")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
@@ -2551,8 +2749,6 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("Id", "PortfolioId");
 
                     b.HasIndex("CapitalizedAssetId")
                         .IsUnique();
@@ -2941,6 +3137,186 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("TemplateId");
 
                     b.ToTable("InspectionTemplateItems");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.JournalEntry", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("AccessContextId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ActorLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("AtomicReceiptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AuthSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateOnly>("EffectiveOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("IdempotencyDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("PostedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<int>("PostingRuleVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PublicId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<int?>("ReversesJournalEntryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceBusinessKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<long>("SourceId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<int?>("UserId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PublicId")
+                        .IsUnique();
+
+                    b.HasIndex("ReversesJournalEntryId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "EffectiveOn", "Id");
+
+                    b.HasIndex("PortfolioId", "PostedAtUtc", "Id");
+
+                    b.HasIndex("PortfolioId", "SourceType", "SourceId");
+
+                    b.HasIndex("PortfolioId", "Currency", "EffectiveOn", "Id");
+
+                    b.HasIndex("PortfolioId", "SourceType", "SourceBusinessKey", "PostingRuleVersion")
+                        .IsUnique();
+
+                    b.ToTable("JournalEntries", t =>
+                        {
+                            t.HasCheckConstraint("CK_JournalEntries_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+
+                            t.HasCheckConstraint("CK_JournalEntries_Description", "length(btrim(\"Description\")) > 0");
+
+                            t.HasCheckConstraint("CK_JournalEntries_IdempotencyDigest", "length(\"IdempotencyDigest\") = 64");
+
+                            t.HasCheckConstraint("CK_JournalEntries_PostingRuleVersion", "\"PostingRuleVersion\" > 0");
+
+                            t.HasCheckConstraint("CK_JournalEntries_SourceBusinessKey", "length(btrim(\"SourceBusinessKey\")) > 0");
+
+                            t.HasCheckConstraint("CK_JournalEntries_SourceId", "\"SourceId\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.JournalLine", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("CreditAmount")
+                        .HasPrecision(22, 6)
+                        .HasColumnType("numeric(22,6)");
+
+                    b.Property<decimal>("DebitAmount")
+                        .HasPrecision(22, 6)
+                        .HasColumnType("numeric(22,6)");
+
+                    b.Property<int>("JournalEntryId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LedgerAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Memo")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<int?>("OwnerEntityId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<long?>("SourceLineId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("SourceLineType")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int?>("TenantAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("UnitId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerEntityId");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("TenantAccountId");
+
+                    b.HasIndex("UnitId");
+
+                    b.HasIndex("JournalEntryId", "Id");
+
+                    b.HasIndex("LedgerAccountId", "JournalEntryId");
+
+                    b.ToTable("JournalLines", t =>
+                        {
+                            t.HasCheckConstraint("CK_JournalLines_Amounts", "\"DebitAmount\" >= 0 AND \"CreditAmount\" >= 0 AND ((\"DebitAmount\" > 0 AND \"CreditAmount\" = 0) OR (\"DebitAmount\" = 0 AND \"CreditAmount\" > 0))");
+
+                            t.HasCheckConstraint("CK_JournalLines_CreditScale", "\"CreditAmount\" = round(\"CreditAmount\", 2)");
+
+                            t.HasCheckConstraint("CK_JournalLines_DebitScale", "\"DebitAmount\" = round(\"DebitAmount\", 2)");
+                        });
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.LeaseAddendum", b =>
@@ -3862,6 +4238,99 @@ namespace RentalCommand.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LedgerAccount", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AccountType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("NormalBalance")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<int?>("ParentAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PublicId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("ScheduleECategory")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("SystemKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PublicId")
+                        .IsUnique();
+
+                    b.HasIndex("ParentAccountId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("PortfolioId", "ParentAccountId");
+
+                    b.HasIndex("PortfolioId", "SystemKey")
+                        .IsUnique()
+                        .HasFilter("\"SystemKey\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "IsActive", "Code");
+
+                    b.ToTable("LedgerAccounts", t =>
+                        {
+                            t.HasCheckConstraint("CK_LedgerAccounts_AccountType", "\"AccountType\" IN ('Asset', 'Liability', 'Equity', 'Income', 'Expense')");
+
+                            t.HasCheckConstraint("CK_LedgerAccounts_Code", "length(btrim(\"Code\")) > 0");
+
+                            t.HasCheckConstraint("CK_LedgerAccounts_Name", "length(btrim(\"Name\")) > 0");
+
+                            t.HasCheckConstraint("CK_LedgerAccounts_NormalBalance", "\"NormalBalance\" IN ('Debit', 'Credit')");
+                        });
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.LegalDocumentArtifact", b =>
                 {
                     b.Property<int>("Id")
@@ -4198,6 +4667,55 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("ListingPublications");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LlmUsageEvidence", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<decimal>("EstimatedCostUsd")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<string>("Feature")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("InputUnits")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LatencyMilliseconds")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ModelId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("OutputUnits")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId", "OccurredAtUtc");
+
+                    b.ToTable("LlmUsageEvidence");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
                 {
                     b.Property<int>("Id")
@@ -4219,6 +4737,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("DayOfMonthDue")
                         .HasColumnType("integer");
+
+                    b.Property<DateTime?>("DebtServiceAutomationStartDate")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
@@ -4359,6 +4880,73 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("LoanPayments");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.LoanPaymentCorrection", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("BalanceAfter")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("DueDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("EscrowAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("InterestAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("LoanPaymentId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("PaidDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("PaymentDoesNotCoverInterest")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("PrincipalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int?>("SourceScanDraftId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("LoanPaymentId", "AttemptId")
+                        .IsUnique();
+
+                    b.HasIndex("LoanPaymentId", "Id");
+
+                    b.ToTable("LoanPaymentCorrections");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.LoginContextSelectionChallenge", b =>
@@ -4528,101 +5116,6 @@ namespace RentalCommand.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("MessagingProviderSettings");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.LlmUsageEvidence", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<decimal>("EstimatedCostUsd")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("Feature")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
-
-                    b.Property<int>("InputUnits")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("LatencyMilliseconds")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ModelId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<DateTime>("OccurredAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("OutputUnits")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId", "OccurredAtUtc");
-
-                    b.ToTable("LlmUsageEvidence");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceLlmCredential", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ApiKeyCipherText")
-                        .IsRequired()
-                        .HasMaxLength(4000)
-                        .HasColumnType("character varying(4000)");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("LastTestedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ModelId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<DateTime?>("RotatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId")
-                        .IsUnique();
-
-                    b.ToTable("WorkspaceLlmCredentials");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.NoticeDeliveryEvidence", b =>
@@ -4817,16 +5310,16 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("LeaseAgreementId", "LeaseManagementId", "PortfolioId");
 
-                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "RecipientLeaseManagementPartyId", "NoticeType")
-                        .IsUnique()
-                        .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice")
-                        .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
-
                     b.HasIndex("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId");
 
                     b.HasIndex("TenantAccountId", "LeaseManagementId", "PortfolioId");
 
                     b.HasIndex("TenantLedgerEntryId", "TenantAccountId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "RecipientLeaseManagementPartyId", "NoticeType")
+                        .IsUnique()
+                        .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice")
+                        .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
                     b.HasIndex("PortfolioId", "LeaseManagementId", "LeaseAgreementId", "RecipientLeaseManagementPartyId", "NoticeType")
                         .IsUnique()
@@ -4873,12 +5366,12 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
-                    b.Property<DateTime?>("NavigationExpiresAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<string>("NavigationExperience")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime?>("NavigationExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("NavigationFallbackDestination")
                         .HasMaxLength(40)
@@ -4928,8 +5421,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("Id", "PortfolioId");
-
                     b.HasIndex("CreatedAt");
 
                     b.HasIndex("PortfolioId");
@@ -4938,60 +5429,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.ToTable("Notifications", t =>
                         {
-                            t.HasCheckConstraint("CK_Notifications_NavigationIntentShape", """
-                                (
-                                    "NavigationExperience" IS NULL
-                                    AND "NavigationDestination" IS NULL
-                                    AND "NavigationAccessContextId" IS NULL
-                                    AND "NavigationAccessRevision" IS NULL
-                                    AND "NavigationResourceKind" IS NULL
-                                    AND "NavigationResourceId" IS NULL
-                                    AND "NavigationParentResourceKind" IS NULL
-                                    AND "NavigationParentResourceId" IS NULL
-                                    AND "NavigationChildResourceKind" IS NULL
-                                    AND "NavigationChildResourceId" IS NULL
-                                    AND "NavigationAction" IS NULL
-                                    AND "NavigationExpiresAtUtc" IS NULL
-                                    AND "NavigationFallbackDestination" IS NULL
-                                )
-                                OR
-                                (
-                                    "NavigationExperience" IS NOT NULL
-                                    AND "NavigationExperience" IN ('Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant')
-                                    AND "NavigationDestination" IS NOT NULL
-                                    AND "NavigationDestination" IN (
-                                        'Home', 'Notifications', 'Rentals', 'Owners', 'Money', 'Work', 'Inbox',
-                                        'UnitSummary', 'UnitTenantLease', 'UnitMoney', 'UnitMaintenance', 'UnitRecords',
-                                        'TenantLedgerEntry', 'Expense', 'ScanDraft', 'Message', 'WorkOrder',
-                                        'TechnicianWork', 'LeasingRental', 'LeasingApplication', 'LeasingAppointment',
-                                        'LeasingConversation', 'LeasingMoveIn'
-                                    )
-                                    AND "NavigationAccessContextId" IS NOT NULL
-                                    AND "NavigationAccessContextId" > 0
-                                    AND "NavigationAccessRevision" IS NOT NULL
-                                    AND "NavigationAccessRevision" > 0
-                                    AND "NavigationAction" IS NOT NULL
-                                    AND "NavigationAction" IN ('Open', 'Review', 'Resolve')
-                                    AND "NavigationExpiresAtUtc" IS NOT NULL
-                                    AND "NavigationFallbackDestination" IS NOT NULL
-                                    AND "NavigationFallbackDestination" IN ('Home', 'Notifications')
-                                    AND (("NavigationResourceKind" IS NULL AND "NavigationResourceId" IS NULL)
-                                        OR ("NavigationResourceKind" IS NOT NULL
-                                            AND btrim("NavigationResourceKind") <> ''
-                                            AND "NavigationResourceId" IS NOT NULL
-                                            AND "NavigationResourceId" > 0))
-                                    AND (("NavigationParentResourceKind" IS NULL AND "NavigationParentResourceId" IS NULL)
-                                        OR ("NavigationParentResourceKind" IS NOT NULL
-                                            AND btrim("NavigationParentResourceKind") <> ''
-                                            AND "NavigationParentResourceId" IS NOT NULL
-                                            AND "NavigationParentResourceId" > 0))
-                                    AND (("NavigationChildResourceKind" IS NULL AND "NavigationChildResourceId" IS NULL)
-                                        OR ("NavigationChildResourceKind" IS NOT NULL
-                                            AND btrim("NavigationChildResourceKind") <> ''
-                                            AND "NavigationChildResourceId" IS NOT NULL
-                                            AND "NavigationChildResourceId" > 0))
-                                )
-                                """);
+                            t.HasCheckConstraint("CK_Notifications_NavigationIntentShape", "(\n    \"NavigationExperience\" IS NULL\n    AND \"NavigationDestination\" IS NULL\n    AND \"NavigationAccessContextId\" IS NULL\n    AND \"NavigationAccessRevision\" IS NULL\n    AND \"NavigationResourceKind\" IS NULL\n    AND \"NavigationResourceId\" IS NULL\n    AND \"NavigationParentResourceKind\" IS NULL\n    AND \"NavigationParentResourceId\" IS NULL\n    AND \"NavigationChildResourceKind\" IS NULL\n    AND \"NavigationChildResourceId\" IS NULL\n    AND \"NavigationAction\" IS NULL\n    AND \"NavigationExpiresAtUtc\" IS NULL\n    AND \"NavigationFallbackDestination\" IS NULL\n)\nOR\n(\n    \"NavigationExperience\" IS NOT NULL\n    AND \"NavigationExperience\" IN ('Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant')\n    AND \"NavigationDestination\" IS NOT NULL\n    AND \"NavigationDestination\" IN (\n        'Home', 'Notifications', 'Rentals', 'Owners', 'Money', 'Work', 'Inbox',\n        'UnitSummary', 'UnitTenantLease', 'UnitMoney', 'UnitMaintenance', 'UnitRecords',\n        'TenantLedgerEntry', 'Expense', 'ScanDraft', 'Message', 'WorkOrder',\n        'TechnicianWork', 'LeasingRental', 'LeasingApplication', 'LeasingAppointment',\n        'LeasingConversation', 'LeasingMoveIn', 'TenantAccount'\n    )\n    AND \"NavigationAccessContextId\" IS NOT NULL\n    AND \"NavigationAccessContextId\" > 0\n    AND \"NavigationAccessRevision\" IS NOT NULL\n    AND \"NavigationAccessRevision\" > 0\n    AND \"NavigationAction\" IS NOT NULL\n    AND \"NavigationAction\" IN ('Open', 'Review', 'Resolve')\n    AND \"NavigationExpiresAtUtc\" IS NOT NULL\n    AND \"NavigationFallbackDestination\" IS NOT NULL\n    AND \"NavigationFallbackDestination\" IN ('Home', 'Notifications')\n    AND ((\"NavigationResourceKind\" IS NULL AND \"NavigationResourceId\" IS NULL)\n        OR (\"NavigationResourceKind\" IS NOT NULL\n            AND btrim(\"NavigationResourceKind\") <> ''\n            AND \"NavigationResourceId\" IS NOT NULL\n            AND \"NavigationResourceId\" > 0))\n    AND ((\"NavigationParentResourceKind\" IS NULL AND \"NavigationParentResourceId\" IS NULL)\n        OR (\"NavigationParentResourceKind\" IS NOT NULL\n            AND btrim(\"NavigationParentResourceKind\") <> ''\n            AND \"NavigationParentResourceId\" IS NOT NULL\n            AND \"NavigationParentResourceId\" > 0))\n    AND ((\"NavigationChildResourceKind\" IS NULL AND \"NavigationChildResourceId\" IS NULL)\n        OR (\"NavigationChildResourceKind\" IS NOT NULL\n            AND btrim(\"NavigationChildResourceKind\") <> ''\n            AND \"NavigationChildResourceId\" IS NOT NULL\n            AND \"NavigationChildResourceId\" > 0))\n)");
                         });
                 });
 
@@ -5160,7 +5598,7 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("OutboxMessages");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerDistribution", b =>
+            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerContribution", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -5172,6 +5610,19 @@ namespace RentalCommand.Data.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ApprovedBusinessDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ApprovedByUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BankReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -5179,6 +5630,13 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExportReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("ExportedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Memo")
@@ -5197,16 +5655,125 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("PropertyId")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("RejectedByUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ApprovedByUserId");
+
                     b.HasIndex("OwnerEntityId");
 
                     b.HasIndex("PropertyId");
 
+                    b.HasIndex("RejectedByUserId");
+
                     b.HasIndex("PortfolioId", "OwnerEntityId", "Date");
+
+                    b.HasIndex("PortfolioId", "Status", "Date");
+
+                    b.ToTable("OwnerContributions");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerDistribution", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ApprovedBusinessDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("ApprovedByUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BankReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ExportReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("ExportedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Memo")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Method")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OwnerEntityId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("RejectedByUserId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApprovedByUserId");
+
+                    b.HasIndex("OwnerEntityId");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("RejectedByUserId");
+
+                    b.HasIndex("PortfolioId", "OwnerEntityId", "Date");
+
+                    b.HasIndex("PortfolioId", "Status", "Date");
 
                     b.ToTable("OwnerDistributions");
                 });
@@ -5270,8 +5837,6 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("Id", "PortfolioId");
 
                     b.HasIndex("PortfolioId");
 
@@ -5685,14 +6250,14 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PropertyType")
                         .HasColumnType("integer");
 
+                    b.Property<decimal?>("PurchasePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<string>("RentalStructure")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
-
-                    b.Property<decimal?>("PurchasePrice")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -5710,13 +6275,69 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("Id", "PortfolioId");
-
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("Status");
 
                     b.ToTable("Properties");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.PropertyDisposition", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("BuyerName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("ClosedOnDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Memo")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("SalePrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("SellingCosts")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClosedOnDate");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("PortfolioId", "PropertyId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_PropertyDispositions_Portfolio_Property_Active")
+                        .HasFilter("\"DeletedAt\" IS NULL");
+
+                    b.ToTable("PropertyDispositions");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.PropertyOwnership", b =>
@@ -5785,64 +6406,6 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_PropertyOwnerships_StatementRecipientName", "length(btrim(\"StatementRecipientName\")) > 0");
                         });
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.PropertyDisposition", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("BuyerName")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<DateTime>("ClosedOnDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Memo")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PropertyId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("SalePrice")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("SellingCosts")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClosedOnDate");
-
-                    b.HasIndex("PortfolioId");
-
-                    b.HasIndex("PropertyId");
-
-                    b.HasIndex("PortfolioId", "PropertyId")
-                        .IsUnique()
-                        .HasDatabaseName("IX_PropertyDispositions_Portfolio_Property_Active")
-                        .HasFilter("\"DeletedAt\" IS NULL");
-
-                    b.ToTable("PropertyDispositions");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.ProviderInboxEvent", b =>
@@ -6174,6 +6737,109 @@ namespace RentalCommand.Data.Migrations
                         .HasDatabaseName("IX_RecurringMaintenanceTasks_GenerationClaim");
 
                     b.ToTable("RecurringMaintenanceTasks");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.RecurringTenantCharge", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateOnly?>("EffectiveEndOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("EffectiveStartOn")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("LeaseAgreementId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LedgerAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<short>("MonthlyDueDay")
+                        .HasColumnType("smallint");
+
+                    b.Property<DateOnly>("NextRunDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PublicId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<int>("TenantAccountId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("UnitId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("clock_timestamp()");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("Id", "PortfolioId");
+
+                    b.HasIndex("PublicId")
+                        .IsUnique();
+
+                    b.HasIndex("LeaseAgreementId", "PortfolioId");
+
+                    b.HasIndex("LedgerAccountId", "PortfolioId");
+
+                    b.HasIndex("PropertyId", "PortfolioId");
+
+                    b.HasIndex("TenantAccountId", "PortfolioId");
+
+                    b.HasIndex("UnitId", "PortfolioId");
+
+                    b.HasIndex("PortfolioId", "TenantAccountId", "EffectiveStartOn");
+
+                    b.HasIndex("PortfolioId", "IsActive", "NextRunDate", "Id");
+
+                    b.ToTable("RecurringTenantCharges", t =>
+                        {
+                            t.HasCheckConstraint("CK_RecurringTenantCharges_Amount", "\"Amount\" > 0");
+
+                            t.HasCheckConstraint("CK_RecurringTenantCharges_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
+
+                            t.HasCheckConstraint("CK_RecurringTenantCharges_DueDay", "\"MonthlyDueDay\" BETWEEN 1 AND 31");
+
+                            t.HasCheckConstraint("CK_RecurringTenantCharges_EffectivePeriod", "\"EffectiveEndOn\" IS NULL OR \"EffectiveEndOn\" >= \"EffectiveStartOn\"");
+                        });
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.RenderedNotice", b =>
@@ -6549,6 +7215,24 @@ namespace RentalCommand.Data.Migrations
                             Description = "Assigned-work-only maintenance access with no general property or Unit browsing.",
                             DisplayName = "Maintenance Technician",
                             Key = "maintenance-technician"
+                        },
+                        new
+                        {
+                            Id = 5,
+                            DefaultExperience = "Owner",
+                            DefaultScopeKind = "AllProperties",
+                            Description = "Owner relationship access only. Grants no management, leasing, maintenance, or workspace capabilities.",
+                            DisplayName = "Owner Portal",
+                            Key = "owner-portal"
+                        },
+                        new
+                        {
+                            Id = 6,
+                            DefaultExperience = "Tenant",
+                            DefaultScopeKind = "AllProperties",
+                            Description = "Tenant relationship access only. Grants no management, leasing, maintenance, or workspace capabilities.",
+                            DisplayName = "Tenant Portal",
+                            Key = "tenant-portal"
                         });
                 });
 
@@ -7675,6 +8359,10 @@ namespace RentalCommand.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("ContentSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("char(64)");
+
                     b.Property<string>("ContentType")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -7717,6 +8405,11 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("EntityType", "EntityId");
+
+                    b.HasIndex("PortfolioId", "EntityType", "EntityId", "ContentSha256")
+                        .IsUnique()
+                        .HasDatabaseName("UX_StoredFiles_Active_Target_ContentSha256")
+                        .HasFilter("\"DeletedAt\" IS NULL AND \"ContentSha256\" IS NOT NULL");
 
                     b.ToTable("StoredFiles");
                 });
@@ -8091,6 +8784,9 @@ namespace RentalCommand.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateOnly?>("RentTrackingStartOn")
+                        .HasColumnType("date");
 
                     b.HasKey("Id");
 
@@ -8617,9 +9313,9 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId", "TenantLedgerEntryId")
                         .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL");
 
-                    b.HasIndex("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId");
-
                     b.HasIndex("TenantNoticePolicyId", "PortfolioId");
+
+                    b.HasIndex("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId");
 
                     b.HasIndex("Status", "DueAtUtc", "ClaimExpiresAtUtc", "Id");
 
@@ -8645,12 +9341,15 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<string>("AttemptType")
                         .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<string>("BankName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<long?>("ChargeLedgerEntryId")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("CheckNumber")
                         .HasMaxLength(100)
@@ -8758,9 +9457,17 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("Provider", "ProviderObjectId")
                         .IsUnique()
-                        .HasFilter("\"ProviderObjectId\" IS NOT NULL");
+                        .HasFilter("\"ProviderObjectId\" IS NOT NULL AND \"Provider\" <> 'manual'");
 
                     b.HasIndex("TenantAccountId", "PortfolioId");
+
+                    b.HasIndex("ChargeLedgerEntryId", "TenantAccountId", "PortfolioId")
+                        .HasFilter("\"ChargeLedgerEntryId\" IS NOT NULL");
+
+                    b.HasIndex("Provider", "TenantAccountId", "ProviderObjectId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_TenantPaymentAttempts_ManualProviderObject")
+                        .HasFilter("\"Provider\" = 'manual' AND \"ProviderObjectId\" IS NOT NULL");
 
                     b.HasIndex("RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId");
 
@@ -8768,9 +9475,11 @@ namespace RentalCommand.Data.Migrations
 
                     b.ToTable("TenantPaymentAttempts", t =>
                         {
-                            t.HasCheckConstraint("CK_TenantPaymentAttempt_Amount", "(\"AttemptType\" = 'Verification' AND \"Amount\" = 0) OR (\"AttemptType\" IN ('Charge','Refund') AND \"Amount\" > 0)");
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_Amount", "(\"AttemptType\" = 'Verification' AND \"Amount\" = 0) OR (\"AttemptType\" <> 'Verification' AND \"Amount\" > 0)");
 
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_AttemptCount", "\"AttemptCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_ChargeTarget", "(\"AttemptType\" = 'Charge' AND \"ChargeLedgerEntryId\" IS NOT NULL) OR (\"AttemptType\" <> 'Charge' AND \"ChargeLedgerEntryId\" IS NULL)");
 
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_Claim", "(\"ClaimOwner\" IS NULL AND \"ClaimToken\" IS NULL AND \"ClaimExpiresAtUtc\" IS NULL) OR (\"ClaimOwner\" IS NOT NULL AND \"ClaimToken\" IS NOT NULL AND \"ClaimExpiresAtUtc\" IS NOT NULL)");
 
@@ -8788,7 +9497,7 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_TenantPaymentAttempt_Submission", "\"SubmittedAtUtc\" IS NULL OR \"SubmittedAtUtc\" >= \"PreparedAtUtc\"");
 
-                            t.HasCheckConstraint("CK_TenantPaymentAttempt_Type", "\"AttemptType\" IN ('Charge', 'Refund', 'Verification')");
+                            t.HasCheckConstraint("CK_TenantPaymentAttempt_Type", "\"AttemptType\" IN ('Charge', 'UnappliedReceipt', 'DepositReceipt', 'ImportedReceipt', 'LegacyTargetlessCharge', 'Refund', 'Verification')");
                         });
                 });
 
@@ -8915,8 +9624,6 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("Id", "PortfolioId");
 
                     b.HasIndex("PortfolioId");
 
@@ -9229,14 +9936,27 @@ namespace RentalCommand.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("AccessWarnings")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<decimal?>("ActualCost")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
+
+                    b.Property<bool?>("CallBeforeEntry")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool?>("CallIfNotHome")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Category")
                         .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime?>("ChronologyRepairOriginalUpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
@@ -9253,6 +9973,10 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
 
+                    b.Property<string>("EntryNotes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<decimal?>("EstimatedCost")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
@@ -9262,6 +9986,13 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int?>("LeaseManagementId")
                         .HasColumnType("integer");
+
+                    b.Property<bool?>("PermissionToEnter")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PetWarnings")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
@@ -9278,6 +10009,21 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("RequestedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("RequesterEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
+                    b.Property<string>("RequesterName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("RequesterPhone")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool?>("ResidentMustBePresent")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTime?>("ScheduledFor")
                         .HasColumnType("timestamp with time zone");
 
@@ -9286,6 +10032,10 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
+
+                    b.Property<string>("SubmittedByLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
 
                     b.Property<string>("TechnicianAccessInstructions")
                         .HasMaxLength(2000)
@@ -9444,11 +10194,21 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("ChangedByUserId")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("ChronologyRepairOriginalCreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int?>("FromStatus")
                         .HasColumnType("integer");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("Status");
 
                     b.Property<string>("Note")
                         .HasMaxLength(2000)
@@ -9459,6 +10219,13 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("ToStatus")
                         .HasColumnType("integer");
+
+                    b.Property<string>("Visibility")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("Public");
 
                     b.Property<int>("WorkOrderId")
                         .HasColumnType("integer");
@@ -9584,6 +10351,52 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_WorkspaceInvitations_TerminalState", "NOT (\"AcceptedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NOT NULL)");
                         });
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceLlmCredential", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("ApiKeyCipherText")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastTestedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ModelId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime?>("RotatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId")
+                        .IsUnique();
+
+                    b.ToTable("WorkspaceLlmCredentials");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceMembership", b =>
@@ -10335,6 +11148,25 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.AccountingConversionReconciliation", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.JournalEntry", "ApprovedOpeningBalanceJournalEntry")
+                        .WithMany()
+                        .HasForeignKey("ApprovedOpeningBalanceJournalEntryId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ApprovedOpeningBalanceJournalEntry");
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingEntityMapping", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.AccountingConnection", "AccountingConnection")
@@ -10584,6 +11416,11 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("UnitId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("RentalCommand.Core.Entities.WorkOrder", "WorkOrder")
+                        .WithMany()
+                        .HasForeignKey("WorkOrderId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.Navigation("LeaseManagement");
 
                     b.Navigation("Portfolio");
@@ -10595,6 +11432,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Tenant");
 
                     b.Navigation("Unit");
+
+                    b.Navigation("WorkOrder");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.AuthSession", b =>
@@ -10669,6 +11508,26 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.BankStatement", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.BankConnection", "BankConnection")
+                        .WithMany("Statements")
+                        .HasForeignKey("BankConnectionId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("BankConnection");
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.BankTransaction", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.BankConnection", "BankConnection")
@@ -10677,10 +11536,25 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.BankTransaction", "MatchedBankTransaction")
+                        .WithMany()
+                        .HasForeignKey("MatchedBankTransactionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.Expense", "MatchedExpense")
                         .WithMany()
                         .HasForeignKey("MatchedExpenseId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.LoanPayment", "MatchedLoanPayment")
+                        .WithMany()
+                        .HasForeignKey("MatchedLoanPaymentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.OwnerDistribution", "MatchedOwnerDistribution")
+                        .WithMany()
+                        .HasForeignKey("MatchedOwnerDistributionId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
@@ -10708,7 +11582,13 @@ namespace RentalCommand.Data.Migrations
 
                     b.Navigation("BankConnection");
 
+                    b.Navigation("MatchedBankTransaction");
+
                     b.Navigation("MatchedExpense");
+
+                    b.Navigation("MatchedLoanPayment");
+
+                    b.Navigation("MatchedOwnerDistribution");
 
                     b.Navigation("MatchedTenantAccount");
 
@@ -10993,17 +11873,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("WorkOrder");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.ExpenseLineItem", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Expense", "Expense")
-                        .WithMany("LineItems")
-                        .HasForeignKey("ExpenseId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Expense");
-                });
-
             modelBuilder.Entity("RentalCommand.Core.Entities.ExpenseAllocation", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Expense", "Expense")
@@ -11038,6 +11907,17 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Property");
 
                     b.Navigation("Unit");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.ExpenseLineItem", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Expense", "Expense")
+                        .WithMany("LineItems")
+                        .HasForeignKey("ExpenseId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Expense");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.ExternalListingSignal", b =>
@@ -11136,6 +12016,76 @@ namespace RentalCommand.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Template");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.JournalEntry", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.JournalEntry", "ReversedJournalEntry")
+                        .WithMany("ReversalEntries")
+                        .HasForeignKey("ReversesJournalEntryId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("ReversedJournalEntry");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.JournalLine", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.JournalEntry", "JournalEntry")
+                        .WithMany("Lines")
+                        .HasForeignKey("JournalEntryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LedgerAccount", "LedgerAccount")
+                        .WithMany("JournalLines")
+                        .HasForeignKey("LedgerAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.OwnerEntity", "OwnerEntity")
+                        .WithMany()
+                        .HasForeignKey("OwnerEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_JournalLines_OwnerEntities_RestrictHistory");
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_JournalLines_Properties_RestrictHistory");
+
+                    b.HasOne("RentalCommand.Core.Entities.TenantAccount", "TenantAccount")
+                        .WithMany()
+                        .HasForeignKey("TenantAccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_JournalLines_TenantAccounts_RestrictHistory");
+
+                    b.HasOne("RentalCommand.Core.Entities.Unit", "Unit")
+                        .WithMany()
+                        .HasForeignKey("UnitId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_JournalLines_Units_RestrictHistory");
+
+                    b.Navigation("JournalEntry");
+
+                    b.Navigation("LedgerAccount");
+
+                    b.Navigation("OwnerEntity");
+
+                    b.Navigation("Property");
+
+                    b.Navigation("TenantAccount");
+
+                    b.Navigation("Unit");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.LeaseAddendum", b =>
@@ -11549,6 +12499,25 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("ReplacementAddendum");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LedgerAccount", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LedgerAccount", "ParentAccount")
+                        .WithMany("ChildAccounts")
+                        .HasForeignKey("ParentAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ParentAccount");
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.LegalDocumentArtifact", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "CreatedByUser")
@@ -11652,6 +12621,17 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("RentalListing");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LlmUsageEvidence", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
@@ -11686,6 +12666,25 @@ namespace RentalCommand.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Loan");
+
+                    b.Navigation("Portfolio");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.LoanPaymentCorrection", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.LoanPayment", "LoanPayment")
+                        .WithMany("Corrections")
+                        .HasForeignKey("LoanPaymentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("LoanPayment");
 
                     b.Navigation("Portfolio");
                 });
@@ -11743,28 +12742,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.MessagingProviderSettings", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany()
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Portfolio");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.LlmUsageEvidence", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany()
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Portfolio");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceLlmCredential", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
@@ -11947,8 +12924,13 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerDistribution", b =>
+            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerContribution", b =>
                 {
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "ApprovedByUser")
+                        .WithMany()
+                        .HasForeignKey("ApprovedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("RentalCommand.Core.Entities.OwnerEntity", "OwnerEntity")
                         .WithMany()
                         .HasForeignKey("OwnerEntityId")
@@ -11966,11 +12948,60 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("PropertyId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "RejectedByUser")
+                        .WithMany()
+                        .HasForeignKey("RejectedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ApprovedByUser");
+
                     b.Navigation("OwnerEntity");
 
                     b.Navigation("Portfolio");
 
                     b.Navigation("Property");
+
+                    b.Navigation("RejectedByUser");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.OwnerDistribution", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "ApprovedByUser")
+                        .WithMany()
+                        .HasForeignKey("ApprovedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.OwnerEntity", "OwnerEntity")
+                        .WithMany()
+                        .HasForeignKey("OwnerEntityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "RejectedByUser")
+                        .WithMany()
+                        .HasForeignKey("RejectedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ApprovedByUser");
+
+                    b.Navigation("OwnerEntity");
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("Property");
+
+                    b.Navigation("RejectedByUser");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.OwnerEntity", b =>
@@ -12075,35 +13106,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.PropertyOwnership", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.OwnerEntity", "OwnerEntity")
-                        .WithMany("PropertyOwnerships")
-                        .HasForeignKey("OwnerEntityId", "PortfolioId")
-                        .HasPrincipalKey("Id", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany("PropertyOwnerships")
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
-                        .WithMany("Ownerships")
-                        .HasForeignKey("PropertyId", "PortfolioId")
-                        .HasPrincipalKey("Id", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("OwnerEntity");
-
-                    b.Navigation("Portfolio");
-
-                    b.Navigation("Property");
-                });
-
             modelBuilder.Entity("RentalCommand.Core.Entities.PropertyDisposition", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
@@ -12117,6 +13119,35 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("PropertyId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("Property");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.PropertyOwnership", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany("PropertyOwnerships")
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.OwnerEntity", "OwnerEntity")
+                        .WithMany("PropertyOwnerships")
+                        .HasForeignKey("OwnerEntityId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany("Ownerships")
+                        .HasForeignKey("PropertyId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("OwnerEntity");
 
                     b.Navigation("Portfolio");
 
@@ -12190,6 +13221,60 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Unit");
 
                     b.Navigation("Vendor");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.RecurringTenantCharge", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LeaseAgreement", "LeaseAgreement")
+                        .WithMany()
+                        .HasForeignKey("LeaseAgreementId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LedgerAccount", "LedgerAccount")
+                        .WithMany()
+                        .HasForeignKey("LedgerAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany()
+                        .HasForeignKey("PropertyId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.TenantAccount", "TenantAccount")
+                        .WithMany()
+                        .HasForeignKey("TenantAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Unit", "Unit")
+                        .WithMany()
+                        .HasForeignKey("UnitId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("LeaseAgreement");
+
+                    b.Navigation("LedgerAccount");
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("Property");
+
+                    b.Navigation("TenantAccount");
+
+                    b.Navigation("Unit");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.RenderedNotice", b =>
@@ -12951,18 +14036,18 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.TenantNoticeWorkItem", b =>
                 {
-                    b.HasOne("RentalCommand.Core.Entities.LeaseManagementParty", "RecipientLeaseManagementParty")
-                        .WithMany()
-                        .HasForeignKey("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId")
-                        .HasPrincipalKey("Id", "LeaseManagementId", "PortfolioId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
                     b.HasOne("RentalCommand.Core.Entities.TenantNoticePolicy", "Policy")
                         .WithMany()
                         .HasForeignKey("TenantNoticePolicyId", "PortfolioId")
                         .HasPrincipalKey("Id", "PortfolioId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LeaseManagementParty", "RecipientLeaseManagementParty")
+                        .WithMany()
+                        .HasForeignKey("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId")
+                        .HasPrincipalKey("Id", "LeaseManagementId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Policy");
@@ -12991,11 +14076,19 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.TenantLedgerEntry", "ChargeLedgerEntry")
+                        .WithMany()
+                        .HasForeignKey("ChargeLedgerEntryId", "TenantAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "TenantAccountId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.TenantPaymentAttempt", "RefundsPaymentAttempt")
                         .WithMany("RefundAttempts")
                         .HasForeignKey("RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId")
                         .HasPrincipalKey("Id", "TenantAccountId", "PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ChargeLedgerEntry");
 
                     b.Navigation("CreatedByUser");
 
@@ -13380,6 +14473,17 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("WorkspaceMembership");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceLlmCredential", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.WorkspaceMembership", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.WorkspaceAccessContext", "AccessContext")
@@ -13451,6 +14555,8 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.BankConnection", b =>
                 {
+                    b.Navigation("Statements");
+
                     b.Navigation("Transactions");
                 });
 
@@ -13491,6 +14597,13 @@ namespace RentalCommand.Data.Migrations
             modelBuilder.Entity("RentalCommand.Core.Entities.InspectionTemplate", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.JournalEntry", b =>
+                {
+                    b.Navigation("Lines");
+
+                    b.Navigation("ReversalEntries");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.LeaseAddendum", b =>
@@ -13567,6 +14680,13 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("UserAccesses");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.LedgerAccount", b =>
+                {
+                    b.Navigation("ChildAccounts");
+
+                    b.Navigation("JournalLines");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.LegalDocumentSourceVersion", b =>
                 {
                     b.Navigation("Addenda");
@@ -13582,6 +14702,11 @@ namespace RentalCommand.Data.Migrations
             modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
                 {
                     b.Navigation("Payments");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.LoanPayment", b =>
+                {
+                    b.Navigation("Corrections");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.MembershipRoleAssignment", b =>

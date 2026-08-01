@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Registers and removes push-notification device tokens for the calling user.
-/// Registration is an upsert by token value — safe to call on every app launch.
+/// Registration is an upsert by selected workspace plus token value — safe to call on every app launch.
 /// </summary>
 [ApiController]
 [Route("api/v1/devices")]

@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Auth;
@@ -14,7 +15,9 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Sandbox;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
 
@@ -28,26 +31,23 @@ namespace RentalCommand.Api.Tests.Domain;
 ///     touches the sandbox flag, so the existing dev/e2e portfolio stays Live.
 ///   * Stripe checkout is suppressed (NotEnabled, no Stripe call) while a portfolio is sandbox.
 /// </summary>
-public class SandboxGuardAndSeederTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class SandboxGuardAndSeederTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<ServiceProvider> _atomicProviders = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
 
-    public SandboxGuardAndSeederTests()
+    public SandboxGuardAndSeederTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync()
     {
         var now = DateTime.UtcNow;
-        var actor = new ApplicationUser
-        {
-            Id = 1,
-            UserName = "sandbox-tests@example.test",
-            NormalizedUserName = "SANDBOX-TESTS@EXAMPLE.TEST",
-            Email = "sandbox-tests@example.test",
-            NormalizedEmail = "SANDBOX-TESTS@EXAMPLE.TEST",
-            DisplayName = "Sandbox Test Actor",
-            CreatedAt = now,
-        };
+        _ctx = await _fixture.CreateContextAsync();
         _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
         {
-            User = actor,
+            UserId = 1,
             PortfolioId = 1,
             Status = WorkspaceAccessContextStatus.Active,
             LastAuthorizedExperience = WorkspaceExperience.Management,
@@ -63,10 +63,20 @@ public class SandboxGuardAndSeederTests : IDisposable
                 UpdatedAtUtc = now,
             },
         });
-        _ctx.Db.SaveChanges();
+        await _ctx.Db.SaveChangesAsync();
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync()
+    {
+        foreach (var provider in _atomicProviders)
+        {
+            await provider.DisposeAsync();
+        }
+        if (_ctx is not null)
+        {
+            await _ctx.DisposeAsync();
+        }
+    }
 
     // -----------------------------------------------------------------------
     // SandboxGuard (the Stripe money-moving predicate)
@@ -140,21 +150,21 @@ public class SandboxGuardAndSeederTests : IDisposable
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         _ctx.Db.SaveChanges();
 
-        var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
-        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db, infrastructure);
+        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
+        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(_ctx.Db),
-            infrastructure,
-            infrastructure,
+            atomic,
+            atomicContext,
             legalDocuments,
             legalDocuments,
             legalDocuments,
             legalDocuments,
             legalDocuments);
-        await seeder.SeedPortfolioAsync(2, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            2, "seed-arbitrary-portfolio", CancellationToken.None);
 
         // Demo data landed under portfolio 2, all FK'd correctly.
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
@@ -255,29 +265,35 @@ public class SandboxGuardAndSeederTests : IDisposable
     }
 
     [Fact]
-    public async Task SeedPortfolio_IsIdempotent()
+    public async Task SeedPortfolio_ExactOperationRetryReplaysOnce()
     {
-        var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
-        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db, infrastructure);
+        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
+        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(_ctx.Db),
-            infrastructure,
-            infrastructure,
+            atomic,
+            atomicContext,
             legalDocuments,
             legalDocuments,
             legalDocuments,
             legalDocuments,
             legalDocuments);
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-idempotency", CancellationToken.None);
         var firstCount = await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1);
         firstCount.Should().BeGreaterThan(0);
 
-        // Re-seeding reconciles stable facts without duplicating the existing graph.
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        // An exact retry reuses the completed receipt and does not duplicate the graph or outbox.
+        await seeder.SeedPortfolioAsync(
+            1, "seed-idempotency", CancellationToken.None);
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1)).Should().Be(firstCount);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sandbox.demo-seed"
+            && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == "demo-seed/1/seed-idempotency")).Should().Be(1);
     }
 
     [Fact]
@@ -286,7 +302,8 @@ public class SandboxGuardAndSeederTests : IDisposable
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
         legalDocuments.FailUploadAttempt = 1;
 
-        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(
+            1, "seed-first-upload-retry", CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<IOException>();
 
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0,
@@ -299,7 +316,8 @@ public class SandboxGuardAndSeederTests : IDisposable
         failedAgreement.FullyExecutedAtUtc.Should().BeNull();
 
         legalDocuments.FailUploadAttempt = null;
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-first-upload-retry", CancellationToken.None);
 
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
@@ -310,7 +328,8 @@ public class SandboxGuardAndSeederTests : IDisposable
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
         legalDocuments.FailUploadAttempt = 2;
 
-        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(
+            1, "seed-second-upload-retry", CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<IOException>();
 
         var firstAdmissions = legalDocuments.AdmissionsByPurpose.ToDictionary(pair => pair.Key, pair => pair.Value);
@@ -321,7 +340,8 @@ public class SandboxGuardAndSeederTests : IDisposable
         legalDocuments.StoredBytes.Should().NotContainKey(firstAdmissions["demo-legal-executed"].StoragePath);
 
         legalDocuments.FailUploadAttempt = null;
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-second-upload-retry", CancellationToken.None);
 
         legalDocuments.AdmissionsByPurpose.Should().BeEquivalentTo(firstAdmissions);
         (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
@@ -332,12 +352,13 @@ public class SandboxGuardAndSeederTests : IDisposable
     public async Task SeedPortfolio_FinalizationFailure_RollsBackAllMetadataAndRetryCompletesOnce()
     {
         var failure = new FinalizationFailureInterceptor();
-        using var context = new SqliteTestContext([failure]);
+        await using var context = await _fixture.CreateContextAsync([failure]);
         SeedAdministeringAccess(context.Db);
-        var (seeder, legalDocuments) = BuildSeeder(context.Db);
+        var (seeder, legalDocuments) = BuildSeeder(context.Db, [failure]);
         failure.Armed = true;
 
-        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        Func<Task> firstAttempt = () => seeder.SeedPortfolioAsync(
+            1, "seed-finalization-retry", CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<InjectedFinalizationException>();
 
         context.Db.ChangeTracker.Clear();
@@ -351,7 +372,8 @@ public class SandboxGuardAndSeederTests : IDisposable
         failedAgreement.ExecutedArtifactId.Should().BeNull();
         failedAgreement.FullyExecutedAtUtc.Should().BeNull();
 
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-finalization-retry", CancellationToken.None);
 
         await AssertCanonicalArtifactsAsync(context.Db, legalDocuments);
     }
@@ -360,15 +382,15 @@ public class SandboxGuardAndSeederTests : IDisposable
     public async Task SeedPortfolio_WithExistingProperties_ReconcilesCurrentFactsAndArtifacts()
     {
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-before-reconciliation", CancellationToken.None);
         var relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
             candidate.RelationshipNumber == "DEMO-LM-ACTIVE-017");
         relationship.PlannedMoveOutAtUtc = DateTime.UtcNow.AddMonths(1);
-        relationship.EndingDispositionDecidedAtUtc = DateTime.UtcNow;
-        relationship.EndingDispositionDecidedByUserId = 1;
         await _ctx.Db.SaveChangesAsync();
 
-        await seeder.SeedPortfolioAsync(1, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(
+            1, "reconcile-existing-demo-facts", CancellationToken.None);
 
         _ctx.Db.ChangeTracker.Clear();
         relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
@@ -377,6 +399,13 @@ public class SandboxGuardAndSeederTests : IDisposable
         relationship.EndingDispositionDecidedAtUtc.Should().BeNull();
         relationship.EndingDispositionDecidedByUserId.Should().BeNull();
         relationship.PossessionAgreementExceptionReason.Should().NotBeNullOrWhiteSpace();
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "sandbox.demo-seed"
+            && (receipt.IdempotencyKey == "portfolio:1:seed-before-reconciliation"
+                || receipt.IdempotencyKey == "portfolio:1:reconcile-existing-demo-facts"))).Should().Be(2);
+        (await _ctx.Db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == "demo-seed/1/seed-before-reconciliation"
+            || message.IdempotencyKey == "demo-seed/1/reconcile-existing-demo-facts")).Should().Be(2);
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
 
@@ -576,18 +605,18 @@ public class SandboxGuardAndSeederTests : IDisposable
         return (account, charge);
     }
 
-    private static (DemoDataSeeder Seeder, DemoLegalTestDependencies LegalDocuments) BuildSeeder(
-        RentalCommandDbContext db)
+    private (DemoDataSeeder Seeder, DemoLegalTestDependencies LegalDocuments) BuildSeeder(
+        RentalCommandDbContext db,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var infrastructure = new TestAtomicInfrastructureUnitOfWork(db);
-        var legalDocuments = new DemoLegalTestDependencies(db, infrastructure);
+        var legalDocuments = new DemoLegalTestDependencies(db);
+        var (atomic, atomicContext) = BuildAtomicServices(db, interceptors);
         return (new DemoDataSeeder(
             db,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(db),
-            infrastructure,
-            infrastructure,
+            atomic,
+            atomicContext,
             legalDocuments,
             legalDocuments,
             legalDocuments,
@@ -595,21 +624,52 @@ public class SandboxGuardAndSeederTests : IDisposable
             legalDocuments), legalDocuments);
     }
 
+    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context) BuildAtomicServices(
+        RentalCommandDbContext db,
+        IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, DemoSeedTestActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            SeedDemoPortfolioCommand,
+            SeedDemoPortfolioResult,
+            DemoSeedCommandHandler>();
+        services.AddAtomicCommandHandler<
+            FinalizeDemoLegalDocumentCommand,
+            FinalizeDemoLegalDocumentResult,
+            DemoLegalDocumentFinalizeCommandHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
+            builder.UseNpgsql(db.Database.GetConnectionString());
+            if (interceptors is not null)
+            {
+                builder.AddInterceptors(interceptors);
+            }
+            builder.UseAtomicPersistenceKernel(provider);
+        });
+        var serviceProvider = services.BuildServiceProvider();
+        _atomicProviders.Add(serviceProvider);
+        return (
+            serviceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            serviceProvider.GetRequiredService<IAtomicCommandContext>());
+    }
+
+    private sealed class DemoSeedTestActor : ICurrentActor
+    {
+        public int? UserId => 1;
+        public string? ActorLabel => "test:demo-seed";
+        public string? IpAddress => "127.0.0.1";
+    }
+
     private static void SeedAdministeringAccess(RentalCommandDbContext db)
     {
         var now = DateTime.UtcNow;
-        var actor = new ApplicationUser
-        {
-            UserName = "finalization-tests@example.test",
-            NormalizedUserName = "FINALIZATION-TESTS@EXAMPLE.TEST",
-            Email = "finalization-tests@example.test",
-            NormalizedEmail = "FINALIZATION-TESTS@EXAMPLE.TEST",
-            DisplayName = "Finalization Test Actor",
-            CreatedAt = now,
-        };
         db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
         {
-            User = actor,
+            UserId = 1,
             PortfolioId = 1,
             Status = WorkspaceAccessContextStatus.Active,
             LastAuthorizedExperience = WorkspaceExperience.Management,
@@ -704,7 +764,6 @@ internal sealed class DemoLegalTestDependencies :
     IFileStorage
 {
     private readonly RentalCommandDbContext _db;
-    private readonly IAtomicExecutionState _atomic;
     private readonly Dictionary<string, byte[]> _stored = new(StringComparer.Ordinal);
     private int _uploadAttempt;
 
@@ -713,11 +772,7 @@ internal sealed class DemoLegalTestDependencies :
     public Dictionary<string, PendingFileUploadAdmission> AdmissionsByPurpose { get; } =
         new(StringComparer.Ordinal);
 
-    public DemoLegalTestDependencies(RentalCommandDbContext db, IAtomicExecutionState atomic)
-    {
-        _db = db;
-        _atomic = atomic;
-    }
+    public DemoLegalTestDependencies(RentalCommandDbContext db) => _db = db;
 
     public Task<LeaseAgreementRenderResult> RenderAsync(
         int portfolioId, int actorUserId, LeaseAgreementRenderData data, CancellationToken ct = default) =>
@@ -838,7 +893,7 @@ internal sealed class DemoLegalTestDependencies :
 
     private void EnsureOutsideInfrastructure()
     {
-        if (_atomic.IsInfrastructureActive)
+        if (_db.Database.CurrentTransaction is not null)
             throw new InvalidOperationException("Provider I/O ran inside infrastructure transaction.");
     }
 }

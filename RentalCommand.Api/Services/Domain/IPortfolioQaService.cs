@@ -20,5 +20,6 @@ public interface IPortfolioQaService
         string question,
         IReadOnlyList<QaTurn>? history,
         QaDeliveryOptions? delivery = null,
+        string? deliveryOperationId = null,
         CancellationToken ct = default);
 }

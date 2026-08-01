@@ -28,4 +28,5 @@ public class BankConnection
 
     public Portfolio? Portfolio { get; set; }
     public ICollection<BankTransaction> Transactions { get; set; } = new List<BankTransaction>();
+    public ICollection<BankStatement> Statements { get; set; } = new List<BankStatement>();
 }

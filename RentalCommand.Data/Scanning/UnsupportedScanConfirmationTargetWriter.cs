@@ -16,7 +16,7 @@ public sealed class UnsupportedScanConfirmationTargetWriter : IScanConfirmationT
     public Task<ScanConfirmationTargetWriteResult> WriteAsync(
         ConfirmScanDraftCommand command,
         string? extractedFieldsJson,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct) =>
         throw new InvalidOperationException("No production scan-confirm target writer is installed.");
 }

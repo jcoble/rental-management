@@ -56,12 +56,17 @@
 		}
 	}
 
+	const mutationHeaders = () => ({ headers: { 'Idempotency-Key': crypto.randomUUID() } });
 	const setDate = () =>
-		dateInput ? run(() => api.post<ClockState>('/dev/clock/set', { date: dateInput })) : undefined;
-	const advance = (days: number) => run(() => api.post<ClockState>('/dev/clock/advance', { days }));
-	const freeze = () => run(() => api.post<ClockState>('/dev/clock/freeze'));
-	const unfreeze = () => run(() => api.post<ClockState>('/dev/clock/unfreeze'));
-	const reset = () => run(() => api.post<ClockState>('/dev/clock/reset'));
+		dateInput
+			? run(() => api.post<ClockState>('/dev/clock/set', { date: dateInput }, mutationHeaders()))
+			: undefined;
+	const advance = (days: number) =>
+		run(() => api.post<ClockState>('/dev/clock/advance', { days }, mutationHeaders()));
+	const freeze = () => run(() => api.post<ClockState>('/dev/clock/freeze', undefined, mutationHeaders()));
+	const unfreeze = () =>
+		run(() => api.post<ClockState>('/dev/clock/unfreeze', undefined, mutationHeaders()));
+	const reset = () => run(() => api.post<ClockState>('/dev/clock/reset', undefined, mutationHeaders()));
 </script>
 
 <div class="sim-panel" class:sim-collapsed={collapsed}>
@@ -156,6 +161,9 @@
 		gap: 8px;
 		padding: 10px;
 	}
+	.sim-panel:not(.sim-collapsed):not(:hover):not(:focus-within) .sim-body {
+		display: none;
+	}
 	.sim-now {
 		color: #cfc8e6;
 		word-break: break-all;
@@ -183,5 +191,10 @@
 	.sim-date {
 		flex: 2;
 		min-width: 0;
+	}
+	@media (min-width: 768px) {
+		.sim-panel {
+			left: calc(15rem + 12px);
+		}
 	}
 </style>

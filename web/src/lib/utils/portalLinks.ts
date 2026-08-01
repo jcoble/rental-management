@@ -29,7 +29,8 @@ const DESTINATIONS = new Set<NotificationDestination>([
 	'LeasingApplication',
 	'LeasingAppointment',
 	'LeasingConversation',
-	'LeasingMoveIn'
+	'LeasingMoveIn',
+	'TenantAccount'
 ]);
 
 export function notificationIntentUrl(
@@ -100,7 +101,7 @@ function resolveDestination(intent: NotificationNavigationIntent): string | null
 		case 'UnitRecords':
 			return unitRoute(resource, 'records');
 		case 'TenantLedgerEntry':
-			return tenantLedgerRoute(intent.parentResource, resource);
+			return tenantLedgerRoute(intent.experience, intent.parentResource, resource);
 		case 'Expense':
 			return detailRoute('/accounting/expenses', resource, 'Expense');
 		case 'ScanDraft':
@@ -135,6 +136,12 @@ function resolveDestination(intent: NotificationNavigationIntent): string | null
 			return detailRoute('/leasing/conversations', resource, 'Conversation');
 		case 'LeasingMoveIn':
 			return detailRoute('/leasing/move-ins', resource, 'LeaseManagement');
+		case 'TenantAccount': {
+			const id = kindId(resource, 'TenantAccount');
+			return id === null || intent.experience !== 'Tenant'
+				? null
+				: `/portal/payments?account=${id}`;
+		}
 		default: {
 			const exhaustiveDestination: never = intent.destination;
 			void exhaustiveDestination;
@@ -208,12 +215,14 @@ function kindId(resource: NotificationResource | null, kind: string): number | n
 }
 
 function tenantLedgerRoute(
+	experience: WorkspaceExperience,
 	parent: NotificationResource | null,
 	resource: NotificationResource | null
 ): string | null {
 	const accountId = kindId(parent, 'TenantAccount');
 	const entryId = kindId(resource, 'TenantLedgerEntry');
-	return accountId === null || entryId === null
-		? null
+	if (accountId === null || entryId === null) return null;
+	return experience === 'Tenant'
+		? `/portal/payments?account=${accountId}&entry=${entryId}`
 		: `/tenant-accounts/${accountId}/entries/${entryId}`;
 }

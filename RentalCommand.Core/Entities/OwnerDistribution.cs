@@ -15,6 +15,16 @@ public class OwnerDistribution : IAuditable, IPortfolioScoped
     public DateTime Date { get; set; }
     public decimal Amount { get; set; }
     public DistributionMethod Method { get; set; } = DistributionMethod.Check;
+    public OwnerDistributionStatus Status { get; set; } = OwnerDistributionStatus.Draft;
+    public DateTime? ApprovedAt { get; set; }
+    public DateTime? ApprovedBusinessDate { get; set; }
+    public int? ApprovedByUserId { get; set; }
+    public DateTime? RejectedAt { get; set; }
+    public int? RejectedByUserId { get; set; }
+    public string? RejectionReason { get; set; }
+    public string? BankReference { get; set; }
+    public string? ExportReference { get; set; }
+    public DateTime? ExportedAt { get; set; }
     public string? Memo { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -23,4 +33,6 @@ public class OwnerDistribution : IAuditable, IPortfolioScoped
     public Portfolio? Portfolio { get; set; }
     public OwnerEntity? OwnerEntity { get; set; }
     public Property? Property { get; set; }
+    public ApplicationUser? ApprovedByUser { get; set; }
+    public ApplicationUser? RejectedByUser { get; set; }
 }

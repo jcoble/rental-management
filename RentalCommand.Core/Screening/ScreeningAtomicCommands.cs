@@ -35,19 +35,19 @@ public sealed record ApplicantScreeningSnapshot(
     string StatusSummary,
     string NextAction,
     bool IsTerminal,
-    bool CanOpenProvider) : IAtomicResultData;
+    bool CanOpenProvider);
 
 public sealed record ScreeningMutationResult(
     ScreeningMutationOutcome Outcome,
-    ApplicantScreeningSnapshot? Screening = null) : IAtomicResultData;
+    ApplicantScreeningSnapshot? Screening = null);
 
 public sealed record TrackExternalScreeningCommand(
     int PortfolioId,
     int ApplicationId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     string ProviderDisplayName,
     string? ProviderReference,
@@ -56,16 +56,16 @@ public sealed record TrackExternalScreeningCommand(
     string? CreditReportingAgencyAddress,
     string? CreditReportingAgencyPhone,
     ApplicantScreeningStatus Status,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record UpdateExternalScreeningCommand(
     int PortfolioId,
     int ApplicationId,
     int ScreeningId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     ApplicantScreeningStatus? Status,
     string? ProviderReference,
@@ -74,33 +74,33 @@ public sealed record UpdateExternalScreeningCommand(
     string? CreditReportingAgencyAddress,
     string? CreditReportingAgencyPhone,
     DateTime? OccurredAtUtc,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record RecordScreeningDecisionCommand(
     int PortfolioId,
     int ApplicationId,
     int ScreeningId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     ScreeningDecision Decision,
     string? Reason,
     bool ConsumerReportUsed,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record PrepareIntegratedScreeningCommand(
     int PortfolioId,
     int ApplicationId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     string ProviderKey,
     string ProviderDisplayName,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record PrepareIntegratedScreeningResult(
     ScreeningMutationOutcome Outcome,
@@ -109,16 +109,16 @@ public sealed record PrepareIntegratedScreeningResult(
     string OperationKey,
     string? ApplicantName,
     string? ApplicantEmail,
-    DateTime? ConsentAtUtc) : IAtomicResultData;
+    DateTime? ConsentAtUtc);
 
 public sealed record FinalizeIntegratedScreeningCommand(
     int PortfolioId,
     int ApplicationId,
     int ScreeningId,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey,
     string ProviderKey,
     bool Accepted,
@@ -129,7 +129,7 @@ public sealed record FinalizeIntegratedScreeningCommand(
     string? CreditReportingAgencyName,
     string? CreditReportingAgencyAddress,
     string? CreditReportingAgencyPhone,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record ApplyScreeningProviderDeliveryCommand(
     string ProviderKey,
@@ -142,4 +142,4 @@ public sealed record ApplyScreeningProviderDeliveryCommand(
     string? CreditReportingAgencyName,
     string? CreditReportingAgencyAddress,
     string? CreditReportingAgencyPhone,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;

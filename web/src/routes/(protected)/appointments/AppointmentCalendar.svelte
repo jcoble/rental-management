@@ -22,11 +22,13 @@
 
 	let {
 		appointments = [],
+		initialDate,
 		onSelectAppointment,
 		onCreateAt,
 		onReschedule
 	}: {
 		appointments?: Appointment[];
+		initialDate?: Date;
 		onSelectAppointment?: (a: Appointment) => void;
 		onCreateAt?: (localWallClockIso: string) => void;
 		onReschedule?: (a: Appointment, newStartUtcIso: string, newEndUtcIso: string) => void;
@@ -69,6 +71,7 @@
 	// updating `options.events` is the supported way to refresh the calendar in Svelte.
 	let options = $state({
 		view: 'dayGridMonth',
+		date: new Date(),
 		events: [] as typeof events,
 		headerToolbar: {
 			start: 'title',
@@ -130,6 +133,10 @@
 	// Keep the calendar's events in sync with the (filtered) appointments prop.
 	$effect(() => {
 		options.events = events;
+	});
+
+	$effect(() => {
+		if (initialDate) options.date = initialDate;
 	});
 
 	const plugins = [DayGrid, TimeGrid, List, Interaction];

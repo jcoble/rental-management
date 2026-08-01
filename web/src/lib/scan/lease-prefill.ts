@@ -28,6 +28,7 @@ export interface LeasePrefill {
 	leaseNumber: string;
 	startDate: string;           // YYYY-MM-DD
 	endDate: string;             // YYYY-MM-DD
+	possessionGivenOn: string;   // YYYY-MM-DD
 	monthlyRent: string;
 	securityDeposit: string;
 	lateFee: string;
@@ -63,6 +64,10 @@ export function toLeasePrefill(fields: ScanFieldDto[]): { values: LeasePrefill; 
 		leaseNumber: FIELD(fs, 'lease_number'),
 		startDate: FIELD(fs, 'start_date'),
 		endDate: FIELD(fs, 'end_date'),
+		possessionGivenOn:
+			FIELD(fs, 'possession_given_at') ||
+			FIELD(fs, 'possession_given_at_utc') ||
+			FIELD(fs, 'possessionGivenAtUtc'),
 		monthlyRent: FIELD(fs, 'monthly_rent'),
 		securityDeposit: FIELD(fs, 'security_deposit'),
 		lateFee: FIELD(fs, 'late_fee'),
@@ -83,6 +88,7 @@ export const STEP_FIELD_TO_EXTRACTION: Record<string, string> = {
 	unitNumber: 'unit_number',
 	bedrooms: 'unit_bedrooms',
 	bathrooms: 'unit_bathrooms',
+	squareFeet: 'unit_square_feet',
 	// tenant
 	firstName: 'tenant_name',
 	lastName: 'tenant_name',

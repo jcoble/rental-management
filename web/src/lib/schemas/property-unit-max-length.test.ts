@@ -30,9 +30,12 @@ const validProperty = {
 
 const validUnit = {
 	unitNumber: '101',
+	floorPlan: '',
 	bedrooms: '2',
 	bathrooms: '1.5',
-	marketRent: '1200'
+	squareFeet: '',
+	marketRent: '1200',
+	notes: ''
 };
 
 test('propertySchema accepts a valid property and a name at the 200-char limit', () => {
@@ -66,9 +69,12 @@ test('unitSchema accepts a valid unit, a 50-char unit number, and 99 beds/baths'
 	assert.equal(parseForm(unitSchema, validUnit).errors, null);
 	const atLimits = parseForm(unitSchema, {
 		unitNumber: 'U'.repeat(50),
+		floorPlan: 'Garden 2B',
 		bedrooms: '99',
 		bathrooms: '99',
-		marketRent: '99999999'
+		squareFeet: '99999',
+		marketRent: '99999999',
+		notes: 'A'.repeat(2000)
 	});
 	assert.equal(atLimits.errors, null, `unexpected errors: ${JSON.stringify(atLimits.errors)}`);
 });
@@ -86,4 +92,11 @@ test('unitSchema rejects bedrooms/bathrooms above 99 (server Range(0, 99))', () 
 test('unitSchema rejects market rent above 99,999,999 (server Range(0, 99999999))', () => {
 	const result = parseForm(unitSchema, { ...validUnit, marketRent: '100000000' });
 	assert.ok(result.errors?.marketRent, 'expected a marketRent error');
+});
+
+test('unitSchema validates floor plan, square feet, and notes against server limits', () => {
+	assert.ok(parseForm(unitSchema, { ...validUnit, floorPlan: 'F'.repeat(101) }).errors?.floorPlan, 'expected a floorPlan error');
+	assert.ok(parseForm(unitSchema, { ...validUnit, squareFeet: '100000' }).errors?.squareFeet, 'expected a squareFeet max error');
+	assert.ok(parseForm(unitSchema, { ...validUnit, squareFeet: '1200.5' }).errors?.squareFeet, 'expected a squareFeet integer error');
+	assert.ok(parseForm(unitSchema, { ...validUnit, notes: 'N'.repeat(2001) }).errors?.notes, 'expected a notes error');
 });

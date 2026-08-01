@@ -32,6 +32,7 @@
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { CalendarClock, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
 
@@ -160,6 +161,21 @@
 		return householdContextQuery.data?.activeTenantUserAccesses.find((access) => access.leaseManagementPartyId === partyId);
 	}
 
+	function canShowHouseholdAction(party: LeaseManagementParty) {
+		return party.isCurrent || party.canGrantTenantPortalAccess;
+	}
+
+	function canGrantAccess(party: LeaseManagementParty) {
+		return party.canGrantTenantPortalAccess && Boolean(party.email) && !activeAccess(party.leaseManagementPartyId);
+	}
+
+	function loginStatus(access: ReturnPossessionActiveTenantUserAccess | undefined) {
+		if (!access) return 'not granted';
+		if (access.hasPendingActivationInvitation) return `pending for ${access.userEmail}`;
+		if (access.isPortalLoginReady || !access.requiresAccountActivation) return `active for ${access.userEmail}`;
+		return `setup required for ${access.userEmail}`;
+	}
+
 	async function handleSuccessorCreated(result: LeaseAgreementDraftMutationResponse) {
 		editAgreementSource = successorSelection?.source ?? null;
 		editAgreementCanCancel = true;
@@ -274,7 +290,7 @@
 						{summary.possessionGivenAtUtc
 							? `Possession given ${new Date(summary.possessionGivenAtUtc).toLocaleDateString()}`
 							: summary.plannedPossessionAtUtc
-								? `Possession planned ${new Date(summary.plannedPossessionAtUtc).toLocaleDateString()}`
+								? `Possession planned ${formatDateOnly(summary.plannedPossessionAtUtc)}`
 								: 'Possession not yet scheduled'}
 					</p>
 				</CardContent>
@@ -310,7 +326,7 @@
 						<p class="text-xs text-muted-foreground">Decided {new Date(summary.endingDispositionDecidedAtUtc).toLocaleDateString()}</p>
 					{/if}
 					{#if summary.plannedMoveOutAtUtc}
-						<p class="text-sm text-muted-foreground">Move-out planned {new Date(summary.plannedMoveOutAtUtc).toLocaleDateString()}</p>
+						<p class="text-sm text-muted-foreground">Move-out planned {formatDateOnly(summary.plannedMoveOutAtUtc)}</p>
 					{/if}
 					{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
 						<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
@@ -350,18 +366,20 @@
 					<p class="text-sm text-muted-foreground">No effective parties.</p>
 				{:else}
 					<div>
-						<h3 class="text-sm font-semibold">Current household</h3>
+						<h3 class="text-sm font-semibold">Current and scheduled household</h3>
 						<div class="divide-y">
-						{#each householdContextQuery.data?.parties ?? [] as party}
+						{#each detail.parties as party}
+							{#if canShowHouseholdAction(party)}
 							{@const access = activeAccess(party.leaseManagementPartyId)}
 							<div class="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
 								<div>
 									<p class="font-medium">{party.tenantName}</p>
 									<p class="text-sm text-muted-foreground">{party.email ?? party.phone ?? 'No contact information'}</p>
-									<p class="text-xs text-muted-foreground">Effective since {party.effectiveFrom} · Login {access ? `active for ${access.userEmail}` : 'not granted'}</p>
+									<p class="text-xs text-muted-foreground">{party.isCurrent ? `Effective since ${party.effectiveFrom}` : `Scheduled for ${party.effectiveFrom}`} · Login {loginStatus(access)}</p>
 								</div>
-								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke login</Button>{:else}<Button size="sm" variant="outline" disabled={!party.email} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create login</Button>{/if}{/if}</div>
+								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke login</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create login</Button>{/if}{/if}</div>
 							</div>
+							{/if}
 						{/each}
 						</div>
 					</div>
@@ -369,7 +387,7 @@
 						<h3 class="text-sm font-semibold">Household history</h3>
 						<div class="divide-y">
 						{#each detail.parties as party}
-							{#if !party.isCurrent}<div class="flex items-center justify-between gap-4 py-3"><div><p class="font-medium">{party.tenantName}</p><p class="text-xs text-muted-foreground">{party.effectiveFrom} through {party.effectiveThrough ?? 'current'}</p></div><StatusBadge status={party.role} /></div>{/if}
+							{#if !canShowHouseholdAction(party)}<div class="flex items-center justify-between gap-4 py-3"><div><p class="font-medium">{party.tenantName}</p><p class="text-xs text-muted-foreground">{party.effectiveFrom} through {party.effectiveThrough ?? 'current'}</p></div><StatusBadge status={party.role} /></div>{/if}
 						{/each}
 					</div>
 					</div>

@@ -1,0 +1,17 @@
+TSK-754-D016 live verification
+Verified source SHA: 1a34244a2cfb7133d60557d9c130d5914d32c699
+Environment: https://rental-command.chimp-map.ts.net
+Stack: rc-preview-yearsim754
+API container health: healthy
+API image: rc-preview-api:yearsim754
+API image revision: 1a34244a2cfb7133d60557d9c130d5914d32c699
+Request date: 2027-01-03
+Request timezone: America/New_York
+Request mode: frozen
+Set response mode: Frozen
+Set response simulated UTC: 2027-01-03T05:00:00Z
+Independent GET mode: Frozen
+Independent GET simulated UTC: 2027-01-03T05:00:00Z
+Independent GET timezone: America/New_York
+PostgreSQL rc_business_date(1): 2027-01-03
+Result: PASS
