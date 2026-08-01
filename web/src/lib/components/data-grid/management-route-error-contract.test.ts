@@ -74,4 +74,12 @@ describe('management route error contract', () => {
 			);
 		}
 	});
+
+	it('keeps the global Leases page on the protected list-page spacing contract', () => {
+		assert.match(
+			sources.leases,
+			/<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="leases-page">/
+		);
+		assert.match(sources.leases, /<PageHeader[\s\S]*class="mb-4"[\s\S]*data-testid="leases-header"/);
+	});
 });

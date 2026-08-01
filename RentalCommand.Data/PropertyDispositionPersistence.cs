@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Atomic;
@@ -12,9 +13,11 @@ namespace RentalCommand.Data.Leasing;
 /// is the transaction boundary: either the disposition and every canonical operational closure
 /// commit together, or none of them do. Legal Agreement and Addendum rows are intentionally absent.
 /// </summary>
-internal sealed partial class AtomicLeaseMutationPersistence
+public static partial class AtomicLeaseMutationPersistence
 {
-    public async Task<AtomicPropertyDispositionMutationResult?> CreatePropertyDispositionAsync(
+    public static async Task<AtomicPropertyDispositionMutationResult?> CreatePropertyDispositionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int propertyId,
         DateTime closedOnDate,
@@ -43,7 +46,8 @@ internal sealed partial class AtomicLeaseMutationPersistence
             Integer("managementHoldType", (int)UnitOperationalPeriodType.ManagementHold),
         };
 
-        using var lease = _auditScope.BeginInternalRawDmlBatch(
+        var auditScope = RequireAuditScope(db, context);
+        using var lease = auditScope.BeginInternalRawDmlBatch(
             new("PropertyDispositions", AtomicRawDmlOperation.Insert),
             new("Properties", AtomicRawDmlOperation.Update),
             new("LeaseManagements", AtomicRawDmlOperation.Update),
@@ -55,7 +59,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert),
             new("Units", AtomicRawDmlOperation.Update),
             new("CapitalAssets", AtomicRawDmlOperation.Update));
-        var row = await _db.Database.SingleOrDefaultTopLevelResultAsync<PropertyDispositionMutationRow>(
+        var row = await db.Database.SingleOrDefaultTopLevelResultAsync<PropertyDispositionMutationRow>(
             CreateSql, parameters, ct);
         return row is null ? null : new AtomicPropertyDispositionMutationResult(
             row.DispositionId,

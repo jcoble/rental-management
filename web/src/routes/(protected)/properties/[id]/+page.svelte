@@ -12,7 +12,7 @@
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, propertyBasisSchema, propertyOperationsSchema, unitSchema, parseForm } from '$lib/schemas';
 	import PropertyCapitalAssetsSection from '$lib/components/property/PropertyCapitalAssetsSection.svelte';
 	import PropertyDispositionsSection from '$lib/components/property/PropertyDispositionsSection.svelte';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
@@ -41,6 +41,7 @@
 		rentalStructureOptions
 	} from '$lib/properties/property-labels';
 	import { propertyUpdateFields } from '$lib/properties/property-update-payload';
+	import { propertyYearBuiltBusinessYearError } from '$lib/properties/property-year-built';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -123,6 +124,12 @@
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0 && activeArea === 'property-work',
 	}));
 
+	const businessDateQuery = createQuery(() => ({
+		queryKey: ['portfolio-business-date', portfolioId],
+		queryFn: () => leaseManagements.prepareMoveInContext(),
+		enabled: canManageRentals && portfolioId > 0,
+	}));
+
 	const expensesQuery = createQuery(() => ({
 		queryKey: ['property-workspace', id, 'finances', financePage, PAGE_SIZE],
 		queryFn: () => expenses.listPage(portfolioId, {
@@ -151,17 +158,6 @@
 	const unitsList = $derived(unitsQuery.data?.items ?? []);
 	const leasesList = $derived(leasesQuery.data?.items ?? []);
 
-	$effect(() => {
-		const loaded = propertyQuery.data;
-		if (
-			loaded?.rentalStructure === 'SingleRental' &&
-			loaded.workspaceEntry.destination === 'Unit' &&
-			loaded.workspaceEntry.unitId
-		) {
-			void goto(`/units/${loaded.workspaceEntry.unitId}`, { replaceState: true });
-		}
-	});
-
 	// Hero occupancy + context tone: full occupancy reads green, vacancy is neutral.
 	const occupiedUnits = $derived(property?.occupiedUnits ?? 0);
 	const totalUnits = $derived(property?.unitCount ?? 0);
@@ -173,7 +169,7 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', rentalStructure: '', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', rentalStructure: '', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', yearBuilt: '', managementFeePercent: '', notes: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
@@ -237,6 +233,9 @@
 			state: property.state,
 			postalCode: property.postalCode,
 			ownerEntityId: property.ownerships.length === 1 ? String(property.ownerships[0].ownerEntityId) : '',
+			yearBuilt: property.yearBuilt != null ? String(property.yearBuilt) : '',
+			managementFeePercent: property.managementFeePercent != null ? String(property.managementFeePercent) : '',
+			notes: property.notes ?? '',
 			purchasePrice: property.purchasePrice != null ? String(property.purchasePrice) : '',
 			landValue: property.landValue != null ? String(property.landValue) : '',
 			inServiceDate: property.inServiceDate ? property.inServiceDate.slice(0, 10) : '',
@@ -260,9 +259,18 @@
 	function submitProperty() {
 		if (!canManageRentals) return;
 		const result = parseForm(propertySchema, propertyForm);
+		const operations = parseForm(propertyOperationsSchema, propertyForm);
 		const basis = parseForm(propertyBasisSchema, propertyForm);
-		if (result.errors || basis.errors) {
-			propertyFormErrors = { ...(result.errors ?? {}), ...(basis.errors ?? {}) };
+		if (result.errors || operations.errors || basis.errors) {
+			propertyFormErrors = { ...(result.errors ?? {}), ...(operations.errors ?? {}), ...(basis.errors ?? {}) };
+			return;
+		}
+		const yearBuiltError = propertyYearBuiltBusinessYearError(
+			operations.data.yearBuilt,
+			businessDateQuery.data?.businessDate
+		);
+		if (yearBuiltError) {
+			propertyFormErrors = { yearBuilt: yearBuiltError };
 			return;
 		}
 		propertyFormErrors = {};
@@ -281,6 +289,7 @@
 			data: {
 				portfolioId,
 				...mutableProperty,
+				...operations.data,
 				...basis.data,
 				...ownershipChange,
 			},
@@ -313,7 +322,7 @@
 	}));
 
 	// ── Unit form ──────────────────────────────────────────────────────────────
-	const emptyUnit = { unitNumber: '', bedrooms: '1', bathrooms: '1', marketRent: '1200' };
+	const emptyUnit = { unitNumber: '', floorPlan: '', bedrooms: '1', bathrooms: '1', squareFeet: '', marketRent: '1200', notes: '' };
 	let showUnitForm = $state(false);
 	let editingUnitId = $state<number | null>(null);
 	let unitForm = $state({ ...emptyUnit });
@@ -332,9 +341,12 @@
 		editingUnitId = u.id;
 		unitForm = {
 			unitNumber: u.unitNumber,
+			floorPlan: u.floorPlan ?? '',
 			bedrooms: String(u.bedrooms),
 			bathrooms: String(u.bathrooms),
+			squareFeet: u.squareFeet == null ? '' : String(u.squareFeet),
 			marketRent: String(u.marketRent),
+			notes: u.notes ?? '',
 		};
 		unitFormErrors = {};
 		showUnitForm = true;
@@ -361,7 +373,7 @@
 	}
 
 	function invalidateUnits() {
-		queryClient.invalidateQueries({ queryKey: ['units', id] });
+		queryClient.invalidateQueries({ queryKey: ['property-workspace', id, 'rentals'] });
 		queryClient.invalidateQueries({ queryKey: ['property', id] });
 		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 	}
@@ -388,7 +400,7 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	let deleteUnitTarget = $state<Unit | null>(null);
+	let deleteUnitTarget = $state<UnitHealth | null>(null);
 
 	const deleteUnitMutation = createMutation(() => ({
 		mutationFn: (unitId: number) => properties.deleteUnit(unitId),
@@ -402,6 +414,14 @@
 
 	// ── Unit columns ───────────────────────────────────────────────────────────
 	const unitColumns: ColumnDef<UnitHealth>[] = [
+		{
+			key: 'actions',
+			title: '',
+			align: 'right',
+			mobileRole: 'hidden',
+			isAction: true,
+			cell: unitActionsCell,
+		},
 		{
 			key: 'unitNumber',
 			title: 'Unit #',
@@ -493,6 +513,23 @@
 
 {#snippet unitStatusCell(u: UnitHealth)}
 	<StatusBadge status={u.status} />
+{/snippet}
+
+{#snippet unitActionsCell(unit: UnitHealth)}
+	{#if canManageRentals}
+		<Button
+			variant="ghost"
+			size="icon"
+			data-testid="unit-delete-{unit.id}"
+			aria-label={`Remove unit ${unit.unitNumber}`}
+			onclick={(event) => {
+				event.stopPropagation();
+				deleteUnitTarget = unit;
+			}}
+		>
+			<Trash2 class="h-4 w-4 text-destructive" />
+		</Button>
+	{/if}
 {/snippet}
 
 {#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
@@ -676,6 +713,7 @@
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Owner</dt><dd class="mt-1 text-sm font-semibold">{ownershipLabel(property.ownerships)}</dd></div>
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year built</dt><dd class="mt-1 text-sm font-semibold">{property.yearBuilt ?? '—'}</dd></div>
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management fee</dt><dd class="mt-1 text-sm font-semibold">{property.managementFeePercent != null ? `${property.managementFeePercent}%` : '—'}</dd></div>
+				<div class="sm:col-span-2"><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt><dd class="mt-1 text-sm font-semibold">{property.notes ?? '—'}</dd></div>
 			</DetailCard>
 		{:else if activeArea === 'ownership-management'}
 		<div class="mb-6 grid gap-6 lg:grid-cols-2" data-testid="property-area-ownership-management-content">
@@ -719,6 +757,20 @@
 				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" morphName="vt-prop-zip" />
 			</DetailCard>
 
+			<DetailCard title="Operations" icon={Info} accent="muted" testid="property-detail-operations-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Year built" bind:value={propertyForm.yearBuilt} display={property.yearBuilt != null ? String(property.yearBuilt) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.yearBuilt} testid="property-detail-year-built" morphName="vt-prop-year-built" />
+				<InlineField label="Management fee %" bind:value={propertyForm.managementFeePercent} display={property.managementFeePercent != null ? `${property.managementFeePercent}%` : '—'} editing={editingProperty} type="number" error={propertyFormErrors.managementFeePercent} testid="property-detail-management-fee" morphName="vt-prop-management-fee" />
+				<InlineField label="Notes" bind:value={propertyForm.notes} display={property.notes ?? '—'} editing={editingProperty} type="textarea" error={propertyFormErrors.notes} testid="property-detail-notes" class="sm:col-span-2" morphName="vt-prop-notes" />
+			</DetailCard>
+
+			<DetailCard title="Tax basis" icon={Info} accent="muted" testid="property-detail-tax-basis-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-detail-purchase-price" morphName="vt-prop-purchase-price" />
+				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-detail-land-value" morphName="vt-prop-land-value" />
+				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-detail-in-service-date" morphName="vt-prop-in-service-date" />
+				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-detail-manual-depreciation" morphName="vt-prop-manual-depreciation" />
+				<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={fmtMoney(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-detail-accumulated-depreciation" class="sm:col-span-2" morphName="vt-prop-accumulated-depreciation" />
+			</DetailCard>
+
 		</div>
 		{:else if activeArea === 'rentals'}
 		<div class="mb-6" data-testid="property-detail-units">
@@ -737,6 +789,22 @@
 				onPageChange={(next) => (rentalsPage = next)}
 				data-testid="property-units-grid"
 			>
+				{#snippet mobileActions(unit)}
+					{#if canManageRentals}
+						<Button
+							variant="ghost"
+							size="icon"
+							data-testid="unit-delete-mobile-{unit.id}"
+							aria-label={`Remove unit ${unit.unitNumber}`}
+							onclick={(event) => {
+								event.stopPropagation();
+								deleteUnitTarget = unit;
+							}}
+						>
+							<Trash2 class="h-4 w-4 text-destructive" />
+						</Button>
+					{/if}
+				{/snippet}
 				{#snippet toolbar()}
 					<div class="flex flex-1"></div>
 					{#if canManageRentals}

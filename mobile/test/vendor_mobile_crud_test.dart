@@ -125,6 +125,34 @@ void main() {
     },
   );
 
+  test(
+    'vendors repository cancels an exact open work-order dispatch',
+    () async {
+      final adapter = _VendorRecordingAdapter();
+      final repository = VendorsRepository(
+        Dio(BaseOptions(baseUrl: 'https://example.test'))
+          ..httpClientAdapter = adapter,
+      );
+
+      final result = await repository.cancelDispatch(
+        26,
+        dispatchId: 6,
+        reason: 'Cancelled for reassignment.',
+      );
+
+      expect(adapter.method, 'POST');
+      expect(adapter.path, '/work-orders/26/dispatches/6/cancel');
+      expect(adapter.body, containsPair('idempotencyKey', isNotEmpty));
+      expect(
+        adapter.body,
+        containsPair('reason', 'Cancelled for reassignment.'),
+      );
+      expect(result.id, 6);
+      expect(result.workOrderId, 26);
+      expect(result.status, 'Cancelled');
+    },
+  );
+
   test('vendors screen does not sort list data client-side', () {
     final source = File(
       'lib/features/vendors/vendors_list_screen.dart',
@@ -198,6 +226,7 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
   String? path;
   Map<String, dynamic>? query;
   Map<String, dynamic>? headers;
+  Map<String, dynamic>? body;
 
   @override
   Future<ResponseBody> fetch(
@@ -209,6 +238,9 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
     path = options.path;
     query = Map<String, dynamic>.from(options.queryParameters);
     headers = Map<String, dynamic>.from(options.headers);
+    body = options.data is Map<String, dynamic>
+        ? Map<String, dynamic>.from(options.data as Map<String, dynamic>)
+        : null;
 
     final item = {
       'id': 8,
@@ -216,7 +248,15 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
       'serviceType': 'Plumbing',
       'website': 'https://akron.example',
     };
-    final body = options.method == 'DELETE'
+    final responseBody = options.path.endsWith('/cancel')
+        ? {
+            'id': 6,
+            'workOrderId': 26,
+            'vendorId': 23,
+            'status': 'Cancelled',
+            'reason': 'Cancelled for reassignment.',
+          }
+        : options.method == 'DELETE'
         ? <String, dynamic>{}
         : options.method != 'GET'
         ? item
@@ -230,7 +270,7 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
         : [item];
 
     return ResponseBody.fromString(
-      jsonEncode(body),
+      jsonEncode(responseBody),
       200,
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],

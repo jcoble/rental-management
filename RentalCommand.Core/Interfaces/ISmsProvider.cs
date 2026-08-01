@@ -44,7 +44,7 @@ public sealed record SmsCredentials(
 /// throw on a non-success response (the outbox worker turns that into a retry); a misconfigured/missing
 /// provider is handled by the caller as a suppression log, never a crash.
 /// </summary>
-public interface ISmsProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface ISmsProvider
 {
     /// <summary>The provider this implementation serves.</summary>
     SmsProviderKey Key { get; }

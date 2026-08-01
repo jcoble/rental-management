@@ -60,6 +60,25 @@ void main() {
     },
   );
 
+  test(
+    'tenants page sends property filter for appointment selectors',
+    () async {
+      final adapter = _RecordingAdapter(_tenantPageJson());
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = TenantsRepository(dio);
+
+      final page = await repo.listPage(
+        const TenantListQuery(take: 200, sort: 'name', propertyId: 21),
+      );
+
+      expect(adapter.path, '/tenants/page');
+      expect(adapter.queryParameters, containsPair('propertyId', 21));
+      expect(page.items.single.currentPropertyName, 'Union Duplex');
+      expect(page.items.single.currentUnitNumber, 'B');
+    },
+  );
+
   test('properties repository sends available-for-lease filters', () async {
     final adapter = _RecordingAdapter(_propertyListJson());
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
@@ -219,6 +238,10 @@ Map<String, dynamic> _tenantPageJson() => {
       'lastName': 'Rivera',
       'email': 'alex@example.test',
       'activeLeaseCount': 1,
+      'currentPropertyId': 21,
+      'currentPropertyName': 'Union Duplex',
+      'currentUnitId': 24,
+      'currentUnitNumber': 'B',
       'createdAt': '2026-06-01T00:00:00.000Z',
       'updatedAt': '2026-06-02T00:00:00.000Z',
     },

@@ -22,6 +22,31 @@ public sealed class FoundationBaselinePostgreSqlTests
         string.Join(Environment.NewLine, RentalCommand.Data.Leasing.LeaseLegalSchemaSql.DropStatements);
 
     [Fact]
+    public void RuntimeLogins_HaveOnlyTheNonInheritedAtomicReadOnlyMembership()
+    {
+        CreateSql.Should().Contain(
+            "CREATE ROLE rentalcommand_atomic_readonly\n" +
+            "      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT");
+        CreateSql.Should().Contain(
+            "GRANT rentalcommand_atomic_readonly TO rentalcommand_api\n" +
+            "  WITH INHERIT FALSE, SET TRUE;");
+        CreateSql.Should().Contain(
+            "GRANT rentalcommand_atomic_readonly TO rentalcommand_engine\n" +
+            "  WITH INHERIT FALSE, SET TRUE;");
+        CreateSql.Should().Contain("OR membership.admin_option");
+        CreateSql.Should().Contain("OR membership.inherit_option");
+        CreateSql.Should().Contain("OR NOT membership.set_option");
+
+        var migrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/20260729017000_AddAtomicReadOnlyRuntimeRole.cs"));
+        migrationSource.Should().Contain(
+            "FoundationBaselinePostgreSql.AtomicReadOnlyRoleSqlV20260729");
+        migrationSource.Should().NotContain("REVOKE rentalcommand_atomic_readonly");
+    }
+
+    [Fact]
     public void Lease_successor_lineage_is_unique_reciprocal_and_commit_deferred()
     {
         LeaseLegalCreateSql.Should().Contain("IX_LeaseAgreements_DurableDirectSuccessor");
@@ -104,16 +129,190 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void NativeEsignExecutionWorker_CanAppendExecutedStoredFilesWithoutBroadMutationRights()
+    {
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+    }
+
+    [Fact]
     public void SandboxGraduation_AddsDeleteWithoutWeakeningAppendOnlyRows()
     {
         CreateSql.Should().Contain(
             "GRANT SELECT, INSERT, DELETE ON TABLE \"AtomicAuditLogs\" TO rentalcommand_api;");
         CreateSql.Should().Contain(
             "GRANT SELECT, INSERT, DELETE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, DELETE ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_api;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantAccounts\" TO rentalcommand_api;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerEntries\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"TenantAccounts\" TO rentalcommand_engine;");
         CreateSql.Should().NotContain(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"AtomicAuditLogs\" TO rentalcommand_api;");
         CreateSql.Should().NotContain(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_engine;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_engine;");
+    }
+
+    [Fact]
+    public void RuntimeTenantMoneyDmlMigration_GrantsOnlyTenantMoneyRuntimeAccess()
+    {
+        var migrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/20260728235000_GrantRuntimeTenantMoneyDml.cs"));
+
+        migrationSource.Should().Contain(
+            "GRANT SELECT, UPDATE ON TABLE \"TenantAccounts\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "GRANT SELECT ON TABLE \"TenantAccounts\" TO rentalcommand_engine;");
+        migrationSource.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerEntries\" TO rentalcommand_engine;");
+        migrationSource.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_engine;");
+        migrationSource.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"TenantLedgerEntries_Id_seq\" TO rentalcommand_engine;");
+        migrationSource.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"TenantLedgerAllocations_Id_seq\" TO rentalcommand_engine;");
+        migrationSource.Should().Contain(
+            "REVOKE SELECT, INSERT ON TABLE \"TenantLedgerEntries\" FROM rentalcommand_engine;");
+        migrationSource.Should().NotContain(
+            "REVOKE SELECT, INSERT ON TABLE \"TenantLedgerEntries\" FROM rentalcommand_api;");
+        migrationSource.Should().NotContain(
+            "REVOKE SELECT, UPDATE ON TABLE \"TenantAccounts\" FROM rentalcommand_api;");
+        migrationSource.Should().NotContain("GRANT ALL");
+        migrationSource.Should().NotContain("BYPASSRLS");
+        migrationSource.Should().NotContain("ALTER ROLE");
+    }
+
+    [Fact]
+    public void VendorDispatchChronologyRecovery_UsesDirectApiRlsWithoutSecurityDefinerFunction()
+    {
+        CreateSql.Should().Contain(
+            "GRANT UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"\n" +
+            "  TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "GRANT UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"\n" +
+            "  TO rentalcommand_rls_authority;");
+        DropSql.Should().Contain(
+            "REVOKE UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"\n" +
+            "  FROM rentalcommand_api;");
+
+        var directGrantMigrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/" +
+                "20260729014000_GrantApiVendorDispatchChronologyRecovery.cs"));
+        var retiredLaneRemovalMigrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/" +
+                "20260729016000_RemoveRetiredVendorDispatchChronologyFunction.cs"));
+
+        directGrantMigrationSource.Should().Contain(
+            "GRANT UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"");
+        directGrantMigrationSource.Should().Contain("TO rentalcommand_api;");
+        directGrantMigrationSource.Should().Contain(
+            "REVOKE UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"");
+        directGrantMigrationSource.Should().NotContain("CREATE OR REPLACE FUNCTION");
+        directGrantMigrationSource.Should().NotContain("SECURITY DEFINER");
+        directGrantMigrationSource.Should().NotContain("GRANT EXECUTE ON FUNCTION");
+        directGrantMigrationSource.Should().NotContain(
+            "REVOKE SELECT ON TABLE public.\"AtomicAuditLogs\"");
+        retiredLaneRemovalMigrationSource.Should().Contain(
+            "DROP FUNCTION IF EXISTS public.rc_recover_vendor_dispatch_audit_chronology(");
+        retiredLaneRemovalMigrationSource.Should().Contain(
+            "GRANT UPDATE (\"Timestamp\") ON TABLE public.\"AtomicAuditLogs\"");
+        retiredLaneRemovalMigrationSource.Should().NotContain("CREATE OR REPLACE FUNCTION");
+        retiredLaneRemovalMigrationSource.Should().NotContain("SECURITY DEFINER");
+        retiredLaneRemovalMigrationSource.Should().NotContain("GRANT EXECUTE ON FUNCTION");
+    }
+
+    [Fact]
+    public void RuntimeTenantMoneyRowLockMigration_GrantsOnlyRequiredUpdateLocks()
+    {
+        var migrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/20260728235500_GrantRuntimeTenantMoneyRowLockUpdates.cs"));
+
+        migrationSource.Should().Contain(
+            "GRANT UPDATE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "GRANT UPDATE ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "GRANT UPDATE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_engine;");
+        migrationSource.Should().NotContain(
+            "GRANT UPDATE ON TABLE \"TenantLedgerAllocations\" TO rentalcommand_engine;");
+        migrationSource.Should().NotContain(
+            "GRANT UPDATE ON TABLE \"TenantAccounts\" TO rentalcommand_engine;");
+        migrationSource.Should().NotContain("GRANT ALL");
+        migrationSource.Should().NotContain("BYPASSRLS");
+        migrationSource.Should().NotContain("ALTER ROLE");
+    }
+
+    [Fact]
+    public void ApprovedNoticeReplay_CanRepairRenderedNoticeChronologyWithoutBroadAppendOnlyUpdates()
+    {
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"RenderedNotices\" TO rentalcommand_api;");
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_update ON \"RenderedNotices\" FOR UPDATE USING (rc_api_scope_allows(\"PortfolioId\")) WITH CHECK (rc_api_scope_allows(\"PortfolioId\"));");
+        DropSql.Should().Contain(
+            "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLE \"RenderedNotices\" FROM rentalcommand_api;");
+
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, DELETE ON TABLE \"NoticeDeliveryEvidence\" TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"NoticeDeliveryEvidence\" TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "GRANT SELECT, INSERT, UPDATE ON TABLE \"NoticeDeliveryEvidence\" TO rentalcommand_api;");
+    }
+
+    [Fact]
+    public void ApprovedNoticeReplayMigration_GrantsOnlyRenderedNoticeUpdate()
+    {
+        var migrationSource = File.ReadAllText(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "../../../../RentalCommand.Data/Migrations/20260728164500_GrantApiRenderedNoticeChronologyRepair.cs"));
+
+        migrationSource.Should().Contain(
+            "GRANT UPDATE ON TABLE \"RenderedNotices\" TO rentalcommand_api;");
+        migrationSource.Should().Contain(
+            "REVOKE UPDATE ON TABLE \"RenderedNotices\" FROM rentalcommand_api;");
+        migrationSource.Should().NotContain("NoticeDeliveryEvidence");
+        migrationSource.Should().NotContain("AtomicAuditLogs");
     }
 
     [Fact]
@@ -134,6 +333,38 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain("rc_api_all_properties_scope_allows(NULLIF(current_setting('app.current_portfolio_id', true), '')::integer)");
         CreateSql.Should().NotContain("app.rls_bypass_reason");
         CreateSql.Should().NotContain("app.is_admin");
+    }
+
+    [Fact]
+    public void ResourceScopeAssignedWorkAuthorization_UsesSimulationEffectiveTime()
+    {
+        var functionSql = ExtractSqlSlice(
+            CreateSql,
+            "CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(",
+            "CREATE OR REPLACE FUNCTION rc_account_bootstrap_audit_allows(");
+        var assignedWorkSql = ExtractSqlSlice(
+            functionSql,
+            "allow_assigned_work AND target_work_order_id IS NOT NULL",
+            "ALTER FUNCTION rc_api_resource_scope_allows");
+
+        functionSql.Should().Contain("WITH business_clock AS MATERIALIZED");
+        functionSql.Should().Contain("clock.\"Mode\"");
+        functionSql.Should().Contain("END\n  FROM business_clock;");
+        functionSql.Should().NotContain("CROSS JOIN business_clock");
+        assignedWorkSql.Should().Contain("FROM public.\"WorkspaceMemberships\" membership");
+        assignedWorkSql.Should().Contain(
+            "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
+        assignedWorkSql.Should().Contain(
+            "membership.\"EffectiveToUtc\" > business_clock.effective_at_utc");
+        assignedWorkSql.Should().Contain(
+            "assignment.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
+        assignedWorkSql.Should().Contain(
+            "assignment.\"EffectiveToUtc\" > business_clock.effective_at_utc");
+        assignedWorkSql.Should().Contain(
+            "responsibility.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
+        assignedWorkSql.Should().Contain(
+            "responsibility.\"EffectiveToUtc\" > business_clock.effective_at_utc");
+        assignedWorkSql.Should().NotContain("CURRENT_TIMESTAMP");
     }
 
     [Fact]
@@ -303,6 +534,8 @@ public sealed class FoundationBaselinePostgreSqlTests
             "the L07 credential table is deliberately installed and secured after InitialCreate");
         mappedBaseTables.Remove("LlmUsageEvidence").Should().BeTrue(
             "the L07 usage-evidence table is deliberately installed and secured after InitialCreate");
+        mappedBaseTables.Remove("LoanPaymentCorrections").Should().BeTrue(
+            "the YS-295 correction table is deliberately installed and secured after InitialCreate");
 
         var direct = FoundationBaselinePostgreSql.DirectPortfolioTables
             .ToHashSet(StringComparer.Ordinal);
@@ -329,6 +562,37 @@ public sealed class FoundationBaselinePostgreSqlTests
             .ToHashSet(StringComparer.Ordinal)
             .Should().BeEquivalentTo(mappedBaseTables,
                 "every mapped table must be deliberately classified before it can enter the clean baseline");
+    }
+
+    [Fact]
+    public void LoanPaymentCorrections_AreSecuredByTheirPostBaselineMigration()
+    {
+        var migration = new AddLoanPaymentCorrections();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddLoanPaymentCorrections).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+        var migrationSql = Regex.Replace(
+            string.Join(
+                Environment.NewLine,
+                builder.Operations.OfType<SqlOperation>().Select(operation => operation.Sql)),
+            @"\s+",
+            " ");
+
+        migrationSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"LoanPaymentCorrections\" TO rentalcommand_api;");
+        migrationSql.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"LoanPaymentCorrections_Id_seq\" TO rentalcommand_api;");
+        migrationSql.Should().Contain(
+            "GRANT SELECT ON TABLE \"LoanPaymentCorrections\" TO rentalcommand_engine;");
+        migrationSql.Should().Contain(
+            "ALTER TABLE \"LoanPaymentCorrections\" ENABLE ROW LEVEL SECURITY;");
+        migrationSql.Should().Contain(
+            "ALTER TABLE \"LoanPaymentCorrections\" FORCE ROW LEVEL SECURITY;");
+        migrationSql.Should().NotContain(
+            "GRANT UPDATE ON TABLE \"LoanPaymentCorrections\" TO rentalcommand_api;");
+        migrationSql.Should().NotContain(
+            "GRANT DELETE ON TABLE \"LoanPaymentCorrections\" TO rentalcommand_api;");
     }
 
     [Fact]
@@ -422,6 +686,31 @@ public sealed class FoundationBaselinePostgreSqlTests
         migrationSql.Should().Contain(
             "GRANT USAGE, SELECT ON SEQUENCE \"LlmUsageEvidence_Id_seq\" " +
             "TO rentalcommand_api, rentalcommand_engine;");
+    }
+
+    [Fact]
+    public void InitialWorkspaceBootstrapRepair_DeploysAlwaysOnRentChargeDefault()
+    {
+        var migration = new RepairInitialWorkspaceRentChargeBootstrap();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RepairInitialWorkspaceRentChargeBootstrap).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        var sql = Regex.Replace(
+            builder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql,
+            @"\s+",
+            " ");
+        var bootstrap = Regex.Match(
+            sql,
+            @"CREATE OR REPLACE FUNCTION rc_bootstrap_initial_workspace\(.*?ALTER FUNCTION rc_bootstrap_initial_workspace",
+            RegexOptions.Singleline).Value;
+
+        bootstrap.Should().NotBeEmpty();
+        bootstrap.Should().Contain(
+            "(new_portfolio_id, TRUE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,");
+        bootstrap.Should().NotContain(
+            "(new_portfolio_id, FALSE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,");
     }
 
     [Fact]
@@ -668,7 +957,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void RlsAuthorityVersions_PreserveHistoricalL15AndInstallCurrentBootstrapAuthority()
     {
         FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725);
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
         FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
 
@@ -759,6 +1048,15 @@ public sealed class FoundationBaselinePostgreSqlTests
             "the immutable optimization migration replaces only current scope authority and adds " +
             "the relational capability-scope authority");
 
+        var businessClockMigration = new UseBusinessClockForCapabilityScopes();
+        var businessClockBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(UseBusinessClockForCapabilityScopes).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(businessClockMigration, [businessClockBuilder]);
+        businessClockBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle()
+            .Which.Sql.Should().BeSameAs(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727);
+
         var down = typeof(OptimizeRlsRequestScope).GetMethod(
             "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         var act = () => down.Invoke(l15Migration, [new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL")]);
@@ -815,7 +1113,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     [Fact]
     public void EffectiveCapabilityScopeAuthority_IsApiOnlyCurrentAndFailClosed()
     {
-        var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725;
+        var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727;
         var normalizedDelta = Regex.Replace(delta, @"\s+", " ");
 
         normalizedDelta.Should().Contain(
@@ -830,16 +1128,30 @@ public sealed class FoundationBaselinePostgreSqlTests
                 "a supplied invalid or stale session must never fall through to registration bootstrap");
         normalizedDelta.Should().Contain(
             "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes(");
-        normalizedDelta.Should().Contain("WITH request_scope AS MATERIALIZED");
+        normalizedDelta.Should().Contain("request_scope AS MATERIALIZED");
         normalizedDelta.Should().Contain("public.rc_api_scope_allows(target_portfolio_id)");
         normalizedDelta.Should().Contain(
             "capability.\"Key\" = ANY(capability_keys)");
         normalizedDelta.Should().Contain(
             "capability.\"AuthorizationTargetKind\"::text = authorization_target_kind");
+        normalizedDelta.Should().Contain("WITH business_clock AS MATERIALIZED");
         normalizedDelta.Should().Contain(
-            "assignment.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+            "WHEN 'Frozen' THEN clock.\"SimAnchorUtc\"");
         normalizedDelta.Should().Contain(
-            "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+            "clock.\"SimAnchorUtc\" + (CURRENT_TIMESTAMP - clock.\"RealAnchorUtc\")");
+        Regex.Matches(normalizedDelta, "WITH business_clock AS MATERIALIZED").Should().HaveCount(2);
+        normalizedDelta.Should().Contain(
+            "THEN EXISTS ( WITH business_clock AS MATERIALIZED");
+        normalizedDelta.Should().Contain(
+            "FROM business_clock CROSS JOIN public.\"AuthSessions\" session");
+        normalizedDelta.Should().Contain(
+            "CROSS JOIN business_clock JOIN public.\"WorkspaceAccessContexts\"");
+        normalizedDelta.Should().Contain(
+            "session.\"ExpiresAtUtc\" > CURRENT_TIMESTAMP");
+        normalizedDelta.Should().Contain(
+            "assignment.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
+        normalizedDelta.Should().Contain(
+            "membership.\"EffectiveFromUtc\" <= business_clock.effective_at_utc");
         normalizedDelta.Should().Contain("SELECT DISTINCT assignment.\"Id\" AS \"AssignmentId\"");
         normalizedDelta.Should().Contain(
             "REVOKE ALL ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) FROM PUBLIC;");
@@ -851,13 +1163,13 @@ public sealed class FoundationBaselinePostgreSqlTests
             "GRANT EXECUTE ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) TO rentalcommand_engine;");
 
         var normalizedBaseline = Regex.Replace(
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725,
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260727,
             @"\s+",
             " ");
         normalizedBaseline.Should().Contain(
             Regex.Replace(
-                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725[
-                    FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725.IndexOf(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727[
+                    FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727.IndexOf(
                         "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes",
                         StringComparison.Ordinal)..],
                 @"\s+",
@@ -919,6 +1231,82 @@ public sealed class FoundationBaselinePostgreSqlTests
             "REVOKE EXECUTE ON FUNCTION rc_pre_auth_email_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
         downSql.Should().Contain(
             "REVOKE EXECUTE ON FUNCTION rc_pre_auth_account_security_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
+    }
+
+    [Fact]
+    public void EngineStoredFileAppendMigration_GrantsOnlyInsertAndSequenceUsage()
+    {
+        var migration = new GrantEngineStoredFileAppend();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineStoredFileAppend).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT INSERT ON TABLE \"StoredFiles\" TO rentalcommand_engine;");
+        upSql.Should().Contain("GRANT USAGE, SELECT ON SEQUENCE");
+        upSql.Should().NotContain("GRANT UPDATE");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineStoredFileAppend).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE INSERT ON TABLE \"StoredFiles\" FROM rentalcommand_engine;");
+        downSql.Should().Contain("REVOKE USAGE, SELECT ON SEQUENCE");
+    }
+
+    [Fact]
+    public void EngineLegalDocumentArtifactAppendMigration_GrantsOnlyInsertAndSequenceUsage()
+    {
+        var migration = new GrantEngineLegalDocumentArtifactAppend();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLegalDocumentArtifactAppend).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT INSERT ON TABLE \"LegalDocumentArtifacts\" TO rentalcommand_engine;");
+        upSql.Should().Contain("GRANT USAGE, SELECT ON SEQUENCE");
+        upSql.Should().NotContain("GRANT UPDATE");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLegalDocumentArtifactAppend).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE INSERT ON TABLE \"LegalDocumentArtifacts\" FROM rentalcommand_engine;");
+        downSql.Should().Contain("REVOKE USAGE, SELECT ON SEQUENCE");
+    }
+
+    [Fact]
+    public void EngineLeaseAddendumExecutionMigration_GrantsUpdateWithoutCreateOrDelete()
+    {
+        var migration = new GrantEngineLeaseAddendumExecutionUpdate();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLeaseAddendumExecutionUpdate).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain("GRANT UPDATE ON TABLE \"LeaseAddenda\" TO rentalcommand_engine;");
+        upSql.Should().NotContain("GRANT INSERT");
+        upSql.Should().NotContain("GRANT DELETE");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineLeaseAddendumExecutionUpdate).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain("REVOKE UPDATE ON TABLE \"LeaseAddenda\" FROM rentalcommand_engine;");
     }
 
     [Fact]
@@ -1032,5 +1420,17 @@ public sealed class FoundationBaselinePostgreSqlTests
             "GRANT EXECUTE ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone) TO rentalcommand_api;");
         DropSql.Should().Contain(
             "DROP FUNCTION IF EXISTS rc_get_access_envelope_for_session(\n  uuid, integer, integer, bigint, timestamp with time zone);");
+    }
+
+    private static string ExtractSqlSlice(string sql, string startMarker, string endMarker)
+    {
+        var start = sql.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = sql.IndexOf(endMarker, start + startMarker.Length, StringComparison.Ordinal);
+        if (start < 0 || end <= start)
+        {
+            throw new InvalidOperationException($"Could not extract SQL slice starting with {startMarker}.");
+        }
+
+        return sql[start..end];
     }
 }

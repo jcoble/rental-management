@@ -19,7 +19,7 @@ public sealed class CanonicalAccessTokenServiceTests
             AccessTokenExpirationMinutes = 15,
         });
         var sessionId = Guid.NewGuid();
-        var sut = new CanonicalAccessTokenService(settings, TimeProvider.System);
+        var sut = new CanonicalAccessTokenService(settings, new FixedAuthSecurityClock(DateTime.UtcNow));
 
         var issued = sut.Issue(new CanonicalAccessCoordinates(41, sessionId, 72, 9));
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(issued.Token);
@@ -34,5 +34,10 @@ public sealed class CanonicalAccessTokenServiceTests
         claims["ownerEntityId"].Should().BeEmpty();
         claims["role"].Should().BeEmpty();
         claims["http://schemas.microsoft.com/ws/2008/06/identity/claims/role"].Should().BeEmpty();
+    }
+
+    private sealed class FixedAuthSecurityClock(DateTime utcNow) : IAuthSecurityClock
+    {
+        public DateTime UtcNow() => utcNow;
     }
 }

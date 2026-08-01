@@ -8,6 +8,8 @@ using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -15,29 +17,33 @@ public sealed record AtomicPublicApplicationSubmissionCommand(
     string Token,
     string RequestJson,
     string? IpAddress,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicPublicApplicationSubmissionResult(
     bool Found,
     int ApplicationId,
     string Status,
-    string Message) : IAtomicResultData;
+    string Message);
 
 /// <summary>Anonymous token-scoped intake with a durable receipt, audit, and outbox.</summary>
 public sealed class AtomicPublicApplicationSubmissionHandler
-    : IAtomicCommandHandler<AtomicPublicApplicationSubmissionCommand, AtomicPublicApplicationSubmissionResult>,
-      IAtomicReplayAuthorizer<AtomicPublicApplicationSubmissionCommand>
+    : IAtomicCommandHandler<AtomicPublicApplicationSubmissionCommand, AtomicPublicApplicationSubmissionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicPublicApplicationSubmissionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicPublicApplicationSubmissionResult> HandleAsync(
         AtomicPublicApplicationSubmissionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        var portfolioId = await ResolvePortfolioIdAsync(command.Token, attempt.Persistence, ct);
+        var portfolioId = await ResolvePortfolioIdAsync(command.Token, _db, ct);
         if (portfolioId is null) return Missing();
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, portfolioId.Value, ct);
-        portfolioId = await ResolvePortfolioIdAsync(command.Token, attempt.Persistence, ct);
+        await attempt.AcquireLockAsync("Portfolio", portfolioId.Value, ct);
+        portfolioId = await ResolvePortfolioIdAsync(command.Token, _db, ct);
         if (portfolioId is null) return Missing();
 
         var request = JsonSerializer.Deserialize<SubmitApplicationRequest>(command.RequestJson)
@@ -47,8 +53,24 @@ public sealed class AtomicPublicApplicationSubmissionHandler
                 "You must consent to a background/credit check to submit an application.");
 
         var references = await ResolveReferencesAsync(
-            portfolioId.Value, request.PropertyId, request.UnitId, attempt.Persistence, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+            portfolioId.Value, request.PropertyId, request.UnitId, _db, ct);
+        var normalizedEmail = Normalize(request.Email)?.ToLowerInvariant();
+        if (normalizedEmail is not null && await _db.Set<RentalApplication>()
+                .AsNoTracking()
+                .AnyAsync(application =>
+                    application.PortfolioId == portfolioId.Value
+                    && application.DeletedAt == null
+                    && application.Email != null
+                    && application.Email.Trim().ToLower() == normalizedEmail
+                    && (application.Status == ApplicationStatus.Submitted
+                        || application.Status == ApplicationStatus.UnderReview
+                        || application.Status == ApplicationStatus.Approved), ct))
+        {
+            throw new DomainValidationException(
+                $"An open application for {normalizedEmail} already exists. Review it before creating another.",
+                409);
+        }
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         var entity = new RentalApplication
         {
             PortfolioId = portfolioId.Value,
@@ -58,7 +80,7 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             LastName = request.LastName.Trim(),
             Email = Normalize(request.Email),
             Phone = Normalize(request.Phone),
-            DateOfBirth = Utc(request.DateOfBirth),
+            DateOfBirth = UtcDate(request.DateOfBirth),
             CurrentAddressLine1 = Normalize(request.CurrentAddressLine1),
             CurrentAddressLine2 = Normalize(request.CurrentAddressLine2),
             CurrentCity = Normalize(request.CurrentCity),
@@ -70,7 +92,7 @@ public sealed class AtomicPublicApplicationSubmissionHandler
                 ?? Normalize(request.CurrentAddress),
             Employer = Normalize(request.Employer),
             MonthlyIncome = request.MonthlyIncome,
-            DesiredMoveInDate = Utc(request.DesiredMoveInDate),
+            DesiredMoveInDate = UtcDate(request.DesiredMoveInDate),
             Notes = Normalize(request.Notes),
             IdExtractedFields = request.IdExtractedFields,
             ConsentGiven = true,
@@ -81,7 +103,7 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             CreatedAt = now,
             UpdatedAt = now,
         };
-        attempt.Persistence.Add(entity);
+        _db.Add(entity);
         attempt.BindSemanticAudit(entity, new AtomicSemanticAudit(
             portfolioId.Value,
             "RentalApplication",
@@ -127,49 +149,49 @@ public sealed class AtomicPublicApplicationSubmissionHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicPublicApplicationSubmissionCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        if (await ResolvePortfolioIdAsync(command.Token, persistence, ct) is null)
+        if (await ResolvePortfolioIdAsync(command.Token, _db, ct) is null)
             throw new UnauthorizedAccessException("This application link is invalid or no longer active.");
     }
 
-    private static Task<int?> ResolvePortfolioIdAsync(
+    private Task<int?> ResolvePortfolioIdAsync(
         string token,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct) =>
-        persistence.Query<Portfolio>().AsNoTracking()
+        db.Set<Portfolio>().AsNoTracking()
             .Where(portfolio => portfolio.PublicApplicationToken == token
                 && portfolio.Status == PortfolioStatus.Active && portfolio.DeletedAt == null)
             .Select(portfolio => (int?)portfolio.Id)
             .SingleOrDefaultAsync(ct);
 
-    private static async Task<(int? PropertyId, int? UnitId)> ResolveReferencesAsync(
+    private async Task<(int? PropertyId, int? UnitId)> ResolveReferencesAsync(
         int portfolioId,
         int? requestedPropertyId,
         int? requestedUnitId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct)
     {
-        var resolved = await persistence.Query<Portfolio>().AsNoTracking()
+        var resolved = await db.Set<Portfolio>().AsNoTracking()
             .Where(portfolio => portfolio.Id == portfolioId && portfolio.DeletedAt == null)
             .Select(portfolio => new
             {
                 PropertyId = requestedPropertyId > 0
-                    ? persistence.Query<Property>()
+                    ? db.Set<Property>()
                         .Where(property => property.Id == requestedPropertyId
                             && property.PortfolioId == portfolio.Id && property.DeletedAt == null)
                         .Select(property => (int?)property.Id).SingleOrDefault()
                     : null,
                 UnitId = requestedUnitId > 0
-                    ? persistence.Query<Unit>()
+                    ? db.Set<Unit>()
                         .Where(unit => unit.Id == requestedUnitId
                             && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
                         .Select(unit => (int?)unit.Id).SingleOrDefault()
                     : null,
                 UnitPropertyId = requestedUnitId > 0
-                    ? persistence.Query<Unit>()
+                    ? db.Set<Unit>()
                         .Where(unit => unit.Id == requestedUnitId
                             && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
                         .Select(unit => (int?)unit.PropertyId).SingleOrDefault()
@@ -185,7 +207,7 @@ public sealed class AtomicPublicApplicationSubmissionHandler
         return (resolved.UnitPropertyId ?? resolved.PropertyId, resolved.UnitId);
     }
 
-    private static void Validate(AtomicPublicApplicationSubmissionCommand command)
+    private void Validate(AtomicPublicApplicationSubmissionCommand command)
     {
         if (string.IsNullOrWhiteSpace(command.Token) || command.Token.Length > 64
             || string.IsNullOrWhiteSpace(command.RequestJson)
@@ -194,17 +216,18 @@ public sealed class AtomicPublicApplicationSubmissionHandler
             throw new ArgumentException("Application token, request, and idempotency key are required.");
     }
 
-    private static AtomicPublicApplicationSubmissionResult Missing() =>
+    private AtomicPublicApplicationSubmissionResult Missing() =>
         new(false, 0, string.Empty, string.Empty);
-    private static string? Normalize(string? value)
+    private string? Normalize(string? value)
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
-    private static DateTime? Utc(DateTime? value) => value is null ? null
-        : value.Value.Kind == DateTimeKind.Utc ? value : value.Value.ToUniversalTime();
+    private DateTime? UtcDate(DateTime? value) => value is null
+        ? null
+        : DateTime.SpecifyKind(value.Value.Date, DateTimeKind.Utc);
 
-    private static PostgresException? FindPostgresException(Exception exception)
+    private PostgresException? FindPostgresException(Exception exception)
     {
         for (var current = exception; current is not null; current = current.InnerException!)
         {

@@ -182,6 +182,87 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task List_ProjectsAuthorizedTenantLedgerEntryIntentAndRejectsUnsafeVariants()
+    {
+        var now = DateTime.UtcNow;
+        var target = await SeedTenantAccountLedgerEntryAsync(1, "tenant-ledger-valid", now);
+        var otherPortfolio = new Portfolio
+        {
+            Name = "Other tenant ledger workspace",
+            ManagementCompanyName = "Other Tenant Ledger Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _context.Db.Portfolios.Add(otherPortfolio);
+        await _context.Db.SaveChangesAsync();
+        var crossScope = await SeedTenantAccountLedgerEntryAsync(
+            otherPortfolio.Id, "tenant-ledger-cross-scope", now);
+
+        _context.Db.Notifications.AddRange(
+            TenantLedgerNotification(
+                "tenant-ledger-valid", now, target.Account.Id, target.Entry.Id),
+            TenantLedgerNotification(
+                "tenant-ledger-malformed-parent", now.AddSeconds(-1), null, target.Entry.Id),
+            TenantLedgerNotification(
+                "tenant-ledger-cross-scope", now.AddSeconds(-2), crossScope.Account.Id, crossScope.Entry.Id),
+            TenantLedgerNotification(
+                "tenant-ledger-expired", now.AddSeconds(-3), target.Account.Id, target.Entry.Id,
+                expiresAtUtc: now.AddSeconds(-1)),
+            TenantLedgerNotification(
+                "tenant-ledger-management-experience", now.AddSeconds(-4), target.Account.Id, target.Entry.Id,
+                experience: NavigationExperience.Management));
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        var scope = new WorkspaceReadScope(1, 1, Guid.NewGuid(), 6, 1);
+        var sut = new NotificationService(_context.Db, TimeProvider.System, null!);
+        _commands.Clear();
+
+        var page = await sut.ListAsync(
+            scope, NavigationExperience.Tenant, unreadOnly: false, skip: 0, take: 10);
+
+        var byTitle = page
+            .Where(notification => notification.Title.StartsWith("tenant-ledger-"))
+            .ToDictionary(notification => notification.Title);
+        byTitle.Should().HaveCount(5);
+        byTitle["tenant-ledger-valid"].NavigationIntent.Should().NotBeNull();
+        byTitle["tenant-ledger-valid"].NavigationIntent!.Destination
+            .Should().Be(NavigationDestination.TenantLedgerEntry);
+        byTitle["tenant-ledger-valid"].NavigationIntent!.Resource.Should().BeEquivalentTo(new
+        {
+            Kind = nameof(TenantLedgerEntry),
+            Id = checked((int)target.Entry.Id),
+        });
+        byTitle["tenant-ledger-valid"].NavigationIntent!.ParentResource.Should().BeEquivalentTo(new
+        {
+            Kind = nameof(TenantAccount),
+            Id = target.Account.Id,
+        });
+
+        foreach (var rejected in new[]
+                 {
+                     "tenant-ledger-malformed-parent",
+                     "tenant-ledger-cross-scope",
+                     "tenant-ledger-expired",
+                     "tenant-ledger-management-experience",
+                 })
+        {
+            byTitle[rejected].NavigationIntent.Should().BeNull(
+                $"{rejected} must not become a tenant portal destination");
+        }
+
+        _commands.Should().ContainSingle(
+            "tenant ledger intent authorization, paging, and projection execute in one statement");
+        var sql = _commands.Single();
+        sql.Should().Contain("\"TenantLedgerEntries\"");
+        sql.Should().Contain("\"TenantAccountId\"");
+        sql.Should().Contain("LIMIT");
+        sql.Should().NotContain("\"ActionUrl\"");
+        CaptureSql("TENANT_LEDGER_LIST", sql);
+    }
+
+    [Fact]
     public async Task HistoricalNotificationBackfill_RequiresOneAuthorizedMatchingResource()
     {
         await RunAtL02BoundaryAsync(async db =>
@@ -802,6 +883,64 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         UpdatedAt = now,
     };
 
+    private async Task<(TenantAccount Account, TenantLedgerEntry Entry)> SeedTenantAccountLedgerEntryAsync(
+        int portfolioId,
+        string suffix,
+        DateTime now)
+    {
+        var property = Property($"Tenant ledger property {suffix}", portfolioId, now);
+        var unit = new Unit
+        {
+            PortfolioId = portfolioId,
+            Property = property,
+            UnitNumber = $"TL-{suffix}",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"LM-TL-{suffix}",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-TL-{suffix}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+        };
+        var entry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            TenantAccount = account,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 1250m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            DueOn = DateOnly.FromDateTime(now.AddDays(7)),
+            PostedAtUtc = now,
+            Description = $"Tenant ledger notification proof {suffix}",
+            BusinessKey = $"tenant-ledger-notification:{suffix}",
+            CreatedByUserId = 1,
+        };
+        _context.Db.AddRange(property, unit, relationship, account, entry);
+        await _context.Db.SaveChangesAsync();
+        return (account, entry);
+    }
+
     private static OutboxMessage PushCase(
         string name,
         int relatedEntityId,
@@ -853,6 +992,36 @@ public sealed class TypedNavigationIntentPostgreSqlTests : IAsyncLifetime
         NavigationFallbackDestination = NavigationDestination.Home,
         RelatedEntityType = relatedEntityType,
         RelatedEntityId = relatedEntityId,
+        CreatedAt = createdAt,
+    };
+
+    private static Notification TenantLedgerNotification(
+        string title,
+        DateTime createdAt,
+        int? tenantAccountId,
+        long tenantLedgerEntryId,
+        NavigationExperience experience = NavigationExperience.Tenant,
+        DateTime? expiresAtUtc = null) => new()
+    {
+        PortfolioId = 1,
+        UserId = 1,
+        Type = "TenantRentCharge",
+        Title = title,
+        Message = "Open the tenant ledger entry.",
+        Severity = "Info",
+        NavigationExperience = experience,
+        NavigationDestination = NavigationDestination.TenantLedgerEntry,
+        NavigationAccessContextId = 6,
+        NavigationAccessRevision = 1,
+        NavigationResourceKind = nameof(TenantLedgerEntry),
+        NavigationResourceId = checked((int)tenantLedgerEntryId),
+        NavigationParentResourceKind = tenantAccountId is null ? null : nameof(TenantAccount),
+        NavigationParentResourceId = tenantAccountId,
+        NavigationAction = NavigationAction.Open,
+        NavigationExpiresAtUtc = expiresAtUtc ?? createdAt.AddDays(7),
+        NavigationFallbackDestination = NavigationDestination.Notifications,
+        RelatedEntityType = nameof(TenantLedgerEntry),
+        RelatedEntityId = checked((int)tenantLedgerEntryId),
         CreatedAt = createdAt,
     };
 

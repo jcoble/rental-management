@@ -233,8 +233,15 @@ MobileShellNavigator? mobileShellNavigatorOf(BuildContext context) {
 }
 
 void revealMobileShellIfDetached(BuildContext context) {
-  if (MobileShellNavigation.maybeOf(context) != null) return;
-  Navigator.of(context).popUntil((route) => route.isFirst);
+  try {
+    if (!context.mounted || MobileShellNavigation.maybeOf(context) != null) {
+      return;
+    }
+    Navigator.maybeOf(context)?.popUntil((route) => route.isFirst);
+  } on FlutterError {
+    // Route teardown can leave a previously valid context inactive for one
+    // frame. Back navigation should keep the current shell instead of crashing.
+  }
 }
 
 class MobileDomainNavigator {

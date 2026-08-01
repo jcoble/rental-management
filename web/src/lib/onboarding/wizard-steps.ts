@@ -259,7 +259,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
 		icon: 'Wand2',
 		title: 'Let the app do the routine work',
 		intro:
-			'Turn on the chores you’d rather not do by hand: posting rent charges, adding late fees, and queuing renewal reminders.',
+			'Rent charges post automatically. Choose how the app handles optional follow-up work such as late fees, tenant notices, and renewal reminders.',
 		why: 'With these on, the app quietly stays ahead of the calendar so nothing slips — you just review and approve. Leave them off to do each step yourself.',
 		docsSlug: 'settings-and-notifications',
 	},

@@ -235,6 +235,34 @@ class VendorsRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  /// Cancels one open vendor dispatch while keeping its history on the work order.
+  Future<VendorDispatchCancellationResult> cancelDispatch(
+    int workOrderId, {
+    required int dispatchId,
+    String? reason,
+  }) async {
+    try {
+      final trimmed = reason?.trim();
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/work-orders/$workOrderId/dispatches/$dispatchId/cancel',
+        data: {
+          'idempotencyKey': const Uuid().v4(),
+          if (trimmed != null && trimmed.isNotEmpty) 'reason': trimmed,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorDispatchCancellationResult.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────

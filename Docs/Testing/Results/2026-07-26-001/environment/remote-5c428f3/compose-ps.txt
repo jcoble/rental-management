@@ -1,0 +1,6 @@
+NAME                               IMAGE                          COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+rc-preview-yearsim754-api-1        rc-preview-api:yearsim754      "dotnet RentalComman…"   api        22 seconds ago   Up 10 seconds (healthy)   8080/tcp
+rc-preview-yearsim754-engine-1     rc-preview-engine:yearsim754   "dotnet RentalComman…"   engine     22 seconds ago   Up 10 seconds (healthy)   
+rc-preview-yearsim754-gateway-1    nginx:1.27-alpine              "/docker-entrypoint.…"   gateway    21 seconds ago   Up 5 seconds              80/tcp, 100.126.201.65:15667->8080/tcp
+rc-preview-yearsim754-postgres-1   postgres:16-alpine             "docker-entrypoint.s…"   postgres   33 seconds ago   Up 21 seconds (healthy)   5432/tcp
+rc-preview-yearsim754-web-1        rc-preview-web:yearsim754      "docker-entrypoint.s…"   web        22 seconds ago   Up 10 seconds             3000/tcp

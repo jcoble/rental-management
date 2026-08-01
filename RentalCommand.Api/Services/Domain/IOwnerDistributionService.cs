@@ -30,5 +30,11 @@ public interface IOwnerDistributionService
     Task<OwnerDistributionResponse?> UpdateAsync(
         WorkspaceReadScope scope, int id, UpdateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default);
 
+    Task<OwnerDistributionResponse?> ApproveAsync(
+        WorkspaceReadScope scope, int id, ApproveOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default);
+
+    Task<OwnerDistributionResponse?> RejectAsync(
+        WorkspaceReadScope scope, int id, RejectOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default);
+
     Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 }

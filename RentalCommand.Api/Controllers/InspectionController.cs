@@ -237,6 +237,32 @@ public class InspectionController : ManagementControllerBase
             : Conflict(new { error });
     }
 
+    /// <summary>
+    /// One-time supported recovery for completed inspections whose report chronology was stamped by runtime wall-clock time.
+    /// The idempotency key must be a unique recovery key.
+    /// </summary>
+    [HttpPost("{id:int}/recover-chronology")]
+    [ProducesResponseType(typeof(RecoverInspectionChronologyResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<RecoverInspectionChronologyResponse>> RecoverChronology(
+        int id,
+        [FromBody] RecoverInspectionChronologyRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var operationError)) return operationError!;
+        var (result, error) = await _service.RecoverChronologyAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey!, ct);
+        if (result != null)
+        {
+            return Ok(result);
+        }
+        return error == null
+            ? NotFound(new { error = "Inspection not found" })
+            : Conflict(new { error });
+    }
+
     /// <summary>Download the generated PDF report (404 until the inspection is completed).</summary>
     [HttpGet("{id:int}/report")]
     [ProducesResponseType(StatusCodes.Status200OK)]

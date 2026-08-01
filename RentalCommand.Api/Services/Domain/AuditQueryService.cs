@@ -287,29 +287,28 @@ public class AuditQueryService : IAuditQueryService
     }
 
     /// <summary>
-    /// Free-text search across <em>every field the audit page renders</em>: the action title / entity
+    /// Free-text search across the fields the audit page renders, plus the title of a linked WorkOrder
+    /// target: the action title / entity
     /// noun (derived from <see cref="Core.Entities.AtomicAuditLog.EntityType"/>), the actor (label or
     /// <c>User #id</c>), the entity id (so a bare <c>76</c> matches), the compound entity label
     /// (<c>Expense #76</c> / <c>expense 76</c>), the action verb (<c>Created</c>/<c>Updated</c>…), and
     /// the IP address. Runs entirely Postgres-side as one translated query.
     /// <para>
-    /// The text predicates only touch the columns that carry pg_trgm GIN indexes
-    /// (<c>EntityType</c>/<c>ActorLabel</c>/<c>IpAddress</c>, see migration <c>AuditSearchTrgmIndexes</c>),
-    /// so Postgres can BitmapOr the index-backed branches. The entity-id / actor-id / compound-label
-    /// matching is done as <em>integer equality</em> on a parsed id (<c>EntityId == n</c> /
-    /// <c>UserId == n</c>) rather than <c>LIKE</c> over <c>EntityId::text</c>: the old computed-column
-    /// LIKEs were unindexable and, OR'd into the predicate, forced the whole search to a sequential scan
-    /// (defeating the trgm indexes). A purely-numeric term ("76") matches the id; a "noun + number"
-    /// term ("expense 76", "Expense #76") matches the entity noun on the trgm column AND the id.
+    /// The audit-column text predicates only touch columns that carry pg_trgm GIN indexes
+    /// (<c>EntityType</c>/<c>ActorLabel</c>/<c>IpAddress</c>, see migration <c>AuditSearchTrgmIndexes</c>).
+    /// WorkOrder title lookup is correlated by its indexed primary key and portfolio before applying
+    /// <c>ILIKE</c> to that single target row. Entity-id / actor-id / compound-label matching is integer
+    /// equality rather than <c>LIKE</c> over computed text. A purely-numeric term ("76") matches the id;
+    /// a "noun + number" term ("expense 76", "Expense #76") matches the entity noun and id.
     /// </para>
     /// </summary>
-    private static IQueryable<Core.Entities.AtomicAuditLog> ApplySearch(IQueryable<Core.Entities.AtomicAuditLog> q, string term)
+    private IQueryable<Core.Entities.AtomicAuditLog> ApplySearch(
+        IQueryable<Core.Entities.AtomicAuditLog> q,
+        string term)
     {
-        // Case-insensitive contains via Postgres ILIKE %term%, served by the
-        // `gin (lower(col) gin_trgm_ops)` trigram indexes (AuditSearchTrgmIndexes) — index-driven,
-        // never a sequential scan. Only the three trgm-indexed columns appear here; the unindexable
-        // computed-column LIKEs that used to be OR'd in (and forced a seq scan of the whole predicate)
-        // are gone, replaced by id equality below. The audit trail is Postgres-only.
+        // Case-insensitive contains via Postgres ILIKE %term%. Audit text columns use their trigram
+        // indexes; linked WorkOrder title resolution uses the WorkOrder primary key. Unindexable
+        // computed audit-column LIKEs remain replaced by id equality below. PostgreSQL only.
         var like = $"%{term}%";
 
         // Verb search: "Created", "create", "recorded", "scheduled", etc. should narrow by operation.
@@ -331,7 +330,15 @@ public class AuditQueryService : IAuditQueryService
             || (parsedId != null && a.EntityId == parsedId.Value)
             || (parsedId != null && a.UserId != null && a.UserId == parsedId.Value)
             // Action verb → operation.
-            || matchedOps.Contains(a.Operation));
+            || matchedOps.Contains(a.Operation)
+            // The Activity History row links to the audited WorkOrder target. Search its user-facing
+            // title as part of the same translated statement so a landlord can find the audit event
+            // using the record name they are investigating (for example, "Yard cleanup").
+            || (a.EntityType == nameof(Core.Entities.WorkOrder)
+                && _db.WorkOrders.Any(workOrder =>
+                    workOrder.PortfolioId == a.PortfolioId
+                    && workOrder.Id == a.EntityId
+                    && EF.Functions.ILike(workOrder.Title, like))));
     }
 
     /// <summary>

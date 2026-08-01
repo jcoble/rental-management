@@ -195,7 +195,6 @@ public interface IEffectiveAccessContextSelectionQuery
     Task<IReadOnlyList<EffectiveAccessContextOption>> ListAsync(
         int userId,
         int? selectedAccessContextId,
-        DateTime utcNow,
         CancellationToken cancellationToken = default);
 }
 

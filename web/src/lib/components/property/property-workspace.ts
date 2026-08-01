@@ -35,14 +35,14 @@ export function resolvePropertyWorkspaceEntry(source: {
   const serverEntry = source.workspaceEntry;
   if (source.rentalStructure === "SingleRental") {
     return {
-      destination: "Unit",
+      destination: "Property",
       propertyId: source.id,
       unitId:
         serverEntry?.destination === "Unit" &&
         serverEntry.propertyId === source.id
           ? serverEntry.unitId
           : null,
-      areas: [],
+      areas: serverEntry?.areas ?? [],
     };
   }
 
@@ -57,13 +57,12 @@ export function resolvePropertyWorkspaceEntry(source: {
 export function propertyWorkspaceRoute(
   entry: PropertyWorkspaceEntry,
   section: PropertyWorkspaceSection = "summary"
-): string | null {
-  if (entry.destination === "Unit") {
-    return entry.unitId != null && entry.unitId > 0
-      ? `/units/${entry.unitId}`
-      : null;
-  }
+): string {
   return `/properties/${entry.propertyId}?area=${section}`;
+}
+
+export function unitCommandCenterRoute(entry: PropertyWorkspaceEntry): string | null {
+  return entry.unitId != null && entry.unitId > 0 ? `/units/${entry.unitId}` : null;
 }
 
 export function readPropertyWorkspaceSection(

@@ -2,6 +2,7 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { pushState, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
+	import { onMount } from 'svelte';
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
@@ -48,9 +49,15 @@
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	// A selected expense folds its full detail inline (?expense=<id> on the unit URL); otherwise the list shows.
-	const selectedExpense = $derived(
-		page.state.unitExpenseId ?? (Number(page.url.searchParams.get('expense')) || null)
-	);
+	let selectedExpense = $state(Number(page.url.searchParams.get('expense')) || null);
+
+	onMount(() => {
+		const syncSelection = () => {
+			selectedExpense = Number(new URL(window.location.href).searchParams.get('expense')) || null;
+		};
+		window.addEventListener('popstate', syncSelection);
+		return () => window.removeEventListener('popstate', syncSelection);
+	});
 
 	function unitUrl(params: Record<string, string | number | null | undefined> = {}) {
 		const url = new URL(`/units/${unitId}`, page.url.origin);
@@ -66,6 +73,7 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openExpense(id: number) {
+		selectedExpense = id;
 		pushState(unitUrl({ expense: id }), {
 			...page.state,
 			unitTab: 'money',
@@ -77,6 +85,7 @@
 
 	// Clearing the selection drops ?expense= (replaceState — peer of the list, not a new history step).
 	function clearSelection() {
+		selectedExpense = null;
 		replaceState(unitUrl(), {
 			...page.state,
 			unitTab: 'money',

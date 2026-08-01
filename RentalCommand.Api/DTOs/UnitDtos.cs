@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.DTOs;
@@ -138,11 +139,25 @@ public class CreateUnitRequest
 
 public class UpdateUnitRequest
 {
+    private string? _floorPlan;
+    private string? _notes;
+
     [MaxLength(50)]
     public string? UnitNumber { get; set; }
 
     [MaxLength(100)]
-    public string? FloorPlan { get; set; }
+    public string? FloorPlan
+    {
+        get => _floorPlan;
+        set
+        {
+            _floorPlan = value;
+            FloorPlanSpecified = true;
+        }
+    }
+
+    [JsonIgnore]
+    internal bool FloorPlanSpecified { get; private set; }
 
     [Range(0, 99)]
     public decimal? Bedrooms { get; set; }
@@ -157,5 +172,16 @@ public class UpdateUnitRequest
     public decimal? MarketRent { get; set; }
 
     [MaxLength(2000)]
-    public string? Notes { get; set; }
+    public string? Notes
+    {
+        get => _notes;
+        set
+        {
+            _notes = value;
+            NotesSpecified = true;
+        }
+    }
+
+    [JsonIgnore]
+    internal bool NotesSpecified { get; private set; }
 }

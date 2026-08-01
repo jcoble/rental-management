@@ -12,7 +12,9 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using Testcontainers.PostgreSql;
@@ -25,6 +27,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
     private readonly DateTime _now = new(2026, 7, 23, 12, 0, 0, DateTimeKind.Utc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
+    private IServiceScope? _serviceScope;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
     private int _portfolioId;
@@ -76,10 +79,12 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
                 .AddInterceptors(provider.GetRequiredService<ExpenseAtomicFailureInterceptor>()));
         _services = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        _serviceScope = _services.CreateScope();
     }
 
     public async Task DisposeAsync()
     {
+        _serviceScope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
     }
@@ -473,7 +478,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             (await verify.ExpenseAllocations.CountAsync(row =>
                 row.ExpenseId == first.Value.EntityId)).Should().Be(1);
             (await verify.AtomicAuditLogs.CountAsync(row =>
-                row.CommandIdempotencyKey == auditIdempotencyKey)).Should().Be(1);
+                row.CommandIdempotencyKey == auditIdempotencyKey)).Should().Be(2);
             (await verify.AtomicCommandReceipts.CountAsync(row =>
                 row.IdempotencyKey == auditIdempotencyKey)).Should().Be(1);
             (await verify.OutboxMessages.CountAsync(row =>
@@ -497,6 +502,172 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task EditingOnlyExpenseDescriptionAndNotesDoesNotRepostItsJournal()
+    {
+        SkipIfNoDocker();
+        var expenseId = await CreateAsync("posted-expense-description-edit-create", new CreateExpenseRequest
+        {
+            OperationalScope = ExpenseOperationalScope.Unit,
+            UnitId = _unitId,
+            Description = "Posted expense description",
+            Notes = "Original expense notes",
+            Amount = 100m,
+            Status = ExpenseStatus.Paid,
+            PaidAt = _now,
+            IncurredAt = _now,
+        });
+
+        var command = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Update,
+            expenseId,
+            "posted-expense-description-edit",
+            new UpdateExpenseRequest
+            {
+                Description = "Updated expense description",
+                Notes = "Updated expense notes",
+            },
+            _now.AddMinutes(1));
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        outcome.Value.Found.Should().BeTrue();
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.ExpensePayment
+                && entry.Lines.Any(line => line.SourceLineId == expenseId))
+            .Include(entry => entry.Lines)
+            .ToListAsync();
+        entries.Should().ContainSingle();
+        entries[0].ReversesJournalEntryId.Should().BeNull();
+        entries[0].Lines.Should().Contain(line => line.CreditAmount == 100m);
+    }
+
+    [SkippableFact]
+    public async Task EditingAPaidExpenseReversesItsJournalAndPostsTheReplacementInsideTheSameCommand()
+    {
+        SkipIfNoDocker();
+        var createRequest = new CreateExpenseRequest
+        {
+            OperationalScope = ExpenseOperationalScope.Unit,
+            UnitId = _unitId,
+            Description = "Paid expense correction",
+            Amount = 100m,
+            Status = ExpenseStatus.Paid,
+            PaidAt = _now,
+            IncurredAt = _now,
+        };
+        var created = await CreateAsync("posted-expense-correction-create", createRequest);
+
+        var update = new UpdateExpenseRequest { Amount = 150m };
+        var command = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Update,
+            created,
+            "posted-expense-correction-update",
+            update,
+            _now.AddMinutes(1));
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        outcome.Value.Found.Should().BeTrue();
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.ExpensePayment
+                && entry.Lines.Any(line => line.SourceLineId == created))
+            .Include(entry => entry.Lines)
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        entries.Count(entry => entry.ReversesJournalEntryId is null).Should().Be(2);
+        var original = entries.Single(entry => entry.SourceId == created);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        var replacement = entries.Single(entry => entry.ReversesJournalEntryId is null && entry.Id != original.Id);
+        reversal.Lines.Should().Contain(line => line.CreditAmount == 100m && line.DebitAmount == 0m);
+        reversal.Lines.Should().Contain(line => line.DebitAmount == 100m && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line => line.DebitAmount == 150m && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line => line.CreditAmount == 150m && line.DebitAmount == 0m);
+        var cash = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.JournalEntry.SourceType == JournalSourceType.ExpensePayment
+                && line.JournalEntry.Lines.Any(candidate => candidate.SourceLineId == created)
+                && line.LedgerAccount!.SystemKey == "operating-cash")
+            .GroupBy(line => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        (cash.Credit - cash.Debit).Should().Be(150m);
+    }
+
+    [SkippableFact]
+    public async Task DeletingAPostedExpenseReversesItsJournalAndLeavesNoNetAccountingEffect()
+    {
+        SkipIfNoDocker();
+        var expenseId = await CreateAsync("posted-expense-delete-create", new CreateExpenseRequest
+        {
+            OperationalScope = ExpenseOperationalScope.Unit,
+            UnitId = _unitId,
+            Description = "Posted expense to delete",
+            Amount = 90m,
+            Status = ExpenseStatus.Paid,
+            PaidAt = _now,
+            IncurredAt = _now,
+        });
+        var command = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Delete,
+            expenseId,
+            "posted-expense-delete",
+            new object(),
+            _now.AddMinutes(1));
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        outcome.Value.Found.Should().BeTrue();
+        await using var verify = NewContext();
+        (await verify.Expenses.IgnoreQueryFilters().SingleAsync(row => row.Id == expenseId))
+            .DeletedAt.Should().NotBeNull();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.ExpensePayment
+                && entry.Lines.Any(line => line.SourceLineId == expenseId))
+            .Include(entry => entry.Lines)
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(2);
+        var original = entries.Single(entry => entry.ReversesJournalEntryId is null);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        reversal.Lines.Should().Contain(line => line.CreditAmount == 90m && line.DebitAmount == 0m);
+        reversal.Lines.Should().Contain(line => line.DebitAmount == 90m && line.CreditAmount == 0m);
+        var net = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.JournalEntry.SourceType == JournalSourceType.ExpensePayment
+                && line.JournalEntry.Lines.Any(candidate => candidate.SourceLineId == expenseId))
+            .GroupBy(line => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        net.Debit.Should().Be(net.Credit);
+    }
+
+    [SkippableFact]
     public async Task AuthorizedFilterAggregateSortAndPage_StayInTwoPostgreSqlCommandsWithoutDuplicates()
     {
         SkipIfNoDocker();
@@ -515,6 +686,15 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             .AddInterceptors(new SqlCaptureInterceptor(commands))
             .Options;
         await using var db = new RentalCommandDbContext(options);
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {_portfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_sessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_userId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_accessContextId.ToString()}, false),
+                   set_config('app.access_revision', '1', false);
+            """);
         var service = new ExpenseService(
             db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
         var page = await service.ListPageAsync(
@@ -539,7 +719,7 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
         commands[0].Should().ContainEquivalentOf("count(*)");
         commands[0].Should().Contain("EXISTS");
         commands[0].Should().Contain("ExpenseAllocations");
-        commands[0].Should().Contain("RoleProfileCapabilities");
+        commands[0].Should().Contain("rc_api_effective_capability_scopes");
         commands[1].Should().ContainEquivalentOf("sum(");
         commands[1].Should().Contain("ORDER BY");
         commands[1].Should().Contain("LIMIT");
@@ -628,7 +808,8 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             AtomicMoneyOperation.Create,
             0,
             key,
-            request);
+            request,
+            _now);
 
     private async Task SeedAsync(RentalCommandDbContext db)
     {
@@ -741,12 +922,14 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = _now.AddHours(-1),
             LastSeenAtUtc = _now,
-            ExpiresAtUtc = _now.AddDays(1),
+            ExpiresAtUtc = _now.AddYears(1),
         };
         db.AuthSessions.Add(session);
         await db.SaveChangesAsync();
 
         _portfolioId = portfolio.Id;
+        await new ChartOfAccountsSeedService(db).SeedAsync(_portfolioId);
+        await db.SaveChangesAsync();
         _propertyId = property.Id;
         _unitId = unit.Id;
         _workOrderId = workOrder.Id;
@@ -807,7 +990,11 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
             .Options);
 
     private IAtomicUnitOfWork Atomic =>
-        Services.GetRequiredService<IAtomicUnitOfWork>();
+        ServiceScope.GetRequiredService<IAtomicUnitOfWork>();
+
+    private IServiceProvider ServiceScope =>
+        _serviceScope?.ServiceProvider
+        ?? throw new InvalidOperationException("Expense atomic scope unavailable.");
 
     private IServiceProvider Services =>
         _services ?? throw new InvalidOperationException("Expense atomic services unavailable.");

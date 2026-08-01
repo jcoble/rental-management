@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/time/app_clock.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../money/money_format.dart';
@@ -16,6 +17,8 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
   String? tenantName,
   String? rentalLabel,
   double? initialAmount,
+  int? targetChargeEntryId,
+  bool initialLeaveUnapplied = false,
 }) {
   return showModalBottomSheet<RecordTenantReceiptResult>(
     context: context,
@@ -28,6 +31,8 @@ Future<RecordTenantReceiptResult?> showRecordTenantReceiptSheet(
       tenantName: tenantName,
       rentalLabel: rentalLabel,
       initialAmount: initialAmount,
+      targetChargeEntryId: targetChargeEntryId,
+      initialLeaveUnapplied: initialLeaveUnapplied,
     ),
   );
 }
@@ -217,6 +222,8 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
     this.tenantName,
     this.rentalLabel,
     this.initialAmount,
+    this.targetChargeEntryId,
+    this.initialLeaveUnapplied = false,
   });
 
   final int tenantAccountId;
@@ -224,6 +231,8 @@ class _RecordTenantReceiptSheet extends ConsumerStatefulWidget {
   final String? tenantName;
   final String? rentalLabel;
   final double? initialAmount;
+  final int? targetChargeEntryId;
+  final bool initialLeaveUnapplied;
 
   @override
   ConsumerState<_RecordTenantReceiptSheet> createState() =>
@@ -245,8 +254,26 @@ class _RecordTenantReceiptSheetState
   late final String _operationKey =
       'mobile-receipt-${widget.tenantAccountId}-${DateTime.now().microsecondsSinceEpoch}';
   DateTime _receivedOn = DateTime.now();
+  late bool _leaveUnapplied =
+      widget.targetChargeEntryId == null && widget.initialLeaveUnapplied;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBusinessDate();
+  }
+
+  Future<void> _loadBusinessDate() async {
+    try {
+      final now = await ref.read(appNowProvider.future);
+      if (!mounted) return;
+      setState(() => _receivedOn = DateUtils.dateOnly(now));
+    } catch (_) {
+      // Keep the device clock fallback when the simulation clock is unavailable.
+    }
+  }
 
   @override
   void dispose() {
@@ -270,6 +297,13 @@ class _RecordTenantReceiptSheetState
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (widget.targetChargeEntryId == null && !_leaveUnapplied) {
+      setState(
+        () => _error =
+            'Choose Leave unapplied/advance receipt to record this without a charge target.',
+      );
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -286,6 +320,7 @@ class _RecordTenantReceiptSheetState
               paymentMethodSummary: _method.text.trim(),
               externalReference: _reference.text,
               payerName: _payer.text,
+              targetChargeEntryId: widget.targetChargeEntryId,
             ),
             operationKey: _operationKey,
           );
@@ -362,6 +397,24 @@ class _RecordTenantReceiptSheetState
                 trailing: const Icon(Icons.calendar_today_outlined),
                 onTap: _pickDate,
               ),
+              if (widget.targetChargeEntryId == null)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _leaveUnapplied,
+                  onChanged: _saving
+                      ? null
+                      : (value) =>
+                            setState(() => _leaveUnapplied = value ?? false),
+                  title: const Text('Leave unapplied/advance receipt'),
+                  controlAffinity: ListTileControlAffinity.leading,
+                )
+              else
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.receipt_long_outlined),
+                  title: const Text('Apply to selected past-due charge'),
+                  subtitle: Text('Charge #${widget.targetChargeEntryId}'),
+                ),
               TextFormField(
                 controller: _reference,
                 decoration: const InputDecoration(

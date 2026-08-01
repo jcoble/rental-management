@@ -4,9 +4,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -155,6 +161,138 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         row.CompletedRealUtc.Should().NotBeNull();
     }
 
+    [SkippableFact]
+    public async Task AtomicEnqueue_ReplayReturnsSameCommandId_AndSingleQueueRow()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is not available; command-bridge Postgres verification skipped.");
+
+        await using var provider = CreateAtomicProvider();
+        var access = await SeedAdministratorAccessAsync(provider);
+        var commandId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var command = new EnqueueSimulationWorkerCommand(
+            access.PortfolioId,
+            access.UserId,
+            access.SessionId,
+            access.AccessContextId,
+            access.AccessRevision,
+            commandId,
+            SimWorkerKeys.RentCharge);
+        var identity = new AtomicCommandIdentity(
+            "simulation.worker.enqueue",
+            $"{access.PortfolioId}:{access.UserId}:worker-replay-proof");
+        var codec = new AtomicJsonResultCodec<EnqueueSimulationWorkerResult>("simulation.worker.enqueue.v1");
+        await using var scope = provider.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+
+        var first = await atomic.ExecuteAsync(identity, command, codec);
+        var replay = await atomic.ExecuteAsync(identity, command, codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.CommandId.Should().Be(first.Value.CommandId);
+        replay.Value.CommandId.Should().Be(commandId);
+
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        (await db.SimWorkerCommands.CountAsync(row => row.Id == commandId)).Should().Be(1);
+        (await db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "simulation.worker.enqueue"
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
     private static RentalCommandDbContext NewContext(string connString) =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+
+    private ServiceProvider CreateAtomicProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            EnqueueSimulationWorkerCommand,
+            EnqueueSimulationWorkerResult,
+            EnqueueSimulationWorkerCommandHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_conn)
+                .UseAtomicPersistenceKernel(provider));
+        return services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+    }
+
+    private static async Task<ActiveAccessContext> SeedAdministratorAccessAsync(ServiceProvider provider)
+    {
+        var now = DateTime.UtcNow;
+        await using var scope = provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var portfolio = new Portfolio
+        {
+            Name = $"Dev worker {Guid.NewGuid():N}",
+            ManagementCompanyName = "Dev Worker Co",
+            TimeZone = "America/New_York",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var user = new ApplicationUser
+        {
+            UserName = $"dev-worker-{Guid.NewGuid():N}@example.test",
+            Email = $"dev-worker-{Guid.NewGuid():N}@example.test",
+            DisplayName = "Dev Worker Admin",
+            CreatedAt = now,
+        };
+        db.Portfolios.Add(portfolio);
+        await db.SaveChangesAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(user, accessContext, membership, assignment, session);
+        await db.SaveChangesAsync();
+
+        return new ActiveAccessContext(
+            session.Id,
+            user.Id,
+            accessContext.Id,
+            portfolio.Id,
+            accessContext.AccessRevision,
+            accessContext.LastAuthorizedExperience,
+            membership.Id,
+            membership.DefaultExperience);
+    }
 }

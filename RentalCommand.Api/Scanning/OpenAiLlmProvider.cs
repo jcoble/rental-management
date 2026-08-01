@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using SkiaSharp;
 
 namespace RentalCommand.Api.Scanning;
 
@@ -214,20 +215,20 @@ public sealed class OpenAiLlmProvider :
             }
             else
             {
-                var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
                 var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
                 var promptText = ocrMode == ImageOcrRoutingMode.Hybrid && ImageOcrRouting.IsUseful(ocrText)
                     ? ImageOcrRouting.BuildHybridHint(ocrText!)
                     : "Extract the fields from the attached document.";
-                userContent = new object[]
+                var imageParts = BuildVisionImageParts(
+                    documentBytes,
+                    contentType,
+                    imageDetail);
+                var contentParts = new List<object>(imageParts.Count + 1)
                 {
-                    new { type = "text", text = promptText },
-                    new
-                    {
-                        type = "image_url",
-                        image_url = new { url = dataUri, detail = imageDetail }
-                    }
+                    new { type = "text", text = promptText }
                 };
+                contentParts.AddRange(imageParts);
+                userContent = contentParts;
             }
         }
 
@@ -261,6 +262,77 @@ public sealed class OpenAiLlmProvider :
         using var resp = await SendChecked(BuildRequest(body, apiKey), ct);
         var json = await resp.Content.ReadAsStringAsync(ct);
         return ParseToolResult(json, fields);
+    }
+
+    private static IReadOnlyList<object> BuildVisionImageParts(
+        byte[] documentBytes,
+        string contentType,
+        string configuredDetail)
+    {
+        SKBitmap? decoded;
+        try
+        {
+            decoded = SKBitmap.Decode(documentBytes);
+        }
+        catch (ArgumentException)
+        {
+            decoded = null;
+        }
+
+        using var bitmap = decoded;
+        if (bitmap is null || bitmap.Width <= 0 || bitmap.Height <= bitmap.Width * 3)
+        {
+            return
+            [
+                BuildVisionImagePart(documentBytes, contentType, configuredDetail)
+            ];
+        }
+
+        // A low-detail vision request reduces an entire image to a single small viewport. For a
+        // camera app's vertically stitched multi-page document, that makes every page unreadable.
+        // Slice the image into overlapping, page-sized tiles and force high detail so the model
+        // receives the document at legible resolution instead of confidently guessing from the
+        // portfolio grounding context.
+        var tileHeight = Math.Max(bitmap.Width, (int)Math.Round(bitmap.Width * 1.25));
+        var overlap = Math.Max(32, bitmap.Width / 10);
+        var step = Math.Max(1, tileHeight - overlap);
+        var parts = new List<object>();
+
+        for (var y = 0; y < bitmap.Height; y += step)
+        {
+            var height = Math.Min(tileHeight, bitmap.Height - y);
+            using var tile = new SKBitmap(bitmap.Width, height, bitmap.ColorType, bitmap.AlphaType);
+            using (var canvas = new SKCanvas(tile))
+            {
+                canvas.Clear(SKColors.White);
+                canvas.DrawBitmap(
+                    bitmap,
+                    new SKRectI(0, y, bitmap.Width, y + height),
+                    new SKRect(0, 0, bitmap.Width, height));
+            }
+
+            using var image = SKImage.FromBitmap(tile);
+            using var encoded = image.Encode(SKEncodedImageFormat.Jpeg, 90);
+            parts.Add(BuildVisionImagePart(encoded.ToArray(), "image/jpeg", "high"));
+
+            if (y + height >= bitmap.Height)
+                break;
+        }
+
+        return parts;
+    }
+
+    private static object BuildVisionImagePart(
+        byte[] imageBytes,
+        string contentType,
+        string detail)
+    {
+        var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(imageBytes)}";
+        return new
+        {
+            type = "image_url",
+            image_url = new { url = dataUri, detail }
+        };
     }
 
     public async Task<LlmToolResult> ChatWithToolsAsync(

@@ -1,10 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using RentalCommand.Data;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Notifications;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Engine.Services;
 
@@ -131,16 +134,22 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
 
 public sealed record EnqueueMorningBriefingsCommand(DateTime EvaluationUtc) : IAtomicCommandData;
 
-public sealed record EnqueueMorningBriefingsResult(int QueuedCount) : IAtomicResultData;
+public sealed record EnqueueMorningBriefingsResult(int QueuedCount);
 
 public sealed class EnqueueMorningBriefingsHandler
     : IAtomicCommandHandler<EnqueueMorningBriefingsCommand, EnqueueMorningBriefingsResult>
 {
     private const string Purpose = "morning-briefing";
+    private readonly RentalCommandDbContext _db;
+
+    public EnqueueMorningBriefingsHandler(RentalCommandDbContext db)
+    {
+        _db = db;
+    }
 
     public async Task<EnqueueMorningBriefingsResult> HandleAsync(
         EnqueueMorningBriefingsCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.EvaluationUtc.Kind != DateTimeKind.Utc)
@@ -148,8 +157,9 @@ public sealed class EnqueueMorningBriefingsHandler
             throw new ArgumentException("Morning briefing evaluation time must be UTC.");
         }
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var digests = await attempt.Notifications.ReadDueMorningBriefingsAsync(command.EvaluationUtc, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var digests = await AtomicNotificationPersistence.ReadDueMorningBriefingsAsync(
+            _db, context, command.EvaluationUtc, ct);
         var queued = 0;
 
         foreach (var digest in digests)
@@ -165,14 +175,14 @@ public sealed class EnqueueMorningBriefingsHandler
 
             if (digest.EnableEmail && !string.IsNullOrWhiteSpace(digest.Email))
             {
-                StageOutbox(attempt, digest, "email", digest.Email,
+                StageOutbox(digest, "email", digest.Email,
                     new { to = digest.Email, subject, body }, now);
                 queued++;
             }
 
             if (digest.EnableSms && !string.IsNullOrWhiteSpace(digest.PhoneNumber))
             {
-                StageOutbox(attempt, digest, "sms", digest.PhoneNumber,
+                StageOutbox(digest, "sms", digest.PhoneNumber,
                     new { to = digest.PhoneNumber, message = body }, now);
                 queued++;
             }
@@ -182,7 +192,7 @@ public sealed class EnqueueMorningBriefingsHandler
                 var tokens = JsonSerializer.Deserialize<List<string>>(digest.DeviceTokensJson) ?? [];
                 foreach (var token in tokens)
                 {
-                    StageOutbox(attempt, digest, "push", token, new
+                    StageOutbox(digest, "push", token, new
                     {
                         deviceToken = token,
                         title = subject,
@@ -200,15 +210,19 @@ public sealed class EnqueueMorningBriefingsHandler
         return new EnqueueMorningBriefingsResult(queued);
     }
 
-    private static void StageOutbox(
-        IAtomicWriteAttempt attempt,
+    public Task AuthorizeReplayAsync(
+        EnqueueMorningBriefingsCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) => Task.CompletedTask;
+
+    private void StageOutbox(
         AtomicMorningBriefingDigest digest,
         string channel,
         string destination,
         object payload,
         DateTime now)
     {
-        attempt.StageOutbox(new OutboxMessage
+        _db.OutboxMessages.Add(new OutboxMessage
         {
             PortfolioId = digest.PortfolioId,
             MessageType = channel,

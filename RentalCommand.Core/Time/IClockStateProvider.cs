@@ -11,6 +11,12 @@ public interface IClockStateProvider
     /// <summary>The latest known clock state (in-memory; never blocks on the DB).</summary>
     ClockState Current { get; }
 
+    /// <summary>True once <see cref="Current"/> has been loaded from the persisted row at least once.</summary>
+    bool HasLoadedPersistedState { get; }
+
     /// <summary>Re-read the <c>SimulationClock</c> row into <see cref="Current"/>.</summary>
     Task RefreshAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Load the persisted clock state if this provider has not completed its first refresh.</summary>
+    Task EnsureInitializedAsync(CancellationToken cancellationToken = default);
 }

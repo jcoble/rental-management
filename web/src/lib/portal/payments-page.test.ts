@@ -31,19 +31,30 @@ describe('canonical portal money contract', () => {
 		assert.match(dashboardSource, /portal-dashboard-account-selector/);
 	});
 
-	it('requests server-owned charge paging and uses exact ledger-entry checkout identity', () => {
-		assert.match(pageSource, /tenantAccountChargesPage\(selectedAccountId as number/);
-		assert.match(pageSource, /skip: chargeSkip/);
+	it('requests server-owned account-history paging and uses exact ledger-entry checkout identity', () => {
+		assert.match(pageSource, /tenantAccountHistory\(selectedAccountId as number/);
+		assert.match(pageSource, /skip,/);
 		assert.match(pageSource, /take: pageSize/);
-		assert.match(pageSource, /charge\.tenantLedgerEntryId/);
+		assert.match(pageSource, /entry\.tenantLedgerEntryId/);
 		assert.doesNotMatch(pageSource, /\.filter\(/);
 		assert.doesNotMatch(pageSource, /\.sort\(/);
+	});
+
+	it('preserves notification account and ledger-entry focus without client-side filtering', () => {
+		assert.match(pageSource, /page\.url\.searchParams\.get\('account'\)/);
+		assert.match(pageSource, /page\.url\.searchParams\.get\('entry'\)/);
+		assert.match(pageSource, /entry: focusedEntryId/);
+		assert.match(pageSource, /id=\{`portal-ledger-entry-\$\{entry\.tenantLedgerEntryId\}`\}/);
+		assert.match(pageSource, /data-focused=\{entry\.isFocused\}/);
+		assert.match(pageSource, /url\.searchParams\.delete\('entry'\)/);
+		assert.doesNotMatch(pageSource, /historyQuery\.data\?\.items\.filter/);
+		assert.doesNotMatch(pageSource, /historyQuery\.data\?\.items\.find/);
 	});
 
 	it('keeps online-payment availability gentle and account-scoped', () => {
 		assert.match(endpointSource, /onlinePaymentsAvailable: boolean/);
 		assert.match(pageSource, /autopayQuery\.data\?\.onlinePaymentsAvailable === false/);
-		assert.match(pageSource, /data-testid="portal-autopay-unavailable"/);
+		assert.match(pageSource, /Autopay is not available right now\./);
 		assert.match(pageSource, /queryKey: \['portal-autopay', selectedAccountId\]/);
 	});
 
@@ -51,9 +62,9 @@ describe('canonical portal money contract', () => {
 		assert.match(pageSource, /LoadingState/);
 		assert.match(pageSource, /portal-payment-accounts-loading/);
 		assert.match(pageSource, /portal-autopay-loading/);
-		assert.match(pageSource, /portal-charges-loading/);
+		assert.match(pageSource, /portal-history-loading/);
 		assert.match(pageSource, /accountsQuery\.refetch\(\)/);
 		assert.match(pageSource, /autopayQuery\.refetch\(\)/);
-		assert.match(pageSource, /chargesQuery\.refetch\(\)/);
+		assert.match(pageSource, /historyQuery\.refetch\(\)/);
 	});
 });

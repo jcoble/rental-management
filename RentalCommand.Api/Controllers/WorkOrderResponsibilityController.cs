@@ -161,6 +161,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
                     item.ExpectedRevision))
                 .ToArray(),
             request.Reason,
+            _timeProvider.GetUtcNow().UtcDateTime,
             digest);
 
         try
@@ -206,7 +207,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
             active.SessionId, active.AccessContextId, active.AccessRevision, workOrderId,
             responsibilityId, request.AccessRevisionExpectations.Select(item =>
                 new WorkspaceAccessRevisionExpectation(item.AccessContextId, item.ExpectedRevision)).ToArray(),
-            request.Reason, digest);
+            request.Reason, _timeProvider.GetUtcNow().UtcDateTime, digest);
         try
         {
             var outcome = await _atomic.ExecuteAsync(new AtomicCommandIdentity(

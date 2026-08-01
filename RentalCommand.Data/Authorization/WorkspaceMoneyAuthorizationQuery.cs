@@ -68,4 +68,18 @@ public static class WorkspaceMoneyAuthorizationQuery
               properties.Any(property => property.Id == distribution.PropertyId)) ||
              (distribution.PropertyId == null && unallocated.Any())));
     }
+
+    public static IQueryable<OwnerContribution> WhereMoneyAuthorized(
+        this IQueryable<OwnerContribution> query, RentalCommandDbContext db, WorkspaceReadScope scope,
+        string capabilityKey, DateTime utcNow)
+    {
+        var properties = db.Properties.AsNoTracking().WhereAuthorized(db, scope, capabilityKey, utcNow);
+        var unallocated = db.AuthorizedAllPropertyAssignments(
+            scope, capabilityKey, CapabilityAuthorizationTargetKind.Property, utcNow);
+        return query.Where(contribution =>
+            contribution.PortfolioId == scope.PortfolioId &&
+            ((contribution.PropertyId != null &&
+              properties.Any(property => property.Id == contribution.PropertyId)) ||
+             (contribution.PropertyId == null && unallocated.Any())));
+    }
 }

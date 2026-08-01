@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
@@ -15,9 +16,13 @@ namespace RentalCommand.Data.Notifications;
 public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
     : IAtomicCommandHandler<ApplyClaimedTenantNoticeDraftBatchCommand, ApplyClaimedTenantNoticeDraftBatchResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyClaimedTenantNoticeDraftBatchHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ApplyClaimedTenantNoticeDraftBatchResult> HandleAsync(
         ApplyClaimedTenantNoticeDraftBatchCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (command.ClaimToken == Guid.Empty)
@@ -25,15 +30,15 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
             throw new ArgumentException("A tenant-notice draft claim token is required.", nameof(command));
         }
 
-        var generated = await attempt.NoticeDrafts.GenerateClaimedBatchAsync(command.ClaimToken, ct);
+        var generated = await AtomicNoticeDraftPersistence.GenerateClaimedBatchAsync(_db, context, command.ClaimToken, ct);
         var createdCount = generated.FirstOrDefault()?.CreatedCount ?? 0;
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         foreach (var draft in generated)
         {
             var operation = draft.WasCreated ? AuditLogOperation.Created : AuditLogOperation.Updated;
             var operationText = draft.WasCreated ? "create" : "resolve";
+            var appliedAtUtc = draft.AppliedAtUtc;
 
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 draft.PortfolioId,
                 nameof(NoticeDraft),
                 draft.DraftId,
@@ -53,8 +58,8 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
                 ChangeReason: draft.WasCreated
                     ? "Generated a claimed tenant notice draft."
                     : "Resolved an existing claimed tenant notice draft."),
-                now);
-            attempt.StageOutbox(new OutboxMessage
+                appliedAtUtc);
+            context.StageOutbox(new OutboxMessage
             {
                 PortfolioId = draft.PortfolioId,
                 MessageType = "data-update",
@@ -77,11 +82,37 @@ public sealed class ApplyClaimedTenantNoticeDraftBatchHandler
                     command.ClaimToken,
                     draft.WorkItemId,
                     draft.DraftId),
-                CreatedAtUtc = now,
-                NextAttemptAtUtc = now,
+                CreatedAtUtc = appliedAtUtc,
+                NextAttemptAtUtc = appliedAtUtc,
             });
         }
 
         return new ApplyClaimedTenantNoticeDraftBatchResult(createdCount, generated.ToArray());
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyClaimedTenantNoticeDraftBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.ClaimToken == Guid.Empty)
+        {
+            throw new ArgumentException("A tenant-notice draft claim token is required.", nameof(command));
+        }
+
+        var claimedOrResolvedWorkExists = await _db.Set<TenantNoticeWorkItem>()
+            .AsNoTracking()
+            .AnyAsync(work =>
+                work.ClaimToken == command.ClaimToken ||
+                (work.Status == TenantNoticeWorkStatus.Completed &&
+                 _db.Set<NoticeDraft>().Any(draft =>
+                     draft.LeaseManagementId == work.LeaseManagementId &&
+                     draft.RecipientLeaseManagementPartyId == work.RecipientLeaseManagementPartyId &&
+                     draft.TenantLedgerEntryId == work.TenantLedgerEntryId)),
+                ct);
+        if (!claimedOrResolvedWorkExists)
+        {
+            throw new UnauthorizedAccessException("The claimed tenant-notice draft work is unavailable.");
+        }
     }
 }

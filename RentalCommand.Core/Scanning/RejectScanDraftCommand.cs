@@ -6,11 +6,13 @@ public sealed record RejectScanDraftCommand(
     int PortfolioId,
     int DraftId,
     int UserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    DateTime ReviewedAtUtc,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string? Reason) : IAtomicCommandData;
 
 public sealed record RejectScanDraftResult(
     bool Rejected,
-    int DraftId) : IAtomicResultData;
+    int DraftId,
+    DateTime? ReviewedAtUtc = null);

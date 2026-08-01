@@ -16,6 +16,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -145,9 +146,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             template.BasedOnSystemTemplateVersionId > 0 &&
             template.CreatedByUserId == user.Id);
         suppliedTemplates.Single(template => template.SystemKey == "lease-non-renewal")
-            .Version.Should().Be(2);
+            .Version.Should().Be(3);
         suppliedTemplates.Single(template => template.SystemKey == "late-rent-late-fee")
-            .Version.Should().Be(2);
+            .Version.Should().Be(3);
         suppliedTemplates.Where(template =>
                 template.SystemKey != "lease-non-renewal" &&
                 template.SystemKey != "late-rent-late-fee")
@@ -178,7 +179,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
 
         var preLoginOptions = await ExecuteAsApiDatabaseIdentityAsync(() =>
             new EffectiveAccessContextSelectionQuery(_ctx.Db)
-                .ListAsync(user.Id, null, DateTime.UtcNow));
+                .ListAsync(user.Id, null));
         preLoginOptions.Should().ContainSingle(option =>
             option.AccessContextId == context.Id &&
             option.AccessRevision == context.AccessRevision);
@@ -191,6 +192,78 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             assignment.RoleProfileKey == RoleProfileKeys.WorkspaceAdministrator &&
             assignment.Scope.Kind == MembershipRoleAssignmentScopeKind.AllProperties);
         loggedIn.Tokens!.AccessToken.Should().Be("canonical-access");
+    }
+
+    [Fact]
+    public async Task Logout_RevokesSessionAndRefreshCredentials_AfterRefreshRotation()
+    {
+        var credentials = CreateAtomicCredentials();
+        var auth = CreateService(credentials, new AccessEnvelopeQuery(_ctx.Db), CreateCanonicalTokens());
+        var email = $"logout-{Guid.NewGuid():N}@example.test";
+
+        var registered = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = email,
+                Password = "Password123!",
+                DisplayName = "Logout Regression",
+            }, $"logout-register-{Guid.NewGuid():N}"));
+        registered.Success.Should().BeTrue();
+        var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
+        user.Should().NotBeNull();
+        (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
+            .Should().BeTrue();
+
+        var loggedIn = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.LoginAsync(email, "Password123!"));
+        loggedIn.Success.Should().BeTrue();
+        loggedIn.Tokens!.RefreshToken.Should().NotBeNullOrWhiteSpace();
+
+        var refreshed = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RefreshAsync(loggedIn.Tokens.RefreshToken));
+        refreshed.Success.Should().BeTrue();
+        refreshed.Tokens!.RefreshToken.Should().NotBe(loggedIn.Tokens.RefreshToken);
+
+        var session = await _ctx.Db.AuthSessions
+            .AsNoTracking()
+            .SingleAsync(row => row.UserId == user!.Id);
+        var accessContext = await _ctx.Db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == session.ActiveAccessContextId);
+
+        var revoked = await ExecuteAsApiDatabaseIdentityAsync(
+            session.Id,
+            user!.Id,
+            accessContext.Id,
+            accessContext.AccessRevision,
+            () =>
+            credentials.RevokeSessionAsync(
+                new RevokeAuthSessionCommand(
+                    session.Id,
+                    user.Id,
+                    accessContext.Id,
+                    accessContext.AccessRevision,
+                    DateTime.UtcNow,
+                    "User signed out"),
+                Guid.NewGuid()));
+
+        revoked.Revoked.Should().BeTrue();
+        (await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RefreshAsync(refreshed.Tokens.RefreshToken))).Success.Should().BeFalse();
+
+        var revokedSession = await _ctx.Db.AuthSessions
+            .Include(row => row.RefreshTokenFamilies)
+            .ThenInclude(row => row.Credentials)
+            .SingleAsync(row => row.Id == session.Id);
+        revokedSession.Status.Should().Be(AuthSessionStatus.Revoked);
+        revokedSession.RefreshTokenFamilies.Should().OnlyContain(row => row.RevokedAtUtc != null);
+        revokedSession.RefreshTokenFamilies.SelectMany(row => row.Credentials)
+            .Should().OnlyContain(row => row.RevokedAtUtc != null);
+        (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
+            row.CommandType == "auth-session:revoke" &&
+            row.EntityType == nameof(AuthSession) &&
+            row.ActorLabel == "authentication:logout" &&
+            row.UserId == user!.Id)).Should().Be(1);
     }
 
     [Fact]
@@ -258,6 +331,41 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         }
     }
 
+    private async Task<T> ExecuteAsApiDatabaseIdentityAsync<T>(
+        Guid authSessionId,
+        int userId,
+        int accessContextId,
+        long accessRevision,
+        Func<Task<T>> action)
+    {
+        await _ctx.Db.Database.OpenConnectionAsync();
+        try
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync(
+                "SET SESSION AUTHORIZATION rentalcommand_api;");
+            await _ctx.Db.Database.ExecuteSqlRawAsync(
+                $"""
+                SET app.auth_session_id = '{authSessionId:D}';
+                SET app.current_user_id = '{userId}';
+                SET app.current_access_context_id = '{accessContextId}';
+                SET app.access_revision = '{accessRevision}';
+                """);
+            return await action();
+        }
+        finally
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync(
+                """
+                RESET app.access_revision;
+                RESET app.current_access_context_id;
+                RESET app.current_user_id;
+                RESET app.auth_session_id;
+                RESET SESSION AUTHORIZATION;
+                """);
+            await _ctx.Db.Database.CloseConnectionAsync();
+        }
+    }
+
     private AuthService CreateService(
         IAtomicAuthSessionCredentialService sessions,
         IAccessEnvelopeQuery envelopes,
@@ -287,8 +395,38 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 })),
             _atomic,
             NullLogger<AuthService>.Instance,
-            TimeProvider.System);
+            new SystemAuthSecurityClock());
     }
+
+    private IAtomicAuthSessionCredentialService CreateAtomicCredentials()
+    {
+        var signingKey = Convert.ToBase64String(
+            Enumerable.Range(1, RefreshCredentialTokenFactory.MinimumSigningKeyBytes)
+                .Select(value => (byte)value)
+                .ToArray());
+        return new AtomicAuthSessionCredentialService(
+            _atomic,
+            new RefreshCredentialTokenFactory(signingKey),
+            Options.Create(new AtomicAuthSessionCredentialOptions
+            {
+                SigningKey = signingKey,
+                CredentialLifetimeDays = 7,
+                FamilyAbsoluteLifetimeDays = 30,
+                SessionLifetimeDays = 30,
+            }),
+            new SystemAuthSecurityClock());
+    }
+
+    private static ICanonicalAccessTokenService CreateCanonicalTokens() =>
+        new CanonicalAccessTokenService(
+            Options.Create(new JwtSettings
+            {
+                SecretKey = "dev_only_super_secret_signing_key_at_least_64_chars_long_0123456789",
+                Issuer = "RentalCommand",
+                Audience = "RentalCommandWeb",
+                AccessTokenExpirationMinutes = 15,
+            }),
+            new SystemAuthSecurityClock());
 
     private static SignInManager<ApplicationUser> CreateSignInManager(
         UserManager<ApplicationUser> userManager) => new(

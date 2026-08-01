@@ -22,6 +22,7 @@
 		confidence,
 		statuses = ['Draft', 'Active', 'Expired', 'Terminated'],
 		section = 'all',
+		showLifecycleFields = true,
 		testidPrefix = 'lease'
 	}: {
 		form: {
@@ -40,6 +41,7 @@
 		confidence?: Record<string, number>;
 		statuses?: readonly string[];
 		section?: 'all' | 'identity' | 'dates' | 'money' | 'rent' | 'fees' | 'status';
+		showLifecycleFields?: boolean;
 		testidPrefix?: string;
 	} = $props();
 
@@ -50,7 +52,7 @@
 	const showMoney = $derived(section === 'all' || section === 'money');
 	const showRent = $derived(showMoney || section === 'rent');
 	const showFees = $derived(showMoney || section === 'fees');
-	const showStatus = $derived(section === 'all' || section === 'status');
+	const showStatus = $derived(showLifecycleFields && (section === 'all' || section === 'status'));
 	let autoDefaultedEndDate = $state('');
 
 	function handleStartDateChange(iso: string) {

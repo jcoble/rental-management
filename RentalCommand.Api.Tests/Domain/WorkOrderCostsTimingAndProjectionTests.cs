@@ -30,7 +30,6 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly ServiceProvider _services;
     private readonly WorkOrderService _workOrders;
-    private readonly PropertyService _properties;
     private readonly WorkspaceReadScope _scope;
 
     public WorkOrderCostsTimingAndProjectionTests()
@@ -68,7 +67,6 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System,
             _services.GetRequiredService<IAtomicUnitOfWork>());
-        _properties = new PropertyService(_db, new NoopDataUpdate(), TimeProvider.System);
     }
 
     private WorkspaceReadScope SeedAdministratorScope()
@@ -400,26 +398,6 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         list[0].PropertyName.Should().Be("Pine Hollow");
     }
 
-    [Fact]
-    public async Task PropertyGetAndList_ProjectTypeAndUnitAggregates()
-    {
-        var property = SeedProperty("Willow Run", PropertyType.MultiFamily);
-        SeedCurrentPossession(property, SeedUnit(property.Id, "A"));
-        SeedCurrentPossession(property, SeedUnit(property.Id, "B"));
-        SeedUnit(property.Id, "C");
-
-        var detail = await _properties.GetAsync(_scope, property.Id);
-        detail.Should().NotBeNull();
-        detail!.PropertyType.Should().Be(PropertyType.MultiFamily);
-        detail.UnitCount.Should().Be(3);
-        detail.OccupiedUnits.Should().Be(2);
-
-        var list = await _properties.ListAsync(_scope, new ListQuery());
-        var row = list.Single(p => p.Id == property.Id);
-        row.UnitCount.Should().Be(3);
-        row.OccupiedUnits.Should().Be(2);
-    }
-
     private Property SeedProperty(string name, PropertyType type = PropertyType.SingleFamily)
     {
         var now = DateTime.UtcNow;
@@ -445,42 +423,6 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
 
     private Task<WorkOrderResponse?> UpdateAsync(int id, UpdateWorkOrderRequest request) =>
         _workOrders.UpdateAuthorizedAsync(_scope, id, request, Guid.NewGuid().ToString("N"));
-
-    private Unit SeedUnit(int propertyId, string number)
-    {
-        var now = DateTime.UtcNow;
-        var unit = new Unit
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = propertyId,
-            UnitNumber = number,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Units.Add(unit);
-        _db.SaveChanges();
-        return unit;
-    }
-
-    private void SeedCurrentPossession(Property property, Unit unit)
-    {
-        var now = DateTime.UtcNow;
-        _db.LeaseManagements.Add(new LeaseManagement
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            RelationshipNumber = $"OCC-{unit.Id}",
-            PlannedPossessionAtUtc = now.AddMonths(-1),
-            PossessionGivenAtUtc = now.AddMonths(-1),
-            CreatedAtUtc = now,
-            CreatedByUserId = 1,
-            UpdatedAtUtc = now,
-            RowVersion = Guid.NewGuid(),
-        });
-        _db.SaveChanges();
-    }
 
     private Vendor SeedVendor(string name)
     {

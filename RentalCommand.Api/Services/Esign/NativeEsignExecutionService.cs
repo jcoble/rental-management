@@ -15,6 +15,11 @@ namespace RentalCommand.Api.Services.Esign;
 /// <inheritdoc cref="INativeEsignExecutionService"/>
 public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 {
+    private const int NativeEsignActorScopeId = 0;
+    private const string ExecutedUploadPurpose = "native-esign-executed";
+    private const string ExecutedPdfContentType = "application/pdf";
+    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsResult>
+        ReconcileAgreementFinancialsCodec = new("native-esign.agreement-financials.reconcile.v1");
     private static readonly TimeSpan ExecutionLease = TimeSpan.FromMinutes(10);
     private readonly string _claimOwner =
         $"{Environment.MachineName}:{Environment.ProcessId}:native-esign-api:{Guid.NewGuid():N}";
@@ -48,11 +53,18 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
     public async Task<bool> FinalizePendingAsync(int signatureRequestId, CancellationToken ct = default)
     {
         var completed = await _db.SignatureRequests.AsNoTracking()
-            .AnyAsync(request => request.Id == signatureRequestId
+            .Where(request => request.Id == signatureRequestId
                 && request.Status == SignatureRequestStatus.Completed
-                && request.ExecutedArtifactId != null, ct);
-        if (completed)
+                && request.ExecutedArtifactId != null)
+            .Select(request => new { request.Id, request.PublicId, request.LeaseAgreementId })
+            .SingleOrDefaultAsync(ct);
+        if (completed is not null)
         {
+            if (completed.LeaseAgreementId.HasValue)
+            {
+                await ReconcileAgreementFinancialsAsync(
+                    completed.Id, completed.PublicId, ct);
+            }
             return true;
         }
 
@@ -61,6 +73,18 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
         return claim is not null
             && await FinalizeClaimedAsync(claim.Id, claim.ClaimToken, ct);
     }
+
+    private Task ReconcileAgreementFinancialsAsync(
+        int signatureRequestId,
+        Guid publicId,
+        CancellationToken ct) =>
+        _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "native-esign.agreement-financials.reconcile",
+                publicId.ToString("N")),
+            new ReconcileNativeEsignAgreementFinancialsCommand(signatureRequestId, publicId),
+            ReconcileAgreementFinancialsCodec,
+            ct);
 
     public async Task<bool> FinalizeClaimedAsync(
         int signatureRequestId, Guid claimToken, CancellationToken ct = default)
@@ -76,6 +100,11 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
         if (sigRequest.Status == SignatureRequestStatus.Completed && sigRequest.ExecutedArtifactId.HasValue)
         {
+            if (sigRequest.LeaseAgreementId.HasValue)
+            {
+                await ReconcileAgreementFinancialsAsync(
+                    sigRequest.Id, sigRequest.PublicId, ct);
+            }
             return true;
         }
 
@@ -107,28 +136,30 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             var fileName = sigRequest.LeaseAgreementId.HasValue
                 ? $"lease-agreement-{sigRequest.LeaseAgreementId}-executed.pdf"
                 : $"lease-addendum-{sigRequest.LeaseAddendumId}-executed.pdf";
-            var admission = await _pendingUploads.PrepareAsync(
-                sigRequest.PortfolioId,
-                actorScopeId: 0,
-                purpose: "native-esign-executed",
-                clientOperationId: sigRequest.PublicId.ToString("N"),
-                requestFingerprint: sha256,
-                fileName,
-                contentType: "application/pdf",
-                sizeBytes: executedBytes.LongLength,
-                nowUtc: DateTime.UtcNow,
-                ct);
+            var requestFingerprint = BuildExecutedUploadRequestFingerprint(sigRequest, fileName);
+            var admission = await FindReusableExecutedUploadAdmissionAsync(sigRequest, fileName, ct)
+                ?? await _pendingUploads.PrepareAsync(
+                    sigRequest.PortfolioId,
+                    NativeEsignActorScopeId,
+                    ExecutedUploadPurpose,
+                    sigRequest.PublicId.ToString("N"),
+                    requestFingerprint,
+                    fileName,
+                    ExecutedPdfContentType,
+                    executedBytes.LongLength,
+                    nowUtc: DateTime.UtcNow,
+                    ct);
             storageKey = admission.StoragePath;
             await using (var stream = new MemoryStream(executedBytes))
             {
-                await _storage.UploadAtAsync(stream, storageKey, fileName, "application/pdf", ct);
+                await _storage.UploadAtAsync(stream, storageKey, fileName, ExecutedPdfContentType, ct);
             }
 
             await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity("native-esign.finalize", TokenIdentity(sigRequest.PublicId.ToString("N"))),
                 new FinalizeNativeEsignRequestCommand(
                     admission.Id,
-                    sha256,
+                    admission.RequestFingerprint,
                     sigRequest.Id,
                     sigRequest.PublicId,
                     claimToken,
@@ -162,6 +193,31 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
             }
             throw;
         }
+    }
+
+    private async Task<PendingFileUploadAdmission?> FindReusableExecutedUploadAdmissionAsync(
+        SignatureRequest sigRequest,
+        string fileName,
+        CancellationToken ct)
+    {
+        var operationHash = ComputeUploadOperationKeyHash(sigRequest.PublicId.ToString("N"));
+        return await _db.PendingFileUploads.AsNoTracking()
+            .Where(upload => upload.PortfolioId == sigRequest.PortfolioId
+                && upload.ActorScopeId == NativeEsignActorScopeId
+                && upload.Purpose == ExecutedUploadPurpose
+                && upload.OperationKeyHash == operationHash
+                && upload.State == PendingFileUploadState.Prepared
+                && upload.StoredFileId == null
+                && upload.CleanupClaimToken == null
+                && upload.FileName == fileName
+                && upload.ContentType == ExecutedPdfContentType)
+            .Select(upload => new PendingFileUploadAdmission(
+                upload.Id,
+                upload.StoragePath,
+                upload.State,
+                upload.StoredFileId,
+                upload.RequestFingerprint))
+            .SingleOrDefaultAsync(ct);
     }
 
     private async Task<ExecutedLeaseData?> BuildExecutedDataAsync(
@@ -399,5 +455,22 @@ public sealed class NativeEsignExecutionService : INativeEsignExecutionService
 
     private static string TokenIdentity(string token) =>
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    internal static string BuildExecutedUploadRequestFingerprint(SignatureRequest sigRequest, string fileName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        var target = sigRequest.LeaseAgreementId.HasValue
+            ? $"agreement:{sigRequest.LeaseAgreementId.Value}"
+            : $"addendum:{sigRequest.LeaseAddendumId!.Value}";
+        return TokenIdentity(string.Join('|',
+            "native-esign-executed:v2",
+            $"portfolio:{sigRequest.PortfolioId}",
+            $"request:{sigRequest.PublicId:N}",
+            $"target:{target}",
+            $"file:{fileName}",
+            $"content-type:{ExecutedPdfContentType}"));
+    }
+
+    private static string ComputeUploadOperationKeyHash(string value) => TokenIdentity(value.Trim());
 
 }

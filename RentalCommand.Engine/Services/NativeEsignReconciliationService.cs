@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Esign;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Esign;
 using RentalCommand.Data.Esign;
 
 namespace RentalCommand.Engine.Services;
@@ -13,6 +15,8 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class NativeEsignReconciliationService
 {
+    private static readonly AtomicJsonResultCodec<ReconcileNativeEsignAgreementFinancialsBatchResult>
+        FinancialBatchCodec = new("native-esign.agreement-financials.batch-reconcile.v1");
     internal const int BatchSize = 20;
     internal static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(10);
 
@@ -33,11 +37,17 @@ public sealed class NativeEsignReconciliationService
     public async Task<int> ReconcileAsync(CancellationToken ct = default)
     {
         IReadOnlyList<NativeEsignExecutionClaim> claims;
+        var hasCompletedAgreementFinancialReconciliations = false;
         await using (var queryScope = _scopeFactory.CreateAsyncScope())
         {
             var store = queryScope.ServiceProvider.GetRequiredService<INativeEsignExecutionClaimStore>();
             claims = await store.ClaimBatchAsync(
                 _claimOwner, ClaimLease, BatchSize, ct);
+            if (claims.Count < BatchSize)
+            {
+                hasCompletedAgreementFinancialReconciliations =
+                    await store.HasCompletedAgreementFinancialReconciliationsAsync(ct);
+            }
         }
 
         var completed = 0;
@@ -61,8 +71,39 @@ public sealed class NativeEsignReconciliationService
             {
                 _logger.LogError(
                     ex,
-                    "Native e-sign reconciliation failed for request {SignatureRequestId}; it remains pending for retry.",
+                "Native e-sign reconciliation failed for request {SignatureRequestId}; it remains pending for retry.",
                     claim.Id);
+            }
+        }
+
+        if (claims.Count < BatchSize && hasCompletedAgreementFinancialReconciliations)
+        {
+            var runToken = Guid.NewGuid();
+            try
+            {
+                await using var batchScope = _scopeFactory.CreateAsyncScope();
+                var atomic = batchScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+                var outcome = await atomic.ExecuteAsync(
+                    new AtomicCommandIdentity(
+                        "native-esign.agreement-financials.batch-reconcile",
+                        runToken.ToString("N")),
+                    new ReconcileNativeEsignAgreementFinancialsBatchCommand(
+                        runToken,
+                        BatchSize - claims.Count),
+                    FinancialBatchCodec,
+                    ct);
+                completed += outcome.Value.DepositChargeCount;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Native e-sign financial reconciliation batch {RunToken} failed; deterministic deposit business keys make retry safe.",
+                    runToken);
             }
         }
 

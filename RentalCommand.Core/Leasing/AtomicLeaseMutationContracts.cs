@@ -67,6 +67,22 @@ public sealed record AtomicTransferLeaseManagementMutationResult(
     IReadOnlyList<long> TenantLedgerEntryIds,
     IReadOnlyList<long> SecurityDepositEntryIds);
 
+public sealed class AtomicInitialSecurityDepositCharge
+{
+    public long LedgerEntryId { get; set; }
+    public int PortfolioId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseAgreementId { get; set; }
+    public decimal Amount { get; set; }
+    public string Currency { get; set; } = string.Empty;
+    public DateOnly EffectiveOn { get; set; }
+    public DateOnly DueOn { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string BusinessKey { get; set; } = string.Empty;
+    public int CreatedByUserId { get; set; }
+    public DateTime PostedAtUtc { get; set; }
+}
+
 public sealed record AtomicAgreementDraftSignerInput(
     int? LeaseManagementPartyId,
     int? TenantId,
@@ -124,140 +140,3 @@ public sealed record AtomicPropertyDispositionMutationResult(
     IReadOnlyList<int> ManagementHoldIds,
     IReadOnlyList<int> UnitIds,
     IReadOnlyList<int> CapitalAssetIds);
-
-/// <summary>
-/// PostgreSQL-owned lease graph mutations. Input sets are validated, joined, partitioned, and
-/// applied by one statement per operation; handlers never materialize a relationship graph.
-/// </summary>
-public interface IAtomicLeaseMutationPersistence
-{
-    Task<AtomicLegalDocumentSourceVersionResult> ResolveAuthoredDocumentSourceVersionAsync(
-        int portfolioId,
-        int propertyId,
-        int leaseManagementId,
-        int documentTemplateId,
-        int actorUserId,
-        DateTime createdAtUtc,
-        CancellationToken ct = default);
-
-    Task<AtomicLegalDocumentSourceVersionResult> ResolveBuiltInDocumentSourceVersionAsync(
-        int portfolioId,
-        int actorUserId,
-        DateTime createdAtUtc,
-        CancellationToken ct = default);
-
-    Task<AtomicLegalDocumentSourceVersionResult> ResolveImportedDocumentSourceVersionAsync(
-        int portfolioId,
-        int sourceStoredFileId,
-        int sourceLegalDocumentArtifactId,
-        string sourceContentSha256,
-        string? sourceLabel,
-        int actorUserId,
-        DateTime createdAtUtc,
-        CancellationToken ct = default);
-
-    Task<AtomicPropertyDispositionMutationResult?> CreatePropertyDispositionAsync(
-        int portfolioId,
-        int propertyId,
-        DateTime closedOnDate,
-        decimal salePrice,
-        decimal sellingCosts,
-        string? buyerName,
-        string? memo,
-        int actorUserId,
-        DateTime changedAtUtc,
-        DateOnly businessDate,
-        CancellationToken ct = default);
-
-    Task<bool> ValidateAgreementDraftSignerScopeAsync(
-        int portfolioId,
-        int leaseManagementId,
-        IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
-        CancellationToken ct = default);
-
-    Task<AtomicRenewalAddendumDraftResult> CreateRenewalAddendumDraftsAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int sourceAgreementId,
-        int renewalAgreementId,
-        DateOnly governingFromOn,
-        IReadOnlyList<AtomicRenewalAddendumDecisionInput> decisions,
-        int actorUserId,
-        DateTime createdAtUtc,
-        CancellationToken ct = default);
-
-    Task<AtomicLegalExecutionTransitionResult> ExecuteLegalArtifactTransitionAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int? leaseAgreementId,
-        int? leaseAddendumId,
-        int executedArtifactId,
-        DateTime executedAtUtc,
-        CancellationToken ct = default);
-
-    Task<IReadOnlyList<int>> CopyAgreementDraftSignersAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int sourceAgreementId,
-        int successorAgreementId,
-        CancellationToken ct = default);
-
-    Task<IReadOnlyList<int>> CopyIssuedAgreementReplacementDraftSignersAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int sourceAgreementId,
-        int replacementAgreementId,
-        CancellationToken ct = default);
-
-    Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int sourceAddendumId,
-        int correctionAddendumId,
-        CancellationToken ct = default);
-
-    Task<AtomicAgreementDraftSignerReplacementResult> ReplaceAgreementDraftSignersAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int leaseAgreementId,
-        int requiredDraftRevision,
-        IReadOnlyList<AtomicAgreementDraftSignerInput> signers,
-        CancellationToken ct = default);
-
-    Task<AtomicTenantAccessTransitionResult> TransitionTenantAccessAsync(
-        int portfolioId,
-        int leaseManagementId,
-        IReadOnlyList<AtomicTenantAccessTransition> transitions,
-        int actorUserId,
-        DateTime changedAtUtc,
-        string reason,
-        CancellationToken ct = default);
-
-    Task<AtomicReturnPossessionMutationResult> ReturnPossessionAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int unitId,
-        IReadOnlyList<AtomicReturnPossessionPartyInput> parties,
-        IReadOnlyList<AtomicReturnPossessionAccessInput> accesses,
-        int actorUserId,
-        DateTime changedAtUtc,
-        string turnoverReason,
-        CancellationToken ct = default);
-
-    Task<AtomicCancelPlannedRelationshipMutationResult> CancelPlannedRelationshipAsync(
-        int portfolioId,
-        int leaseManagementId,
-        IReadOnlyList<AtomicCancelPlannedAccessInput> accesses,
-        int actorUserId,
-        DateTime changedAtUtc,
-        string cancellationReasonCode,
-        string? cancellationNote,
-        string draftCancellationReason,
-        CancellationToken ct = default);
-
-    Task<AtomicTransferLeaseManagementMutationResult> TransferLeaseManagementAsync(
-        TransferLeaseManagementCommand command,
-        int destinationDocumentSourceVersionId,
-        DateTime changedAtUtc,
-        CancellationToken ct = default);
-}

@@ -33,18 +33,9 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
         var onboardingProperties = AuthorizedProperties(scope, CapabilityKeys.LeasingOnboardingManage, now);
         var conversations = AuthorizedConversations(scope, now);
 
-        return _db.AuthSessions
+        return _db.Portfolios
             .AsNoTracking()
-            .Where(session =>
-                session.Id == scope.SessionId &&
-                session.UserId == scope.UserId &&
-                session.ActiveAccessContextId == scope.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > now &&
-                session.ActiveAccessContext != null &&
-                session.ActiveAccessContext.AccessRevision == scope.AccessRevision &&
-                session.ActiveAccessContext.PortfolioId == scope.PortfolioId)
+            .Where(portfolio => portfolio.Id == scope.PortfolioId)
             .Select(_ => new LeasingTodayResponse
             {
                 ApplicationsToReview = applications.Count(application =>
@@ -223,6 +214,14 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
             {
                 PropertyId = unit.PropertyId,
                 UnitId = unit.Id,
+                LeaseManagementId = unit.LeaseManagements
+                    .Where(management => management.CanceledAtUtc == null &&
+                        management.PossessionReturnedAtUtc == null)
+                    .OrderByDescending(management => management.PossessionGivenAtUtc != null)
+                    .ThenBy(management => management.PlannedPossessionAtUtc)
+                    .ThenByDescending(management => management.Id)
+                    .Select(management => (int?)management.Id)
+                    .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
                 Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
@@ -403,6 +402,14 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
             {
                 PropertyId = unit.PropertyId,
                 UnitId = unit.Id,
+                LeaseManagementId = unit.LeaseManagements
+                    .Where(management => management.CanceledAtUtc == null &&
+                        management.PossessionReturnedAtUtc == null)
+                    .OrderByDescending(management => management.PossessionGivenAtUtc != null)
+                    .ThenBy(management => management.PlannedPossessionAtUtc)
+                    .ThenByDescending(management => management.Id)
+                    .Select(management => (int?)management.Id)
+                    .FirstOrDefault(),
                 PropertyName = unit.Property!.Name,
                 UnitNumber = unit.UnitNumber,
                 Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
@@ -473,6 +480,7 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
                 Notes = application.Notes,
                 ConsentGiven = application.ConsentGiven,
                 SubmittedAtUtc = application.SubmittedAtUtc,
+                ApprovedTenantId = application.ApprovedTenantId,
             })
             .SingleOrDefaultAsync(ct);
 

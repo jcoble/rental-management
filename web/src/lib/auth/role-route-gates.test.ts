@@ -49,6 +49,10 @@ const teamPage = readFileSync(
 	new URL('../../routes/(admin)/admin/users/+page.svelte', import.meta.url),
 	'utf8'
 );
+const portalLayout = readFileSync(
+	new URL('../../routes/(portal)/+layout.server.ts', import.meta.url),
+	'utf8'
+);
 
 test('direct staff routes use the same role-capability gates as navigation', () => {
 	assert.match(
@@ -80,7 +84,11 @@ test('property mutation controls use active-experience capability gates', () => 
 		assert.match(source, /activeCapabilities\.has\(CAPABILITY\.rentalsManage\)/);
 		assert.match(source, /\{#if canManageRentals\}/);
 	}
-	assert.match(propertiesList, /emptyOnAction=\{canManageRentals \? openCreate : undefined\}/);
+	assert.match(
+		propertiesList,
+		/const canCreateProperty = \$derived\(hasAllPropertiesRentalsManageAuthority\(currentAccess\)\)/
+	);
+	assert.match(propertiesList, /emptyOnAction=\{canCreateProperty \? openCreate : undefined\}/);
 	assert.match(
 		propertyDetail,
 		/PropertyLoansSection propertyId=\{id\} canManage=\{canManageMoneyExpenses\}/
@@ -132,6 +140,24 @@ test('technician commands stay on the canonical assignment-scoped mutation', () 
 	assert.match(scanPage, /skip: \(assignedPage - 1\) \* PAGE_SIZE/);
 	assert.match(scanPage, /take: PAGE_SIZE/);
 	assert.doesNotMatch(scanPage, /workOrders\.listPage/);
+});
+
+test('work order detail renders actions from server detail capabilities', () => {
+	assert.match(workOrderDetail, /const caps = \$derived\(workOrderCapabilities\(wo\)\)/);
+	assert.match(workOrderDetail, /caps\.canDispatchVendor/);
+	assert.match(workOrderDetail, /caps\.canContactVendor/);
+	assert.match(workOrderDetail, /caps\.canRateVendor/);
+	assert.match(workOrderDetail, /caps\.canEdit/);
+	assert.match(workOrderDetail, /caps\.canDelete/);
+	assert.match(workOrderDetail, /caps\.canAssign/);
+	assert.match(workOrderDetail, /caps\.canViewCosts/);
+	assert.match(workOrderDetail, /caps\.canViewPrivateNotes/);
+	assert.match(workOrderDetail, /allowedStatusTransitions/);
+	assert.match(workOrderDetail, /work-order-job-context/);
+	assert.match(workOrderDetail, /work-order-meaningful-activity/);
+	assert.match(workOrderDetail, /caps\.canViewTenantContact && \(wo\.requesterName/);
+	assert.doesNotMatch(workOrderDetail, /rows\.push\(\['Contact'/);
+	assert.doesNotMatch(workOrderDetail, /rows\.push\(\['Email', workOrder\.requesterEmail\]/);
 });
 
 test('staff action URLs open route-backed message details without query aliases', () => {
@@ -192,4 +218,20 @@ test('Tenant keeps relationship projections while management routes fail closed'
 		canAccessRoute('/tenant-accounts/7/entries/9', 'Tenant', leakedManagementCapabilities),
 		false
 	);
+});
+
+test('Tenant portal shell redirects revoked relationship access to the unlinked page', () => {
+	assert.match(portalLayout, /serverGet<PortalAccessState>\('\/portal\/access-state', locals\.accessToken\)/);
+	assert.match(portalLayout, /hasActiveTenantAccess/);
+	assert.match(
+		portalLayout,
+		/state\.data\?\.hasActiveTenantAccess === false\)[\s\S]{0,120}redirect\(303, '\/portal\/unlinked'\)/
+	);
+	assert.match(
+		portalLayout,
+		/state\.data\?\.hasActiveTenantAccess\)[\s\S]{0,120}redirect\(303, '\/portal'\)/
+	);
+	assert.doesNotMatch(portalLayout, /tenantId|leaseManagementId|propertyId|unitId/i);
+	assert.equal(canAccessRoute('/portal/unlinked', 'Tenant', new Set()), true);
+	assert.equal(canAccessRoute('/portal/unlinked', 'Management', new Set(['rentals.read'])), false);
 });

@@ -214,11 +214,12 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Atomic_pull_deduplicates_replays_advances_cursor_and_releases_claim()
+    public async Task Atomic_pull_imports_unapplied_receipt_preserves_charge_replays_and_releases_claim()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
         var portfolioId = await SeedPortfolioAsync(now, "Atomic apply");
+        long existingChargeId;
         await using (var seed = NewContext())
         {
             var actor = new ApplicationUser
@@ -285,7 +286,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             };
             seed.TenantAccounts.Add(account);
             await seed.SaveChangesAsync();
-            seed.TenantLedgerEntries.Add(new TenantLedgerEntry
+            var existingCharge = new TenantLedgerEntry
             {
                 PortfolioId = portfolioId,
                 TenantAccountId = account.Id,
@@ -299,7 +300,8 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
                 Description = "Test rent charge",
                 BusinessKey = "test:accounting-pull-charge",
                 CreatedByUserId = actor.Id,
-            });
+            };
+            seed.TenantLedgerEntries.Add(existingCharge);
             seed.AccountingEntityMappings.Add(new AccountingEntityMapping
             {
                 PortfolioId = portfolioId, AccountingConnectionId = connection.Id,
@@ -309,6 +311,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
                 CreatedAt = now, UpdatedAt = now,
             });
             await seed.SaveChangesAsync();
+            existingChargeId = existingCharge.Id;
         }
 
         AccountingConnectionClaim claim;
@@ -340,10 +343,18 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         await using var verify = NewContext();
         (await verify.TenantLedgerEntries.CountAsync(row => row.PortfolioId == portfolioId
             && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
-        (await verify.TenantPaymentAttempts.CountAsync(row => row.PortfolioId == portfolioId
-            && row.State == TenantPaymentAttemptState.Succeeded)).Should().Be(1);
+        var importedAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.PortfolioId == portfolioId
+            && row.State == TenantPaymentAttemptState.Succeeded);
+        importedAttempt.AttemptType.Should().Be(TenantPaymentAttemptType.ImportedReceipt);
+        importedAttempt.ChargeLedgerEntryId.Should().BeNull();
         (await verify.TenantLedgerAllocations.CountAsync(row => row.PortfolioId == portfolioId))
-            .Should().Be(1);
+            .Should().Be(0);
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.Id == existingChargeId
+            && row.Amount == 1200m
+            && row.Direction == TenantLedgerDirection.Debit
+            && row.EntryType == TenantLedgerEntryType.ManualCharge)).Should().Be(1);
         (await verify.AccountingSyncMaps.CountAsync(row => row.AccountingConnectionId == claim.Connection.Id))
             .Should().Be(1);
         (await verify.AtomicCommandReceipts.CountAsync(row => row.CommandType == "accounting.pull.apply"))
@@ -356,7 +367,8 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             .Should().Be(1, "the bounded payload must be mapped, ranked, deduplicated, and written by one SQL statement");
         applyCommands.Single(sql => sql.Contains("payment_decisions AS MATERIALIZED", StringComparison.Ordinal))
             .Should().Contain("jsonb_array_elements").And.Contain("TenantLedgerEntries")
-            .And.Contain("TenantLedgerAllocations").And.Contain("ON CONFLICT")
+            .And.Contain("'ImportedReceipt'").And.Contain("ON CONFLICT")
+            .And.NotContain("TenantLedgerAllocations")
             .And.NotContain("INSERT INTO \"Payments\"");
     }
 
@@ -848,7 +860,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
             RentalCommand.Core.Accounting.ApplyAccountingPullResult,

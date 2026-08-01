@@ -25,7 +25,7 @@ public class ConversationService : IConversationService
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
+    private readonly IRealtimeInvalidationQueue _realtimeQueue;
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILogger<ConversationService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -35,14 +35,14 @@ public class ConversationService : IConversationService
 
     public ConversationService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
+        IRealtimeInvalidationQueue realtimeQueue,
         IFairHousingReviewService fairHousing,
         ILogger<ConversationService> logger,
         TimeProvider timeProvider,
         IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
+        _realtimeQueue = realtimeQueue;
         _fairHousing = fairHousing;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -233,6 +233,13 @@ public class ConversationService : IConversationService
             Id = c.Id,
             TenantId = c.TenantId,
             TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            CounterpartyName = tenantViewer
+                ? c.Portfolio != null && c.Portfolio.ManagementCompanyName.Trim() != string.Empty
+                    ? c.Portfolio.ManagementCompanyName.Trim()
+                    : "Property management"
+                : c.Tenant != null
+                    ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim()
+                    : string.Empty,
             Subject = c.Subject,
             PropertyName = c.Property != null ? c.Property.Name : null,
             LastMessagePreview = c.LastMessagePreview,
@@ -251,6 +258,13 @@ public class ConversationService : IConversationService
             Id = c.Id,
             TenantId = c.TenantId,
             TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            CounterpartyName = tenantViewer
+                ? c.Portfolio != null && c.Portfolio.ManagementCompanyName.Trim() != string.Empty
+                    ? c.Portfolio.ManagementCompanyName.Trim()
+                    : "Property management"
+                : c.Tenant != null
+                    ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim()
+                    : string.Empty,
             Subject = c.Subject,
             PropertyName = c.Property != null ? c.Property.Name : null,
             LastMessagePreview = c.LastMessagePreview,
@@ -542,23 +556,7 @@ public class ConversationService : IConversationService
         }
 
         // Remote broadcasts happen only after the atomic command has committed (or replayed its receipt).
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            command.PortfolioId, EntityType, detail.Id, detail, ct);
-        if (outcome.Value.NotificationIds.Count > 0)
-        {
-            var notifications = await _db.Notifications
-                .AsNoTracking()
-                .Where(notification => notification.PortfolioId == command.PortfolioId
-                    && outcome.Value.NotificationIds.Contains(notification.Id))
-                .OrderBy(notification => notification.Id)
-                .ToListAsync(ct);
-            foreach (var notification in notifications)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    command.PortfolioId, "Notification", notification.Id,
-                    NotificationResponse.FromEntity(notification), ct);
-            }
-        }
+        EnqueueConversationUpdates(command.PortfolioId, detail, outcome.Value.NotificationIds);
 
         return detail;
     }
@@ -684,25 +682,27 @@ public class ConversationService : IConversationService
             command.PortfolioId, outcome.Value.ConversationId, tenantId, tenantViewer: true, ct);
         if (detail is null) return null;
 
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            command.PortfolioId, EntityType, detail.Id, detail, ct);
-        if (outcome.Value.NotificationIds.Count > 0)
-        {
-            var notifications = await _db.Notifications
-                .AsNoTracking()
-                .Where(notification => notification.PortfolioId == command.PortfolioId
-                    && outcome.Value.NotificationIds.Contains(notification.Id))
-                .OrderBy(notification => notification.Id)
-                .ToListAsync(ct);
-            foreach (var notification in notifications)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    command.PortfolioId, "Notification", notification.Id,
-                    NotificationResponse.FromEntity(notification), ct);
-            }
-        }
+        EnqueueConversationUpdates(command.PortfolioId, detail, outcome.Value.NotificationIds);
 
         return detail;
+    }
+
+    private void EnqueueConversationUpdates(
+        int portfolioId,
+        ConversationDetail detail,
+        IReadOnlyList<int> notificationIds)
+    {
+        var updates = new List<EntityUpdateBroadcast>(notificationIds.Count + 1)
+        {
+            new(portfolioId, EntityType, detail.Id, detail),
+        };
+        updates.AddRange(notificationIds.Select(notificationId =>
+            new EntityUpdateBroadcast(
+                portfolioId,
+                "Notification",
+                notificationId,
+                new SavedContextNotificationRealtimeHint())));
+        _realtimeQueue.EnqueueEntityUpdates(updates);
     }
 
     // ===========================================================================================

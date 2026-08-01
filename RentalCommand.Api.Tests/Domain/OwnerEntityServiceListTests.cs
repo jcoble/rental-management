@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -12,23 +13,31 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class OwnerEntityServiceListTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class OwnerEntityServiceListTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly OwnerEntityService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private OwnerEntityService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public OwnerEntityServiceListTests()
+    public OwnerEntityServiceListTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceListTests));
+        await _ctx.ActivateApiScopeAsync(_scope);
         _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
@@ -117,6 +126,74 @@ public class OwnerEntityServiceListTests : IDisposable
 
         result.Should().NotBeNull();
         result!.AssignedPropertyCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task OwnerEntityAuditAuthorization_IsTranslatedAndReturnsAuthorizedHistory()
+    {
+        var owner = SeedOwner("Audit Holdings", OwnerEntityType.LLC);
+        var audit = new AtomicAuditLog
+        {
+            AttemptId = Guid.NewGuid(),
+            CommandType = "owner-audit-test",
+            CommandIdempotencyKey = Guid.NewGuid().ToString("N"),
+            MutationOrdinal = 1,
+            PortfolioId = PortfolioId,
+            UserId = _scope.UserId,
+            EntityType = nameof(OwnerEntity),
+            EntityId = owner.Id,
+            Operation = AuditLogOperation.Updated,
+            ChangeReason = "Owner audit authorization proof",
+            Timestamp = DateTime.UtcNow,
+        };
+        _ctx.Db.AtomicAuditLogs.Add(audit);
+        await _ctx.Db.SaveChangesAsync();
+
+        var query = _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .WhereAuthorizedForReports(_ctx.Db, _scope, DateTime.UtcNow)
+            .Where(row => row.EntityType == nameof(OwnerEntity) && row.EntityId == owner.Id);
+        var sql = query.ToQueryString();
+        var rows = await query.ToListAsync();
+
+        rows.Should().ContainSingle().Which.Id.Should().Be(audit.Id);
+        sql.Should().Contain("\"OwnerEntities\"");
+        sql.Should().Contain("\"PropertyOwnerships\"");
+        sql.Should().Contain("rc_api_effective_capability_scopes");
+        sql.Count(character => character == ';').Should().BeLessThanOrEqualTo(1);
+    }
+
+    [Fact]
+    public async Task OwnerEntityAuditAuthorization_StaleScopeFailsClosed()
+    {
+        var owner = SeedOwner("Denied Audit Holdings", OwnerEntityType.LLC);
+        _ctx.Db.AtomicAuditLogs.Add(new AtomicAuditLog
+        {
+            AttemptId = Guid.NewGuid(),
+            CommandType = "owner-audit-denied-test",
+            CommandIdempotencyKey = Guid.NewGuid().ToString("N"),
+            MutationOrdinal = 1,
+            PortfolioId = PortfolioId,
+            UserId = _scope.UserId,
+            EntityType = nameof(OwnerEntity),
+            EntityId = owner.Id,
+            Operation = AuditLogOperation.Created,
+            ChangeReason = "Denied owner audit authorization proof",
+            Timestamp = DateTime.UtcNow,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        var stale = new WorkspaceReadScope(
+            _scope.PortfolioId,
+            _scope.UserId,
+            _scope.SessionId,
+            _scope.AccessContextId,
+            _scope.AccessRevision + 1);
+
+        var rows = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .WhereAuthorizedForReports(_ctx.Db, stale, DateTime.UtcNow)
+            .Where(row => row.EntityType == nameof(OwnerEntity) && row.EntityId == owner.Id)
+            .ToListAsync();
+
+        rows.Should().BeEmpty();
     }
 
     private OwnerEntity SeedOwner(string name, OwnerEntityType type)

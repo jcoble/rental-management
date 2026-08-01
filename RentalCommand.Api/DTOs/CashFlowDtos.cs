@@ -31,7 +31,7 @@ public class PropertyCashFlow
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
 
-    /// <summary>Actual cash received: Rent + LateFee, Paid (full) or Partial (collected), no deposits.</summary>
+    /// <summary>Actual cash received and allocated to non-deposit charges.</summary>
     public decimal Income { get; set; }
 
     /// <summary>

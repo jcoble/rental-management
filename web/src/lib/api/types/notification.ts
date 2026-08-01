@@ -30,7 +30,8 @@ export type NotificationDestination =
   | "LeasingApplication"
   | "LeasingAppointment"
   | "LeasingConversation"
-  | "LeasingMoveIn";
+  | "LeasingMoveIn"
+  | "TenantAccount";
 
 export type NotificationAction = "Open" | "Review" | "Resolve";
 
@@ -104,6 +105,17 @@ export interface UpdateMorningBriefingSettingsRequest {
   enabled: boolean;
   sendHourLocal: number;
   includeEmpty: boolean;
+}
+
+export interface LateFeeAutomationSettingsResponse {
+  rentChargesAlwaysOn: boolean;
+  enableLateFees: boolean;
+  lateFeeGraceDays: number;
+}
+
+export interface UpdateLateFeeAutomationSettingsRequest {
+  enableLateFees: boolean;
+  lateFeeGraceDays: number;
 }
 
 export type TeamRoutingTopic =

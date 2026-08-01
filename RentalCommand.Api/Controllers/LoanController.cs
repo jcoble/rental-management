@@ -51,10 +51,37 @@ public class LoanController : ManagementControllerBase
     [HttpGet("{id:int}/payments")]
     [ProducesResponseType(typeof(IReadOnlyList<LoanPaymentResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<IReadOnlyList<LoanPaymentResponse>>> Payments(int id, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<LoanPaymentResponse>>> Payments(
+        int id,
+        [FromQuery] LoanPaymentQuery query,
+        CancellationToken ct)
     {
-        var payments = await _service.GetPaymentsAsync(GetWorkspaceReadScope(), id, ct);
+        var payments = await _service.GetPaymentsAsync(GetWorkspaceReadScope(), id, query, ct);
         return payments == null ? NotFound(new { error = "Loan not found" }) : Ok(payments);
+    }
+
+    [HttpPost("{loanId:int}/payments/{paymentId:int}/post")]
+    [ProducesResponseType(typeof(LoanPaymentResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LoanPaymentResponse>> PostPayment(
+        int loanId,
+        int paymentId,
+        [FromBody] PostLoanPaymentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var posted = await _service.PostPaymentAsync(
+                GetWorkspaceReadScope(), loanId, paymentId, request, operationKey, ct);
+            if (posted is null)
+                return NotFound(new { error = "Loan payment not found" });
+            return Ok(posted);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
     [HttpPost]

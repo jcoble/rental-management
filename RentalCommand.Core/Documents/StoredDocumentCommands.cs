@@ -27,15 +27,17 @@ public enum StoredDocumentTarget
 public enum StoredDocumentMutationOutcome
 {
     Created,
+    ReusedExisting,
     Deleted,
     NotFound,
 }
 
 public sealed record StoredDocumentManagementAccess(
+    [property: AtomicFingerprintIgnore]
     Guid SessionId,
     int UserId,
-    int AccessContextId,
-    long AccessRevision) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long AccessRevision) : IAtomicCommandData;
 
 /// <summary>
 /// Persists one already-uploaded blob as a general document. Blob I/O is deliberately excluded from
@@ -57,7 +59,7 @@ public sealed record CreateStoredDocumentCommand(
     string StoragePath,
     string ContentType,
     long SizeBytes,
-    DateTime UploadedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime UploadedAtUtc,
     StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record CreateStoredDocumentResult(
@@ -69,7 +71,7 @@ public sealed record CreateStoredDocumentResult(
     string StoragePath,
     string ContentType,
     long SizeBytes,
-    DateTime UploadedAtUtc) : IAtomicResultData;
+    DateTime UploadedAtUtc);
 
 /// <summary>
 /// Soft-deletes a document row and stages durable physical-blob cleanup in the same database
@@ -82,7 +84,7 @@ public sealed record DeleteStoredDocumentCommand(
     int? TenantId,
     bool IsStaff,
     string ClientOperationId,
-    DateTime DeletedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime DeletedAtUtc,
     StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record DeleteStoredDocumentResult(
@@ -92,4 +94,4 @@ public sealed record DeleteStoredDocumentResult(
     long EntityId,
     string FileName,
     string StoragePath,
-    DateTime DeletedAtUtc) : IAtomicResultData;
+    DateTime DeletedAtUtc);

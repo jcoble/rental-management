@@ -33,6 +33,7 @@ export interface TeamAssignmentSummary {
 	status: string;
 	scopeKind: AssignmentScopeKind;
 	selectedPropertyCount: number;
+	selectedPropertyIds: number[];
 	effectiveFromUtc: string;
 	effectiveToUtc: string | null;
 }

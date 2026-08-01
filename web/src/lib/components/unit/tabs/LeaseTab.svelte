@@ -17,6 +17,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
+	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -45,6 +46,9 @@
 	let closeReasonCode = $state('');
 	let closeNote = $state('');
 
+	const canManagePossession = $derived(
+		hasCapability('rentals.manage') || hasCapability('leasing.onboarding.manage')
+	);
 	const relationshipsQuery = createQuery(() => ({
 		queryKey: ['lease-managements', 'unit', dashboard.unit.id],
 		queryFn: () => leaseManagements.listPage({ unitId: dashboard.unit.id, take: 50, sort: '-updatedAtUtc' }),
@@ -171,22 +175,29 @@
 					<a href={`/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements&leaseManagement=${relationship.leaseManagementId}`} class="flex items-center justify-between gap-4 transition-colors hover:bg-muted/40">
 						<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-medium">{relationship.primaryTenantName ?? 'No primary tenant'}</p><StatusBadge status={relationship.lifecycle} /></div><p class="mt-1 text-sm text-muted-foreground">{relationship.agreementNumber ?? 'No governing agreement'}{relationship.agreementStatus ? ` · ${relationship.agreementStatus}` : ''}{relationship.termEndOn ? ` · ends ${relationship.termEndOn}` : ''}</p></div><ArrowRight class="h-4 w-4 shrink-0 text-muted-foreground" />
 					</a>
-					{#if canManageLifecycle}
-						<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">
-							{#if relationship.lifecycle === 'Planned' && !relationship.possessionGivenAtUtc}
-								<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned move-in</Button>
-							{/if}
-							{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}
-								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Move to another rental</Button>
-							{/if}
-							{#if relationship.tenantAccountId && !relationship.accountClosedAtUtc}
-								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'close')}>Close account</Button>
-							{/if}
+						{#if canManageLifecycle}
+							<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">
+								{#if !relationship.possessionGivenAtUtc && !relationship.canceledAtUtc}
+									<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned move-in</Button>
+								{/if}
+								{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}
+									<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Move to another rental</Button>
+								{/if}
+								{#if relationship.tenantAccountId && !relationship.accountClosedAtUtc}
+									<Button size="sm" variant="outline" onclick={() => choose(relationship, 'close')}>Close account</Button>
+								{/if}
+							</div>
+						{/if}
+						<div class="mt-3" data-testid="unit-possession-actions-{relationship.leaseManagementId}">
+							<PossessionActions
+								summary={relationship}
+								canManage={canManagePossession}
+								onchanged={refresh}
+							/>
 						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
+					</div>
+				{/each}
+			</div>
 	{/if}
 </div>
 

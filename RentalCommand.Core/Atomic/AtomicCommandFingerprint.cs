@@ -1,94 +1,63 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace RentalCommand.Core.Atomic;
 
-/// <summary>
-/// Produces the stable business-payload fingerprint stored with an atomic receipt. Authentication
-/// envelope fields and command-generated processing timestamps are deliberately omitted: they can
-/// legitimately change when the same request is retried after a token refresh or timeout. Dates and
-/// timestamps that describe the business operation remain part of the fingerprint.
-/// </summary>
+/// <summary>Marks a root command property that is intentionally excluded from receipt fingerprints.</summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class AtomicFingerprintIgnoreAttribute : Attribute;
+
+/// <summary>Produces the stable command fingerprint stored with an atomic receipt.</summary>
 public static class AtomicCommandFingerprint
 {
-    private static readonly HashSet<string> RetryVolatileProperties = new(StringComparer.Ordinal)
-    {
-        "AuthSessionId",
-        "AccessContextId",
-        "AccessRevision",
-        "ExpectedAccessRevision",
-        "ActorAuthSessionId",
-        "ActorAccessContextId",
-        "ActorAccessRevision",
-        "DeliveryIdempotencyKey",
-        // Data Protection uses a randomized nonce, so retrying the same Plaid command produces
-        // different ciphertext. The stable request and external-account hashes remain fingerprinted.
-        "ExternalAccountIdCipherText",
-        "PreparedAtUtc",
-        "AppliedAtUtc",
-        "AdmittedAtUtc",
-        "RecordedAtUtc",
-        "ImportedAtUtc",
-        "ReceivedAtUtc",
-        "ReconciledAtUtc",
-        "ConfirmedAtUtc",
-        "UploadedAtUtc",
-        "IssuedAtUtc",
-        "PresentedAtUtc",
-        "RequestedAtUtc",
-        "GeneratedAtUtc",
-        "ChangedAtUtc",
-        "DeletedAtUtc",
-        "DispatchedAtUtc",
-        "CreatedAtUtc",
-        "CompletedAtUtc",
-        "ExpiresAtUtc",
-        "SessionExpiresAtUtc",
-        "CredentialExpiresAtUtc",
-        "AbsoluteFamilyExpiresAtUtc",
-        "ReplacementExpiresAtUtc",
-        "LinkExpiresAtUtc",
-        // Password commands carry these values only into the in-memory handler. The receipt
-        // fingerprint binds the server-keyed PasswordIntentHash instead, so a database leak does
-        // not expose an unsalted offline password verifier.
-        "CurrentPassword",
-        "NewPassword",
-        // Identity password hashes and token payloads are prepared with randomized cryptographic
-        // material outside the transaction. Stable server-keyed intent hashes remain fingerprinted.
-        "PasswordHash",
-        "NewSecurityStamp",
-        "NewConcurrencyStamp",
-        "PreparedEmailPayload",
-        "ExpectedSecurityStamp",
-        "TokenWasValidated",
-    };
-
     public static string Create(IAtomicCommandData command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var ignoredProperties = IgnoredRootPropertyNames(command.GetType());
         var element = JsonSerializer.SerializeToElement(command, command.GetType());
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
         {
-            WriteCanonical(writer, element, isRoot: true);
+            WriteCanonical(writer, element, ignoredProperties, isRoot: true);
         }
 
         return Convert.ToHexString(SHA256.HashData(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length))))
             .ToLowerInvariant();
     }
 
-    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element, bool isRoot = false)
+    private static HashSet<string> IgnoredRootPropertyNames(Type commandType) =>
+        commandType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(property =>
+                property.GetCustomAttribute<AtomicFingerprintIgnoreAttribute>() is not null
+                || commandType.GetInterfaces()
+                    .SelectMany(contract => contract.GetProperties())
+                    .Any(contractProperty =>
+                        contractProperty.Name == property.Name
+                        && contractProperty.PropertyType == property.PropertyType
+                        && contractProperty.GetCustomAttribute<AtomicFingerprintIgnoreAttribute>() is not null))
+            .Select(property =>
+                property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name ?? property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static void WriteCanonical(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        IReadOnlySet<string> ignoredRootProperties,
+        bool isRoot = false)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
                 writer.WriteStartObject();
                 foreach (var property in element.EnumerateObject()
-                             .Where(property => !isRoot || !RetryVolatileProperties.Contains(property.Name))
+                             .Where(property =>
+                                 !isRoot || !ignoredRootProperties.Contains(property.Name))
                              .OrderBy(property => property.Name, StringComparer.Ordinal))
                 {
                     writer.WritePropertyName(property.Name);
-                    WriteCanonical(writer, property.Value);
+                    WriteCanonical(writer, property.Value, ignoredRootProperties);
                 }
                 writer.WriteEndObject();
                 break;
@@ -96,7 +65,7 @@ public static class AtomicCommandFingerprint
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    WriteCanonical(writer, item);
+                    WriteCanonical(writer, item, ignoredRootProperties);
                 }
                 writer.WriteEndArray();
                 break;

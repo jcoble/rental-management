@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
 
@@ -24,14 +25,14 @@ public sealed class CanonicalAccessContextMiddleware
     public async Task InvokeAsync(
         HttpContext httpContext,
         IActiveAccessContextResolver resolver,
-        TimeProvider timeProvider,
+        IAuthSecurityClock securityClock,
         RentalCommandDbContext db)
     {
         var principal = httpContext.User;
         if (principal.Identity?.IsAuthenticated == true)
         {
             if (!Guid.TryParse(principal.FindFirstValue("sid"), out var sessionId) ||
-                !int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ||
+                !principal.TryReadSubjectUserId(out var userId) ||
                 !int.TryParse(principal.FindFirstValue("ctx"), out var accessContextId) ||
                 !long.TryParse(principal.FindFirstValue("ar"), out var accessRevision))
             {
@@ -46,7 +47,7 @@ public sealed class CanonicalAccessContextMiddleware
                     userId,
                     accessContextId,
                     accessRevision,
-                    timeProvider.GetUtcNow().UtcDateTime,
+                    securityClock.UtcNow(),
                     httpContext.RequestAborted);
 
                 httpContext.Items[CanonicalAccessContextHttpItem.Key] = active;

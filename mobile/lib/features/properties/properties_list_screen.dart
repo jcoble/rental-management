@@ -112,33 +112,7 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
     await ref.read(propertiesPageProvider(_query).future);
   }
 
-  void _openDetail(
-    BuildContext context,
-    Property property,
-    PropertyWorkspaceEntry? serverEntry,
-  ) {
-    final entry = resolvePropertyWorkspaceEntry(
-      propertyId: property.id,
-      rentalStructure: property.rentalStructure.wireValue,
-      serverEntry: serverEntry,
-    );
-    if (entry.destination == PropertyWorkspaceDestination.unit) {
-      final unitId = entry.unitId;
-      if (unitId == null || unitId <= 0) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text(
-                'This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.',
-              ),
-            ),
-          );
-        return;
-      }
-      openUnitCommandCenter(context, unitId: unitId);
-      return;
-    }
+  void _openDetail(BuildContext context, Property property) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => PropertyDetailScreen(property: property),
@@ -162,11 +136,9 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
-        canUseMobileCapabilityAction(
-          experience: auth.activeExperience,
-          capabilities: auth.capabilities,
-          capability: 'rentals.manage',
-          experiences: const {WorkspaceExperience.management},
+        hasAllPropertiesRentalsManageAuthority(
+          access: auth.access,
+          activeExperience: auth.activeExperience,
         );
 
     return Scaffold(
@@ -289,34 +261,45 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
                     },
                     itemBuilder: (context, index) {
                       if (index == page.items.length) {
-                        return MobileGridPagingBar(
-                          totalCount: page.totalCount,
-                          skip: page.skip,
-                          itemCount: page.items.length,
-                          previousTooltip: 'Previous properties page',
-                          nextTooltip: 'Next properties page',
-                          onPrevious: page.hasPrevious
-                              ? () => setState(() {
-                                  _skip = (_skip - _pageSize).clamp(0, _skip);
-                                })
-                              : null,
-                          onNext: page.hasNext
-                              ? () => setState(() => _skip += _pageSize)
-                              : null,
+                        return Padding(
+                          padding: const EdgeInsetsDirectional.only(end: 72),
+                          child: MobileGridPagingBar(
+                            totalCount: page.totalCount,
+                            skip: page.skip,
+                            itemCount: page.items.length,
+                            previousTooltip: 'Previous properties page',
+                            nextTooltip: 'Next properties page',
+                            onPrevious: page.hasPrevious
+                                ? () => setState(() {
+                                    _skip = (_skip - _pageSize).clamp(0, _skip);
+                                  })
+                                : null,
+                            onNext: page.hasNext
+                                ? () => setState(() => _skip += _pageSize)
+                                : null,
+                          ),
                         );
                       }
                       final property = page.items[index];
+                      final entry = resolvePropertyWorkspaceEntry(
+                        propertyId: property.id,
+                        rentalStructure: property.rentalStructure.wireValue,
+                        serverEntry: page.workspaceEntries[property.id],
+                      );
                       return _PropertyCard(
                         property: property,
                         position: MobileM3ListItemPositionForIndex.forIndex(
                           index,
                           page.items.length,
                         ),
-                        onTap: () => _openDetail(
-                          context,
-                          property,
-                          page.workspaceEntries[property.id],
-                        ),
+                        onTap: () => _openDetail(context, property),
+                        onOpenUnitCommand:
+                            entry.unitId == null || entry.unitId! <= 0
+                            ? null
+                            : () => openUnitCommandCenter(
+                                context,
+                                unitId: entry.unitId!,
+                              ),
                       );
                     },
                   );
@@ -337,11 +320,13 @@ class _PropertyCard extends StatelessWidget {
     required this.property,
     required this.position,
     required this.onTap,
+    this.onOpenUnitCommand,
   });
 
   final Property property;
   final MobileM3ListItemPosition position;
   final VoidCallback onTap;
+  final VoidCallback? onOpenUnitCommand;
 
   @override
   Widget build(BuildContext context) {
@@ -404,6 +389,14 @@ class _PropertyCard extends StatelessWidget {
         ],
       ),
       trailing: Icon(Icons.chevron_right, color: colorScheme.onSurfaceVariant),
+      actions: [
+        if (onOpenUnitCommand != null)
+          IconButton(
+            tooltip: 'Open unit command center',
+            icon: const Icon(Icons.home_work_outlined),
+            onPressed: onOpenUnitCommand,
+          ),
+      ],
     );
   }
 }

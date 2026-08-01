@@ -5,14 +5,19 @@ namespace RentalCommand.Core.Banking;
 public sealed record ApplyPlaidConnectionCommand(
     int PortfolioId,
     Guid ExchangeAttemptId,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public sealed record ApplyPlaidConnectionResult(
     int ConnectionId,
-    bool Created) : IAtomicResultData;
+    bool Created);
 
 public sealed record PreparePlaidTokenExchangeCommand(
     int PortfolioId,
+    int ActorUserId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    string RequiredCapability,
     string ClientOperationId,
     string RequestHash,
     string PublicTokenHash,
@@ -21,9 +26,9 @@ public sealed record PreparePlaidTokenExchangeCommand(
     string? AccountMask,
     string? AccountType,
     string? AccountSubtype,
-    string ExternalAccountIdCipherText,
+    [property: AtomicFingerprintIgnore] string ExternalAccountIdCipherText,
     string ExternalAccountIdHash,
-    DateTime PreparedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime PreparedAtUtc) : IAtomicCommandData;
 
 public enum PreparePlaidTokenExchangeOutcome
 {
@@ -34,12 +39,12 @@ public enum PreparePlaidTokenExchangeOutcome
 
 public sealed record PreparePlaidTokenExchangeResult(
     PreparePlaidTokenExchangeOutcome Outcome,
-    Guid ExchangeAttemptId) : IAtomicResultData;
+    Guid ExchangeAttemptId);
 
 public sealed record AdmitPlaidTokenExchangeCommand(
     int PortfolioId,
     Guid ExchangeAttemptId,
-    DateTime AdmittedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AdmittedAtUtc) : IAtomicCommandData;
 
 public enum AdmitPlaidTokenExchangeOutcome
 {
@@ -52,7 +57,7 @@ public enum AdmitPlaidTokenExchangeOutcome
 
 public sealed record AdmitPlaidTokenExchangeResult(
     AdmitPlaidTokenExchangeOutcome Outcome,
-    Guid ExchangeAttemptId) : IAtomicResultData;
+    Guid ExchangeAttemptId);
 
 public sealed record RecordPlaidTokenExchangeReceiptCommand(
     int PortfolioId,
@@ -61,7 +66,7 @@ public sealed record RecordPlaidTokenExchangeReceiptCommand(
     string ExternalItemIdCipherText,
     string ExternalItemIdHash,
     string ExternalAccessTokenCipherText,
-    DateTime RecordedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime RecordedAtUtc) : IAtomicCommandData;
 
 public enum RecordPlaidTokenExchangeReceiptOutcome
 {
@@ -73,7 +78,7 @@ public enum RecordPlaidTokenExchangeReceiptOutcome
 
 public sealed record RecordPlaidTokenExchangeReceiptResult(
     RecordPlaidTokenExchangeReceiptOutcome Outcome,
-    Guid ExchangeAttemptId) : IAtomicResultData;
+    Guid ExchangeAttemptId);
 
 public sealed record BankTransactionInput(
     string ProviderTransactionId,
@@ -86,31 +91,13 @@ public sealed record BankTransactionInput(
     string? Category,
     string? RawData) : IAtomicCommandData;
 
-/// <summary>
-/// Narrow kernel-owned set merge used by banking atomic handlers. The implementation owns the
-/// PostgreSQL statement; handlers cannot obtain a DbContext, connection, or raw-SQL capability.
-/// </summary>
-public interface IAtomicBankingPersistence
-{
-    Task<AtomicBankTransactionMergeResult> ApplyPlaidSyncAsync(
-        int portfolioId,
-        int connectionId,
-        IReadOnlyList<BankTransactionInput> added,
-        int addedInputCount,
-        IReadOnlyList<BankTransactionInput> modified,
-        int modifiedInputCount,
-        IReadOnlyList<string> removedProviderTransactionIds,
-        DateTime appliedAtUtc,
-        CancellationToken ct = default);
-
-    Task<AtomicBankTransactionMergeResult> ImportAsync(
-        int portfolioId,
-        int connectionId,
-        IReadOnlyList<BankTransactionInput> transactions,
-        int inputCount,
-        DateTime importedAtUtc,
-        CancellationToken ct = default);
-}
+public sealed record BankStatementInput(
+    DateOnly PeriodStart,
+    DateOnly PeriodEnd,
+    decimal OpeningBalance,
+    decimal ClosingBalance,
+    decimal StatementMovement,
+    string IsoCurrencyCode) : IAtomicCommandData;
 
 public sealed record AtomicBankTransactionMutation(
     int TransactionId,
@@ -139,7 +126,7 @@ public sealed record ApplyPlaidSyncCommand(
     int ModifiedInputCount,
     IReadOnlyList<string> RemovedProviderTransactionIds,
     string ProviderRequestIdentity,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public enum ApplyPlaidSyncOutcome
 {
@@ -153,7 +140,7 @@ public sealed record ApplyPlaidSyncResult(
     int ConnectionId,
     int ImportedCount,
     int SkippedCount,
-    IReadOnlyList<int> AffectedTransactionIds) : IAtomicResultData;
+    IReadOnlyList<int> AffectedTransactionIds);
 
 public sealed record ImportBankTransactionsCommand(
     int PortfolioId,
@@ -166,18 +153,29 @@ public sealed record ImportBankTransactionsCommand(
     IReadOnlyList<BankTransactionInput> Transactions,
     int InputCount,
     string RequestIdentity,
-    DateTime ImportedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime ImportedAtUtc,
+    BankStatementInput? Statement = null) : IAtomicCommandData;
 
 public sealed record ImportBankTransactionsResult(
     int ConnectionId,
     int ImportedCount,
     int SkippedCount,
-    IReadOnlyList<int> ImportedTransactionIds) : IAtomicResultData;
+    IReadOnlyList<int> ImportedTransactionIds,
+    int? StatementId = null,
+    DateOnly? StatementPeriodStart = null,
+    DateOnly? StatementPeriodEnd = null,
+    decimal? StatementOpeningBalance = null,
+    decimal? StatementClosingBalance = null,
+    decimal? StatementMovement = null,
+    string? StatementIsoCurrencyCode = null);
 
 public enum BankReconciliationAction
 {
     MatchReceipt,
     MatchExpense,
+    MatchLoanPayment,
+    MatchOwnerDistribution,
+    MatchTransfer,
     Clear,
     Dismiss,
     Ignore,
@@ -190,14 +188,20 @@ public sealed record ReconcileBankTransactionCommand(
     int? TenantAccountId,
     long? TenantLedgerEntryId,
     int? ExpenseId,
+    int? LoanPaymentId,
+    int? OwnerDistributionId,
+    int? TransferBankTransactionId,
+    DateTime? ExpectedTransferUpdatedAtUtc,
     DateTime ExpectedUpdatedAtUtc,
-    DateTime AppliedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string RequiredCapability,
-    string OperationKey) : IAtomicCommandData;
+    string OperationKey,
+    [property: AtomicFingerprintIgnore] DateTime? ResolvedSuggestionTransferUpdatedAtUtc = null)
+    : IAtomicCommandData;
 
 public enum ReconcileBankTransactionOutcome
 {
@@ -209,20 +213,47 @@ public enum ReconcileBankTransactionOutcome
     StaleVersion,
 }
 
+public sealed record ReconciledBankTransactionSnapshot(
+    int Id,
+    int? PropertyId,
+    string? PropertyName,
+    int BankConnectionId,
+    string InstitutionName,
+    string AccountName,
+    string ProviderTransactionId,
+    DateTime PostedAt,
+    DateTime? AuthorizedAt,
+    string Description,
+    string? MerchantName,
+    decimal Amount,
+    string IsoCurrencyCode,
+    string? Category,
+    int? MatchedTenantAccountId,
+    long? MatchedTenantLedgerEntryId,
+    int? MatchedExpenseId,
+    int? MatchedLoanPaymentId,
+    int? MatchedOwnerDistributionId,
+    int? MatchedBankTransactionId,
+    string MatchStatus,
+    decimal? MatchConfidence,
+    string? Notes,
+    DateTime UpdatedAt);
+
 public sealed record ReconcileBankTransactionResult(
     ReconcileBankTransactionOutcome Outcome,
-    int TransactionId) : IAtomicResultData;
+    int TransactionId,
+    ReconciledBankTransactionSnapshot? Transaction = null);
 
 public sealed record RouteBankTransactionCommand(
     int PortfolioId,
     int TransactionId,
     int? PropertyId,
     DateTime ExpectedUpdatedAtUtc,
-    DateTime AppliedAtUtc,
+    [property: AtomicFingerprintIgnore] DateTime AppliedAtUtc,
     int ActorUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string OperationKey) : IAtomicCommandData;
 
 public enum RouteBankTransactionOutcome
@@ -236,4 +267,4 @@ public enum RouteBankTransactionOutcome
 
 public sealed record RouteBankTransactionResult(
     RouteBankTransactionOutcome Outcome,
-    int TransactionId) : IAtomicResultData;
+    int TransactionId);

@@ -12,9 +12,9 @@ public interface IWorkspaceTeamAuthorityCommand : IAtomicCommandData
 {
     int PortfolioId { get; }
     int ActorUserId { get; }
-    Guid ActorAuthSessionId { get; }
-    int ActorAccessContextId { get; }
-    long ActorAccessRevision { get; }
+    [AtomicFingerprintIgnore] Guid ActorAuthSessionId { get; }
+    [AtomicFingerprintIgnore] int ActorAccessContextId { get; }
+    [AtomicFingerprintIgnore] long ActorAccessRevision { get; }
 }
 
 public sealed record CreateWorkspaceMembershipCommand(
@@ -39,9 +39,9 @@ public sealed record ActivateWorkspaceInvitationCommand(
     long InvitationId,
     int InvitedUserId,
     string TokenHash,
-    string PasswordHash,
-    string NewSecurityStamp,
-    string NewConcurrencyStamp) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string PasswordHash,
+    [property: AtomicFingerprintIgnore] string NewSecurityStamp,
+    [property: AtomicFingerprintIgnore] string NewConcurrencyStamp) : IAtomicCommandData;
 
 public enum ActivateWorkspaceInvitationOutcome
 {
@@ -53,7 +53,7 @@ public sealed record ActivateWorkspaceInvitationResult(
     ActivateWorkspaceInvitationOutcome Outcome,
     int UserId,
     int PortfolioId,
-    int AccessContextId) : IAtomicResultData;
+    int AccessContextId);
 
 public sealed record AddWorkspaceRoleAssignmentCommand(
     int PortfolioId,
@@ -125,7 +125,7 @@ public sealed record CreateWorkspaceMembershipResult(
     int WorkspaceMembershipId,
     int AssignmentId,
     long AccessRevision,
-    bool RequiresAccountActivation) : IAtomicResultData;
+    bool RequiresAccountActivation);
 
 public sealed record WorkspaceTeamMutationResult(
     int AccessContextId,
@@ -133,4 +133,4 @@ public sealed record WorkspaceTeamMutationResult(
     int? AssignmentId,
     long AccessRevision,
     WorkspaceAccessContextStatus ContextStatus,
-    WorkspaceMembershipStatus MembershipStatus) : IAtomicResultData;
+    WorkspaceMembershipStatus MembershipStatus);

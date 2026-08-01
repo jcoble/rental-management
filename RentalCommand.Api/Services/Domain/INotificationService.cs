@@ -20,6 +20,11 @@ public interface INotificationService
         int notificationId,
         CancellationToken ct = default);
 
+    Task<int> GetUnreadCountAsync(
+        WorkspaceReadScope scope,
+        NavigationExperience experience,
+        CancellationToken ct = default);
+
     Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default);
     Task<bool> MarkAsReadAsync(WorkspaceReadScope scope, int notificationId, string operationKey,
         CancellationToken ct = default);

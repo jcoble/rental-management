@@ -230,14 +230,55 @@ class PropertyLoansRepository {
     }
   }
 
-  Future<List<LoanPayment>> getLoanPayments(int loanId) async {
+  Future<List<LoanPayment>> getLoanPayments(
+    int loanId, {
+    String? status,
+    String? sort,
+    int? skip,
+    int? take,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>('/loans/$loanId/payments');
+      final response = await _dio.get<List<dynamic>>(
+        '/loans/$loanId/payments',
+        queryParameters: {
+          if (status != null && status.trim().isNotEmpty)
+            'status': status.trim(),
+          if (sort != null && sort.trim().isNotEmpty) 'sort': sort.trim(),
+          'skip': ?skip,
+          'take': ?take,
+        },
+      );
       final data = response.data ?? [];
       return data
           .whereType<Map<String, dynamic>>()
           .map(LoanPayment.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<LoanPayment> postLoanPayment({
+    required int loanId,
+    required int paymentId,
+  }) async {
+    try {
+      final response = await IdempotentMutation.run(
+        'loans:$loanId:payments:$paymentId:post',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/loans/$loanId/payments/$paymentId/post',
+          data: const <String, dynamic>{},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LoanPayment.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

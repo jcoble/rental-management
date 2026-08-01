@@ -547,7 +547,8 @@ public class UnitDashboardServiceTests : IAsyncLifetime
                 TenantLedgerDirection.Debit,
                 remainingReceivable,
                 $"dashboard-current-due-{Guid.NewGuid():N}",
-                nextDueOn ?? DateOnly.FromDateTime(DateTime.UtcNow));
+                DateOnly.FromDateTime(DateTime.UtcNow),
+                nextDueOn);
         }
 
         _db.SaveChanges();
@@ -715,7 +716,8 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         TenantLedgerDirection direction,
         decimal amount,
         string businessKey,
-        DateOnly effectiveOn)
+        DateOnly effectiveOn,
+        DateOnly? dueOn = null)
     {
         _db.TenantLedgerEntries.Add(new TenantLedgerEntry
         {
@@ -728,7 +730,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
             Amount = amount,
             Currency = "USD",
             EffectiveOn = effectiveOn,
-            DueOn = direction == TenantLedgerDirection.Debit ? effectiveOn : null,
+            DueOn = direction == TenantLedgerDirection.Debit ? dueOn ?? effectiveOn : null,
             PostedAtUtc = effectiveOn.ToDateTime(new TimeOnly(12, 0), DateTimeKind.Utc),
             Description = businessKey,
             BusinessKey = businessKey,

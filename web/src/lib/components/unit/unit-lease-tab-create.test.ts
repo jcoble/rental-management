@@ -39,6 +39,14 @@ describe('unit lease tab create action', () => {
 		assert.doesNotMatch(source, /selectedLeaseId/);
 	});
 
+	it('offers cancellation for every uncanceled relationship before possession', () => {
+		assert.match(
+			source,
+			/\{#if !relationship\.possessionGivenAtUtc && !relationship\.canceledAtUtc\}[\s\S]*Cancel planned move-in/
+		);
+		assert.doesNotMatch(source, /relationship\.lifecycle === 'Planned'/);
+	});
+
 	it('does not let access-disposition initialization retrigger its own effect', () => {
 		assert.match(source, /import \{[^}]*untrack[^}]*\} from 'svelte'/s);
 		assert.match(source, /const current = untrack\(\(\) => accessDispositions\)/);

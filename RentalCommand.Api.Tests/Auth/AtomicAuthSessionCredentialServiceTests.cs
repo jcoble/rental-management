@@ -76,7 +76,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
                 start.CredentialId);
         }, AtomicCommandDisposition.Executed);
         var tokens = new RefreshCredentialTokenFactory(SigningKey);
-        var service = CreateService(atomic, tokens, new AdvancingTimeProvider());
+        var service = CreateService(atomic, tokens, new AdvancingAuthSecurityClock());
         var request = new AtomicAuthSessionStartRequest(
             Guid.NewGuid(),
             41,
@@ -157,7 +157,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     private static AtomicAuthSessionCredentialService CreateService(
         IAtomicUnitOfWork atomic,
         RefreshCredentialTokenFactory tokens,
-        TimeProvider? timeProvider = null) =>
+        IAuthSecurityClock? securityClock = null) =>
         new(
             atomic,
             tokens,
@@ -168,13 +168,13 @@ public sealed class AtomicAuthSessionCredentialServiceTests
                 FamilyAbsoluteLifetimeDays = 30,
                 SessionLifetimeDays = 30,
             }),
-            timeProvider ?? TimeProvider.System);
+            securityClock ?? new SystemAuthSecurityClock());
 
-    private sealed class AdvancingTimeProvider : TimeProvider
+    private sealed class AdvancingAuthSecurityClock : IAuthSecurityClock
     {
-        private DateTimeOffset _utcNow = new(2026, 7, 14, 0, 0, 0, TimeSpan.Zero);
+        private DateTime _utcNow = new(2026, 7, 14, 0, 0, 0, DateTimeKind.Utc);
 
-        public override DateTimeOffset GetUtcNow()
+        public DateTime UtcNow()
         {
             var current = _utcNow;
             _utcNow = _utcNow.AddSeconds(1);
@@ -202,7 +202,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
             TCommand command,
-            IAtomicResultCodec<TResult> resultCodec,
+            AtomicJsonResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull

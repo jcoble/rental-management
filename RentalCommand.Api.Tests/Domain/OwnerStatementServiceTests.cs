@@ -608,6 +608,7 @@ public class OwnerStatementServiceTests : IAsyncLifetime
     private void SeedOwnerDistribution(int ownerEntityId, decimal amount, int? year = null, int? propertyId = null)
     {
         var y = year ?? Year;
+        var now = DateTime.UtcNow;
         _db.OwnerDistributions.Add(new OwnerDistribution
         {
             PortfolioId = PortfolioId,
@@ -616,8 +617,11 @@ public class OwnerStatementServiceTests : IAsyncLifetime
             Date = new DateTime(y, 7, 1, 0, 0, 0, DateTimeKind.Utc),
             Amount = amount,
             Method = DistributionMethod.Ach,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            Status = OwnerDistributionStatus.Approved,
+            ApprovedAt = now,
+            ApprovedBusinessDate = new DateTime(y, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = now,
+            UpdatedAt = now,
         });
         _db.SaveChanges();
     }

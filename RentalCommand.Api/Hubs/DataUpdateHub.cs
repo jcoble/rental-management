@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Hubs;
@@ -16,16 +17,16 @@ namespace RentalCommand.Api.Hubs;
 public class DataUpdateHub : Hub
 {
     private readonly IActiveAccessContextResolver _accessContextResolver;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAuthSecurityClock _securityClock;
     private readonly ILogger<DataUpdateHub> _logger;
 
     public DataUpdateHub(
         IActiveAccessContextResolver accessContextResolver,
-        TimeProvider timeProvider,
+        IAuthSecurityClock securityClock,
         ILogger<DataUpdateHub> logger)
     {
         _accessContextResolver = accessContextResolver;
-        _timeProvider = timeProvider;
+        _securityClock = securityClock;
         _logger = logger;
     }
 
@@ -40,7 +41,7 @@ public class DataUpdateHub : Hub
                 presented.UserId,
                 presented.AccessContextId,
                 presented.AccessRevision,
-                _timeProvider.GetUtcNow().UtcDateTime,
+                _securityClock.UtcNow(),
                 Context.ConnectionAborted);
         }
         catch (UnauthorizedAccessException ex)

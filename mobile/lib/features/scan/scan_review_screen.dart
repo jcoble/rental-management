@@ -7,11 +7,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../home/mobile_quick_action_fab.dart';
 import '../leases/leases_repository.dart';
+import '../maintenance/work_order_unit_aware_loader.dart';
+import '../maintenance/work_orders_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
+import '../properties/property_loans_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
+import '../units/units_repository.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 import 'scan_target_options.dart';
@@ -109,6 +114,36 @@ final _leaseTemplateOptionsProvider = FutureProvider.autoDispose
           );
     });
 
+typedef _LoanOptionQuery = ({int propertyId, int skip});
+
+final _loanOptionsProvider = FutureProvider.autoDispose
+    .family<List<PropertyLoan>, _LoanOptionQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(propertyLoansRepositoryProvider)
+          .listLoans(
+            propertyId: query.propertyId,
+            skip: query.skip,
+            take: 50,
+            sort: '-createdAt',
+          );
+    });
+
+typedef _LoanPaymentOptionQuery = ({int loanId, int skip});
+
+final _loanPaymentOptionsProvider = FutureProvider.autoDispose
+    .family<List<LoanPayment>, _LoanPaymentOptionQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(propertyLoansRepositoryProvider)
+          .getLoanPayments(
+            query.loanId,
+            sort: 'dueDate',
+            skip: query.skip,
+            take: 50,
+          );
+    });
+
 // ---------------------------------------------------------------------------
 // Field groups (mirrors web review page)
 // ---------------------------------------------------------------------------
@@ -144,12 +179,23 @@ const _fieldGroups = <({String label, List<String> fields})>[
   (label: 'Details', fields: ['document_kind', 'category', 'notes']),
 ];
 
-// Lease-draft field group (target == 'LeaseAgreement'). The property/unit/tenant are
-// chosen with pickers below, so only the lease *terms* live here.
+// Lease-draft review fields (target == 'LeaseAgreement'). Canonical rows can be
+// selected with the pickers below, but create-new confirmation also accepts the
+// reviewed tenant contact and Unit details. Keep those visible here so a scan
+// never creates an incomplete rental graph simply because extraction was unsure.
 const _leaseFieldOrder = <String>[
+  'tenant_name',
+  'tenant_email',
+  'tenant_phone',
+  'tenant_emergency_contact',
+  'unit_number',
+  'unit_bedrooms',
+  'unit_bathrooms',
+  'unit_square_feet',
   'lease_number',
   'start_date',
   'end_date',
+  'possession_given_at',
   'monthly_rent',
   'security_deposit',
   'late_fee',
@@ -193,6 +239,54 @@ const _loanFieldOrder = <String>[
   'notes',
 ];
 
+const _leaseEndingNoticeFieldOrder = <String>[
+  'lease_management_id',
+  'unit_id',
+  'tenant_name',
+  'property_name',
+  'unit_number',
+  'notice_type',
+  'notice_given_date',
+  'planned_move_out_date',
+  'reason',
+  'notes',
+];
+
+const _loanStatementPrincipalFieldNames = [
+  'statement_principal_amount',
+  'statementPrincipalAmount',
+  'principal_amount',
+  'principalAmount',
+];
+const _loanStatementInterestFieldNames = [
+  'statement_interest_amount',
+  'statementInterestAmount',
+  'interest_amount',
+  'interestAmount',
+];
+const _loanStatementEscrowFieldNames = [
+  'statement_escrow_amount',
+  'statementEscrowAmount',
+  'escrow_amount',
+  'escrowAmount',
+];
+const _loanStatementOpeningBalanceFieldNames = [
+  'opening_principal_balance',
+  'openingPrincipalBalance',
+  'unpaid_principal_balance',
+  'unpaidPrincipalBalance',
+  'current_balance',
+  'currentBalance',
+];
+const _loanStatementEffectiveDateFieldNames = [
+  'statementEffectiveDate',
+  'statement_effective_date',
+  'statement_date',
+  'statementDate',
+  'due_date',
+  'dueDate',
+];
+
 const _knownScalarFields = {
   'vendor_name',
   'vendor_address',
@@ -222,10 +316,29 @@ const _knownScalarFields = {
   'day_of_month_due',
   'monthly_principal_interest',
   'monthly_escrow',
+  'statement_principal_amount',
+  'principal_amount',
+  'statement_interest_amount',
+  'interest_amount',
+  'statement_escrow_amount',
+  'escrow_amount',
+  'opening_principal_balance',
+  'unpaid_principal_balance',
+  'statement_effective_date',
+  'statementEffectiveDate',
+  'statement_date',
+  'notice_given_date',
+  'planned_move_out_date',
   'escrow_covers_taxes',
   'escrow_covers_insurance',
   'property_id',
   'property_address',
+  'lease_management_id',
+  'tenant_name',
+  'property_name',
+  'unit_number',
+  'notice_type',
+  'reason',
 };
 
 // Money fields use a decimal number keypad; date fields open a date picker so a
@@ -242,6 +355,8 @@ const _moneyFields = {
   'monthly_rent',
   'security_deposit',
   'late_fee',
+  'unit_bedrooms',
+  'unit_bathrooms',
   // Applicant fields
   'monthly_income',
   // Loan terms
@@ -250,6 +365,14 @@ const _moneyFields = {
   'annual_interest_rate_pct',
   'monthly_principal_interest',
   'monthly_escrow',
+  'statement_principal_amount',
+  'principal_amount',
+  'statement_interest_amount',
+  'interest_amount',
+  'statement_escrow_amount',
+  'escrow_amount',
+  'opening_principal_balance',
+  'unpaid_principal_balance',
 };
 
 const _dateFields = {
@@ -258,9 +381,17 @@ const _dateFields = {
   // Lease terms
   'start_date',
   'end_date',
+  'possession_given_at',
   // Applicant fields
   'date_of_birth',
   'desired_move_in_date',
+  // Loan statement fields
+  'statement_date',
+  'statement_effective_date',
+  'statementEffectiveDate',
+  // Lease-ending notice fields
+  'notice_given_date',
+  'planned_move_out_date',
 };
 
 enum LeaseScanReviewDisposition {
@@ -272,8 +403,15 @@ enum LeaseScanReviewDisposition {
   final String wireValue;
 }
 
+enum _LoanReviewMode { matchExistingPayment, addNewLoan }
+
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
-const _intFields = {'rent_due_day', 'term_months', 'day_of_month_due'};
+const _intFields = {
+  'rent_due_day',
+  'unit_square_feet',
+  'term_months',
+  'day_of_month_due',
+};
 
 // Friendly label overrides for keys where plain Title Case reads awkwardly.
 const _labelOverrides = <String, String>{
@@ -293,11 +431,19 @@ const _labelOverrides = <String, String>{
   'lease_number': 'Lease number',
   'start_date': 'Start date',
   'end_date': 'End date',
+  'possession_given_at': 'Possession date',
   'monthly_rent': 'Monthly rent',
   'security_deposit': 'Security deposit',
   'late_fee': 'Late fee',
   'rent_due_day': 'Rent due day (of month)',
   'tenant_name': 'Tenant',
+  'tenant_email': 'Tenant email',
+  'tenant_phone': 'Tenant phone',
+  'tenant_emergency_contact': 'Emergency contact',
+  'unit_number': 'Unit number',
+  'unit_bedrooms': 'Bedrooms',
+  'unit_bathrooms': 'Bathrooms',
+  'unit_square_feet': 'Square feet',
   // Applicant fields (mirror the web review page's labels)
   'first_name': 'First name',
   'last_name': 'Last name',
@@ -317,8 +463,26 @@ const _labelOverrides = <String, String>{
   'day_of_month_due': 'Day due',
   'monthly_principal_interest': 'Monthly P&I',
   'monthly_escrow': 'Monthly escrow',
+  'statement_principal_amount': 'Statement principal',
+  'principal_amount': 'Statement principal',
+  'statement_interest_amount': 'Statement interest',
+  'interest_amount': 'Statement interest',
+  'statement_escrow_amount': 'Statement escrow',
+  'escrow_amount': 'Statement escrow',
+  'opening_principal_balance': 'Opening principal balance',
+  'unpaid_principal_balance': 'Opening principal balance',
+  'statement_date': 'Statement date',
+  'statement_effective_date': 'Statement effective date',
+  'statementEffectiveDate': 'Statement effective date',
   'escrow_covers_taxes': 'Escrow covers taxes',
   'escrow_covers_insurance': 'Escrow covers insurance',
+  // Lease-ending notices
+  'lease_management_id': 'Rental relationship',
+  'unit_id': 'Unit',
+  'notice_type': 'Notice type',
+  'notice_given_date': 'Notice date',
+  'planned_move_out_date': 'Planned move-out',
+  'reason': 'Reason',
 };
 
 /// Turns a raw snake_case field name into a human-readable label, e.g.
@@ -362,6 +526,20 @@ const _scheduleECategories = [
   'Other',
 ];
 
+const _workOrderCategories = [
+  'General',
+  'Plumbing',
+  'Electrical',
+  'HVAC',
+  'Appliance',
+  'Structural',
+  'Exterior',
+  'Landscaping',
+  'Cleaning',
+  'Safety',
+  'Other',
+];
+
 // ---------------------------------------------------------------------------
 // Overrides map builder (mirrors web's buildOverridesJson)
 // ---------------------------------------------------------------------------
@@ -383,6 +561,7 @@ Map<String, dynamic> buildOverridesMap({
   required bool isLease,
   required bool isApplication,
   required bool isLoan,
+  required bool isLeaseEndingNotice,
   required bool isPaid,
   required int? selectedTenantAccountId,
   // Extracted, in-portfolio-validated property/unit link for an Application
@@ -395,9 +574,14 @@ Map<String, dynamic> buildOverridesMap({
   required int? selectedUnitId,
   required int? selectedTenantId,
   required int? loanPropertyId,
+  int? existingLoanId,
+  int? existingLoanPaymentId,
+  bool includeLoanStatementPaymentOverrides = false,
   RentalStructure? newPropertyRentalStructure,
   LeaseScanReviewDisposition? leaseReviewDisposition,
   int? documentTemplateId,
+  String rentTrackingStartMode = 'ForwardOnly',
+  DateTime? rentTrackingStartOn,
   // Create-new-property fields (only used when createNewProperty is true).
   String? newPropertyName,
   String? newPropertyAddress,
@@ -410,15 +594,28 @@ Map<String, dynamic> buildOverridesMap({
         entry.key == 'rental_structure') {
       continue;
     }
+    if (isLoan &&
+        !includeLoanStatementPaymentOverrides &&
+        _isLoanStatementPaymentOnlyField(entry.key)) {
+      continue;
+    }
     final key = _keyMap[entry.key] ?? entry.key;
     overrides[key] = entry.value;
   }
   if (isLease) {
     if (createNewProperty) {
       // Empty-portfolio bootstrap (C3): propertyId=0 explicitly requests a new
-      // property; no unitId is sent, so the server creates its first unit from
-      // the reviewed document. Structure comes only from this user choice.
+      // property. unitId=0 explicitly clears any Unit command-center capture
+      // context so the server creates the first unit from the reviewed
+      // document. Clear the rest of the captured rental chain as well: those
+      // ids can be present in the extracted field map when the scan was opened
+      // from a Unit command center, but they cannot belong to a property/unit
+      // that is being created now.
       overrides['propertyId'] = 0;
+      overrides['unitId'] = 0;
+      overrides['leaseManagementId'] = 0;
+      overrides['tenantAccountId'] = 0;
+      overrides['leaseAgreementId'] = 0;
       if (newPropertyRentalStructure == null) {
         throw ArgumentError.value(
           newPropertyRentalStructure,
@@ -439,11 +636,14 @@ Map<String, dynamic> buildOverridesMap({
       if (selectedPropertyId != null) {
         overrides['propertyId'] = selectedPropertyId;
       }
-      if (selectedUnitId != null) overrides['unitId'] = selectedUnitId;
+      // A null selection is an affirmative "create the Unit from this lease"
+      // choice. Send the zero sentinel so a stale capture-context Unit cannot
+      // silently win on the server.
+      overrides['unitId'] = selectedUnitId ?? 0;
     }
-    // Tenant: a chosen id links; null lets the server match/create from
-    // tenant_name (same in both property modes).
-    if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
+    // Tenant: a chosen id links; zero explicitly clears any extracted/captured
+    // tenant id so the server matches or creates from the reviewed name/email.
+    overrides['tenantId'] = selectedTenantId ?? 0;
     if (leaseReviewDisposition != null) {
       overrides['reviewDisposition'] = leaseReviewDisposition.wireValue;
       if (leaseReviewDisposition ==
@@ -451,6 +651,14 @@ Map<String, dynamic> buildOverridesMap({
           documentTemplateId != null) {
         overrides['documentTemplateId'] = documentTemplateId;
       }
+    }
+    overrides['rentTrackingStartMode'] = rentTrackingStartMode;
+    if (rentTrackingStartMode == 'CustomCutoffDate' &&
+        rentTrackingStartOn != null) {
+      overrides['rentTrackingStartOn'] = rentTrackingStartOn
+          .toIso8601String()
+          .split('T')
+          .first;
     }
   } else if (isApplication) {
     // The edited applicant scalar fields (first_name, last_name, email, …) are
@@ -466,10 +674,462 @@ Map<String, dynamic> buildOverridesMap({
     overrides['tenantAccountId'] = selectedTenantAccountId;
   } else if (isLoan) {
     if (loanPropertyId != null) overrides['propertyId'] = loanPropertyId;
+    if (existingLoanId != null) overrides['existingLoanId'] = existingLoanId;
+    if (existingLoanPaymentId != null) {
+      overrides['existingLoanPaymentId'] = existingLoanPaymentId;
+    }
+    if (includeLoanStatementPaymentOverrides) {
+      _addLoanStatementPaymentOverrideAliases(overrides, editedFields);
+    }
+  } else if (isLeaseEndingNotice) {
+    if (editedFields['lease_management_id'] != null) {
+      overrides['leaseManagementId'] = editedFields['lease_management_id'];
+    }
+    if (editedFields['unit_id'] != null) {
+      overrides['unitId'] = editedFields['unit_id'];
+    }
+    if (editedFields['notice_given_date'] != null) {
+      overrides['noticeGivenDate'] = editedFields['notice_given_date'];
+    }
+    if (editedFields['planned_move_out_date'] != null) {
+      overrides['plannedMoveOutDate'] = editedFields['planned_move_out_date'];
+    }
   } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
   }
   return overrides;
+}
+
+bool _isLoanStatementPaymentOnlyField(String name) {
+  return name == 'statement_principal_amount' ||
+      name == 'statementPrincipalAmount' ||
+      name == 'principal_amount' ||
+      name == 'principalAmount' ||
+      name == 'statement_interest_amount' ||
+      name == 'statementInterestAmount' ||
+      name == 'interest_amount' ||
+      name == 'interestAmount' ||
+      name == 'statement_escrow_amount' ||
+      name == 'statementEscrowAmount' ||
+      name == 'escrow_amount' ||
+      name == 'escrowAmount' ||
+      name == 'opening_principal_balance' ||
+      name == 'openingPrincipalBalance' ||
+      name == 'unpaid_principal_balance' ||
+      name == 'unpaidPrincipalBalance' ||
+      name == 'statementTotalAmount' ||
+      name == 'statement_total_amount' ||
+      name == 'statementEffectiveDate' ||
+      name == 'statement_effective_date' ||
+      name == 'statement_date' ||
+      name == 'statementDate' ||
+      name == 'due_date' ||
+      name == 'dueDate';
+}
+
+void _addLoanStatementPaymentOverrideAliases(
+  Map<String, dynamic> overrides,
+  Map<String, String> editedFields,
+) {
+  void addFirst({
+    required List<String> names,
+    required String? snakeKey,
+    required String camelKey,
+  }) {
+    for (final name in names) {
+      final value = editedFields[name]?.trim();
+      if (value != null && value.isNotEmpty) {
+        if (snakeKey != null) overrides[snakeKey] = value;
+        overrides[camelKey] = value;
+        return;
+      }
+    }
+  }
+
+  addFirst(
+    names: _loanStatementPrincipalFieldNames,
+    snakeKey: null,
+    camelKey: 'statementPrincipalAmount',
+  );
+  addFirst(
+    names: _loanStatementInterestFieldNames,
+    snakeKey: null,
+    camelKey: 'statementInterestAmount',
+  );
+  addFirst(
+    names: _loanStatementEscrowFieldNames,
+    snakeKey: null,
+    camelKey: 'statementEscrowAmount',
+  );
+  addFirst(
+    names: _loanStatementOpeningBalanceFieldNames,
+    snakeKey: 'current_balance',
+    camelKey: 'currentBalance',
+  );
+  final principal = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementPrincipalFieldNames,
+  );
+  final interest = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementInterestFieldNames,
+  );
+  final escrow = _loanStatementOverrideDecimal(
+    editedFields,
+    _loanStatementEscrowFieldNames,
+  );
+  if (principal != null && interest != null && escrow != null) {
+    overrides['statementTotalAmount'] = (principal + interest + escrow)
+        .toStringAsFixed(2);
+  }
+  addFirst(
+    names: _loanStatementEffectiveDateFieldNames,
+    snakeKey: null,
+    camelKey: 'statementEffectiveDate',
+  );
+}
+
+double? _loanStatementOverrideDecimal(
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    final value = editedFields[name]?.trim();
+    if (value == null || value.isEmpty) continue;
+    return double.tryParse(value.replaceAll(RegExp(r'[$,]'), ''));
+  }
+  return null;
+}
+
+String? paymentContextConflictMessage({
+  required ScanDraft draft,
+  required int? selectedTenantAccountId,
+  TenantAccountOption? selectedTenantAccount,
+  Map<String, String> editedFields = const {},
+}) {
+  final selectedId =
+      selectedTenantAccount?.tenantAccountId ?? selectedTenantAccountId;
+  if (!draft.isPayment || selectedId == null) return null;
+
+  final extractedTenantAccountId = _effectivePositiveFieldInt(
+    draft,
+    editedFields,
+    const ['tenantAccountId', 'tenant_account_id'],
+  );
+  if (extractedTenantAccountId != null &&
+      extractedTenantAccountId != selectedId) {
+    return _paymentContextConflictCorrection;
+  }
+
+  if (selectedTenantAccount == null &&
+      _hasReviewedPaymentTargetIds(draft, editedFields)) {
+    return _paymentContextConflictCorrection;
+  }
+
+  if (selectedTenantAccount != null) {
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.propertyId,
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+        'propertyId',
+        'property_id',
+      ]),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.unitId,
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+        'unitId',
+        'unit_id',
+      ]),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+    if (_conflictsWithCapture(
+      capturedId: selectedTenantAccount.leaseManagementId,
+      extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+        'leaseManagementId',
+        'lease_management_id',
+      ]),
+    )) {
+      return _paymentContextConflictCorrection;
+    }
+  }
+
+  final capture = draft.captureContext;
+  if (capture == null) return null;
+  final capturedTenantAccountId = capture.tenantAccountId;
+  if (capturedTenantAccountId != null &&
+      capturedTenantAccountId > 0 &&
+      selectedId != capturedTenantAccountId) {
+    return null;
+  }
+
+  if (_conflictsWithCapture(
+    capturedId: capture.unitId,
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+      'unitId',
+      'unit_id',
+    ]),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+  if (_conflictsWithCapture(
+    capturedId: capture.leaseManagementId,
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+      'leaseManagementId',
+      'lease_management_id',
+    ]),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+  if (_conflictsWithCapture(
+    capturedId: capture.tenantLedgerEntryId,
+    extractedId: _effectivePositiveFieldInt(draft, editedFields, const [
+      'tenantLedgerEntryId',
+      'tenant_ledger_entry_id',
+    ]),
+  )) {
+    return _paymentContextConflictCorrection;
+  }
+
+  return null;
+}
+
+String? expenseScanReadinessMessage({
+  required ScanDraft draft,
+  Map<String, String> editedFields = const {},
+}) {
+  if (draft.isPayment ||
+      draft.isWorkOrder ||
+      draft.isLease ||
+      draft.isApplication ||
+      draft.isLoan ||
+      draft.isLeaseEndingNotice) {
+    return null;
+  }
+
+  final missing = <String>[];
+  if (_effectiveFieldText(draft, editedFields, const [
+    'vendorName',
+    'vendor_name',
+  ]).isEmpty) {
+    missing.add('vendor');
+  }
+
+  final transactionDate = _effectiveFieldText(draft, editedFields, const [
+    'transactionDate',
+    'transaction_date',
+  ]);
+  if (DateTime.tryParse(transactionDate) == null) {
+    missing.add('transaction date');
+  }
+
+  final total = _effectivePositiveFieldDecimal(draft, editedFields, const [
+    'total',
+    'amount',
+  ]);
+  final subtotal = _effectivePositiveFieldDecimal(draft, editedFields, const [
+    'subtotal',
+  ]);
+  if (total == null && subtotal == null) {
+    missing.add('positive total or subtotal');
+  }
+
+  if (_effectiveFieldText(draft, editedFields, const ['category']).isEmpty) {
+    missing.add('category');
+  }
+
+  if (!_hasReviewedExpenseScope(draft, editedFields)) {
+    missing.add('property, unit, or work order');
+  }
+
+  if (missing.isEmpty) return null;
+  return 'Review ${missing.join(', ')} before creating this expense.';
+}
+
+bool _hasReviewedPaymentTargetIds(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  return _effectivePositiveFieldInt(draft, editedFields, const [
+            'propertyId',
+            'property_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'unitId',
+            'unit_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'leaseManagementId',
+            'lease_management_id',
+          ]) !=
+          null;
+}
+
+const _paymentContextConflictCorrection =
+    'This scan appears to belong to a different rental account. Choose the matching rental account, or reject this scan and upload the document from the right Unit/account before creating the payment.';
+
+bool _conflictsWithCapture({
+  required int? capturedId,
+  required int? extractedId,
+}) {
+  return capturedId != null &&
+      capturedId > 0 &&
+      extractedId != null &&
+      extractedId > 0 &&
+      capturedId != extractedId;
+}
+
+bool _hasReviewedExpenseScope(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  final capture = draft.captureContext;
+  return _isPositiveId(capture?.propertyId) ||
+      _isPositiveId(capture?.unitId) ||
+      _isPositiveId(capture?.workOrderId) ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'propertyId',
+            'property_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'unitId',
+            'unit_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'workOrderId',
+            'work_order_id',
+          ]) !=
+          null;
+}
+
+String _effectiveFieldText(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      return editedFields[name]?.trim() ?? '';
+    }
+  }
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = field?.value.trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  return '';
+}
+
+double? _effectivePositiveFieldDecimal(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  final value = double.tryParse(
+    _effectiveFieldText(
+      draft,
+      editedFields,
+      names,
+    ).replaceAll(RegExp(r'[$,]'), ''),
+  );
+  return value != null && value > 0 ? value : null;
+}
+
+String _effectiveLoanStatementText(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    final edited = editedFields[name]?.trim();
+    if (edited != null && edited.isNotEmpty) return edited;
+  }
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = field?.value.trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  return '';
+}
+
+double? _effectiveLoanStatementDecimal(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  final text = _effectiveLoanStatementText(draft, editedFields, names);
+  final value = double.tryParse(text.replaceAll(RegExp(r'[$,]'), ''));
+  return value != null && value >= 0 ? value : null;
+}
+
+bool _loanMatchStatementNumbersReady(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  return _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementPrincipalFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementInterestFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementEscrowFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementDecimal(
+            draft,
+            editedFields,
+            _loanStatementOpeningBalanceFieldNames,
+          ) !=
+          null &&
+      _effectiveLoanStatementText(
+        draft,
+        editedFields,
+        _loanStatementEffectiveDateFieldNames,
+      ).isNotEmpty;
+}
+
+int? _effectivePositiveFieldInt(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      final value = int.tryParse(editedFields[name]?.trim() ?? '');
+      return value != null && value > 0 ? value : null;
+    }
+  }
+  return _positiveFieldInt(draft, names);
+}
+
+bool _isPositiveId(int? value) => value != null && value > 0;
+
+int? _positiveFieldInt(ScanDraft draft, List<String> names) {
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = int.tryParse(field?.value.trim() ?? '');
+    if (value != null && value > 0) return value;
+  }
+  return null;
+}
+
+extension _MobileQuickActionHideExtension on Widget {
+  Widget hideShellQuickAction() => MobileQuickActionHider(child: this);
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +1161,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   // Selected canonical tenant account (Payment only).
   int? _selectedTenantAccountId;
+  TenantAccountOption? _selectedTenantAccountOption;
+  bool _savingTenantAccountSelection = false;
+  String? _tenantAccountSelectionError;
 
   // Lease-draft selections. In LINK mode property + unit are required; tenant is
   // optional (null = create/match from the extracted tenant_name). Seeded once
@@ -524,10 +1187,16 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // signatures becomes a draft from the selected active template.
   LeaseScanReviewDisposition? _leaseReviewDisposition;
   int? _selectedDocumentTemplateId;
+  String _rentTrackingStartMode = 'ForwardOnly';
+  DateTime? _rentTrackingStartOn;
 
   // Loan scans launched from a property arrive with this preselected. Reopened
   // drafts choose here so a pending mortgage scan never dead-ends after restart.
   int? _selectedLoanPropertyId;
+  _LoanReviewMode _loanReviewMode = _LoanReviewMode.matchExistingPayment;
+  int? _selectedExistingLoanId;
+  int? _selectedExistingLoanPaymentId;
+  bool _loanStatementEffectiveDateSeededFromPayment = false;
 
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
@@ -535,6 +1204,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // Action states
   bool _confirming = false;
   bool _rejecting = false;
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -618,6 +1288,12 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       }
     }
 
+    if (draft.isPayment && _selectedTenantAccountId == null) {
+      _selectedTenantAccountId = _positiveOrNull(
+        draft.captureContext?.tenantAccountId,
+      );
+    }
+
     // Start/stop polling based on status. The worker flips the draft
     // Pending → Processing → Reviewing, so we must keep polling through BOTH
     // Pending and Processing to catch the final Reviewing state.
@@ -654,6 +1330,69 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     return (parsed != null && parsed > 0) ? parsed : null;
   }
 
+  int? _positiveOrNull(int? value) => value != null && value > 0 ? value : null;
+
+  int? _effectiveSelectedTenantAccountId(ScanDraft draft) =>
+      _selectedTenantAccountId ??
+      _positiveOrNull(draft.captureContext?.tenantAccountId);
+
+  void _setLoanReviewMode(_LoanReviewMode mode) {
+    setState(() {
+      _loanReviewMode = mode;
+      _selectedExistingLoanId = null;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setLoanPropertyId(int? id) {
+    setState(() {
+      _selectedLoanPropertyId = id;
+      _selectedExistingLoanId = null;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setExistingLoanId(int? id) {
+    setState(() {
+      _selectedExistingLoanId = id;
+      _selectedExistingLoanPaymentId = null;
+      if (_loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields.remove('statementEffectiveDate');
+        _loanStatementEffectiveDateSeededFromPayment = false;
+      }
+    });
+  }
+
+  void _setExistingLoanPayment(ScanDraft draft, LoanPayment? payment) {
+    setState(() {
+      _selectedExistingLoanPaymentId = payment?.id;
+      if (payment == null) {
+        if (_loanStatementEffectiveDateSeededFromPayment) {
+          _editedFields.remove('statementEffectiveDate');
+          _loanStatementEffectiveDateSeededFromPayment = false;
+        }
+        return;
+      }
+      if (_effectiveLoanStatementText(
+            draft,
+            _editedFields,
+            _loanStatementEffectiveDateFieldNames,
+          ).isEmpty ||
+          _loanStatementEffectiveDateSeededFromPayment) {
+        _editedFields['statementEffectiveDate'] = _formatDate(payment.dueDate);
+        _loanStatementEffectiveDateSeededFromPayment = true;
+      }
+    });
+  }
+
   /// Reads an extracted scalar field's raw value, or '' when absent. Used to
   /// seed the create-new-property address fields.
   String _extractedValue(ScanDraft draft, String name) {
@@ -672,8 +1411,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isLease: draft.isLease,
         isApplication: draft.isApplication,
         isLoan: draft.isLoan,
+        isLeaseEndingNotice: draft.isLeaseEndingNotice,
         isPaid: _isPaid,
-        selectedTenantAccountId: _selectedTenantAccountId,
+        selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
         applicationPropertyId: _extractedInt(draft, 'property_id'),
         applicationUnitId: _extractedInt(draft, 'unit_id'),
         createNewProperty: _createNewProperty,
@@ -681,9 +1421,20 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         selectedUnitId: _selectedUnitId,
         selectedTenantId: _selectedTenantId,
         loanPropertyId: _selectedLoanPropertyId,
+        existingLoanId: _loanReviewMode == _LoanReviewMode.matchExistingPayment
+            ? _selectedExistingLoanId
+            : null,
+        existingLoanPaymentId:
+            _loanReviewMode == _LoanReviewMode.matchExistingPayment
+            ? _selectedExistingLoanPaymentId
+            : null,
+        includeLoanStatementPaymentOverrides:
+            _loanReviewMode == _LoanReviewMode.matchExistingPayment,
         newPropertyRentalStructure: _newPropertyRentalStructure,
         leaseReviewDisposition: _leaseReviewDisposition,
         documentTemplateId: _selectedDocumentTemplateId,
+        rentTrackingStartMode: _rentTrackingStartMode,
+        rentTrackingStartOn: _rentTrackingStartOn,
         newPropertyName: _editedFields['property_name'],
         newPropertyAddress: _editedFields['property_address'],
         newPropertyCity: _editedFields['property_city'],
@@ -692,6 +1443,21 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           .read(scanRepositoryProvider)
           .confirm(draft.id, overrides);
       if (!mounted) return;
+      final agreementId = (result?['agreementId'] as num?)?.toInt();
+      final workOrderId =
+          (result?['workOrderId'] as num?)?.toInt() ??
+          (result?['entityType'] == 'WorkOrder'
+              ? (result?['entityId'] as num?)?.toInt()
+              : null);
+      final unitId = (result?['unitId'] as num?)?.toInt();
+      if (draft.isWorkOrder) {
+        ref.invalidate(workOrdersPageProvider);
+        await ref.read(workOrdersProvider.notifier).refresh();
+        if (unitId != null) {
+          ref.invalidate(unitDashboardProvider(unitId));
+        }
+      }
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -699,6 +1465,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 ? 'Payment recorded!'
                 : draft.isWorkOrder
                 ? 'Work order created!'
+                : draft.isLeaseEndingNotice
+                ? 'Move-out workflow started!'
                 : draft.isLease
                 ? _leaseReviewDisposition ==
                           LeaseScanReviewDisposition.alreadyFullySigned
@@ -707,18 +1475,40 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 : draft.isApplication
                 ? 'Application created!'
                 : draft.isLoan
-                ? 'Loan created!'
+                ? _loanReviewMode == _LoanReviewMode.matchExistingPayment
+                      ? 'Payment recorded!'
+                      : 'Loan created!'
                 : 'Expense created!',
           ),
           backgroundColor: Colors.green,
         ),
       );
 
+      if (draft.isWorkOrder && workOrderId != null) {
+        final shellNavigator = mobileShellNavigatorOf(context);
+        if (shellNavigator != null) {
+          shellNavigator.openTab(
+            MobileShellTabId.work,
+            destination: MobileDestinationId.workOrders,
+            detailBuilder: (_) =>
+                WorkOrderUnitAwareLoaderScreen(workOrderId: workOrderId),
+          );
+          revealMobileShellIfDetached(context);
+          return;
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                WorkOrderUnitAwareLoaderScreen(workOrderId: workOrderId),
+          ),
+        );
+        return;
+      }
+
       // For an imported agreement, jump to its Unit relationship so the
       // landlord can review the canonical agreement history. Replace this
       // review screen so Back returns to the scan list.
-      final agreementId = (result?['agreementId'] as num?)?.toInt();
-      final unitId = (result?['unitId'] as num?)?.toInt();
       if (draft.isLease && agreementId != null && unitId != null) {
         final shellNavigator = mobileShellNavigatorOf(context);
         if (shellNavigator != null) {
@@ -746,7 +1536,11 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         );
         return;
       }
-      Navigator.of(context).pop();
+      // Keep the canonical addressable scan route mounted after confirmation.
+      // Popping here can remove the root GoRouter page when the review was
+      // opened directly (for example `/scan/166`), leaving a black Navigator
+      // and corrupting the next attempt to reactivate that same route.
+      ref.invalidate(_draftProvider(draft.id));
     } on ApiException catch (e) {
       if (!mounted) return;
       _showError(e.message);
@@ -755,6 +1549,70 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _confirming = false);
+    }
+  }
+
+  Future<void> _selectTenantAccount(
+    ScanDraft draft,
+    TenantAccountOption? account,
+  ) async {
+    if (!draft.isPayment) return;
+    final tenantAccountId = account?.tenantAccountId;
+    if (tenantAccountId == null || tenantAccountId <= 0) {
+      setState(() {
+        _selectedTenantAccountId = null;
+        _selectedTenantAccountOption = null;
+        _tenantAccountSelectionError = null;
+      });
+      return;
+    }
+
+    if (draft.captureContext?.tenantAccountId == tenantAccountId) {
+      setState(() {
+        _selectedTenantAccountId = tenantAccountId;
+        _selectedTenantAccountOption = account;
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _selectedTenantAccountId = tenantAccountId;
+      _selectedTenantAccountOption = account;
+      _savingTenantAccountSelection = true;
+      _tenantAccountSelectionError = null;
+    });
+
+    try {
+      final updated = await ref
+          .read(scanRepositoryProvider)
+          .setPaymentAccount(draft.id, tenantAccountId);
+      if (!mounted) return;
+      final persistedTenantAccountId =
+          _positiveOrNull(updated.captureContext?.tenantAccountId) ??
+          tenantAccountId;
+      setState(() {
+        _selectedTenantAccountId = persistedTenantAccountId;
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = null;
+      });
+      ref.invalidate(_draftProvider(draft.id));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = e.message;
+      });
+      _showError(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      const message = 'Could not save the rental account. Please try again.';
+      setState(() {
+        _savingTenantAccountSelection = false;
+        _tenantAccountSelectionError = message;
+      });
+      _showError(message);
     }
   }
 
@@ -778,6 +1636,30 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _showError(e.message);
     } finally {
       if (mounted) setState(() => _rejecting = false);
+    }
+  }
+
+  Future<void> _retry(ScanDraft draft) async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    try {
+      final updated = await ref.read(scanRepositoryProvider).retry(draft.id);
+      if (!mounted) return;
+      ref.invalidate(_draftProvider(draft.id));
+      if (updated.isPending || updated.isProcessing) {
+        _ensurePolling(updated.id);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Extraction retry started.')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      _showError(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _showError('Could not retry extraction. Please try again.');
+    } finally {
+      if (mounted) setState(() => _retrying = false);
     }
   }
 
@@ -832,16 +1714,20 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     });
 
     return draftAsync.when(
-      loading: () => Scaffold(
-        appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
-        body: const Center(child: CircularProgressIndicator()),
+      loading: () => MobileQuickActionHider(
+        child: Scaffold(
+          appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
+          body: const Center(child: CircularProgressIndicator()),
+        ),
       ),
-      error: (e, _) => Scaffold(
-        appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
-        body: Center(
-          child: Text(
-            e is ApiException ? e.message : e.toString(),
-            textAlign: TextAlign.center,
+      error: (e, _) => MobileQuickActionHider(
+        child: Scaffold(
+          appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
+          body: Center(
+            child: Text(
+              e is ApiException ? e.message : e.toString(),
+              textAlign: TextAlign.center,
+            ),
           ),
         ),
       ),
@@ -849,13 +1735,20 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         return _ReviewBody(
           draft: draft,
           editedFields: _editedFields,
-          onFieldChanged: (name, value) =>
-              setState(() => _editedFields[name] = value),
+          onFieldChanged: (name, value) => setState(() {
+            _editedFields[name] = value;
+            if (_loanStatementEffectiveDateFieldNames.contains(name)) {
+              _loanStatementEffectiveDateSeededFromPayment = false;
+            }
+          }),
           isPaid: _isPaid,
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
-          selectedTenantAccountId: _selectedTenantAccountId,
-          onTenantAccountSelected: (id) =>
-              setState(() => _selectedTenantAccountId = id),
+          selectedTenantAccountId: _effectiveSelectedTenantAccountId(draft),
+          selectedTenantAccount: _selectedTenantAccountOption,
+          savingTenantAccountSelection: _savingTenantAccountSelection,
+          tenantAccountSelectionError: _tenantAccountSelectionError,
+          onTenantAccountSelected: (account) =>
+              unawaited(_selectTenantAccount(draft, account)),
           createNewProperty: _createNewProperty,
           onCreateNewPropertyChanged: (v) => setState(() {
             _createNewProperty = v;
@@ -890,13 +1783,29 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           selectedDocumentTemplateId: _selectedDocumentTemplateId,
           onDocumentTemplateSelected: (id) =>
               setState(() => _selectedDocumentTemplateId = id),
+          rentTrackingStartMode: _rentTrackingStartMode,
+          onRentTrackingStartModeChanged: (value) => setState(() {
+            _rentTrackingStartMode = value;
+            if (value != 'CustomCutoffDate') _rentTrackingStartOn = null;
+          }),
+          rentTrackingStartOn: _rentTrackingStartOn,
+          onRentTrackingStartOnChanged: (value) =>
+              setState(() => _rentTrackingStartOn = value),
           loanPropertyId: _selectedLoanPropertyId,
-          onLoanPropertySelected: (id) =>
-              setState(() => _selectedLoanPropertyId = id),
+          onLoanPropertySelected: _setLoanPropertyId,
+          loanReviewMode: _loanReviewMode,
+          onLoanReviewModeChanged: _setLoanReviewMode,
+          existingLoanId: _selectedExistingLoanId,
+          onExistingLoanSelected: _setExistingLoanId,
+          existingLoanPaymentId: _selectedExistingLoanPaymentId,
+          onExistingLoanPaymentSelected: (payment) =>
+              _setExistingLoanPayment(draft, payment),
           confirming: _confirming,
           rejecting: _rejecting,
+          retrying: _retrying,
           onConfirm: () => _confirm(draft),
           onReject: () => _reject(draft),
+          onRetry: () => _retry(draft),
         );
       },
     );
@@ -915,6 +1824,9 @@ class _ReviewBody extends ConsumerWidget {
     required this.isPaid,
     required this.onIsPaidChanged,
     required this.selectedTenantAccountId,
+    required this.selectedTenantAccount,
+    required this.savingTenantAccountSelection,
+    required this.tenantAccountSelectionError,
     required this.onTenantAccountSelected,
     required this.createNewProperty,
     required this.onCreateNewPropertyChanged,
@@ -930,12 +1842,24 @@ class _ReviewBody extends ConsumerWidget {
     required this.onLeaseReviewDispositionChanged,
     required this.selectedDocumentTemplateId,
     required this.onDocumentTemplateSelected,
+    required this.rentTrackingStartMode,
+    required this.onRentTrackingStartModeChanged,
+    required this.rentTrackingStartOn,
+    required this.onRentTrackingStartOnChanged,
     required this.loanPropertyId,
     required this.onLoanPropertySelected,
+    required this.loanReviewMode,
+    required this.onLoanReviewModeChanged,
+    required this.existingLoanId,
+    required this.onExistingLoanSelected,
+    required this.existingLoanPaymentId,
+    required this.onExistingLoanPaymentSelected,
     required this.confirming,
     required this.rejecting,
+    required this.retrying,
     required this.onConfirm,
     required this.onReject,
+    required this.onRetry,
   });
 
   final ScanDraft draft;
@@ -944,7 +1868,10 @@ class _ReviewBody extends ConsumerWidget {
   final bool isPaid;
   final ValueChanged<bool> onIsPaidChanged;
   final int? selectedTenantAccountId;
-  final ValueChanged<int?> onTenantAccountSelected;
+  final TenantAccountOption? selectedTenantAccount;
+  final bool savingTenantAccountSelection;
+  final String? tenantAccountSelectionError;
+  final ValueChanged<TenantAccountOption?> onTenantAccountSelected;
   final bool createNewProperty;
   final ValueChanged<bool> onCreateNewPropertyChanged;
   final RentalStructure? newPropertyRentalStructure;
@@ -960,12 +1887,24 @@ class _ReviewBody extends ConsumerWidget {
   onLeaseReviewDispositionChanged;
   final int? selectedDocumentTemplateId;
   final ValueChanged<int?> onDocumentTemplateSelected;
+  final String rentTrackingStartMode;
+  final ValueChanged<String> onRentTrackingStartModeChanged;
+  final DateTime? rentTrackingStartOn;
+  final ValueChanged<DateTime?> onRentTrackingStartOnChanged;
   final int? loanPropertyId;
   final ValueChanged<int?> onLoanPropertySelected;
+  final _LoanReviewMode loanReviewMode;
+  final ValueChanged<_LoanReviewMode> onLoanReviewModeChanged;
+  final int? existingLoanId;
+  final ValueChanged<int?> onExistingLoanSelected;
+  final int? existingLoanPaymentId;
+  final ValueChanged<LoanPayment?> onExistingLoanPaymentSelected;
   final bool confirming;
   final bool rejecting;
+  final bool retrying;
   final VoidCallback onConfirm;
   final VoidCallback onReject;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -983,37 +1922,86 @@ class _ReviewBody extends ConsumerWidget {
     final actionsLocked = draft.isProcessing || draft.isInFlight;
     final isTerminal = draft.isTerminal;
     final isFailed = draft.status == 'Failed';
-    final busy = confirming || rejecting;
+    final busy = confirming || rejecting || retrying;
 
-    // Confirm is only possible once the draft is ready for review (or Failed, so
-    // manual values can still be entered) and nothing is in flight. For a lease:
+    // Confirm is only possible once the draft is ready for review and nothing
+    // is in flight. Failed drafts stay blocked unless the server makes them
+    // reviewable again through retry; they can still be rejected/cleared. For a lease:
     //  - CREATE mode (C3): a usable property name/address is needed (the server
     //    creates the property + unit from the document).
-    //  - LINK mode: an existing property + unit must be chosen.
+    //  - LINK mode: choose an existing unit, or choose an existing property
+    //    and provide a unit number so the server can create that unit.
     final hasUsablePropertyText =
         (editedFields['property_address']?.trim().isNotEmpty ?? false) ||
         (editedFields['property_name']?.trim().isNotEmpty ?? false);
+    final hasUsableUnitText =
+        editedFields['unit_number']?.trim().isNotEmpty ?? false;
     final leaseReady =
         !draft.isLease ||
         ((createNewProperty
                 ? hasUsablePropertyText && newPropertyRentalStructure != null
-                : (selectedPropertyId != null && selectedUnitId != null)) &&
+                : selectedPropertyId != null &&
+                      (selectedUnitId != null || hasUsableUnitText)) &&
             leaseReviewDisposition != null);
+    final rentTrackingReady =
+        !draft.isLease ||
+        rentTrackingStartMode != 'CustomCutoffDate' ||
+        rentTrackingStartOn != null;
     // An Application needs a first + last name (both [Required] on the create),
     // mirroring the web review page's applicationInvalid guard.
     final applicationReady =
         !draft.isApplication ||
         ((editedFields['first_name']?.trim().isNotEmpty ?? false) &&
             (editedFields['last_name']?.trim().isNotEmpty ?? false));
-    final loanReady = !draft.isLoan || loanPropertyId != null;
+    final addLoanReady =
+        loanPropertyId != null &&
+        (editedFields['lender']?.trim().isNotEmpty ?? false);
+    final matchLoanReady =
+        loanPropertyId != null &&
+        existingLoanId != null &&
+        existingLoanPaymentId != null &&
+        _loanMatchStatementNumbersReady(draft, editedFields);
+    final loanReady =
+        !draft.isLoan ||
+        (loanReviewMode == _LoanReviewMode.addNewLoan
+            ? addLoanReady
+            : matchLoanReady);
+    final noticeLeaseManagementReady =
+        (editedFields['lease_management_id']?.trim().isNotEmpty ?? false) ||
+        draft.captureContext?.leaseManagementId != null;
+    final noticeUnitReady =
+        (editedFields['unit_id']?.trim().isNotEmpty ?? false) ||
+        draft.captureContext?.unitId != null;
+    final leaseEndingNoticeReady =
+        !draft.isLeaseEndingNotice ||
+        (noticeLeaseManagementReady &&
+            noticeUnitReady &&
+            (editedFields['notice_given_date']?.trim().isNotEmpty ?? false) &&
+            (editedFields['planned_move_out_date']?.trim().isNotEmpty ??
+                false));
+    final paymentConflictMessage = paymentContextConflictMessage(
+      draft: draft,
+      selectedTenantAccountId: selectedTenantAccountId,
+      selectedTenantAccount: selectedTenantAccount,
+      editedFields: editedFields,
+    );
+    final expenseReadinessMessage = expenseScanReadinessMessage(
+      draft: draft,
+      editedFields: editedFields,
+    );
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
+        !savingTenantAccountSelection &&
         !isTerminal &&
         (!draft.isPayment || selectedTenantAccountId != null) &&
+        paymentConflictMessage == null &&
+        expenseReadinessMessage == null &&
         leaseReady &&
+        rentTrackingReady &&
         applicationReady &&
-        loanReady;
+        loanReady &&
+        leaseEndingNoticeReady;
     final leaseActionLabel = switch (leaseReviewDisposition) {
       LeaseScanReviewDisposition.alreadyFullySigned => 'Import Signed Lease',
       LeaseScanReviewDisposition.needsSignatures => 'Prepare for Signatures',
@@ -1025,10 +2013,36 @@ class _ReviewBody extends ConsumerWidget {
         ? 'Choose whether this address is one rental or multiple rentals.'
         : createNewProperty
         ? 'Enter a property name or address above to create this lease.'
-        : 'Choose a property and unit above to create this lease.';
+        : selectedPropertyId != null && selectedUnitId == null
+        ? 'Enter the new Unit number from the lease.'
+        : 'Choose an existing Unit, or create a new Unit in an existing Property.';
+    final loanReadinessMessage = loanReviewMode == _LoanReviewMode.addNewLoan
+        ? loanPropertyId == null
+              ? 'Select a property to enable loan creation.'
+              : 'Enter the lender before creating this loan.'
+        : loanPropertyId == null
+        ? 'Select a property to find its loans.'
+        : existingLoanId == null
+        ? 'Choose the existing loan from this property.'
+        : existingLoanPaymentId == null
+        ? 'Choose the loan payment this statement should attach to.'
+        : 'Review the statement principal, interest, escrow, opening balance, and effective date.';
+    final leaseEndingNoticeReadinessMessage =
+        !noticeLeaseManagementReady || !noticeUnitReady
+        ? 'Choose the existing rental relationship this notice belongs to.'
+        : 'Review the notice date and planned move-out date.';
+    final loanActionLabel = loanReviewMode == _LoanReviewMode.addNewLoan
+        ? 'Create Loan'
+        : 'Match & record payment';
     // Reject stays available on Failed so a bad scan can always be cleared, but
-    // never while processing, mid-action, or already terminal.
-    final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
+    // never while processing, mid-action, or already confirmed/rejected.
+    final rejectEnabled =
+        (!actionsLocked || isFailed) && !busy && (!isTerminal || isFailed);
+    final retryEnabled = isFailed && !busy;
+    final failedBannerText =
+        draft.scalarFields.isEmpty && draft.lineItems.isEmpty
+        ? 'Extraction failed before review fields could be recovered. Retry extraction or reject this scan.'
+        : 'Extraction failed. Review any recovered fields, retry extraction, or reject this scan.';
 
     return Scaffold(
       appBar: AppBar(
@@ -1041,7 +2055,7 @@ class _ReviewBody extends ConsumerWidget {
       body: extracting
           ? _ProcessingView(draftId: draft.id)
           : ListView(
-              padding: const EdgeInsets.only(bottom: 140),
+              padding: EdgeInsets.only(bottom: isTerminal ? 24 : 140),
               children: [
                 _ReviewCheckpointCard(draft: draft),
 
@@ -1050,9 +2064,7 @@ class _ReviewBody extends ConsumerWidget {
                     color: colorScheme.errorContainer,
                     borderColor: colorScheme.error.withValues(alpha: 0.4),
                     textColor: colorScheme.onErrorContainer,
-                    child: const Text(
-                      'Extraction failed. You can still enter the values below and confirm.',
-                    ),
+                    child: Text(failedBannerText),
                   ),
 
                 if (draft.isNoOp)
@@ -1087,15 +2099,48 @@ class _ReviewBody extends ConsumerWidget {
                 const Divider(height: 1),
 
                 // ---- Lease selector (Payment only) ----
-                if (draft.isPayment)
+                if (draft.isPayment && !isTerminal)
                   _TenantAccountSelector(
                     selectedTenantAccountId: selectedTenantAccountId,
                     contextualTenantAccountId:
                         draft.captureContext?.tenantAccountId,
+                    selectedTenantAccount: selectedTenantAccount,
                     onTenantAccountSelected: onTenantAccountSelected,
                   ),
 
-                if (draft.isLease) ...[
+                if (draft.isPayment &&
+                    savingTenantAccountSelection &&
+                    !isTerminal)
+                  _Banner(
+                    color: colorScheme.surfaceContainerHighest,
+                    borderColor: colorScheme.outlineVariant,
+                    textColor: colorScheme.onSurfaceVariant,
+                    child: const Text('Saving rental account selection...'),
+                  ),
+
+                if (draft.isPayment &&
+                    tenantAccountSelectionError != null &&
+                    !isTerminal)
+                  _Banner(
+                    color: colorScheme.errorContainer,
+                    borderColor: colorScheme.error.withValues(alpha: 0.4),
+                    textColor: colorScheme.onErrorContainer,
+                    child: Text(tenantAccountSelectionError!),
+                  ),
+
+                if (paymentConflictMessage != null && !isTerminal)
+                  _Banner(
+                    color: colorScheme.errorContainer,
+                    borderColor: colorScheme.error.withValues(alpha: 0.4),
+                    textColor: colorScheme.onErrorContainer,
+                    child: Text(paymentConflictMessage),
+                  ),
+
+                if (isTerminal) ...[
+                  _ReadOnlyFieldsSection(draft: draft),
+                  if (draft.lineItems.isNotEmpty)
+                    _LineItemsSection(items: draft.lineItems),
+                ] else if (draft.isLease) ...[
                   // ---- "What confirming will do" proposal summary ----
                   if (draft.leaseProposal != null)
                     _LeaseProposalSummary(proposal: draft.leaseProposal!),
@@ -1106,6 +2151,15 @@ class _ReviewBody extends ConsumerWidget {
                     selectedTemplateId: selectedDocumentTemplateId,
                     onTemplateSelected: onDocumentTemplateSelected,
                     propertyId: createNewProperty ? null : selectedPropertyId,
+                  ),
+                  _RentTrackingStartSection(
+                    mode: rentTrackingStartMode,
+                    startOn: rentTrackingStartOn,
+                    leaseStart: DateTime.tryParse(
+                      editedFields['start_date'] ?? '',
+                    ),
+                    onModeChanged: onRentTrackingStartModeChanged,
+                    onStartOnChanged: onRentTrackingStartOnChanged,
                   ),
 
                   // ---- Property / Unit / Tenant pickers ----
@@ -1147,13 +2201,36 @@ class _ReviewBody extends ConsumerWidget {
                       onFieldChanged: onFieldChanged,
                     ),
                 ] else if (draft.isLoan) ...[
+                  _LoanReviewModeSection(
+                    mode: loanReviewMode,
+                    onModeChanged: onLoanReviewModeChanged,
+                  ),
                   _LoanPropertyPicker(
                     selectedPropertyId: loanPropertyId,
                     onPropertySelected: onLoanPropertySelected,
                   ),
-                  if (draft.scalarFields.isNotEmpty ||
+                  if (loanReviewMode == _LoanReviewMode.matchExistingPayment)
+                    _ExistingLoanPaymentPicker(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                      propertyId: loanPropertyId,
+                      loanId: existingLoanId,
+                      onLoanSelected: onExistingLoanSelected,
+                      paymentId: existingLoanPaymentId,
+                      onPaymentSelected: onExistingLoanPaymentSelected,
+                    )
+                  else if (draft.scalarFields.isNotEmpty ||
                       draft.status != 'Pending')
                     _LoanFieldsSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
+                ] else if (draft.isLeaseEndingNotice) ...[
+                  if (draft.scalarFields.isNotEmpty ||
+                      draft.status != 'Pending')
+                    _LeaseEndingNoticeFieldsSection(
                       draft: draft,
                       editedFields: editedFields,
                       onFieldChanged: onFieldChanged,
@@ -1189,148 +2266,233 @@ class _ReviewBody extends ConsumerWidget {
               ],
             ),
       // ---- Bottom action bar ----
-      bottomSheet: Container(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          12,
-          16,
-          12 + MediaQuery.of(context).padding.bottom,
-        ),
-        decoration: BoxDecoration(
-          color: colorScheme.surface,
-          border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (draft.isPayment &&
-                selectedTenantAccountId == null &&
-                !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Select a rental account above to enable payment creation.',
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
+      bottomSheet: isTerminal
+          ? null
+          : Container(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                12 + MediaQuery.of(context).padding.bottom,
+              ),
+              decoration: BoxDecoration(
+                color: colorScheme.surface,
+                border: Border(
+                  top: BorderSide(color: colorScheme.outlineVariant),
                 ),
               ),
-            if (draft.isLease && !leaseReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  leaseReadinessMessage,
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (draft.isApplication && !applicationReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Enter the applicant’s first and last name to create this application.',
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (draft.isLoan && !loanReady && !isTerminal)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Select a property to enable loan creation.',
-                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            // Surface the interim "Confirming" state (L19): the server is mid-
-            // confirm even though this client didn't start it.
-            if (draft.isInFlight && !isFailed && !confirming)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Saving this record…',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            // Why `OverflowBar` and not a plain `Row`: this Scaffold.bottomSheet
-            // is driven by a DraggableScrollableActuator/Stack that lays its
-            // child out with an unbounded width (constraints: unconstrained in
-            // the render tree). A horizontal `Row` in that context hands its
-            // non-flex children an unbounded width; a default OutlinedButton
-            // (ButtonStyle.maximumSize == Size.infinite) cannot accept that and
-            // trips RenderConstrainedBox's "BoxConstraints forces an infinite
-            // width" assert, which aborts layout of the whole bottom-sheet
-            // subtree — the symptom was a bottom bar that never rendered, a body
-            // ListView that would not scroll, and a lease dropdown that would
-            // not open. Wrapping the buttons in Expanded does NOT help, because
-            // an Expanded child of an unbounded-width Row also fails to resolve.
-            // `OverflowBar` lays its children out without forcing an unbounded
-            // width, so the buttons size to their content (and wrap to a second
-            // line if they ever overflow). Mirrors the guided-flow fix in
-            // commit cee9e78.
-            OverflowBar(
-              alignment: MainAxisAlignment.spaceBetween,
-              overflowAlignment: OverflowBarAlignment.end,
-              overflowSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: confirmEnabled ? onConfirm : null,
-                  child: (confirming || (draft.isInFlight && !isFailed))
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          draft.isPayment
-                              ? 'Create Payment'
-                              : draft.isWorkOrder
-                              ? 'Create Work Order'
-                              : draft.isLease
-                              ? leaseActionLabel
-                              : draft.isApplication
-                              ? 'Create Application'
-                              : draft.isLoan
-                              ? 'Create Loan'
-                              : 'Confirm & Create Expense',
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (draft.isPayment &&
+                      selectedTenantAccountId == null &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Select a rental account above to enable payment creation.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
                         ),
-                ),
-                // design#9: Reject is clearly destructive (error-coloured text +
-                // border) so it can't be mistaken for a secondary action.
-                OutlinedButton(
-                  onPressed: rejectEnabled ? onReject : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colorScheme.error,
-                    side: BorderSide(
-                      color: rejectEnabled
-                          ? colorScheme.error
-                          : colorScheme.outlineVariant,
+                        textAlign: TextAlign.center,
+                      ),
                     ),
-                  ),
-                  child: rejecting
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: colorScheme.error,
+                  if (draft.isPayment &&
+                      savingTenantAccountSelection &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Saving rental account selection...',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (paymentConflictMessage != null && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        paymentConflictMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.error,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLease && !leaseReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        leaseReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isApplication && !applicationReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Enter the applicant’s first and last name to create this application.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLoan && !loanReady && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        loanReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (draft.isLeaseEndingNotice &&
+                      !leaseEndingNoticeReady &&
+                      !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        leaseEndingNoticeReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  if (expenseReadinessMessage != null && !isTerminal)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        expenseReadinessMessage,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.amber.shade700,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  // Surface the interim "Confirming" state (L19): the server is mid-
+                  // confirm even though this client didn't start it.
+                  if (draft.isInFlight && !isFailed && !confirming)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Saving this record…',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  // Why `OverflowBar` and not a plain `Row`: this Scaffold.bottomSheet
+                  // is driven by a DraggableScrollableActuator/Stack that lays its
+                  // child out with an unbounded width (constraints: unconstrained in
+                  // the render tree). A horizontal `Row` in that context hands its
+                  // non-flex children an unbounded width; a default OutlinedButton
+                  // (ButtonStyle.maximumSize == Size.infinite) cannot accept that and
+                  // trips RenderConstrainedBox's "BoxConstraints forces an infinite
+                  // width" assert, which aborts layout of the whole bottom-sheet
+                  // subtree — the symptom was a bottom bar that never rendered, a body
+                  // ListView that would not scroll, and a lease dropdown that would
+                  // not open. Wrapping the buttons in Expanded does NOT help, because
+                  // an Expanded child of an unbounded-width Row also fails to resolve.
+                  // `OverflowBar` lays its children out without forcing an unbounded
+                  // width, so the buttons size to their content (and wrap to a second
+                  // line if they ever overflow). Mirrors the guided-flow fix in
+                  // commit cee9e78.
+                  OverflowBar(
+                    alignment: MainAxisAlignment.spaceBetween,
+                    overflowAlignment: OverflowBarAlignment.end,
+                    overflowSpacing: 8,
+                    children: [
+                      FilledButton(
+                        onPressed: confirmEnabled ? onConfirm : null,
+                        child: (confirming || (draft.isInFlight && !isFailed))
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                draft.isPayment
+                                    ? 'Create Payment'
+                                    : draft.isWorkOrder
+                                    ? 'Create Work Order'
+                                    : draft.isLease
+                                    ? leaseActionLabel
+                                    : draft.isApplication
+                                    ? 'Create Application'
+                                    : draft.isLoan
+                                    ? loanActionLabel
+                                    : draft.isLeaseEndingNotice
+                                    ? 'Record Move-out Notice'
+                                    : 'Confirm & Create Expense',
+                              ),
+                      ),
+                      if (isFailed)
+                        OutlinedButton.icon(
+                          onPressed: retryEnabled ? onRetry : null,
+                          icon: retrying
+                              ? SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: colorScheme.primary,
+                                  ),
+                                )
+                              : const Icon(Icons.refresh),
+                          label: const Text('Retry extraction'),
+                        ),
+                      // design#9: Reject is clearly destructive (error-coloured text +
+                      // border) so it can't be mistaken for a secondary action.
+                      OutlinedButton(
+                        onPressed: rejectEnabled ? onReject : null,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: colorScheme.error,
+                          side: BorderSide(
+                            color: rejectEnabled
+                                ? colorScheme.error
+                                : colorScheme.outlineVariant,
                           ),
-                        )
-                      : const Text('Reject'),
-                ),
-              ],
+                        ),
+                        child: rejecting
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: colorScheme.error,
+                                ),
+                              )
+                            : const Text('Reject'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
-      ),
-    );
+    ).hideShellQuickAction();
   }
 }
 
@@ -1348,6 +2510,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
     if (draft.isLease) return 'Create one lease agreement';
     if (draft.isApplication) return 'Create one rental application';
     if (draft.isLoan) return 'Create one property loan';
+    if (draft.isLeaseEndingNotice) return 'Record one move-out notice';
     return 'Create one expense';
   }
 
@@ -1365,6 +2528,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
     if (draft.isPayment) return 'Rental account selected below';
     if (draft.isLease) return 'Property and unit selected below';
     if (draft.isLoan) return 'Property selected below';
+    if (draft.isLeaseEndingNotice) return 'Rental relationship selected below';
     return 'Current workspace';
   }
 
@@ -1376,6 +2540,7 @@ class _ReviewCheckpointCard extends StatelessWidget {
         .where((field) => field.confidence < 0.8)
         .length;
     final target = scanTargetFor(draft.targetEntityType);
+    final isTerminal = draft.isTerminal;
 
     return Card.filled(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
@@ -1407,19 +2572,24 @@ class _ReviewCheckpointCard extends StatelessWidget {
                   : 'Uploaded document #${draft.id}',
             ),
             _CheckpointRow(
-              label: 'Review',
-              value: draft.fields.isEmpty
+              label: isTerminal ? 'Result' : 'Review',
+              value: isTerminal
+                  ? draft.status
+                  : draft.fields.isEmpty
                   ? 'Waiting for extracted fields'
                   : lowConfidence == 0
                   ? '${draft.scalarFields.length} fields ready to verify'
                   : '$lowConfidence field${lowConfidence == 1 ? '' : 's'} need extra attention',
-              warning: lowConfidence > 0,
+              warning: !isTerminal && lowConfidence > 0,
             ),
             _CheckpointRow(label: 'Destination', value: _destination),
-            _CheckpointRow(label: 'Save command', value: _command),
+            if (!isTerminal)
+              _CheckpointRow(label: 'Save command', value: _command),
             const SizedBox(height: 8),
             Text(
-              'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
+              isTerminal
+                  ? 'This result is final and read-only.'
+                  : 'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -1564,19 +2734,20 @@ class _DocumentPreview extends ConsumerWidget {
             ],
           ),
         ),
-        data: (bytes) => InteractiveViewer(
-          child: Image.memory(
-            bytes,
-            fit: BoxFit.contain,
-            // Decode at preview scale (not full sensor resolution) so a large
-            // stored image doesn't pin the CPU on lower-end / throttled devices.
-            cacheHeight: 1080,
-            errorBuilder: (ctx, e, _) => Center(
-              child: Icon(
-                Icons.picture_as_pdf_outlined,
-                size: 64,
-                color: Colors.grey.shade400,
-              ),
+        // Keep this a passive preview. InteractiveViewer still participates in
+        // the gesture arena when panning/scaling are disabled, which prevents
+        // the parent review ListView from scrolling when a swipe begins here.
+        data: (bytes) => Image.memory(
+          bytes,
+          fit: BoxFit.contain,
+          // Decode at preview scale (not full sensor resolution) so a large
+          // stored image doesn't pin the CPU on lower-end / throttled devices.
+          cacheHeight: 1080,
+          errorBuilder: (ctx, e, _) => Center(
+            child: Icon(
+              Icons.picture_as_pdf_outlined,
+              size: 64,
+              color: Colors.grey.shade400,
             ),
           ),
         ),
@@ -1593,12 +2764,14 @@ class _TenantAccountSelector extends ConsumerStatefulWidget {
   const _TenantAccountSelector({
     required this.selectedTenantAccountId,
     required this.contextualTenantAccountId,
+    required this.selectedTenantAccount,
     required this.onTenantAccountSelected,
   });
 
   final int? selectedTenantAccountId;
   final int? contextualTenantAccountId;
-  final ValueChanged<int?> onTenantAccountSelected;
+  final TenantAccountOption? selectedTenantAccount;
+  final ValueChanged<TenantAccountOption?> onTenantAccountSelected;
 
   @override
   ConsumerState<_TenantAccountSelector> createState() =>
@@ -1613,6 +2786,21 @@ class _TenantAccountSelectorState
   String _search = '';
   int _skip = 0;
   TenantAccountOption? _selectedOption;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedOption = widget.selectedTenantAccount;
+  }
+
+  @override
+  void didUpdateWidget(covariant _TenantAccountSelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedTenantAccount?.tenantAccountId !=
+        oldWidget.selectedTenantAccount?.tenantAccountId) {
+      _selectedOption = widget.selectedTenantAccount;
+    }
+  }
 
   @override
   void dispose() {
@@ -1639,17 +2827,16 @@ class _TenantAccountSelectorState
     );
     final pageAccounts =
         accountsAsync.value?.items ?? const <TenantAccountOption>[];
-    final contextualId = widget.selectedTenantAccountId == null
-        ? widget.contextualTenantAccountId
-        : null;
+    final exactAccountId =
+        widget.selectedTenantAccountId ?? widget.contextualTenantAccountId;
     final contextualIsInPage =
-        contextualId != null &&
-        pageAccounts.any((item) => item.tenantAccountId == contextualId);
+        exactAccountId != null &&
+        pageAccounts.any((item) => item.tenantAccountId == exactAccountId);
     final contextualAccountAsync =
-        contextualId != null &&
+        exactAccountId != null &&
             accountsAsync.value != null &&
             !contextualIsInPage
-        ? ref.watch(_tenantAccountOptionProvider(contextualId))
+        ? ref.watch(_tenantAccountOptionProvider(exactAccountId))
         : const AsyncValue<TenantAccountOption?>.data(null);
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -1693,7 +2880,7 @@ class _TenantAccountSelectorState
               final accounts = [...page.items];
               final contextualAccount = contextualIsInPage
                   ? accounts
-                        .where((item) => item.tenantAccountId == contextualId)
+                        .where((item) => item.tenantAccountId == exactAccountId)
                         .firstOrNull
                   : contextualAccountAsync.value;
               if (contextualAccount != null &&
@@ -1712,14 +2899,26 @@ class _TenantAccountSelectorState
                   )) {
                 accounts.insert(0, _selectedOption!);
               }
-              if (widget.selectedTenantAccountId == null &&
-                  contextualAccount != null) {
+              final parentNeedsSelectedMetadata =
+                  contextualAccount != null &&
+                  widget.selectedTenantAccountId ==
+                      contextualAccount.tenantAccountId &&
+                  widget.selectedTenantAccount?.tenantAccountId !=
+                      contextualAccount.tenantAccountId;
+              if (contextualAccount != null &&
+                  (widget.selectedTenantAccountId == null ||
+                      parentNeedsSelectedMetadata)) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted && widget.selectedTenantAccountId == null) {
+                  final stillNeedsSelectedMetadata =
+                      widget.selectedTenantAccountId ==
+                          contextualAccount.tenantAccountId &&
+                      widget.selectedTenantAccount?.tenantAccountId !=
+                          contextualAccount.tenantAccountId;
+                  if (mounted &&
+                      (widget.selectedTenantAccountId == null ||
+                          stillNeedsSelectedMetadata)) {
                     _selectedOption = contextualAccount;
-                    widget.onTenantAccountSelected(
-                      contextualAccount.tenantAccountId,
-                    );
+                    widget.onTenantAccountSelected(contextualAccount);
                   }
                 });
               }
@@ -1762,7 +2961,7 @@ class _TenantAccountSelectorState
                       _selectedOption = accounts
                           .where((item) => item.tenantAccountId == id)
                           .firstOrNull;
-                      widget.onTenantAccountSelected(id);
+                      widget.onTenantAccountSelected(_selectedOption);
                     },
                   ),
                   const SizedBox(height: 6),
@@ -1987,22 +3186,26 @@ class _LeaseSignatureDispositionSectionState
                   'This determines whether Rental Command preserves the upload as the signed agreement or prepares it for signatures.',
                 ),
               ),
-              RadioListTile<LeaseScanReviewDisposition>(
-                value: LeaseScanReviewDisposition.alreadyFullySigned,
+              RadioGroup<LeaseScanReviewDisposition>(
                 groupValue: widget.selectedDisposition,
                 onChanged: widget.onDispositionChanged,
-                title: const Text('Already fully signed'),
-                subtitle: const Text(
-                  'Everyone has signed. Save this uploaded document as the executed agreement.',
-                ),
-              ),
-              RadioListTile<LeaseScanReviewDisposition>(
-                value: LeaseScanReviewDisposition.needsSignatures,
-                groupValue: widget.selectedDisposition,
-                onChanged: widget.onDispositionChanged,
-                title: const Text('Still needs signatures'),
-                subtitle: const Text(
-                  'Prepare an editable agreement draft and send it through Rental Command signing.',
+                child: const Column(
+                  children: [
+                    RadioListTile<LeaseScanReviewDisposition>(
+                      value: LeaseScanReviewDisposition.alreadyFullySigned,
+                      title: Text('Already fully signed'),
+                      subtitle: Text(
+                        'Everyone has signed. Save this uploaded document as the executed agreement.',
+                      ),
+                    ),
+                    RadioListTile<LeaseScanReviewDisposition>(
+                      value: LeaseScanReviewDisposition.needsSignatures,
+                      title: Text('Still needs signatures'),
+                      subtitle: Text(
+                        'Prepare an editable agreement draft and send it through Rental Command signing.',
+                      ),
+                    ),
+                  ],
                 ),
               ),
               if (needsSignatures) ...[
@@ -2074,7 +3277,7 @@ class _LeaseSignatureDispositionSectionState
                             (item) => item.id == widget.selectedTemplateId,
                           );
                           return DropdownButtonFormField<int>(
-                            value: selectedIsVisible
+                            initialValue: selectedIsVisible
                                 ? widget.selectedTemplateId
                                 : null,
                             decoration: const InputDecoration(
@@ -2095,6 +3298,92 @@ class _LeaseSignatureDispositionSectionState
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RentTrackingStartSection extends StatelessWidget {
+  const _RentTrackingStartSection({
+    required this.mode,
+    required this.startOn,
+    required this.leaseStart,
+    required this.onModeChanged,
+    required this.onStartOnChanged,
+  });
+
+  final String mode;
+  final DateTime? startOn;
+  final DateTime? leaseStart;
+  final ValueChanged<String> onModeChanged;
+  final ValueChanged<DateTime?> onStartOnChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card.filled(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Begin rent charges',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              key: ValueKey(mode),
+              initialValue: mode,
+              items: const [
+                DropdownMenuItem(
+                  value: 'ForwardOnly',
+                  child: Text('Start from the current date'),
+                ),
+                DropdownMenuItem(
+                  value: 'BackfillFromLeaseStart',
+                  child: Text('Backfill from the lease start'),
+                ),
+                DropdownMenuItem(
+                  value: 'CustomCutoffDate',
+                  child: Text('Start from a custom date'),
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) onModeChanged(value);
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'This decides whether older rent periods are posted when the lease is imported.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (mode == 'CustomCutoffDate')
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Custom start date'),
+                subtitle: Text(
+                  startOn == null
+                      ? 'Required'
+                      : startOn!.toIso8601String().split('T').first,
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = leaseStart ?? DateTime(2000);
+                  final initial = startOn ?? firstDate;
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: initial.isBefore(firstDate)
+                        ? firstDate
+                        : initial,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                  );
+                  if (selected != null) onStartOnChanged(selected);
+                },
+              ),
+          ],
         ),
       ),
     );
@@ -2160,8 +3449,9 @@ class _LeasePickers extends ConsumerWidget {
                 ? 'No matching property — a new one will be created from the '
                       'document. Check the address, or link an existing property '
                       'instead.'
-                : 'Link the property and unit. The tenant is matched from the '
-                      'lease — or you can choose one.',
+                : 'Choose an existing Unit, or create a new Unit under an '
+                      'existing Property. The tenant is matched from the lease '
+                      '— or you can choose one.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
@@ -2281,16 +3571,34 @@ class _LinkPropertyFields extends ConsumerStatefulWidget {
 
 class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
   final _searchController = TextEditingController();
+  Timer? _searchDebounce;
+  String _search = '';
   int _skip = 0;
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  void _search() {
-    setState(() => _skip = 0);
+  void _searchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() {
+        _search = value.trim();
+        _skip = 0;
+      });
+    });
+  }
+
+  void _submitSearch(String value) {
+    _searchDebounce?.cancel();
+    setState(() {
+      _search = value.trim();
+      _skip = 0;
+    });
   }
 
   void _select(ScanUnitTargetOption target) {
@@ -2298,15 +3606,17 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
     widget.onUnitSelected(target.unitId);
   }
 
+  void _selectNewUnit(ScanUnitTargetOption target) {
+    widget.onPropertySelected(target.propertyId);
+    widget.onUnitSelected(null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final targetsAsync = ref.watch(
-      _scanTargetOptionsProvider((
-        search: _searchController.text.trim(),
-        skip: _skip,
-      )),
+      _scanTargetOptionsProvider((search: _search, skip: _skip)),
     );
 
     return Column(
@@ -2317,7 +3627,8 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
           controller: _searchController,
           hintText: 'Search property or Unit',
           leading: const Icon(Icons.search),
-          onSubmitted: (_) => _search(),
+          onChanged: _searchChanged,
+          onSubmitted: _submitSearch,
         ),
         const SizedBox(height: 8),
         targetsAsync.when(
@@ -2335,8 +3646,39 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
                 ),
               );
             }
+            final propertyTargets = <int, ScanUnitTargetOption>{
+              for (final target in page.items) target.propertyId: target,
+            }.values;
             return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Text(
+                  'Create a new Unit in:',
+                  style: theme.textTheme.labelMedium,
+                ),
+                const SizedBox(height: 4),
+                for (final target in propertyTargets)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading:
+                        widget.selectedPropertyId == target.propertyId &&
+                            widget.selectedUnitId == null
+                        ? Icon(Icons.check_circle, color: colorScheme.primary)
+                        : const Icon(Icons.add_home_work_outlined),
+                    title: Text(
+                      target.propertyName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text(
+                      'Create the Unit from this lease scan',
+                    ),
+                    onTap: () => _selectNewUnit(target),
+                  ),
+                const Divider(),
+                Text(
+                  'Or choose an existing Unit:',
+                  style: theme.textTheme.labelMedium,
+                ),
                 RadioGroup<int>(
                   groupValue: widget.selectedUnitId,
                   onChanged: (unitId) {
@@ -2698,7 +4040,7 @@ class _LeaseTermsSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'LEASE TERMS',
+            'TENANT, UNIT & LEASE DETAILS',
             style: theme.textTheme.labelSmall?.copyWith(
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
@@ -2706,6 +4048,13 @@ class _LeaseTermsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          Text(
+            'For a signed lease that has already started, enter the date the tenant received possession.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
           ...ordered.map(
             (field) => Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -2785,6 +4134,68 @@ class _ApplicantSection extends StatelessWidget {
 // _LoanFieldsSection — editable loan fields in web form order
 // ---------------------------------------------------------------------------
 
+String _formatMoney(double value) {
+  final fixed = value.abs().toStringAsFixed(2);
+  final parts = fixed.split('.');
+  final dollars = parts.first;
+  final buffer = StringBuffer();
+  for (var i = 0; i < dollars.length; i++) {
+    if (i > 0 && (dollars.length - i) % 3 == 0) buffer.write(',');
+    buffer.write(dollars[i]);
+  }
+  final sign = value < 0 ? '-' : '';
+  return '$sign\$$buffer.${parts.last}';
+}
+
+String _formatDate(DateTime value) {
+  if (value.year <= 0) return 'Unknown date';
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
+
+String _loanPaymentStatusLabel(String status) => switch (status) {
+  'Paid' => 'Paid',
+  'Scheduled' => 'Scheduled',
+  _ => status,
+};
+
+class _LoanReviewModeSection extends StatelessWidget {
+  const _LoanReviewModeSection({
+    required this.mode,
+    required this.onModeChanged,
+  });
+
+  final _LoanReviewMode mode;
+  final ValueChanged<_LoanReviewMode> onModeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: SegmentedButton<_LoanReviewMode>(
+        segments: const [
+          ButtonSegment(
+            value: _LoanReviewMode.matchExistingPayment,
+            label: Text('Match existing payment'),
+            icon: Icon(Icons.playlist_add_check),
+          ),
+          ButtonSegment(
+            value: _LoanReviewMode.addNewLoan,
+            label: Text('Add new loan'),
+            icon: Icon(Icons.add_home_work_outlined),
+          ),
+        ],
+        selected: {mode},
+        onSelectionChanged: (selection) =>
+            onModeChanged(selection.firstOrNull ?? mode),
+        style: SegmentedButton.styleFrom(visualDensity: theme.visualDensity),
+      ),
+    );
+  }
+}
+
 class _LoanPropertyPicker extends ConsumerWidget {
   const _LoanPropertyPicker({
     required this.selectedPropertyId,
@@ -2862,6 +4273,504 @@ class _LoanPropertyPicker extends ConsumerWidget {
   }
 }
 
+class _ExistingLoanPaymentPicker extends ConsumerWidget {
+  const _ExistingLoanPaymentPicker({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+    required this.propertyId,
+    required this.loanId,
+    required this.onLoanSelected,
+    required this.paymentId,
+    required this.onPaymentSelected,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+  final int? propertyId;
+  final int? loanId;
+  final ValueChanged<int?> onLoanSelected;
+  final int? paymentId;
+  final ValueChanged<LoanPayment?> onPaymentSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final propertyId = this.propertyId;
+    final selectedLoanId = loanId;
+    final loansAsync = propertyId == null
+        ? null
+        : ref.watch(_loanOptionsProvider((propertyId: propertyId, skip: 0)));
+    final paymentsAsync = selectedLoanId == null
+        ? null
+        : ref.watch(
+            _loanPaymentOptionsProvider((loanId: selectedLoanId, skip: 0)),
+          );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'MATCH PAYMENT',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _PickerLabel(text: 'Existing loan', required: true),
+          if (loansAsync == null)
+            Text(
+              'Select a property first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            loansAsync.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => Text(
+                'Could not load property loans.',
+                style: TextStyle(color: colorScheme.error),
+              ),
+              data: (loans) {
+                if (loans.isEmpty) {
+                  return Text(
+                    'No loans were returned for this property.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  );
+                }
+                final ids = loans.map((loan) => loan.id).toSet();
+                final selectedLoan = loans
+                    .where((loan) => loan.id == selectedLoanId)
+                    .firstOrNull;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: ids.contains(selectedLoanId)
+                          ? selectedLoanId
+                          : null,
+                      hint: const Text('Select a loan'),
+                      isExpanded: true,
+                      decoration: _pickerDecoration,
+                      items: loans
+                          .map(
+                            (loan) => DropdownMenuItem(
+                              value: loan.id,
+                              child: Text(
+                                '${loan.lender} - ${_formatMoney(loan.currentBalance)} balance',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: onLoanSelected,
+                    ),
+                    if (selectedLoan != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _LoanSummary(loan: selectedLoan),
+                      ),
+                  ],
+                );
+              },
+            ),
+          const SizedBox(height: 16),
+          _PickerLabel(text: 'Loan payment', required: true),
+          if (loanId == null)
+            Text(
+              'Select a loan first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            paymentsAsync!.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => Text(
+                'Could not load loan payments.',
+                style: TextStyle(color: colorScheme.error),
+              ),
+              data: (payments) {
+                if (payments.isEmpty) {
+                  return Text(
+                    'No payments were returned for this loan.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.error,
+                    ),
+                  );
+                }
+                final ids = payments.map((payment) => payment.id).toSet();
+                final selectedPayment = payments
+                    .where((payment) => payment.id == paymentId)
+                    .firstOrNull;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: ids.contains(paymentId) ? paymentId : null,
+                      hint: const Text('Select a payment'),
+                      isExpanded: true,
+                      decoration: _pickerDecoration,
+                      items: payments
+                          .map(
+                            (payment) => DropdownMenuItem(
+                              value: payment.id,
+                              child: Text(
+                                '${_formatDate(payment.dueDate)} - ${_formatMoney(payment.totalAmount)} total - ${_loanPaymentStatusLabel(payment.status)}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (id) => onPaymentSelected(
+                        payments
+                            .where((payment) => payment.id == id)
+                            .firstOrNull,
+                      ),
+                    ),
+                    if (selectedPayment != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: _LoanPaymentSummary(payment: selectedPayment),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: _LoanStatementPaymentFields(
+                        draft: draft,
+                        editedFields: editedFields,
+                        onFieldChanged: onFieldChanged,
+                        selectedPayment: selectedPayment,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanStatementPaymentFields extends StatelessWidget {
+  const _LoanStatementPaymentFields({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+    required this.selectedPayment,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+  final LoanPayment? selectedPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final principal = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementPrincipalFieldNames,
+    );
+    final interest = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementInterestFieldNames,
+    );
+    final escrow = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementEscrowFieldNames,
+    );
+    final openingBalance = _effectiveLoanStatementDecimal(
+      draft,
+      editedFields,
+      _loanStatementOpeningBalanceFieldNames,
+    );
+    final piTotal = principal != null && interest != null
+        ? principal + interest
+        : null;
+    final cashTotal = principal != null && interest != null && escrow != null
+        ? principal + interest + escrow
+        : null;
+    final balanceAfter = openingBalance != null && principal != null
+        ? openingBalance - principal
+        : null;
+    final fields = [
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementPrincipalFieldNames,
+        'statement_principal_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementInterestFieldNames,
+        'statement_interest_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementEscrowFieldNames,
+        'statement_escrow_amount',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementOpeningBalanceFieldNames,
+        'opening_principal_balance',
+      ),
+      _loanStatementField(
+        draft,
+        editedFields,
+        _loanStatementEffectiveDateFieldNames,
+        'statementEffectiveDate',
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'STATEMENT AMOUNTS',
+          style: theme.textTheme.labelSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Review the exact amounts from the statement before attaching it to this loan payment.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        for (final field in fields)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _FieldInput(
+              field: field,
+              value: editedFields[field.name] ?? field.value,
+              onChanged: (value) => onFieldChanged(field.name, value),
+            ),
+          ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colorScheme.outlineVariant),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                _AmountReviewRow(label: 'P&I total', value: piTotal),
+                _AmountReviewRow(label: 'Full cash total', value: cashTotal),
+                _AmountReviewRow(
+                  label: 'Derived balance after',
+                  value: balanceAfter,
+                ),
+                if (selectedPayment != null) ...[
+                  const Divider(height: 20),
+                  _AmountReviewRow(
+                    label: 'Selected payment total',
+                    value: selectedPayment!.totalAmount,
+                  ),
+                  _AmountReviewRow(
+                    label: 'Selected balance after',
+                    value: selectedPayment!.balanceAfter,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AmountReviewRow extends StatelessWidget {
+  const _AmountReviewRow({required this.label, required this.value});
+
+  final String label;
+  final double? value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final amount = value;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          Text(
+            amount == null ? 'Review needed' : _formatMoney(amount),
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: amount == null ? colorScheme.error : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+ScanField _loanStatementField(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+  String fallbackName,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      final existing = draft.fields
+          .where((field) => field.name == name)
+          .firstOrNull;
+      return ScanField(
+        name: name,
+        value: editedFields[name] ?? existing?.value ?? '',
+        confidence: existing?.confidence ?? 1,
+      );
+    }
+  }
+  for (final name in names) {
+    final existing = draft.fields
+        .where((field) => field.name == name)
+        .firstOrNull;
+    if (existing != null) return existing;
+  }
+  return ScanField(name: fallbackName, value: '', confidence: 1);
+}
+
+class _LoanSummary extends StatelessWidget {
+  const _LoanSummary({required this.loan});
+
+  final PropertyLoan loan;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              loan.lender,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${_formatMoney(loan.currentBalance)} balance',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LoanPaymentSummary extends StatelessWidget {
+  const _LoanPaymentSummary({required this.payment});
+
+  final LoanPayment payment;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final rows = [
+      ('Principal', payment.principalAmount),
+      ('Interest', payment.interestAmount),
+      ('Escrow', payment.escrowAmount),
+      ('Total', payment.totalAmount),
+      ('Balance after', payment.balanceAfter),
+    ];
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Due ${_formatDate(payment.dueDate)} - ${_loanPaymentStatusLabel(payment.status)}',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final row in rows)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        row.$1,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _formatMoney(row.$2),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _LoanFieldsSection extends StatelessWidget {
   const _LoanFieldsSection({
     required this.draft,
@@ -2908,6 +4817,134 @@ class _LoanFieldsSection extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LeaseEndingNoticeFieldsSection extends StatelessWidget {
+  const _LeaseEndingNoticeFieldsSection({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fieldMap = {for (final f in draft.scalarFields) f.name: f};
+    final fields = _leaseEndingNoticeFieldOrder.map((name) {
+      return fieldMap[name] ??
+          ScanField(name: name, value: editedFields[name] ?? '', confidence: 1);
+    }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'MOVE-OUT NOTICE',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fields.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FieldInput(
+                field: field,
+                value: editedFields[field.name] ?? field.value,
+                onChanged: (v) => onFieldChanged(field.name, v),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadOnlyFieldsSection extends StatelessWidget {
+  const _ReadOnlyFieldsSection({required this.draft});
+
+  final ScanDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fields = draft.scalarFields;
+    if (fields.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'CONFIRMED DETAILS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...fields.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _ReadOnlyFieldRow(field: field),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadOnlyFieldRow extends StatelessWidget {
+  const _ReadOnlyFieldRow({required this.field});
+
+  final ScanField field;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final value = field.value.trim().isEmpty ? 'Not captured' : field.value;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _prettifyLabel(field.name),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            SelectableText(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2978,6 +5015,9 @@ class _FieldsSection extends StatelessWidget {
                       field: field,
                       value: editedFields[field.name] ?? field.value,
                       onChanged: (v) => onFieldChanged(field.name, v),
+                      categoryOptions: draft.isWorkOrder
+                          ? _workOrderCategories
+                          : _scheduleECategories,
                     ),
                   ),
                 ),
@@ -2999,11 +5039,13 @@ class _FieldInput extends StatefulWidget {
     required this.field,
     required this.value,
     required this.onChanged,
+    this.categoryOptions = _scheduleECategories,
   });
 
   final ScanField field;
   final String value;
   final ValueChanged<String> onChanged;
+  final List<String> categoryOptions;
 
   @override
   State<_FieldInput> createState() => _FieldInputState();
@@ -3048,6 +5090,8 @@ class _FieldInputState extends State<_FieldInput> {
     final isDate = _dateFields.contains(widget.field.name);
     final isMoney = _moneyFields.contains(widget.field.name);
     final isInt = _intFields.contains(widget.field.name);
+    final isEmail = widget.field.name == 'tenant_email';
+    final isPhone = widget.field.name == 'tenant_phone';
 
     // Date fields open a calendar picker so the landlord taps a date instead of
     // typing one (design#5). Free-text editing is still allowed as a fallback.
@@ -3086,7 +5130,7 @@ class _FieldInputState extends State<_FieldInput> {
         children: [
           _FieldLabel(label: fieldLabel, level: level, labelColor: labelColor),
           DropdownButtonFormField<String>(
-            initialValue: _scheduleECategories.contains(widget.value)
+            initialValue: widget.categoryOptions.contains(widget.value)
                 ? widget.value
                 : null,
             hint: const Text('Select category'),
@@ -3098,7 +5142,7 @@ class _FieldInputState extends State<_FieldInput> {
                 vertical: 10,
               ),
             ),
-            items: _scheduleECategories
+            items: widget.categoryOptions
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
             onChanged: (v) {
@@ -3125,6 +5169,10 @@ class _FieldInputState extends State<_FieldInput> {
               ? const TextInputType.numberWithOptions(decimal: true)
               : isInt
               ? TextInputType.number
+              : isEmail
+              ? TextInputType.emailAddress
+              : isPhone
+              ? TextInputType.phone
               : null,
           decoration: InputDecoration(
             border: const OutlineInputBorder(),

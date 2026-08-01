@@ -19,6 +19,9 @@ public interface INativeEsignExecutionClaimStore
 
     Task<int> ReleaseForRetryAsync(
         int signatureRequestId, Guid claimToken, string? error, CancellationToken ct = default);
+
+    Task<bool> HasCompletedAgreementFinancialReconciliationsAsync(
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -120,6 +123,42 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
           AND request."ExecutionClaimExpiresAtUtc" > clock.now_utc;
         """;
 
+    internal const string CompletedAgreementFinancialReconciliationExistsSql = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM "SignatureRequests" AS request
+            JOIN "LeaseAgreements" AS agreement
+              ON agreement."Id" = request."LeaseAgreementId"
+             AND agreement."PortfolioId" = request."PortfolioId"
+            JOIN "LeaseManagements" AS management
+              ON management."Id" = agreement."LeaseManagementId"
+             AND management."PortfolioId" = agreement."PortfolioId"
+            JOIN "TenantAccounts" AS account
+              ON account."LeaseManagementId" = management."Id"
+             AND account."PortfolioId" = management."PortfolioId"
+            WHERE request."Status" = 'Completed'
+              AND request."ExecutedArtifactId" IS NOT NULL
+              AND request."LeaseAgreementId" IS NOT NULL
+              AND request."LeaseAddendumId" IS NULL
+              AND agreement."ChangeType" = 'Initial'
+              AND agreement."ReplacesAgreementId" IS NULL
+              AND agreement."RenewsAgreementId" IS NULL
+              AND agreement."FullyExecutedAtUtc" IS NOT NULL
+              AND agreement."ExecutedArtifactId" IS NOT NULL
+              AND agreement."VoidedAtUtc" IS NULL
+              AND agreement."DraftCanceledAtUtc" IS NULL
+              AND agreement."SecurityDepositObligation" > 0
+              AND management."CanceledAtUtc" IS NULL
+              AND account."ClosedAtUtc" IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "TenantLedgerEntries" AS ledger
+                  WHERE ledger."TenantAccountId" = account."Id"
+                    AND ledger."BusinessKey" =
+                        'security-deposit:agreement:' || agreement."PublicId"::text)
+            LIMIT 1);
+        """;
+
     private readonly RentalCommandDbContext _db;
 
     public NativeEsignExecutionClaimStore(RentalCommandDbContext db) => _db = db;
@@ -158,6 +197,25 @@ public sealed class NativeEsignExecutionClaimStore : INativeEsignExecutionClaimS
             command.Parameters.Add(new NpgsqlParameter("error", NpgsqlDbType.Text)
                 { Value = (object?)LimitError(error) ?? DBNull.Value });
             return await command.ExecuteNonQueryAsync(ct);
+        }
+        finally
+        {
+            if (closeWhenDone) await _db.Database.CloseConnectionAsync();
+        }
+    }
+
+    public async Task<bool> HasCompletedAgreementFinancialReconciliationsAsync(
+        CancellationToken ct = default)
+    {
+        var connection = _db.Database.GetDbConnection();
+        var closeWhenDone = connection.State != ConnectionState.Open;
+        if (closeWhenDone) await _db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = CompletedAgreementFinancialReconciliationExistsSql;
+            var value = await command.ExecuteScalarAsync(ct);
+            return value is bool candidate && candidate;
         }
         finally
         {

@@ -29,7 +29,7 @@ void main() {
     ]);
   });
 
-  testWidgets('large hub exposes every destination in one section menu', (
+  testWidgets('large hub keeps every destination in direct pill tabs', (
     tester,
   ) async {
     final destinations = <MobileDestination>[
@@ -86,27 +86,35 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const Key('hub-section-selector')), findsOneWidget);
-    expect(find.byKey(const Key('hub-segment-scroll')), findsNothing);
-
-    await tester.tap(find.byTooltip('Choose section'));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('hub-section-selector')), findsNothing);
+    expect(find.byKey(const Key('hub-segment-scroll')), findsOneWidget);
 
     for (final destination in destinations) {
-      expect(
-        find.byKey(ValueKey('hub-section-${destination.id.name}')),
-        findsOneWidget,
-      );
+      expect(find.text(destination.label), findsWidgets);
     }
 
-    await tester.tap(find.byKey(const ValueKey('hub-section-applications')));
+    await tester.scrollUntilVisible(
+      find.text('Applications').last,
+      300,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('hub-segment-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(find.text('Applications').last);
     await tester.pumpAndSettle();
 
     expect(find.text('Applications root'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Choose section'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('hub-section-units')));
+    await tester.scrollUntilVisible(
+      find.text('Units').last,
+      -300,
+      scrollable: find.descendant(
+        of: find.byKey(const Key('hub-segment-scroll')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(find.text('Units').last);
     await tester.pumpAndSettle();
 
     expect(find.text('Units root'), findsOneWidget);
@@ -292,6 +300,28 @@ void main() {
     expect(find.byTooltip('Back'), findsNothing);
     expect(find.text('Transactions feed'), findsOneWidget);
     expect(find.text('Open payment detail'), findsOneWidget);
+  });
+
+  testWidgets('detached shell reveal ignores inactive route context', (
+    tester,
+  ) async {
+    late BuildContext routeContext;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            routeContext = context;
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    expect(() => revealMobileShellIfDetached(routeContext), returnsNormally);
   });
 
   testWidgets('detail header replaces the destination header above top tabs', (

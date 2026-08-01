@@ -95,10 +95,9 @@ public sealed class PlatformAdminAuthorizationHandler
 
     internal static bool TryReadCanonicalUserId(ClaimsPrincipal principal, out int userId)
     {
-        // JwtBearer maps `sub` to NameIdentifier by default. Accept the raw registered name as well
-        // so the policy is stable if inbound claim mapping is disabled later.
-        var subject = principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        // JwtBearer may expose `sub` either as NameIdentifier or as the raw registered claim name
+        // depending on framework mapping defaults. Accept both shapes.
+        var subject = principal.FindSubjectValue();
         return int.TryParse(subject, out userId) && userId > 0;
     }
 }

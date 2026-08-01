@@ -116,11 +116,11 @@ public static class ApplicantScreeningQueries
             screening.ProviderHostedUrl != null));
 
     public static Task<ApplicantScreeningSnapshot> LoadSnapshotAsync(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         int portfolioId,
         int screeningId,
         CancellationToken ct) =>
-        persistence.Query<ApplicantScreening>().AsNoTracking()
+        db.Set<ApplicantScreening>().AsNoTracking()
             .Where(screening => screening.Id == screeningId && screening.PortfolioId == portfolioId)
             .ProjectSnapshots()
             .SingleAsync(ct);

@@ -4,24 +4,31 @@
 	import { owners as ownersApi } from '$lib/api/endpoints/owners';
 	import {
 		ownerDistributions,
+		type ApproveOwnerDistributionRequest,
 		type CreateOwnerDistributionRequest,
 		type DistributionMethod,
-		type OwnerDistribution
+		type OwnerDistribution,
+		type OwnerDistributionStatus,
+		type RejectOwnerDistributionRequest
 	} from '$lib/api/endpoints/owner-distributions';
 	import type { OwnerStatementSummary, OwnerStatementReport } from '$lib/types';
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import {
+		currentOwnerStatementYear,
+		ownerStatementYearOptions,
+		watchOwnerStatementYear
+	} from '$lib/accounting/owner-statement-years';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
-	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
+	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
+	import { onMount } from 'svelte';
 
-	const CURRENT_YEAR = new Date().getFullYear();
-	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
 		{ value: 'Check', label: 'Check' },
@@ -32,11 +39,21 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	let selectedYear = $state(String(CURRENT_YEAR));
+	let yearOptions = $state(ownerStatementYearOptions());
+	let selectedYear = $state(String(currentOwnerStatementYear()));
 	let selectedOwnerId = $state<number | null>(null);
 	let downloading = $state(false);
 	let distributionFormContext = $state('');
-	let distributionForm = $state(makeDistributionForm(CURRENT_YEAR));
+	let distributionForm = $state(makeDistributionForm(currentOwnerStatementYear()));
+	let approvalReferences = $state<Record<number, string>>({});
+	let rejectionReasons = $state<Record<number, string>>({});
+
+	function applyBusinessYear(businessYear: number) {
+		yearOptions = ownerStatementYearOptions(businessYear);
+		selectedYear = String(businessYear);
+	}
+
+	onMount(() => watchOwnerStatementYear(applyBusinessYear));
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owner-statements', portfolioId, selectedYear],
@@ -115,6 +132,18 @@
 		return DISTRIBUTION_METHODS.find((m) => m.value === value)?.label ?? value;
 	}
 
+	function statusLabel(value: OwnerDistributionStatus) {
+		return value === 'Approved' ? 'Approved' : value === 'Rejected' ? 'Rejected' : 'Draft';
+	}
+
+	function statusClass(value: OwnerDistributionStatus) {
+		return value === 'Approved'
+			? 'border-[var(--success)]/30 bg-[var(--success)]/10 text-[var(--success)]'
+			: value === 'Rejected'
+				? 'border-destructive/30 bg-destructive/10 text-destructive'
+				: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+	}
+
 	function parseAmount(value: string) {
 		const parsed = Number(value.replace(/[$,]/g, '').trim());
 		return Number.isFinite(parsed) ? parsed : NaN;
@@ -169,11 +198,31 @@
 	const createDistributionMutation = createMutation(() => ({
 		mutationFn: (body: CreateOwnerDistributionRequest) => ownerDistributions.create(body),
 		onSuccess: () => {
-			showSuccess('Owner distribution recorded.');
+			showSuccess('Draft distribution created.');
 			distributionForm = {
 				...makeDistributionForm(Number(selectedYear)),
 				date: distributionForm.date
 			};
+			invalidateDistributionData();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const approveDistributionMutation = createMutation(() => ({
+		mutationFn: ({ id, body }: { id: number; body: ApproveOwnerDistributionRequest }) =>
+			ownerDistributions.approve(id, body),
+		onSuccess: () => {
+			showSuccess('Owner distribution approved.');
+			invalidateDistributionData();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const rejectDistributionMutation = createMutation(() => ({
+		mutationFn: ({ id, body }: { id: number; body: RejectOwnerDistributionRequest }) =>
+			ownerDistributions.reject(id, body),
+		onSuccess: () => {
+			showSuccess('Owner distribution rejected.');
 			invalidateDistributionData();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -214,6 +263,40 @@
 		};
 		createDistributionMutation.mutate(body);
 	}
+
+	function setApprovalReference(id: number, value: string) {
+		approvalReferences = { ...approvalReferences, [id]: value };
+	}
+
+	function setRejectionReason(id: number, value: string) {
+		rejectionReasons = { ...rejectionReasons, [id]: value };
+	}
+
+	function inputValue(event: Event) {
+		return (event.currentTarget as HTMLInputElement | null)?.value ?? '';
+	}
+
+	function handleApprove(distribution: OwnerDistribution) {
+		const reference = (approvalReferences[distribution.id] ?? '').trim();
+		if (!reference) {
+			showError('Enter the bank/export reference before approval.');
+			return;
+		}
+		approveDistributionMutation.mutate({
+			id: distribution.id,
+			body: {
+				bankReference: reference,
+				exportReference: reference
+			}
+		});
+	}
+
+	function handleReject(distribution: OwnerDistribution) {
+		rejectDistributionMutation.mutate({
+			id: distribution.id,
+			body: { reason: (rejectionReasons[distribution.id] ?? '').trim() || undefined }
+		});
+	}
 </script>
 
 <svelte:head>
@@ -245,7 +328,7 @@
 					{selectedYear}
 				</Select.Trigger>
 				<Select.Content>
-					{#each YEAR_OPTIONS as year}
+					{#each yearOptions as year}
 						<Select.Item value={String(year)} label={String(year)}>{year}</Select.Item>
 					{/each}
 				</Select.Content>
@@ -370,7 +453,7 @@
 							{#if canCreateDistribution}
 								<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
 									<Card.Header class="border-b border-border px-4 py-3">
-										<Card.Title class="text-base font-semibold">Record payment to owner</Card.Title>
+										<Card.Title class="text-base font-semibold">Draft owner distribution</Card.Title>
 									</Card.Header>
 									<Card.Content class="p-4">
 										<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
@@ -440,7 +523,7 @@
 											data-testid="owner-distribution-submit"
 										>
 											<Plus class="h-4 w-4" />
-											{createDistributionMutation.isPending ? 'Recording…' : 'Record payment'}
+											{createDistributionMutation.isPending ? 'Creating…' : 'Create draft'}
 										</Button>
 									</div>
 										</form>
@@ -450,7 +533,7 @@
 
 						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-list-card">
 							<Card.Header class="border-b border-border px-4 py-3">
-								<Card.Title class="text-base font-semibold">Payments to owner</Card.Title>
+								<Card.Title class="text-base font-semibold">Owner distribution approvals</Card.Title>
 							</Card.Header>
 							<Card.Content class="p-0">
 								{#if distributionQuery.isLoading}
@@ -461,7 +544,7 @@
 										<Button size="sm" variant="outline" onclick={() => distributionQuery.refetch()}>Try again</Button>
 									</div>
 								{:else if distributions.length === 0}
-									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No payments to this owner were recorded for {selectedYear}.</p>
+									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No owner distributions were drafted for {selectedYear}.</p>
 								{:else}
 									<div class="overflow-x-auto">
 										<table class="w-full text-sm">
@@ -469,9 +552,11 @@
 												<tr class="border-b border-border bg-muted/50">
 													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
 													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Method</th>
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
 													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property</th>
 													<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
-													<th class="w-12 px-4 py-3"><span class="sr-only">Actions</span></th>
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Bank/export reference</th>
+													<th class="px-4 py-3 text-left font-medium text-muted-foreground">Actions</th>
 												</tr>
 											</thead>
 											<tbody>
@@ -479,23 +564,74 @@
 													<tr class="border-b border-border/50 last:border-0 hover:bg-muted/30" data-testid="owner-distribution-row-{distribution.id}">
 														<td class="px-4 py-3 whitespace-nowrap">{formatDate(distribution.date)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
+														<td class="px-4 py-3 whitespace-nowrap">
+															<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {statusClass(distribution.status)}">
+																{statusLabel(distribution.status)}
+															</span>
+														</td>
 														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
 														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
-																<td class="px-4 py-3 text-right">
-																	{#if canDeleteDistribution}
-																		<Button
-																			variant="ghost"
-																			size="icon"
-																			class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-																			aria-label={`Delete distribution ${money(distribution.amount)}`}
-																			title="Delete distribution"
-																			disabled={deleteDistributionMutation.isPending}
-																			onclick={() => deleteDistributionMutation.mutate(distribution.id)}
-																			data-testid="owner-distribution-delete-{distribution.id}"
-																		>
-																			<Trash2 class="h-4 w-4" />
-																		</Button>
-																	{/if}
+														<td class="min-w-56 px-4 py-3">
+															{#if distribution.status === 'Draft'}
+																<Input
+																	value={approvalReferences[distribution.id] ?? ''}
+																	oninput={(event) => setApprovalReference(distribution.id, inputValue(event))}
+																	placeholder="DIST-202701-O01"
+																	data-testid="owner-distribution-reference-{distribution.id}"
+																/>
+															{:else if distribution.status === 'Approved'}
+																<span class="font-mono text-xs">{distribution.exportReference ?? distribution.bankReference}</span>
+															{:else}
+																<span class="text-xs text-muted-foreground">{distribution.rejectionReason ?? 'Rejected'}</span>
+															{/if}
+														</td>
+																<td class="px-4 py-3">
+																	<div class="flex flex-wrap items-center justify-end gap-2">
+																		{#if distribution.status === 'Draft' && canCreateDistribution}
+																			<Button
+																				type="button"
+																				size="sm"
+																				disabled={approveDistributionMutation.isPending}
+																				onclick={() => handleApprove(distribution)}
+																				data-testid="owner-distribution-approve-{distribution.id}"
+																			>
+																				<Check class="h-4 w-4" />
+																				Approve
+																			</Button>
+																			<Input
+																				class="w-40"
+																				value={rejectionReasons[distribution.id] ?? ''}
+																				oninput={(event) => setRejectionReason(distribution.id, inputValue(event))}
+																				placeholder="Reject reason"
+																				data-testid="owner-distribution-reject-reason-{distribution.id}"
+																			/>
+																			<Button
+																				type="button"
+																				variant="outline"
+																				size="sm"
+																				disabled={rejectDistributionMutation.isPending}
+																				onclick={() => handleReject(distribution)}
+																				data-testid="owner-distribution-reject-{distribution.id}"
+																			>
+																				<XCircle class="h-4 w-4" />
+																				Reject
+																			</Button>
+																		{/if}
+																		{#if canDeleteDistribution}
+																			<Button
+																				variant="ghost"
+																				size="icon"
+																				class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+																				aria-label={`Delete distribution ${money(distribution.amount)}`}
+																				title="Delete draft"
+																				disabled={deleteDistributionMutation.isPending || distribution.status !== 'Draft'}
+																				onclick={() => deleteDistributionMutation.mutate(distribution.id)}
+																				data-testid="owner-distribution-delete-{distribution.id}"
+																			>
+																				<Trash2 class="h-4 w-4" />
+																			</Button>
+																		{/if}
+																	</div>
 														</td>
 													</tr>
 												{/each}

@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/widgets/mobile_m3_list.dart';
 import 'package:rental_command/features/accounting/accounting_models.dart';
 import 'package:rental_command/features/accounting/accounting_repository.dart';
 import 'package:rental_command/features/money/money_screen.dart';
@@ -154,6 +155,38 @@ void main() {
     expect(find.byKey(const Key('ledger-append-progress')), findsNothing);
   });
 
+  testWidgets('ledger loading state is not shaped like a transaction row', (
+    tester,
+  ) async {
+    final repo = _FakeMoneyRepository();
+    final pending = Completer<AccountingTransactionsPage>();
+    repo.queue(pending.future);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          accountingRepositoryProvider.overrideWithValue(
+            _FakeAccountingRepository(),
+          ),
+          moneyRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(
+          home: MoneyScreen(initialView: MoneyScreenView.ledger),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('ledger-loading')), findsOneWidget);
+    expect(find.byType(MobileM3ListItem), findsNothing);
+    expect(find.text('Loading ledger'), findsNothing);
+
+    pending.complete(_pageWith(items: const [], totalCount: 0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('ledger-loading')), findsNothing);
+  });
+
   testWidgets('ledger source and date context may wrap twice at phone width', (
     tester,
   ) async {
@@ -207,6 +240,32 @@ void main() {
     expect(find.text(r'+$75.00'), findsOneWidget);
     expect(find.text('Scheduled'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('expense ledger amount renders one outflow sign', (tester) async {
+    final repo = _FakeMoneyRepository();
+    repo.completeNext(_page(_tx(kind: 'Expense', id: 4, amount: -157)));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          accountingRepositoryProvider.overrideWithValue(
+            _FakeAccountingRepository(),
+          ),
+          moneyRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(
+          home: MoneyScreen(
+            initialView: MoneyScreenView.expenses,
+            showTransactionSelector: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(r'-$157.00'), findsOneWidget);
+    expect(find.text(r'-$-157.00'), findsNothing);
   });
 
   test('tenant ledger rows preserve canonical tenant-account identity', () {
@@ -368,7 +427,11 @@ AccountingTransactionsPage _pageWith({
   take: 40,
 );
 
-AccountingTransaction _tx({required String kind, required int id}) {
+AccountingTransaction _tx({
+  required String kind,
+  required int id,
+  double amount = 75,
+}) {
   return AccountingTransaction(
     kind: kind,
     id: id,
@@ -376,7 +439,7 @@ AccountingTransaction _tx({required String kind, required int id}) {
     description: '$kind row',
     category: kind,
     status: 'Scheduled',
-    amount: 75,
+    amount: amount,
     hasReceipt: false,
     receiptIsImage: false,
     reconciled: false,

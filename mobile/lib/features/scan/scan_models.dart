@@ -231,7 +231,7 @@ class ScanDraft {
   final int id;
   final int portfolioId;
 
-  /// 'Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', or 'Loan'
+  /// 'Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan', or 'LeaseEndingNotice'
   final String targetEntityType;
 
   /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
@@ -279,6 +279,9 @@ class ScanDraft {
   /// Target is a scanned mortgage statement or closing disclosure.
   bool get isLoan => targetEntityType == 'Loan';
 
+  /// Target is a tenant move-out / non-renewal notice for an existing rental.
+  bool get isLeaseEndingNotice => targetEntityType == 'LeaseEndingNotice';
+
   /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';
 
@@ -292,9 +295,8 @@ class ScanDraft {
   /// Extraction finished; awaiting user review/confirmation.
   bool get isReviewing => status == 'Reviewing';
 
-  /// Reached a final state — confirmed, rejected, or failed (no more work).
-  bool get isTerminal =>
-      status == 'Confirmed' || status == 'Rejected' || status == 'Failed';
+  /// Reached a non-resubmittable final state.
+  bool get isTerminal => status == 'Confirmed' || status == 'Rejected';
 
   /// True when the server ran in no-op mode (no OpenAI key configured).
   bool get isNoOp => modelId == 'noop';

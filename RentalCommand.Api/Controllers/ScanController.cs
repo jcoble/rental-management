@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
@@ -38,6 +39,7 @@ public class ScanController : ManagementControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ScanController> _logger;
 
     // Content types we trust to render inline (non-active: no script execution). Anything else
     // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
@@ -50,7 +52,9 @@ public class ScanController : ManagementControllerBase
     // upload and each file in a batch; an explicit target skips classification.
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan"
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan",
+        "LeaseEndingNotice",
+        "PropertyAcquisition"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
@@ -62,7 +66,8 @@ public class ScanController : ManagementControllerBase
         IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
         IFileStorage files,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<ScanController>? logger = null)
     {
         _scan = scan;
         _uploads = uploads;
@@ -70,6 +75,7 @@ public class ScanController : ManagementControllerBase
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
+        _logger = logger ?? NullLogger<ScanController>.Instance;
     }
 
     // -------------------------------------------------------------------------
@@ -96,7 +102,7 @@ public class ScanController : ManagementControllerBase
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrEmpty(target) && !ValidTargets.Contains(target))
         {
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
         }
         if (!string.IsNullOrEmpty(target))
             target = ValidTargets.First(validTarget =>
@@ -176,7 +182,7 @@ public class ScanController : ManagementControllerBase
         // independently routed to its own typed review draft; an explicit target skips that pass.
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(target) && !ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
         if (!string.IsNullOrWhiteSpace(target))
             target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
 
@@ -336,7 +342,7 @@ public class ScanController : ManagementControllerBase
             && context.RentalListingId is null
             && await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
                 _db, GetWorkspaceReadScope(), targetEntityType,
-                _timeProvider.GetUtcNow().UtcDateTime, ct);
+                _timeProvider.GetUtcNow().UtcDateTime, ct: ct);
     }
 
     // -------------------------------------------------------------------------
@@ -652,6 +658,7 @@ public class ScanController : ManagementControllerBase
             GetWorkspaceReadScope(),
             status,
             new ListQuery { Skip = skip, Take = take },
+            includeTotalCount: false,
             ct);
         return Ok(page.Items);
     }
@@ -663,7 +670,12 @@ public class ScanController : ManagementControllerBase
         [FromQuery] string? status,
         CancellationToken ct = default)
     {
-        var page = await LoadScanDraftPageAsync(GetWorkspaceReadScope(), status, query, ct);
+        var page = await LoadScanDraftPageAsync(
+            GetWorkspaceReadScope(),
+            status,
+            query,
+            includeTotalCount: true,
+            ct);
         return Ok(page);
     }
 
@@ -671,6 +683,7 @@ public class ScanController : ManagementControllerBase
         WorkspaceReadScope scope,
         string? status,
         ListQuery listQuery,
+        bool includeTotalCount,
         CancellationToken ct)
     {
         var portfolioId = scope.PortfolioId;
@@ -687,7 +700,12 @@ public class ScanController : ManagementControllerBase
             _ => query.OrderByDescending(d => d.CreatedAt),
         };
 
-        var totalCount = await query.CountAsync(ct);
+        // The legacy array endpoint does not expose a total. Avoid executing its expensive
+        // authorization-shaped COUNT only to discard the result; the paged endpoint still
+        // requests and returns the exact DB-side count.
+        var totalCount = includeTotalCount
+            ? await query.CountAsync(ct)
+            : 0;
 
         var drafts = await query
             .Skip(listQuery.NormalizedSkip)
@@ -706,6 +724,7 @@ public class ScanController : ManagementControllerBase
                 CreatedAt = d.CreatedAt,
                 ReviewedAt = d.ReviewedAt,
                 ConfirmedAt = d.ConfirmedAt,
+                SourceStoredFileId = d.SourceStoredFileId,
                 SourceContentSha256 = d.SourceContentSha256,
                 SourceLabel = d.SourceLabel,
                 CaptureExperience = d.CaptureExperience,
@@ -786,6 +805,7 @@ public class ScanController : ManagementControllerBase
                     draft.CaptureTenantAccountId, draft.CaptureTenantLedgerEntryId,
                     draft.CaptureWorkOrderId, draft.CaptureApplicationId,
                     draft.CaptureRentalListingId, draft.SourceLabel),
+                SourceStoredFileId: draft.SourceStoredFileId,
                 SourceContentSha256: draft.SourceContentSha256));
         }
 
@@ -843,6 +863,7 @@ public class ScanController : ManagementControllerBase
         public DateTime CreatedAt { get; init; }
         public DateTime? ReviewedAt { get; init; }
         public DateTime? ConfirmedAt { get; init; }
+        public int? SourceStoredFileId { get; init; }
         public string? SourceContentSha256 { get; init; }
         public string? SourceLabel { get; init; }
         public WorkspaceExperience? CaptureExperience { get; init; }
@@ -914,6 +935,104 @@ public class ScanController : ManagementControllerBase
             ? BadRequest(new { error = "Only failed scan drafts can be retried." })
             : NotFound(new { error = "Scan draft not found" });
     }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/scans/{id}/payment-account — persist selected review account
+    // -------------------------------------------------------------------------
+
+    [HttpPost("{id:int}/payment-account")]
+    [ProducesResponseType(typeof(ScanDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ScanDraftResponse>> SetPaymentAccount(
+        int id,
+        [FromBody] SetScanDraftPaymentAccountRequest? body,
+        CancellationToken ct)
+    {
+        if (body is null
+            || body.TenantAccountId <= 0
+            || string.IsNullOrWhiteSpace(body.ClientOperationId)
+            || body.ClientOperationId.Trim().Length > 160)
+        {
+            return BadRequest(new
+            {
+                error = "tenantAccountId and a non-blank clientOperationId of at most 160 characters are required.",
+            });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(body.ClientOperationId.Trim())))
+            .ToLowerInvariant();
+        var command = new SetScanDraftPaymentAccountCommand(
+            scope.PortfolioId,
+            id,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            body.TenantAccountId,
+            $"scan-payment-account:{scope.PortfolioId}:{id}:{operationDigest}");
+
+        ScanDraftMutationResult result;
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "scan-draft.payment-account",
+                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
+                command,
+                DraftMutationCodec,
+                ct);
+            result = outcome.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return NotFound(new { error = "Scan draft not found" });
+        }
+
+        return result.Outcome switch
+        {
+            ScanDraftMutationOutcome.Applied when result.Snapshot is not null =>
+                Ok(ScanDraftResponseFromMutationSnapshot(result.Snapshot)),
+            ScanDraftMutationOutcome.InvalidStatus => BadRequest(new
+            {
+                error = "Only reviewing payment scan drafts can choose a rental account.",
+            }),
+            _ => NotFound(new { error = "Scan draft not found" }),
+        };
+    }
+
+    private static ScanDraftResponse ScanDraftResponseFromMutationSnapshot(
+        ScanDraftReceiptSnapshot snapshot) => new(
+        snapshot.Id,
+        snapshot.PortfolioId,
+        snapshot.TargetEntityType,
+        snapshot.Status,
+        $"/api/v1/scans/{snapshot.Id}/file",
+        ScanDraftResponse.ParseFields(snapshot.ExtractedFields),
+        snapshot.ModelId,
+        snapshot.TokensUsed,
+        snapshot.CostUsd,
+        snapshot.FailureReason,
+        snapshot.CreatedAt,
+        snapshot.ReviewedAt,
+        snapshot.ConfirmedAt,
+        CaptureContext: new ScanCaptureContextDto(
+            snapshot.CaptureExperience?.ToString(),
+            snapshot.CaptureAccessContextId,
+            snapshot.CaptureAccessRevision,
+            snapshot.CapturePropertyId,
+            snapshot.CaptureUnitId,
+            snapshot.CaptureLeaseManagementId,
+            snapshot.CaptureLeaseAgreementId,
+            snapshot.CaptureTenantAccountId,
+            snapshot.CaptureTenantLedgerEntryId,
+            snapshot.CaptureWorkOrderId,
+            snapshot.CaptureApplicationId,
+            snapshot.CaptureRentalListingId,
+            snapshot.SourceLabel),
+        SourceContentSha256: snapshot.SourceContentSha256);
 
     // -------------------------------------------------------------------------
     // GET /api/v1/scans/{id}/file  — stream the stored file
@@ -1059,8 +1178,21 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            var leaseTarget = command.Target.LeaseAgreement;
+            _logger.LogWarning(
+                ex,
+                "Scan confirmation authorization failed for draft {DraftId}, portfolio {PortfolioId}, "
+                + "user {UserId}, access context {AccessContextId}, target {TargetKind}, "
+                + "property {PropertyId}, unit {UnitId}.",
+                id,
+                portfolioId,
+                command.ConfirmedByUserId,
+                command.AccessContextId,
+                command.Target.Kind,
+                leaseTarget?.PropertyId,
+                leaseTarget?.UnitId);
             return Forbid();
         }
 
@@ -1071,6 +1203,12 @@ public class ScanController : ManagementControllerBase
                 ConfirmationOk(result, atomicResult.Disposition),
             ConfirmScanDraftOutcome.DraftNotFound => NotFound(new { error = result.Error ?? "Scan draft not found." }),
             ConfirmScanDraftOutcome.DraftRejected => Conflict(new { error = result.Error ?? "Scan draft is rejected." }),
+            ConfirmScanDraftOutcome.DuplicateSourceContent => Conflict(new
+            {
+                error = result.Error ?? "This scan source has already been confirmed.",
+                entityType = result.TargetEntityType,
+                entityId = result.TargetEntityId,
+            }),
             _ => BadRequest(new { error = result.Error ?? "Scan draft could not be confirmed." }),
         };
     }
@@ -1079,7 +1217,7 @@ public class ScanController : ManagementControllerBase
         ConfirmScanDraftResult result,
         AtomicCommandDisposition disposition)
     {
-        var replayed = disposition is AtomicCommandDisposition.Replayed or AtomicCommandDisposition.Joined;
+        var replayed = disposition == AtomicCommandDisposition.Replayed;
         var atomicDisposition = disposition.ToString();
         var entityType = Enum.TryParse<ScanConfirmationTargetKind>(
             result.TargetEntityType, ignoreCase: true, out var targetKind)
@@ -1093,7 +1231,9 @@ public class ScanController : ManagementControllerBase
             "Payment" => Ok(new { receiptId = result.LedgerEntryId, tenantAccountId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
-            "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Loan" => Ok(new { loanId = result.TargetEntityId, loanPaymentId = result.LoanPaymentId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "PropertyAcquisition" => Ok(new { propertyId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "LeaseEndingNotice" => Ok(new { leaseManagementId = result.LeaseManagementId ?? result.TargetEntityId, entityType = nameof(LeaseManagement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             nameof(LeaseAgreement) => Ok(new { leaseManagementId = result.LeaseManagementId, agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
             _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };

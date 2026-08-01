@@ -6,13 +6,16 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
@@ -124,6 +127,126 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         (await _db.ScanDrafts.SingleAsync(d => d.Id == foreignDraft.Id)).Status.Should().Be("Failed");
     }
 
+    [Fact]
+    public async Task SetPaymentAccount_ReviewingPaymentDraft_PersistsCaptureContextForReopen()
+    {
+        var account = SeedTenantAccount("ys038-account");
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(
+            batch.Id,
+            "Reviewing",
+            targetEntityType: "Payment",
+            extractedFields: """{"total":{"value":"1250.00","confidence":0.98}}""");
+        draft.CaptureTenantAccountId.Should().BeNull();
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+        var now = DateTime.UtcNow;
+        (await _db.ScanDrafts.AsNoTracking()
+                .WhereAuthorizedForReview(_db, _authorization.Scope, now)
+                .AnyAsync(candidate => candidate.Id == draft.Id))
+            .Should().BeTrue();
+        var controller = CreateController();
+
+        var result = await controller.SetPaymentAccount(
+            draft.Id,
+            new SetScanDraftPaymentAccountRequest
+            {
+                TenantAccountId = account.Id,
+                ClientOperationId = $"ys038-payment-account-{draft.Id}-{Guid.NewGuid():N}",
+            },
+            CancellationToken.None);
+
+        var ok = result.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var response = ok.Value.Should().BeOfType<ScanDraftResponse>().Subject;
+        response.CaptureContext.Should().NotBeNull();
+        response.CaptureContext!.TenantAccountId.Should().Be(account.Id);
+
+        _db.ChangeTracker.Clear();
+        var reloaded = await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id);
+        reloaded.CaptureTenantAccountId.Should().Be(account.Id);
+        reloaded.Status.Should().Be("Reviewing");
+
+        var reopenedResult = await controller.Get(draft.Id, CancellationToken.None);
+        var reopenedOk = reopenedResult.Result.Should().BeOfType<OkObjectResult>().Subject;
+        var reopened = reopenedOk.Value.Should().BeOfType<ScanDraftResponse>().Subject;
+        reopened.CaptureContext.Should().NotBeNull();
+        reopened.CaptureContext!.TenantAccountId.Should().Be(account.Id);
+    }
+
+    [Fact]
+    public async Task GlobalScanCreate_UsesRealSecurityClock_WhenBusinessClockIsFuture()
+    {
+        var realSecurityNow = DateTime.UtcNow;
+        await SetAuthSessionExpiresAtAsync(realSecurityNow.AddDays(30));
+        var simulatedBusinessNow = realSecurityNow.AddMonths(6);
+
+        var authorized = await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+            _db,
+            _authorization.Scope,
+            "Expense",
+            simulatedBusinessNow,
+            securityUtcNow: realSecurityNow);
+
+        authorized.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GlobalScanCreate_DeniesActuallyExpiredSession_WhenBusinessClockIsFuture()
+    {
+        var realSecurityNow = DateTime.UtcNow;
+        await SetAuthSessionExpiresAtAsync(realSecurityNow.AddSeconds(-1));
+        var simulatedBusinessNow = realSecurityNow.AddMonths(6);
+
+        var authorized = await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+            _db,
+            _authorization.Scope,
+            "Expense",
+            simulatedBusinessNow,
+            securityUtcNow: realSecurityNow);
+
+        authorized.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LeaseEndingNotice_ContextualCreateAndReview_UseCanonicalRentalsAuthorization()
+    {
+        var account = SeedTenantAccount("lease-ending-notice");
+        var relationship = await _db.LeaseManagements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == account.LeaseManagementId);
+        var businessNow = new DateTime(2027, 1, 14, 12, 0, 0, DateTimeKind.Utc);
+        await _ctx.ActivateApiScopeAsync(_authorization.Scope);
+
+        var canCreate = await ScanDraftAuthorizationQuery.CanCreateDraftAsync(
+            _db,
+            _authorization.Scope,
+            "LeaseEndingNotice",
+            relationship.PropertyId,
+            businessNow,
+            securityUtcNow: DateTime.UtcNow);
+
+        canCreate.Should().BeTrue();
+        ScanDraftAuthorizationQuery.CapabilitiesForTarget("LeaseEndingNotice")
+            .Should().Equal(CapabilityKeys.RentalsManage);
+
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Reviewing", targetEntityType: "LeaseEndingNotice");
+        draft.CapturePropertyId = relationship.PropertyId;
+        draft.CaptureUnitId = relationship.UnitId;
+        draft.CaptureLeaseManagementId = relationship.Id;
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+
+        var authorizedDrafts = _db.ScanDrafts.AsNoTracking()
+            .WhereAuthorizedForReview(
+                _db,
+                _authorization.Scope,
+                businessNow,
+                DateTime.UtcNow);
+
+        authorizedDrafts.ToQueryString().Should().Contain("UNION ALL");
+        (await authorizedDrafts.AnyAsync(candidate => candidate.Id == draft.Id))
+            .Should().BeTrue();
+    }
+
     private ScanController CreateController()
     {
         var controller = new ScanController(
@@ -177,6 +300,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         int batchId,
         string status,
         int portfolioId = PortfolioId,
+        string targetEntityType = "LeaseAgreement",
         string? extractedFields = null,
         string? failureReason = null)
     {
@@ -184,7 +308,7 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         {
             PortfolioId = portfolioId,
             BatchId = batchId,
-            TargetEntityType = "LeaseAgreement",
+            TargetEntityType = targetEntityType,
             Status = status,
             ExtractedFields = extractedFields,
             FailureReason = failureReason,
@@ -193,5 +317,87 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         _db.ScanDrafts.Add(draft);
         _db.SaveChanges();
         return draft;
+    }
+
+    private TenantAccount SeedTenantAccount(string suffix)
+    {
+        var seededAt = new DateTime(2027, 1, 5, 12, 0, 0, DateTimeKind.Utc);
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"YS038 Property {suffix}",
+            AddressLine1 = "100 Review Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = "A",
+            MarketRent = 1250m,
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Dana",
+            LastName = "Garcia",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"LM-{suffix}",
+            PossessionGivenAtUtc = seededAt,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+            CreatedByUserId = _authorization.Scope.UserId,
+            RowVersion = Guid.NewGuid(),
+        };
+        relationship.Parties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(2027, 1, 1),
+            ChangeReason = "Test setup",
+            CreatedAtUtc = seededAt,
+            CreatedByUserId = _authorization.Scope.UserId,
+        });
+        var account = new TenantAccount
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-{suffix}",
+            Currency = "USD",
+            OpenedAtUtc = seededAt,
+            CreatedAtUtc = seededAt,
+            CreatedByUserId = _authorization.Scope.UserId,
+        };
+        _db.AddRange(property, unit, tenant, relationship, account);
+        _db.SaveChanges();
+        _db.ChangeTracker.Clear();
+        return account;
+    }
+
+    private async Task SetAuthSessionExpiresAtAsync(DateTime expiresAtUtc)
+    {
+        var session = await _db.AuthSessions.SingleAsync(candidate => candidate.Id == SessionId);
+        if (session.CreatedAtUtc >= expiresAtUtc)
+        {
+            session.CreatedAtUtc = expiresAtUtc.AddMinutes(-1);
+            session.LastSeenAtUtc = session.CreatedAtUtc;
+        }
+        session.ExpiresAtUtc = expiresAtUtc;
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
     }
 }

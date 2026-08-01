@@ -51,14 +51,14 @@ PropertyWorkspaceEntry resolvePropertyWorkspaceEntry({
 }) {
   if (rentalStructure == 'SingleRental') {
     return PropertyWorkspaceEntry(
-      destination: PropertyWorkspaceDestination.unit,
+      destination: PropertyWorkspaceDestination.property,
       propertyId: propertyId,
       unitId:
           serverEntry?.destination == PropertyWorkspaceDestination.unit &&
               serverEntry?.propertyId == propertyId
           ? serverEntry?.unitId
           : null,
-      areas: const [],
+      areas: serverEntry?.areas ?? const [],
     );
   }
 

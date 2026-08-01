@@ -9,50 +9,53 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CreatePropertyDispositionHandler
-    : IAtomicCommandHandler<CreatePropertyDispositionCommand, CreatePropertyDispositionResult>,
-      IAtomicReplayAuthorizer<CreatePropertyDispositionCommand>
+    : IAtomicCommandHandler<CreatePropertyDispositionCommand, CreatePropertyDispositionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreatePropertyDispositionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CreatePropertyDispositionResult> HandleAsync(
-        CreatePropertyDispositionCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Property, command.PropertyId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        await context.AcquireLockAsync("Property", command.PropertyId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var now = times.WallClockUtc;
-        await AuthorizeAsync(command, attempt.Persistence, now, ct);
+        await AuthorizeAsync(command, _db, now, ct);
 
-        var mutation = await attempt.Leasing.CreatePropertyDispositionAsync(
-            command.PortfolioId, command.PropertyId, command.ClosedOnDate,
+        var mutation = await AtomicLeaseMutationPersistence.CreatePropertyDispositionAsync(_db,
+            context, command.PortfolioId, command.PropertyId, command.ClosedOnDate,
             command.SalePrice, command.SellingCosts, command.BuyerName, command.Memo,
             command.ActorUserId, now, times.BusinessDate, ct);
         if (mutation is null)
             return new(CreatePropertyDispositionOutcome.PropertyNotFoundOrAlreadyDisposed, null, 0, 0);
 
-        Stage(attempt, command, now, nameof(PropertyDisposition), mutation.DispositionId,
+        Stage(context, command, now, nameof(PropertyDisposition), mutation.DispositionId,
             AuditLogOperation.Created, "Recorded property disposition.");
-        Stage(attempt, command, now, nameof(Property), command.PropertyId,
+        Stage(context, command, now, nameof(Property), command.PropertyId,
             AuditLogOperation.Updated, "Property made inactive by disposition.");
-        StageMany(attempt, command, now, nameof(LeaseManagement), mutation.LeaseManagementIds,
+        StageMany(context, command, now, nameof(LeaseManagement), mutation.LeaseManagementIds,
             "Returned possession or canceled the planned relationship and closed its account lifecycle.");
-        StageMany(attempt, command, now, nameof(TenantAccount), mutation.TenantAccountIds,
+        StageMany(context, command, now, nameof(TenantAccount), mutation.TenantAccountIds,
             "Closed Tenant Account because the property was disposed.");
-        StageMany(attempt, command, now, nameof(TenantAutopayEnrollment), mutation.AutopayEnrollmentIds,
+        StageMany(context, command, now, nameof(TenantAutopayEnrollment), mutation.AutopayEnrollmentIds,
             "Canceled autopay because the property was disposed.");
-        StageMany(attempt, command, now, nameof(LeaseManagementParty), mutation.PartyIds,
+        StageMany(context, command, now, nameof(LeaseManagementParty), mutation.PartyIds,
             "Ended party membership because the property was disposed.");
-        StageMany(attempt, command, now, nameof(TenantUserAccess), mutation.RevokedAccessIds,
+        StageMany(context, command, now, nameof(TenantUserAccess), mutation.RevokedAccessIds,
             "Revoked tenant access because the property was disposed.");
-        StageMany(attempt, command, now, nameof(WorkspaceAccessContext), mutation.AccessContextIds,
+        StageMany(context, command, now, nameof(WorkspaceAccessContext), mutation.AccessContextIds,
             "Advanced access revision after property disposition.");
         foreach (var id in mutation.ManagementHoldIds)
-            Stage(attempt, command, now, nameof(UnitOperationalPeriod), id, AuditLogOperation.Created,
+            Stage(context, command, now, nameof(UnitOperationalPeriod), id, AuditLogOperation.Created,
                 "Opened management hold because the property was disposed.");
-        StageMany(attempt, command, now, nameof(Unit), mutation.UnitIds,
+        StageMany(context, command, now, nameof(Unit), mutation.UnitIds,
             "Unit removed from operation because the property was disposed.");
-        StageMany(attempt, command, now, nameof(CapitalAsset), mutation.CapitalAssetIds,
+        StageMany(context, command, now, nameof(CapitalAsset), mutation.CapitalAssetIds,
             "Capital asset disposed with its property.");
 
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
@@ -70,24 +73,23 @@ public sealed class CreatePropertyDispositionHandler
             mutation.LeaseManagementIds.Count, mutation.TenantAccountIds.Count);
     }
 
-    public async Task AuthorizeReplayAsync(CreatePropertyDispositionCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(CreatePropertyDispositionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeAsync(command, persistence, now, ct);
+        var now = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        await AuthorizeAsync(command, _db, now, ct);
     }
 
     private static async Task AuthorizeAsync(CreatePropertyDispositionCommand command,
-        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+        RentalCommandDbContext db, DateTime now, CancellationToken ct)
     {
-        var memberships = persistence.Query<WorkspaceMembership>().Where(membership =>
-            persistence.Query<AuthSession>().Any(session => session.Id == command.AuthSessionId
+        var memberships = db.Set<WorkspaceMembership>().Where(membership =>
+            db.Set<AuthSession>().Any(session => session.Id == command.AuthSessionId
                 && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now)
-            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+            && db.Set<WorkspaceAccessContext>().Any(context =>
                 context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                 && context.PortfolioId == command.PortfolioId
                 && context.AccessRevision == command.ExpectedAccessRevision
@@ -99,13 +101,13 @@ public sealed class CreatePropertyDispositionHandler
             && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
             && membership.EffectiveFromUtc <= now
             && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now));
-        var assignments = persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        var assignments = db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
             && assignment.EffectiveFromUtc <= now
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now));
-        var authorized = await persistence.Query<Property>().AnyAsync(property =>
+        var authorized = await db.Set<Property>().AnyAsync(property =>
             property.Id == command.PropertyId && property.PortfolioId == command.PortfolioId
             && memberships.Any(membership => assignments.Any(assignment =>
                 assignment.WorkspaceMembershipId == membership.Id
@@ -121,16 +123,16 @@ public sealed class CreatePropertyDispositionHandler
             throw new UnauthorizedAccessException("The property is not authorized in the current workspace scope.");
     }
 
-    private static void StageMany(IAtomicWriteAttempt attempt, CreatePropertyDispositionCommand command,
+    private static void StageMany(IAtomicCommandContext context, CreatePropertyDispositionCommand command,
         DateTime now, string entityType, IReadOnlyList<int> ids, string reason)
     {
         foreach (var id in ids)
-            Stage(attempt, command, now, entityType, id, AuditLogOperation.Updated, reason);
+            Stage(context, command, now, entityType, id, AuditLogOperation.Updated, reason);
     }
 
-    private static void Stage(IAtomicWriteAttempt attempt, CreatePropertyDispositionCommand command,
+    private static void Stage(IAtomicCommandContext context, CreatePropertyDispositionCommand command,
         DateTime now, string entityType, int entityId, AuditLogOperation operation, string reason) =>
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, entityType, entityId,
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, entityType, entityId,
             operation, UserId: command.ActorUserId, ChangeReason: reason), now);
 
     private static void Validate(CreatePropertyDispositionCommand command)

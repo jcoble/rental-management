@@ -2,6 +2,7 @@ using FluentAssertions;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Leasing;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -26,7 +27,8 @@ public sealed class LeaseUnitTransferContractTests
             PossessionAgreementExceptionReason = null,
         };
 
-        Func<Task> act = async () => await new TransferLeaseManagementHandler()
+        using var testContext = new SqliteTestContext();
+        Func<Task> act = async () => await new TransferLeaseManagementHandler(testContext.Db)
             .HandleAsync(command, null!, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>();
@@ -41,7 +43,8 @@ public sealed class LeaseUnitTransferContractTests
             PossessionAgreementExceptionReason = "Not actually used.",
         };
 
-        Func<Task> act = async () => await new TransferLeaseManagementHandler()
+        using var testContext = new SqliteTestContext();
+        Func<Task> act = async () => await new TransferLeaseManagementHandler(testContext.Db)
             .HandleAsync(command, null!, CancellationToken.None);
 
         await act.Should().ThrowAsync<ArgumentException>();
@@ -56,6 +59,7 @@ public sealed class LeaseUnitTransferContractTests
         AuthSessionId: Guid.NewGuid(),
         AccessContextId: 8,
         ExpectedAccessRevision: 1,
+        BusinessNowUtc: new DateTime(2026, 7, 12, 12, 0, 0, DateTimeKind.Utc),
         TransferPublicId: Guid.NewGuid(),
         EffectiveOn: new DateOnly(2026, 7, 12),
         PlannedDestinationPossessionAtUtc: null,

@@ -9,6 +9,10 @@
 		type AtomicTeamResponse
 	} from '$lib/api/endpoints/team';
 	import { properties } from '$lib/api/endpoints/properties';
+	import {
+		isTeamAssignmentEffectivelyActive,
+		teamAssignmentDisplayStatus
+	} from '$lib/auth/team-assignment-lifecycle';
 	import { getAuthState, getCurrentUser, hasCapability } from '$lib/stores/auth.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -231,7 +235,7 @@
 		editingAssignment = assignment;
 		assignmentRoleProfileKey = assignment.roleProfileKey;
 		assignmentScopeKind = 'SelectedProperties';
-		assignmentPropertyIds = [];
+		assignmentPropertyIds = assignment.selectedPropertyIds.toSorted((a, b) => a - b);
 		resetPropertyPicker();
 		showAssignmentEditor = true;
 	}
@@ -508,9 +512,9 @@
 									Started {formatDate(assignment.effectiveFromUtc)}{#if assignment.effectiveToUtc} · ended {formatDate(assignment.effectiveToUtc)}{/if}
 								</p>
 							</div>
-							<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-medium">{assignment.status}</span>
+							<span class="rounded-full bg-muted px-2.5 py-1 text-xs font-medium">{teamAssignmentDisplayStatus(assignment)}</span>
 						</div>
-						{#if canManageTeam && assignment.status === 'Active'}
+						{#if canManageTeam && isTeamAssignmentEffectivelyActive(assignment)}
 							<div class="mt-3 flex flex-wrap gap-2">
 								{#if assignment.roleProfileKey === 'property-manager' || assignment.roleProfileKey === 'leasing-agent'}
 									<Button variant="outline" size="sm" onclick={() => beginReplaceProperties(assignment)}>Replace property scope</Button>

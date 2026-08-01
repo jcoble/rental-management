@@ -28,7 +28,10 @@
 		adjustFieldRectSize,
 		clampDesignerZoom,
 		clampFieldRect,
+		MAX_FIELD_DIMENSION_PERCENT,
+		MIN_FIELD_DIMENSION_PERCENT,
 		moveFieldRect,
+		parseFieldDimensionPercent,
 		resizeFieldRect,
 		type FieldRect,
 		type FieldResizeHandle
@@ -115,6 +118,11 @@
 	let renderedZoomPct = $state(100);
 	let lastSavedAt = $state<Date | null>(null);
 	let saveErrorMessage = $state<string | null>(null);
+	let fieldDimensionError = $state<{
+		fieldId: number;
+		dimension: 'widthPct' | 'heightPct';
+		message: string;
+	} | null>(null);
 	let renderToken = 0;
 	let cleanupActiveDrag: (() => void) | null = null;
 	let lastTemplateId = $state<number | null>(null);
@@ -731,11 +739,19 @@
 	) {
 		if (field.locked || moveFieldMutation.isPending) return;
 		const target = event.currentTarget as HTMLInputElement;
-		const pct = Number(target.value) / 100;
-		if (!Number.isFinite(pct)) return;
+		const parsed = parseFieldDimensionPercent(target.value);
+		if (parsed.error) {
+			fieldDimensionError = {
+				fieldId: field.id,
+				dimension,
+				message: parsed.error
+			};
+			return;
+		}
+		fieldDimensionError = null;
 		const rect = clampFieldRect({
 			...getFieldRect(field),
-			[dimension]: pct
+			[dimension]: parsed.valuePct
 		});
 		draftRects = {
 			...draftRects,
@@ -1401,36 +1417,44 @@
 									</div>
 								</div>
 								<div class="space-y-3 rounded-md border border-border bg-muted/15 p-3">
-									<div class="grid grid-cols-2 gap-2">
-										<label class="space-y-1 text-xs font-medium">
-											<span class="text-muted-foreground">Width %</span>
-											<input
-												type="number"
-												min="3"
-												max="100"
-												step="1"
-												value={Math.round(getFieldRect(selectedField).widthPct * 100)}
-												class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-												disabled={selectedField.locked || moveFieldMutation.isPending}
-												onchange={(event) => setSelectedFieldDimension(selectedField, 'widthPct', event)}
-												data-testid="lease-template-field-width"
-											/>
-										</label>
-										<label class="space-y-1 text-xs font-medium">
-											<span class="text-muted-foreground">Height %</span>
-											<input
-												type="number"
-												min="3"
-												max="100"
-												step="1"
-												value={Math.round(getFieldRect(selectedField).heightPct * 100)}
-												class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-												disabled={selectedField.locked || moveFieldMutation.isPending}
-												onchange={(event) => setSelectedFieldDimension(selectedField, 'heightPct', event)}
-												data-testid="lease-template-field-height"
-											/>
-										</label>
-									</div>
+										<div class="grid grid-cols-2 gap-2">
+											<label class="space-y-1 text-xs font-medium">
+												<span class="text-muted-foreground">Width %</span>
+												<input
+													type="number"
+													min={MIN_FIELD_DIMENSION_PERCENT}
+													max={MAX_FIELD_DIMENSION_PERCENT}
+													step="1"
+													value={Math.round(getFieldRect(selectedField).widthPct * 100)}
+													class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+													disabled={selectedField.locked || moveFieldMutation.isPending}
+													aria-invalid={fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'widthPct'}
+													onchange={(event) => setSelectedFieldDimension(selectedField, 'widthPct', event)}
+													data-testid="lease-template-field-width"
+												/>
+												{#if fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'widthPct'}
+													<p class="text-xs font-normal text-destructive" data-testid="lease-template-field-width-error">{fieldDimensionError.message}</p>
+												{/if}
+											</label>
+											<label class="space-y-1 text-xs font-medium">
+												<span class="text-muted-foreground">Height %</span>
+												<input
+													type="number"
+													min={MIN_FIELD_DIMENSION_PERCENT}
+													max={MAX_FIELD_DIMENSION_PERCENT}
+													step="1"
+													value={Math.round(getFieldRect(selectedField).heightPct * 100)}
+													class="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+													disabled={selectedField.locked || moveFieldMutation.isPending}
+													aria-invalid={fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'heightPct'}
+													onchange={(event) => setSelectedFieldDimension(selectedField, 'heightPct', event)}
+													data-testid="lease-template-field-height"
+												/>
+												{#if fieldDimensionError?.fieldId === selectedField.id && fieldDimensionError.dimension === 'heightPct'}
+													<p class="text-xs font-normal text-destructive" data-testid="lease-template-field-height-error">{fieldDimensionError.message}</p>
+												{/if}
+											</label>
+										</div>
 									<div class="grid grid-cols-2 gap-2">
 										<Button
 											variant="outline"

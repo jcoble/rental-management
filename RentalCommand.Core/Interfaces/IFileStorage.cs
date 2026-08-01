@@ -4,7 +4,7 @@ namespace RentalCommand.Core.Interfaces;
 /// Abstraction over the file/blob store (local disk in dev, object storage later).
 /// Phase 0 defines the contract only; the upload pipeline implementation is Phase 1.
 /// </summary>
-public interface IFileStorage : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface IFileStorage
 {
     /// <summary>Persist a file and return the storage path/key that can later be passed to <see cref="DownloadAsync"/>.</summary>
     Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default);

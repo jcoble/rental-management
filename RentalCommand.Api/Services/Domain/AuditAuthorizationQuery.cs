@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -22,6 +23,11 @@ internal static class AuditAuthorizationQuery
         var authorizedProperties = db.Properties
             .AsNoTracking()
             .WhereAuthorized(db, scope, CapabilityKeys.ReportsRead, utcNow);
+        var allPropertiesAssignments = db.AuthorizedAllPropertyAssignments(
+            scope,
+            CapabilityKeys.ReportsRead,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
 
         return audits.Where(audit =>
             audit.PortfolioId == scope.PortfolioId &&
@@ -29,6 +35,18 @@ internal static class AuditAuthorizationQuery
                   property.PortfolioId == scope.PortfolioId &&
                   property.Id == audit.EntityId &&
                   authorizedProperties.Any(authorized => authorized.Id == property.Id))) ||
+             (audit.EntityType == nameof(OwnerEntity) && db.OwnerEntities.Any(owner =>
+                  owner.PortfolioId == scope.PortfolioId &&
+                  owner.Id == audit.EntityId &&
+                  owner.DeletedAt == null &&
+                  (allPropertiesAssignments.Any() ||
+                   db.PropertyOwnerships.Any(ownership =>
+                       ownership.PortfolioId == scope.PortfolioId &&
+                       ownership.OwnerEntityId == owner.Id &&
+                       ownership.EffectiveFromUtc <= utcNow &&
+                       (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > utcNow) &&
+                       authorizedProperties.Any(authorized =>
+                           authorized.Id == ownership.PropertyId))))) ||
              (audit.EntityType == nameof(Unit) && db.Units.Any(unit =>
                   unit.PortfolioId == scope.PortfolioId &&
                   unit.Id == audit.EntityId &&

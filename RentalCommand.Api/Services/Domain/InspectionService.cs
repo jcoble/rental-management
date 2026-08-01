@@ -296,7 +296,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -310,7 +310,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Update, templateId, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -323,7 +323,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Template,
             AtomicInspectionMutationOperation.Delete, templateId, 0, operationKey, new object());
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -336,7 +336,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -350,7 +350,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Update, id, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -363,7 +363,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Delete, id, 0, operationKey, new object());
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -383,7 +383,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Create, inspectionId, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -398,7 +398,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Update, inspectionId, itemId, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -412,7 +412,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Delete, inspectionId, itemId, operationKey, new object());
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -426,7 +426,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.Reorder, inspectionId, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -442,7 +442,7 @@ public class InspectionService : IInspectionService
         CancellationToken ct = default)
     {
         var request = new AttachInspectionItemPhotoRequest { StoredFileId = storedFileId };
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Item,
             AtomicInspectionMutationOperation.AttachPhoto, inspectionId, itemId, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -456,7 +456,7 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.Complete, id, 0, operationKey, new object());
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -476,6 +476,28 @@ public class InspectionService : IInspectionService
                 "Inspection {InspectionId} report generation failed; atomic completion remains committed.", id);
         }
         return (summary, null);
+    }
+
+    public async Task<(RecoverInspectionChronologyResponse? Result, string? Error)> RecoverChronologyAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        RecoverInspectionChronologyRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.RecoverChronology, id, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        if (!outcome.Value.Found) return (null, null);
+        if (outcome.Value.Error is not null) return (null, outcome.Value.Error);
+        var result = DeserializeSnapshot<RecoverInspectionChronologyResponse>(outcome.Value)
+            ?? throw new AtomicReceiptInvariantException("Inspection chronology recovery receipt has no summary.");
+
+        var summary = await BuildCompletionSummaryAsync(scope.PortfolioId, id, result.CompletedAt, ct);
+        if (summary is null) return (null, null);
+        result.ReportStoredFileId = await EnsureInspectionReportAsync(scope, id, summary, operationKey, ct);
+        return (result, null);
     }
 
     internal async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -555,6 +577,54 @@ public class InspectionService : IInspectionService
                 _timeProvider.GetUtcNow().UtcDateTime)
             .AnyAsync(ct);
 
+    private async Task<CompleteInspectionResponse?> BuildCompletionSummaryAsync(
+        int portfolioId,
+        int inspectionId,
+        DateTime completedAt,
+        CancellationToken ct)
+    {
+        var counts = await _db.Inspections.AsNoTracking()
+            .Where(inspection => inspection.PortfolioId == portfolioId
+                && inspection.Id == inspectionId
+                && inspection.Status == InspectionStatus.Completed
+                && inspection.CompletedAt == completedAt)
+            .Select(inspection => new
+            {
+                inspection.Id,
+                inspection.Status,
+                inspection.ReportStoredFileId,
+                TotalItems = inspection.Items.Count(),
+                PassCount = inspection.Items.Count(item => item.Result == InspectionItemResult.Pass),
+                FailCount = inspection.Items.Count(item => item.Result == InspectionItemResult.Fail),
+                NotApplicableCount = inspection.Items.Count(item => item.Result == InspectionItemResult.NotApplicable),
+                PendingCount = inspection.Items.Count(item => item.Result == InspectionItemResult.Pending),
+            })
+            .SingleOrDefaultAsync(ct);
+        if (counts is null) return null;
+
+        var workOrderIds = await _db.InspectionItems.AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId
+                && item.InspectionId == inspectionId
+                && item.Result == InspectionItemResult.Fail
+                && item.SpawnedWorkOrderId != null)
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .Select(item => item.SpawnedWorkOrderId!.Value)
+            .ToListAsync(ct);
+
+        return new CompleteInspectionResponse
+        {
+            InspectionId = counts.Id,
+            Status = counts.Status,
+            TotalItems = counts.TotalItems,
+            PassCount = counts.PassCount,
+            FailCount = counts.FailCount,
+            NotApplicableCount = counts.NotApplicableCount,
+            PendingCount = counts.PendingCount,
+            ReportStoredFileId = counts.ReportStoredFileId,
+            CreatedWorkOrderIds = workOrderIds,
+        };
+    }
+
     private async Task<int?> EnsureInspectionReportAsync(
         WorkspaceReadScope scope,
         int inspectionId,
@@ -562,8 +632,10 @@ public class InspectionService : IInspectionService
         string operationKey,
         CancellationToken ct)
     {
-        var header = await AuthorizedInspections(scope, WriteCapabilities)
-            .Where(inspection => inspection.Id == inspectionId)
+        var header = await _db.Inspections
+            .AsNoTracking()
+            .Where(inspection => inspection.PortfolioId == scope.PortfolioId
+                && inspection.Id == inspectionId)
             .Select(inspection => new InspectionReportHeader
             {
                 ReportStoredFileId = inspection.ReportStoredFileId,
@@ -584,11 +656,9 @@ public class InspectionService : IInspectionService
         if (header is null) return null;
         if (header.ReportStoredFileId.HasValue) return header.ReportStoredFileId.Value;
 
-        var authorized = AuthorizedInspections(scope, WriteCapabilities);
         var items = await _db.InspectionItems.AsNoTracking()
             .Where(item => item.PortfolioId == scope.PortfolioId
-                && item.InspectionId == inspectionId
-                && authorized.Any(inspection => inspection.Id == item.InspectionId))
+                && item.InspectionId == inspectionId)
             .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
             .Select(item => new InspectionReportItem
             {
@@ -605,8 +675,7 @@ public class InspectionService : IInspectionService
                 && item.InspectionId == inspectionId
                 && item.PhotoStoredFileId != null
                 && item.PhotoStoredFile != null
-                && item.PhotoStoredFile.DeletedAt == null
-                && authorized.Any(inspection => inspection.Id == item.InspectionId))
+                && item.PhotoStoredFile.DeletedAt == null)
             .Select(item => new InspectionPhotoReference(item.Id, item.PhotoStoredFile!.FilePath))
             .ToListAsync(ct);
 
@@ -654,7 +723,7 @@ public class InspectionService : IInspectionService
 
         var request = new AttachInspectionReportRequest(
             fileName, storagePath, "application/pdf", pdfBytes.LongLength);
-        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+        var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.AttachReport, inspectionId, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
@@ -666,6 +735,24 @@ public class InspectionService : IInspectionService
             ? throw new AtomicReceiptInvariantException("Inspection report receipt has no StoredFile id.")
             : JsonSerializer.Deserialize<int>(outcome.Value.ResponseJson);
     }
+
+    private AtomicInspectionMutationCommand CreateAtomicCommand<TRequest>(
+        WorkspaceReadScope scope,
+        AtomicInspectionMutationDomain domain,
+        AtomicInspectionMutationOperation operation,
+        int entityId,
+        int relatedEntityId,
+        string operationKey,
+        TRequest request) =>
+        AtomicInspectionMutation.Command(
+            scope,
+            domain,
+            operation,
+            entityId,
+            relatedEntityId,
+            operationKey,
+            request,
+            _timeProvider.GetUtcNow().UtcDateTime);
 
     private sealed class InspectionReportHeader
     {

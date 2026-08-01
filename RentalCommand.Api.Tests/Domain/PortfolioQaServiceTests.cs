@@ -3,7 +3,6 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +12,8 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.AiIntegrations;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -23,148 +24,33 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class PortfolioQaServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class PortfolioQaServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private WorkspaceReadScope _scope;
     private MembershipRoleAssignment _assignment = null!;
 
-    public PortfolioQaServiceTests()
+    public PortfolioQaServiceTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new PortfolioQaTestDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = 1,
-            UserName = "portfolio-qa@example.test",
-            NormalizedUserName = "PORTFOLIO-QA@EXAMPLE.TEST",
-            Email = "portfolio-qa@example.test",
-            NormalizedEmail = "PORTFOLIO-QA@EXAMPLE.TEST",
-            DisplayName = "Portfolio QA Actor",
-            CreatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
+        _context = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(_commands)]);
+        _db = _context.Db;
         _scope = SeedAdministratorScope();
-        _db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_lease_management_lifecycle" AS
-            SELECT management."PortfolioId" AS "PortfolioId",
-                   management."Id" AS "LeaseManagementId",
-                   management."PropertyId" AS "PropertyId",
-                   management."UnitId" AS "UnitId",
-                   CASE WHEN agreement."TermEndOn" IS NOT NULL
-                             AND agreement."TermEndOn" < date('now')
-                        THEN 'Closed' ELSE 'Occupied' END AS "Lifecycle",
-                   agreement."Id" AS "CurrentAgreementId",
-                   trim(tenant."FirstName" || ' ' || tenant."LastName") AS "CurrentPrimaryTenantName"
-            FROM "LeaseManagements" AS management
-            JOIN "LeaseAgreements" AS agreement
-              ON agreement."PortfolioId" = management."PortfolioId"
-             AND agreement."LeaseManagementId" = management."Id"
-             AND agreement."VoidedAtUtc" IS NULL
-             AND agreement."DraftCanceledAtUtc" IS NULL
-            LEFT JOIN "LeaseManagementParties" AS party
-              ON party."PortfolioId" = management."PortfolioId"
-             AND party."LeaseManagementId" = management."Id"
-             AND party."Role" = 'PrimaryTenant'
-             AND party."EffectiveThrough" IS NULL
-            LEFT JOIN "Tenants" AS tenant
-              ON tenant."PortfolioId" = party."PortfolioId"
-             AND tenant."Id" = party."TenantId"
-            WHERE management."CanceledAtUtc" IS NULL
-              AND management."AccountClosedAtUtc" IS NULL
-            """);
-        _db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_tenant_charge_balances" AS
-            SELECT entry."PortfolioId" AS "PortfolioId",
-                   entry."TenantAccountId" AS "TenantAccountId",
-                   entry."Id" AS "TenantLedgerEntryId",
-                   date('now') AS "BusinessDate",
-                   entry."EntryType" AS "EntryType",
-                   entry."Currency" AS "Currency",
-                   entry."EffectiveOn" AS "EffectiveOn",
-                   entry."DueOn" AS "DueOn",
-                   entry."Amount" AS "OriginalAmount",
-                   0 AS "ReversedAmount",
-                   COALESCE((
-                     SELECT sum(allocation."Amount")
-                     FROM "TenantLedgerAllocations" AS allocation
-                     WHERE allocation."PortfolioId" = entry."PortfolioId"
-                       AND allocation."TenantAccountId" = entry."TenantAccountId"
-                       AND allocation."DebitEntryId" = entry."Id"
-                   ), 0) AS "NetAllocations",
-                   max(entry."Amount" - COALESCE((
-                     SELECT sum(allocation."Amount")
-                     FROM "TenantLedgerAllocations" AS allocation
-                     WHERE allocation."PortfolioId" = entry."PortfolioId"
-                       AND allocation."TenantAccountId" = entry."TenantAccountId"
-                       AND allocation."DebitEntryId" = entry."Id"
-                   ), 0), 0) AS "OpenAmount",
-                   entry."DueOn" < date('now') AND entry."Amount" > COALESCE((
-                     SELECT sum(allocation."Amount")
-                     FROM "TenantLedgerAllocations" AS allocation
-                     WHERE allocation."PortfolioId" = entry."PortfolioId"
-                       AND allocation."TenantAccountId" = entry."TenantAccountId"
-                       AND allocation."DebitEntryId" = entry."Id"
-                   ), 0) AS "IsPastDue"
-            FROM "TenantLedgerEntries" AS entry
-            WHERE entry."Direction" = 'Debit'
-            """);
-        _db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_unit_occupancy" AS
-            SELECT unit."PortfolioId" AS "PortfolioId",
-                   unit."PropertyId" AS "PropertyId",
-                   unit."Id" AS "UnitId",
-                   CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-                   CASE WHEN management."Id" IS NULL THEN 0 ELSE 1 END AS "IsOccupied",
-                   management."Id" AS "CurrentLeaseManagementId",
-                   0 AS "HasScheduledMoveIn",
-                   NULL AS "NextPlannedPossessionAtUtc",
-                   NULL AS "PlannedLeaseManagementId",
-                   0 AS "IsInTurnover",
-                   0 AS "IsOutOfService",
-                   0 AS "IsOnManagementHold",
-                   0 AS "HasGoverningAgreementWithoutPossession",
-                   0 AS "HasPossessionWithoutGoverningAgreement",
-                   NULL AS "OccupancyExceptionCode"
-            FROM "Units" AS unit
-            LEFT JOIN "LeaseManagements" AS management
-              ON management."PortfolioId" = unit."PortfolioId"
-             AND management."PropertyId" = unit."PropertyId"
-             AND management."UnitId" = unit."Id"
-             AND management."CanceledAtUtc" IS NULL
-             AND management."PossessionGivenAtUtc" IS NOT NULL
-             AND management."PossessionGivenAtUtc" <= CURRENT_TIMESTAMP
-             AND (management."PossessionReturnedAtUtc" IS NULL
-                  OR management."PossessionReturnedAtUtc" > CURRENT_TIMESTAMP)
-            WHERE unit."DeletedAt" IS NULL
-            """);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await ResetApiScopeAsync();
+        await _context.DisposeAsync();
     }
 
     [Fact]
@@ -177,6 +63,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
             _db.Expenses.Add(new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 Property = property,
                 Description = $"Repair {i + 1}",
                 Category = ScheduleECategory.Repairs,
@@ -225,7 +112,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task OverdueRentTool_ExcludesClosedLeaseRelationshipCharges()
+    public async Task OverdueRentTool_ExcludesReturnedPossessionLeaseRelationshipCharges()
     {
         var now = DateTime.UtcNow;
         var current = SeedLease(now);
@@ -233,10 +120,12 @@ public sealed class PortfolioQaServiceTests : IDisposable
         current.Agreement.AgreementNumber = "CURRENT-1";
         stale.Agreement.AgreementNumber = "STALE-1";
         stale.Agreement.TermEndOn = DateOnly.FromDateTime(now.AddDays(-1));
-        stale.Management.PossessionReturnedAtUtc = now.AddDays(-1);
-        stale.Management.AccountClosedAtUtc = now.AddDays(-1);
         SeedRentCharge(current, 1400m, now.AddDays(-5));
         SeedRentCharge(stale, 1400m, now.AddDays(-30));
+        await _db.SaveChangesAsync();
+
+        var returnedAtUtc = now.AddDays(-1);
+        stale.Management.PossessionReturnedAtUtc = returnedAtUtc;
         await _db.SaveChangesAsync();
 
         var answer = await AskToolAsync(
@@ -249,7 +138,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
         doc.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
         var overdue = doc.RootElement.GetProperty("overdue");
         overdue.GetArrayLength().Should().Be(1);
-        overdue[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
+        overdue[0].GetProperty("leaseNumber").GetString().Should().Be(current.Account.AccountNumber);
     }
 
     [Fact]
@@ -507,6 +396,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = allowed.Id,
                 Description = "Allowed expense",
                 Category = ScheduleECategory.Repairs,
@@ -519,6 +409,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = decoy.Id,
                 Description = "Decoy expense",
                 Category = ScheduleECategory.Repairs,
@@ -546,8 +437,9 @@ public sealed class PortfolioQaServiceTests : IDisposable
         expenses.RootElement.GetProperty("count").GetInt32().Should().Be(1);
         expenses.RootElement.GetProperty("total").GetDecimal().Should().Be(25m);
         _commands.Should().Contain(sql =>
-            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase));
+            sql.Contains(
+                "public.rc_api_effective_capability_scopes",
+                StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -579,31 +471,36 @@ public sealed class PortfolioQaServiceTests : IDisposable
     public async Task ResolvedDeliveryRecipients_UseCurrentUserEmailAndPhoneWithoutOwnerFallback()
     {
         SeedProperty(DateTime.UtcNow);
-        var publisher = new CapturingMessagePublisher();
+        var atomic = new CapturingPortfolioQaAtomicUnitOfWork(
+            new PortfolioQaDeliveryResult(["Email", "Sms"]));
         var sut = new PortfolioQaService(
             _db,
             new ToolEchoLlmProvider("list_properties", "{}"),
             new ThrowingAccountingService(),
-            publisher,
             new EmptyKnowledgeBaseService(),
             NullLogger<PortfolioQaService>.Instance,
             TimeProvider.System,
-            new TestAtomicInfrastructureUnitOfWork(_db));
+            atomic);
 
+        await ResetApiScopeAsync();
+        await _context.ActivateApiScopeAsync(_scope);
         var response = await sut.AskAsync(
             _scope,
             "List properties",
             history: null,
-            delivery: new QaDeliveryOptions(true, true, "portfolio-qa@example.test", "+16145550123"));
+            delivery: new QaDeliveryOptions(true, true, "portfolio-qa@example.test", "+16145550123"),
+            deliveryOperationId: "portfolio-qa-delivery-test");
 
         response.DeliveredChannels.Should().BeEquivalentTo("Email", "Sms");
-        publisher.Messages.Should().HaveCount(2);
-        publisher.Messages.Single(message => message.Type == "email").Payload
-            .Should().Contain("portfolio-qa@example.test");
-        using var smsPayload = JsonDocument.Parse(
-            publisher.Messages.Single(message => message.Type == "sms").Payload);
-        smsPayload.RootElement.GetProperty("to").GetString()
-            .Should().Be("+16145550123");
+        var command = atomic.Command.Should().BeOfType<PortfolioQaDeliveryCommand>().Subject;
+        command.ToEmail.Should().Be("portfolio-qa@example.test");
+        command.ToSms.Should().Be("+16145550123");
+        command.ActorUserId.Should().Be(_scope.UserId);
+        command.ActorAuthSessionId.Should().Be(_scope.SessionId);
+        command.ActorAccessContextId.Should().Be(_scope.AccessContextId);
+        command.ActorAccessRevision.Should().Be(_scope.AccessRevision);
+        atomic.Identity!.CommandType.Should().Be("portfolio.qa.delivery");
+        atomic.Identity.IdempotencyKey.Should().Be($"{PortfolioId}:portfolio-qa-delivery-test");
     }
 
     [Fact]
@@ -616,6 +513,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         var qa = new CapturingPortfolioQaService();
+        await ResetApiScopeAsync();
+        await _context.ActivateApiScopeAsync(_scope);
         using var requestServices = new ServiceCollection()
             .AddSingleton<IWorkspaceAuthorizationEvaluator>(new WorkspaceAuthorizationEvaluator(_db))
             .AddSingleton(TimeProvider.System)
@@ -652,12 +551,14 @@ public sealed class PortfolioQaServiceTests : IDisposable
                 DeliverViaEmail = true,
                 DeliverViaSms = true,
             },
+            "qa-controller-delivery",
             CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>();
         qa.Delivery.Should().NotBeNull();
         qa.Delivery!.ToEmail.Should().Be("current-user@example.test");
         qa.Delivery.ToSms.Should().Be("+16145550999");
+        qa.DeliveryOperationId.Should().Be("qa-controller-delivery");
     }
 
     private async Task<string> AskToolAsync(
@@ -667,20 +568,39 @@ public sealed class PortfolioQaServiceTests : IDisposable
         IAccountingService? accounting = null,
         WorkspaceReadScope? scope = null)
     {
+        var effectiveScope = scope ?? _scope;
+        await ResetApiScopeAsync();
+        await _context.ActivateApiScopeAsync(effectiveScope);
         _commands.Clear();
         var sut = new PortfolioQaService(
             _db,
             new ToolEchoLlmProvider(toolName, argsJson),
             accounting ?? new ThrowingAccountingService(),
-            new NoopMessagePublisher(),
             new EmptyKnowledgeBaseService(),
             NullLogger<PortfolioQaService>.Instance,
             TimeProvider.System,
-            new TestAtomicInfrastructureUnitOfWork(_db));
+            new CapturingPortfolioQaAtomicUnitOfWork(new PortfolioQaDeliveryResult([])));
 
-        var response = await sut.AskAsync(scope ?? _scope, question, history: null);
+        var response = await sut.AskAsync(effectiveScope, question, history: null);
         response.ToolsUsed.Should().ContainSingle().Which.Should().Be(toolName);
         return response.Answer;
+    }
+
+    private async Task ResetApiScopeAsync()
+    {
+        if (_db.Database.GetDbConnection().State != System.Data.ConnectionState.Open)
+        {
+            return;
+        }
+
+        await _db.Database.ExecuteSqlRawAsync("""
+            RESET SESSION AUTHORIZATION;
+            SELECT set_config('app.current_portfolio_id', '', false),
+                   set_config('app.auth_session_id', '', false),
+                   set_config('app.current_user_id', '', false),
+                   set_config('app.current_access_context_id', '', false),
+                   set_config('app.access_revision', '', false);
+            """);
     }
 
     private WorkspaceReadScope SeedAdministratorScope()
@@ -960,36 +880,49 @@ public sealed class PortfolioQaServiceTests : IDisposable
         }
     }
 
-    private sealed class CapturingMessagePublisher : IMessagePublisher
-    {
-        public List<(string Type, string Payload)> Messages { get; } = [];
-
-        public Task PublishAsync<TPayload>(
-            int portfolioId,
-            string messageType,
-            string idempotencyKey,
-            TPayload payload,
-            CancellationToken ct = default)
-        {
-            Messages.Add((messageType, JsonSerializer.Serialize(payload)));
-            return Task.CompletedTask;
-        }
-    }
-
     private sealed class CapturingPortfolioQaService : IPortfolioQaService
     {
         public QaDeliveryOptions? Delivery { get; private set; }
+        public string? DeliveryOperationId { get; private set; }
 
         public Task<AskResponse> AskAsync(
             WorkspaceReadScope scope,
             string question,
             IReadOnlyList<QaTurn>? history,
             QaDeliveryOptions? delivery = null,
+            string? deliveryOperationId = null,
             CancellationToken ct = default)
         {
             Delivery = delivery;
+            DeliveryOperationId = deliveryOperationId;
             return Task.FromResult(new AskResponse(
                 "ok", [], true, 0, "test", DeliveredChannels: null));
+        }
+    }
+
+    private sealed class CapturingPortfolioQaAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        private readonly object _result;
+
+        public CapturingPortfolioQaAtomicUnitOfWork(object result) => _result = result;
+
+        public AtomicCommandIdentity? Identity { get; private set; }
+        public object? Command { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            Identity = identity;
+            Command = command;
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)_result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
         }
     }
 
@@ -1056,12 +989,6 @@ public sealed class PortfolioQaServiceTests : IDisposable
             throw new NotSupportedException();
     }
 
-    private sealed class NoopMessagePublisher : IMessagePublisher
-    {
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
     private sealed class EmptyKnowledgeBaseService : IKnowledgeBaseService
     {
         public IReadOnlyList<KbArticleSummary> ListArticles() => [];
@@ -1095,8 +1022,4 @@ public sealed class PortfolioQaServiceTests : IDisposable
         }
     }
 
-    private sealed class PortfolioQaTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-    {
-        public PortfolioQaTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-    }
 }

@@ -2,8 +2,6 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -15,7 +13,6 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -24,7 +21,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Proves that move-out statements are assembled from the canonical lease relationship and
 /// append-only deposit subledger, including immutable reversals and account-keyed photos.
 /// </summary>
-public sealed class MoveOutStatementTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class MoveOutStatementTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int ActorUserId = 41;
@@ -32,11 +30,24 @@ public sealed class MoveOutStatementTests : IDisposable
     private static readonly byte[] OnePixelPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
 
-    private readonly MoveOutStatementTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<string> _commands = [];
     private readonly InMemoryFileStorage _storage = new();
     private readonly CapturingPdfGenerator _pdf = new();
+    private MigratedPostgreSqlTestContext _ctx = null!;
 
-    public void Dispose() => _ctx.Dispose();
+    public MoveOutStatementTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync(
+            [new MoveOutRecordingCommandInterceptor(_commands)]);
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task GetAsync_UsesCanonicalFactsAndNetsDeductionReversals()
@@ -60,10 +71,17 @@ public sealed class MoveOutStatementTests : IDisposable
             graph,
             SecurityDepositEntryType.Reversal,
             SecurityDepositDirection.Increase,
-            50m,
-            "Correct carpet deduction",
+            150m,
+            "Reverse carpet deduction",
             new DateOnly(2026, 6, 4),
             carpetDeduction.Id);
+        AddEntry(
+            graph,
+            SecurityDepositEntryType.Deduction,
+            SecurityDepositDirection.Decrease,
+            100m,
+            "Carpet cleaning",
+            new DateOnly(2026, 6, 2));
         AddEntry(
             graph,
             SecurityDepositEntryType.Refund,
@@ -84,9 +102,11 @@ public sealed class MoveOutStatementTests : IDisposable
             CreatePhoto(graph.DepositAccount.Id, "matching.png", matchingKey),
             CreatePhoto(graph.DepositAccount.Id + 10_000, "other-account.png", otherKey));
         await _ctx.Db.SaveChangesAsync();
+        CloseCanonicalChain(graph);
 
         var scope = SeedAdministratorScope();
-        _ctx.Commands.Clear();
+        await _ctx.ActivateApiScopeAsync(scope);
+        _commands.Clear();
         var result = await CreateSut().GetAsync(
             scope,
             graph.DepositAccount.TenantAccountId);
@@ -109,22 +129,18 @@ public sealed class MoveOutStatementTests : IDisposable
         _pdf.LastData.Photos.Should().ContainSingle();
         _pdf.LastData.Photos[0].Should().Equal(OnePixelPng);
 
-        _ctx.Commands.Should().HaveCount(3,
+        _commands.Should().HaveCount(3,
             "the PDF path is one authorized header query, one authorized deduction query, and one authorized photo-metadata query");
-        _ctx.Commands.Should().OnlyContain(sql =>
-            sql.Contains("AuthSessions", StringComparison.Ordinal) &&
-            sql.Contains("AccessRevision", StringComparison.Ordinal) &&
-            sql.Contains("RoleProfileCapabilities", StringComparison.Ordinal) &&
-            sql.Contains("CapabilityDefinitions", StringComparison.Ordinal) &&
-            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.Ordinal) &&
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("public.rc_api_effective_capability_scopes", StringComparison.Ordinal) &&
             sql.Contains("Properties", StringComparison.Ordinal) &&
             sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase),
             "every move-out read must prove current capability and property scope in its SQL");
-        _ctx.Commands.Count(sql => sql.Contains("SecurityDepositEntries", StringComparison.Ordinal))
+        _commands.Count(sql => sql.Contains("SecurityDepositEntries", StringComparison.Ordinal))
             .Should().Be(2, "deductions are one set query and the header computes its refund date without per-row lookups");
-        _ctx.Commands.Count(sql => sql.Contains("StoredFiles", StringComparison.Ordinal))
+        _commands.Count(sql => sql.Contains("StoredFiles", StringComparison.Ordinal))
             .Should().Be(1, "all authorized photo metadata must load in one ordered query");
-        var headerSql = _ctx.Commands[0];
+        var headerSql = _commands[0];
         headerSql.Should().Contain("vw_security_deposit_balances",
             "the statement corpus must come from the canonical reversal-netted deposit view");
         headerSql.Should().Contain("HeldBalance");
@@ -186,7 +202,8 @@ public sealed class MoveOutStatementTests : IDisposable
             WorkspaceExperience.Management,
             WorkspaceMembershipId: null,
             DefaultExperience: WorkspaceExperience.Management);
-        _ctx.Commands.Clear();
+        await _ctx.ActivateApiScopeAsync(scope);
+        _commands.Clear();
 
         var result = await controller.DepositMoveOutStatement(
             decoy.DepositAccount.TenantAccountId,
@@ -194,13 +211,12 @@ public sealed class MoveOutStatementTests : IDisposable
 
         result.Should().BeOfType<NotFoundObjectResult>(
             "an unauthorized deposit must be indistinguishable from a missing deposit");
-        _ctx.Commands.Should().ContainSingle(
+        _commands.Should().ContainSingle(
             "the denied header query must stop the PDF path before deduction and photo metadata reads");
-        _ctx.Commands[0].Should().Contain("AuthSessions");
-        _ctx.Commands[0].Should().Contain("AccessRevision");
-        _ctx.Commands[0].Should().Contain("MembershipRoleAssignmentProperties");
-        _ctx.Commands[0].Should().Contain("RoleProfileCapabilities");
-        _ctx.Commands.Should().NotContain(sql => sql.Contains("StoredFiles", StringComparison.Ordinal));
+        _commands[0].Should().Contain("public.rc_api_effective_capability_scopes");
+        _commands[0].Should().Contain("Properties");
+        _commands[0].Should().ContainEquivalentOf("EXISTS");
+        _commands.Should().NotContain(sql => sql.Contains("StoredFiles", StringComparison.Ordinal));
         _storage.DownloadCount.Should().Be(0);
         _pdf.LastData.Should().BeNull();
     }
@@ -373,7 +389,6 @@ public sealed class MoveOutStatementTests : IDisposable
             PossessionGivenAtUtc = createdAtUtc,
             PlannedMoveOutAtUtc = possessionReturnedAtUtc,
             PossessionReturnedAtUtc = possessionReturnedAtUtc,
-            AccountClosedAtUtc = possessionReturnedAtUtc.AddHours(1),
             CreatedAtUtc = createdAtUtc,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = possessionReturnedAtUtc,
@@ -426,8 +441,6 @@ public sealed class MoveOutStatementTests : IDisposable
             AccountNumber = "TA-1001",
             Currency = "USD",
             OpenedAtUtc = createdAtUtc,
-            ClosedAtUtc = possessionReturnedAtUtc.AddHours(1),
-            CloseReasonCode = "MoveOutComplete",
             CreatedAtUtc = createdAtUtc,
             CreatedByUserId = ActorUserId,
         };
@@ -448,7 +461,7 @@ public sealed class MoveOutStatementTests : IDisposable
         _ctx.Db.SecurityDepositAccounts.Add(depositAccount);
         _ctx.Db.SaveChanges();
 
-        var graph = new CanonicalDepositGraph(management, agreement, depositAccount);
+        var graph = new CanonicalDepositGraph(management, agreement, tenantAccount, depositAccount);
         AddEntry(
             graph,
             SecurityDepositEntryType.Receipt,
@@ -458,6 +471,15 @@ public sealed class MoveOutStatementTests : IDisposable
             new DateOnly(2025, 6, 1));
 
         return graph;
+    }
+
+    private void CloseCanonicalChain(CanonicalDepositGraph graph)
+    {
+        var accountClosedAtUtc = graph.Management.PossessionReturnedAtUtc!.Value.AddHours(1);
+        graph.Management.AccountClosedAtUtc = accountClosedAtUtc;
+        graph.TenantAccount.ClosedAtUtc = accountClosedAtUtc;
+        graph.TenantAccount.CloseReasonCode = "MoveOutComplete";
+        _ctx.Db.SaveChanges();
     }
 
     private SecurityDepositEntry AddEntry(
@@ -507,6 +529,7 @@ public sealed class MoveOutStatementTests : IDisposable
     private sealed record CanonicalDepositGraph(
         LeaseManagement Management,
         LeaseAgreement Agreement,
+        TenantAccount TenantAccount,
         SecurityDepositAccount DepositAccount);
 
     private sealed class CapturingPdfGenerator : IMoveOutStatementPdfGenerator
@@ -556,43 +579,6 @@ public sealed class MoveOutStatementTests : IDisposable
         }
     }
 
-    private sealed class MoveOutStatementTestContext : IDisposable
-    {
-        private readonly SqliteConnection _connection;
-
-        internal MoveOutStatementTestContext()
-        {
-            _connection = new SqliteConnection("DataSource=:memory:");
-            _connection.Open();
-            var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-                .UseSqlite(_connection)
-                .AddInterceptors(new MoveOutRecordingCommandInterceptor(Commands))
-                .Options;
-            Db = new MoveOutStatementTestDbContext(options);
-            Db.Database.EnsureCreated();
-            Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-            Db.Portfolios.Add(new Portfolio
-            {
-                Id = PortfolioId,
-                Name = "Test Portfolio",
-                ManagementCompanyName = "Test Co",
-                TimeZone = "UTC",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            });
-            Db.SaveChanges();
-        }
-
-        internal RentalCommandDbContext Db { get; }
-        internal List<string> Commands { get; } = [];
-
-        public void Dispose()
-        {
-            Db.Dispose();
-            _connection.Dispose();
-        }
-    }
-
     private sealed class MoveOutRecordingCommandInterceptor(List<string> commands)
         : DbCommandInterceptor
     {
@@ -616,90 +602,4 @@ public sealed class MoveOutStatementTests : IDisposable
         }
     }
 
-    private sealed class MoveOutStatementTestDbContext(DbContextOptions<RentalCommandDbContext> options)
-        : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
-    {
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-            modelBuilder.Entity<SecurityDepositBalanceProjection>()
-                .HasKey(row => new { row.PortfolioId, row.SecurityDepositAccountId });
-        }
-    }
-
-    private const string SecurityDepositBalanceViewSqlite = """
-        CREATE VIEW "vw_security_deposit_balances" AS
-        WITH entry_reversals AS (
-            SELECT reversal."PortfolioId",
-                   reversal."SecurityDepositAccountId",
-                   reversal."ReversesEntryId" AS "SecurityDepositEntryId",
-                   SUM(reversal."Amount") AS "ReversedAmount"
-            FROM "SecurityDepositEntries" AS reversal
-            WHERE reversal."EntryType" = 'Reversal'
-            GROUP BY reversal."PortfolioId", reversal."SecurityDepositAccountId", reversal."ReversesEntryId"
-        ),
-        effective_entries AS (
-            SELECT entry."PortfolioId",
-                   entry."SecurityDepositAccountId",
-                   entry."EntryType",
-                   entry."Direction",
-                   MAX(entry."Amount" - COALESCE(entry_reversals."ReversedAmount", 0), 0) AS "NetAmount"
-            FROM "SecurityDepositEntries" AS entry
-            LEFT JOIN entry_reversals
-              ON entry_reversals."PortfolioId" = entry."PortfolioId"
-             AND entry_reversals."SecurityDepositAccountId" = entry."SecurityDepositAccountId"
-             AND entry_reversals."SecurityDepositEntryId" = entry."Id"
-            WHERE entry."EntryType" <> 'Reversal'
-        ),
-        totals AS (
-            SELECT entry."PortfolioId",
-                   entry."SecurityDepositAccountId",
-                   SUM(CASE WHEN entry."EntryType" = 'Receipt' THEN entry."NetAmount" ELSE 0 END) AS "TotalReceived",
-                   SUM(CASE WHEN entry."EntryType" = 'Deduction' THEN entry."NetAmount" ELSE 0 END) AS "TotalDeductions",
-                   SUM(CASE WHEN entry."EntryType" = 'Refund' THEN entry."NetAmount" ELSE 0 END) AS "TotalRefunded",
-                   SUM(CASE WHEN entry."EntryType" = 'TransferIn' THEN entry."NetAmount" ELSE 0 END) AS "TotalTransferredIn",
-                   SUM(CASE WHEN entry."EntryType" = 'TransferOut' THEN entry."NetAmount" ELSE 0 END) AS "TotalTransferredOut",
-                   SUM(CASE
-                       WHEN entry."EntryType" = 'Adjustment' AND entry."Direction" = 'Increase' THEN entry."NetAmount"
-                       WHEN entry."EntryType" = 'Adjustment' AND entry."Direction" = 'Decrease' THEN -entry."NetAmount"
-                       ELSE 0 END) AS "NetAdjustments",
-                   SUM(CASE WHEN entry."Direction" = 'Increase' THEN entry."NetAmount" ELSE -entry."NetAmount" END)
-                       AS "HeldBalance"
-            FROM effective_entries AS entry
-            GROUP BY entry."PortfolioId", entry."SecurityDepositAccountId"
-        )
-        SELECT deposit."PortfolioId",
-               account."LeaseManagementId",
-               deposit."TenantAccountId",
-               deposit."Id" AS "SecurityDepositAccountId",
-               CURRENT_TIMESTAMP AS "EffectiveNowUtc",
-               DATE('now') AS "BusinessDate",
-               deposit."Currency",
-               COALESCE(totals."TotalReceived", 0) AS "TotalReceived",
-               COALESCE(totals."TotalDeductions", 0) AS "TotalDeductions",
-               COALESCE(totals."TotalRefunded", 0) AS "TotalRefunded",
-               COALESCE(totals."TotalTransferredIn", 0) AS "TotalTransferredIn",
-               COALESCE(totals."TotalTransferredOut", 0) AS "TotalTransferredOut",
-               COALESCE(totals."NetAdjustments", 0) AS "NetAdjustments",
-               COALESCE(totals."HeldBalance", 0) AS "HeldBalance",
-               CASE
-                   WHEN COALESCE(totals."TotalReceived", 0) = 0 THEN 'NotFunded'
-                   WHEN management."AccountClosedAtUtc" IS NULL OR COALESCE(totals."HeldBalance", 0) > 0 THEN 'Held'
-                   WHEN COALESCE(totals."TotalDeductions", 0) > 0
-                        AND COALESCE(totals."TotalRefunded", 0) = 0 THEN 'Withheld'
-                   WHEN COALESCE(totals."TotalDeductions", 0) > 0 THEN 'PartiallyReturned'
-                   WHEN COALESCE(totals."TotalRefunded", 0) > 0 THEN 'Returned'
-                   ELSE 'Held'
-               END AS "DepositStatus"
-        FROM "SecurityDepositAccounts" AS deposit
-        JOIN "TenantAccounts" AS account
-          ON account."Id" = deposit."TenantAccountId"
-         AND account."PortfolioId" = deposit."PortfolioId"
-        JOIN "LeaseManagements" AS management
-          ON management."Id" = account."LeaseManagementId"
-         AND management."PortfolioId" = account."PortfolioId"
-        LEFT JOIN totals
-          ON totals."PortfolioId" = deposit."PortfolioId"
-         AND totals."SecurityDepositAccountId" = deposit."Id";
-        """;
 }

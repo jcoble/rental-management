@@ -1,8 +1,6 @@
 using System.Text;
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -18,67 +16,48 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <see cref="ScheduleEService"/> computation for the same year, and that the generator produces a
 /// non-empty PDF.
 /// </summary>
-public class YearEndPacketTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class YearEndPacketTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int Year = 2025;
     private const int ActorUserId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly ScheduleEService _scheduleE;
-    private readonly AccountingService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private ScheduleEService _scheduleE = null!;
+    private AccountingService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public YearEndPacketTests()
+    public YearEndPacketTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
     {
         // QuestPDF community license (set in Program.cs at runtime; tests don't run Program).
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-        _conn.RegisterScheduleEDepreciationFunctionForSqlite();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new YearEndPacketRecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new YearEndPacketFixtureDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Frank's Rentals",
-            ManagementCompanyName = "Frank Property Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = ActorUserId,
-            UserName = "year-end-test@rentalcommand.local",
-            NormalizedUserName = "YEAR-END-TEST@RENTALCOMMAND.LOCAL",
-            Email = "year-end-test@rentalcommand.local",
-            NormalizedEmail = "YEAR-END-TEST@RENTALCOMMAND.LOCAL",
-            DisplayName = "Year End Test Actor",
-            CreatedAt = DateTime.UtcNow,
-        });
+        _context = await _fixture.CreateContextAsync(
+            [new YearEndPacketRecordingCommandInterceptor(_commands)]);
+        _db = _context.Db;
+        var portfolio = _db.Portfolios.Single(candidate => candidate.Id == PortfolioId);
+        portfolio.Name = "Frank's Rentals";
+        portfolio.ManagementCompanyName = "Frank Property Co";
         _db.SaveChanges();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(YearEndPacketTests));
+        await _context.ActivateApiScopeAsync(_scope);
 
         _scheduleE = new ScheduleEService(_db);
         _sut = new AccountingService(_db, _scheduleE, new YearEndPacketPdfGenerator(), TimeProvider.System);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _context.DisposeAsync();
     }
 
     [Fact]
@@ -191,12 +170,15 @@ public class YearEndPacketTests : IDisposable
         packet.RentRoll.Should().ContainSingle();
         packet.RentRoll[0].PastDueBalance.Should().Be(1_200m);
         var rentRollSql = _commands.Single(sql =>
-            sql.Contains("\"vw_tenant_account_balances\"", StringComparison.Ordinal));
+            sql.Contains("\"LeaseManagements\"", StringComparison.Ordinal)
+            && sql.Contains("\"LeaseAgreements\"", StringComparison.Ordinal)
+            && sql.Contains("\"PastDueAmount\"", StringComparison.Ordinal));
         rentRollSql.Should().Contain("LeaseManagements");
         rentRollSql.Should().Contain("LeaseAgreements");
-        rentRollSql.Should().Contain("\"vw_lease_management_lifecycle\"");
-        rentRollSql.Should().Contain("\"vw_unit_occupancy\"");
-        rentRollSql.Should().Contain("\"vw_lease_agreement_status\"");
+        rentRollSql.Should().Contain("vw_lease_management_lifecycle");
+        rentRollSql.Should().Contain("vw_unit_occupancy");
+        rentRollSql.Should().Contain("vw_lease_agreement_status");
+        rentRollSql.Should().Contain("vw_tenant_account_balances");
         rentRollSql.Should().Contain("PastDueAmount");
         rentRollSql.Should().Contain("ORDER BY");
     }
@@ -310,8 +292,6 @@ public class YearEndPacketTests : IDisposable
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, ActorUserId, anchor),
-            IssuedAtUtc = anchor,
-            FullyExecutedAtUtc = anchor,
             CreatedAtUtc = anchor,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = anchor,
@@ -340,37 +320,12 @@ public class YearEndPacketTests : IDisposable
         };
         _db.AddRange(agreement, party, account);
         _db.SaveChanges();
-
-        _db.LeaseManagementLifecycleProjections.Add(new LeaseManagementLifecycleProjection
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            LeaseManagementId = management.Id,
-            EffectiveNowUtc = anchor,
-            BusinessDate = termStart,
-            Lifecycle = "Occupied",
-            CurrentAgreementId = null,
-            CurrentPartyCount = 1,
-            CurrentResidentCount = 1,
-            CurrentFinanciallyResponsiblePartyCount = 1,
-            CurrentPrimaryPartyId = party.Id,
-            CurrentPrimaryTenantId = tenant.Id,
-            CurrentPrimaryTenantName = "Maria Tenant",
-            TenantAccountId = account.Id,
-        });
-        _db.LeaseAgreementStatusProjections.Add(new LeaseAgreementStatusProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = management.Id,
-            AgreementId = agreement.Id,
-            BusinessDate = termStart,
-            GoverningFromOn = termStart,
-            GoverningThroughExclusiveOn = termEnd.AddDays(1),
-            AgreementStatus = "Expired",
-            IsGoverning = false,
-        });
-        _db.SaveChanges();
+        _db.MarkFullyExecuted(
+            agreement,
+            party,
+            tenant,
+            ActorUserId,
+            anchor);
 
         var graph = new CanonicalYearGraph(property, unit, tenant, management, agreement, party, account);
 
@@ -403,28 +358,11 @@ public class YearEndPacketTests : IDisposable
             LeaseAgreementId = agreement.Id,
             CreatedByUserId = ActorUserId,
         });
-        _db.TenantAccountBalanceProjections.Add(new TenantAccountBalanceProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = management.Id,
-            TenantAccountId = account.Id,
-            EffectiveNowUtc = anchor,
-            BusinessDate = termStart,
-            Currency = "USD",
-            TotalDebits = 15_600m,
-            TotalCredits = 14_400m,
-            ReceivableBalance = 1_200m,
-            PastDueAmount = 1_200m,
-            PastDueCount = 1,
-            Condition = "PastDue",
-            LastReceiptOn = new DateOnly(year, 12, 1),
-            LastReceiptAmount = 1_200m,
-        });
-
         // Expenses in-year.
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = property.Id,
             Category = ScheduleECategory.Repairs,
             Description = "Roof repair",
@@ -438,6 +376,7 @@ public class YearEndPacketTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = property.Id,
             Category = ScheduleECategory.Insurance,
             Description = "Annual policy",
@@ -523,28 +462,6 @@ public class YearEndPacketTests : IDisposable
         LeaseAgreement Agreement,
         LeaseManagementParty Party,
         TenantAccount Account);
-}
-
-internal sealed class YearEndPacketFixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
-    : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
-{
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-            .HasKey(row => new { row.PortfolioId, row.LeaseManagementId });
-        modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-            .ToTable("YearEndTestLeaseLifecycle");
-        modelBuilder.Entity<LeaseAgreementStatusProjection>()
-            .HasKey(row => new { row.PortfolioId, row.AgreementId });
-        modelBuilder.Entity<LeaseAgreementStatusProjection>()
-            .ToTable("YearEndTestAgreementStatus");
-        modelBuilder.Entity<TenantAccountBalanceProjection>()
-            .HasKey(row => new { row.PortfolioId, row.TenantAccountId });
-        modelBuilder.Entity<TenantAccountBalanceProjection>()
-            .ToTable("YearEndTestAccountBalances");
-    }
 }
 
 internal sealed class YearEndPacketRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

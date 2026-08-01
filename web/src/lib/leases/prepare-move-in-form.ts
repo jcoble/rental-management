@@ -7,6 +7,12 @@ export interface PrepareMoveInForm {
 	applicationId: string;
 	unitId: string;
 	tenantId: string;
+	createNewTenant: boolean;
+	newTenantFirstName: string;
+	newTenantLastName: string;
+	newTenantEmail: string;
+	newTenantPhone: string;
+	newTenantEmergencyContact: string;
 	plannedPossessionOn: string;
 	partyEffectiveFrom: string;
 	documentTemplateId: string;
@@ -18,6 +24,8 @@ export interface PrepareMoveInForm {
 	securityDepositObligation: string;
 	lateFeeAmount: string;
 	gracePeriodDays: string;
+	rentTrackingStartMode: 'BackfillFromLeaseStart' | 'ForwardOnly' | 'CustomCutoffDate';
+	rentTrackingStartOn: string;
 	createSecurityDepositAccount: boolean;
 	openingBalanceAmount: string;
 	openingBalanceEffectiveOn: string;
@@ -25,6 +33,10 @@ export interface PrepareMoveInForm {
 }
 
 export type PrepareMoveInFormErrors = Partial<Record<keyof PrepareMoveInForm, string>>;
+
+export interface BuildPrepareMoveInRequestOptions {
+	requireApplication?: boolean;
+}
 
 export function createPrepareMoveInForm(
 	prefill: {
@@ -37,6 +49,12 @@ export function createPrepareMoveInForm(
 		applicationId: prefill.applicationId ?? '',
 		unitId: prefill.unitId ?? '',
 		tenantId: prefill.tenantId ?? '',
+		createNewTenant: false,
+		newTenantFirstName: '',
+		newTenantLastName: '',
+		newTenantEmail: '',
+		newTenantPhone: '',
+		newTenantEmergencyContact: '',
 		plannedPossessionOn: '',
 		partyEffectiveFrom: '',
 		documentTemplateId: '',
@@ -48,6 +66,8 @@ export function createPrepareMoveInForm(
 		securityDepositObligation: '',
 		lateFeeAmount: '',
 		gracePeriodDays: '',
+		rentTrackingStartMode: 'ForwardOnly',
+		rentTrackingStartOn: '',
 		createSecurityDepositAccount: false,
 		openingBalanceAmount: '',
 		openingBalanceEffectiveOn: '',
@@ -72,7 +92,10 @@ function nonNegativeMoney(value: string): number | null {
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
+export function buildPrepareMoveInRequest(
+	form: PrepareMoveInForm,
+	options: BuildPrepareMoveInRequestOptions = {}
+): {
 	request: PrepareMoveInRequest | null;
 	errors: PrepareMoveInFormErrors;
 } {
@@ -88,9 +111,19 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 	const securityDepositObligation = nonNegativeMoney(form.securityDepositObligation);
 	const lateFeeAmount = nonNegativeMoney(form.lateFeeAmount);
 
-	if (!applicationId) errors.applicationId = 'Choose an approved application.';
 	if (!unitId) errors.unitId = 'Choose the exact unit for this move-in.';
-	if (!tenantId) errors.tenantId = 'The approved tenant could not be resolved.';
+	if (options.requireApplication && !applicationId) {
+		errors.applicationId = 'Choose an approved application.';
+	}
+	if (!applicationId && !form.createNewTenant && !tenantId) {
+		errors.tenantId = 'Choose an existing tenant or create a new one.';
+	}
+	if (applicationId && !tenantId) errors.tenantId = 'The approved tenant could not be resolved.';
+	if (form.createNewTenant) {
+		if (!form.newTenantFirstName.trim()) errors.newTenantFirstName = 'Enter the tenant first name.';
+		if (!form.newTenantLastName.trim()) errors.newTenantLastName = 'Enter the tenant last name.';
+		if (!form.newTenantEmail.trim()) errors.newTenantEmail = 'Enter the tenant email for signing.';
+	}
 	if (!form.partyEffectiveFrom)
 		errors.partyEffectiveFrom = 'Choose when this household relationship begins.';
 	if (!form.termStartOn) errors.termStartOn = 'Choose the agreement start date.';
@@ -106,6 +139,17 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 	}
 	if (lateFeeAmount == null) errors.lateFeeAmount = 'Enter the late fee, including zero.';
 	if (gracePeriodDays == null) errors.gracePeriodDays = 'Enter grace days from 0 through 31.';
+	if (form.rentTrackingStartMode === 'CustomCutoffDate' && !form.rentTrackingStartOn) {
+		errors.rentTrackingStartOn = 'Choose the custom rent tracking start date.';
+	}
+	if (
+		form.rentTrackingStartMode === 'CustomCutoffDate' &&
+		form.rentTrackingStartOn &&
+		form.termStartOn &&
+		form.rentTrackingStartOn < form.termStartOn
+	) {
+		errors.rentTrackingStartOn = 'Rent tracking cannot start before the agreement.';
+	}
 	const openingBalanceAmount =
 		form.openingBalanceAmount.trim() === '' ? null : Number(form.openingBalanceAmount);
 	if (
@@ -127,9 +171,9 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 
 	if (
 		Object.keys(errors).length > 0 ||
-		!applicationId ||
+		(options.requireApplication && !applicationId) ||
 		!unitId ||
-		!tenantId ||
+		(!form.createNewTenant && !tenantId) ||
 		rentDueDay == null ||
 		gracePeriodDays == null ||
 		baseRentAmount == null ||
@@ -149,10 +193,19 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 			partyEffectiveFrom: form.partyEffectiveFrom,
 			parties: [
 				{
-					tenantId,
+					tenantId: form.createNewTenant ? null : tenantId,
+					newTenant: form.createNewTenant
+						? {
+								firstName: form.newTenantFirstName.trim(),
+								lastName: form.newTenantLastName.trim(),
+								email: form.newTenantEmail.trim() || null,
+								phone: form.newTenantPhone.trim() || null,
+								emergencyContact: form.newTenantEmergencyContact.trim() || null
+							}
+						: null,
 					role: 'PrimaryTenant',
 					guarantorLegalNoticeEligible: false,
-					changeReason: 'Approved application move-in',
+					changeReason: applicationId ? 'Approved application move-in' : 'Manual lease creation',
 					isAgreementSigner: true,
 					signingOrder: 1,
 					isRequiredSigner: true
@@ -167,6 +220,9 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 			securityDepositObligation,
 			lateFeeAmount,
 			gracePeriodDays,
+			rentTrackingStartMode: form.rentTrackingStartMode,
+			rentTrackingStartOn:
+				form.rentTrackingStartMode === 'CustomCutoffDate' ? form.rentTrackingStartOn : null,
 			termsSchemaVersion: 1,
 			termsPayload: {},
 			createSecurityDepositAccount: form.createSecurityDepositAccount,

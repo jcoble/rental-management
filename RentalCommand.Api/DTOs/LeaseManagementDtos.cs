@@ -58,6 +58,7 @@ public sealed class LeaseManagementSummaryResponse
     public int CurrentResidentCount { get; init; }
     public int CurrentFinanciallyResponsiblePartyCount { get; init; }
     public bool HasReconciliationException { get; init; }
+    public bool HasGoverningAgreementWithoutPossession { get; init; }
     public DateTime? PlannedPossessionAtUtc { get; init; }
     public DateTime? PossessionGivenAtUtc { get; init; }
     public DateTime? PlannedMoveOutAtUtc { get; init; }
@@ -217,6 +218,7 @@ public sealed class LeaseManagementPartyResponse
     public DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveThrough { get; init; }
     public bool IsCurrent { get; init; }
+    public bool CanGrantTenantPortalAccess { get; init; }
     public bool GuarantorLegalNoticeEligible { get; init; }
 }
 
@@ -236,6 +238,9 @@ public sealed class ActiveTenantUserAccessResponse
     public string UserEmail { get; init; } = string.Empty;
     public DateTime GrantedAtUtc { get; init; }
     public string Reason { get; init; } = string.Empty;
+    public bool RequiresAccountActivation { get; init; }
+    public bool HasPendingActivationInvitation { get; init; }
+    public bool IsPortalLoginReady { get; init; }
 }
 
 /// <summary>

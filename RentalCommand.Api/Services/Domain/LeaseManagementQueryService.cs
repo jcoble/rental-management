@@ -89,7 +89,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseManagementReadContext access,
         int leaseManagementId,
         CancellationToken ct = default) =>
-        BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        BuildLeaseWorkspaceReadManagementQuery(access)
             .AnyAsync(management => management.Id == leaseManagementId, ct);
 
     public Task<LeaseQaAgreementFacts?> GetLeaseQaAgreementAsync(
@@ -178,6 +178,12 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         BuildAuthorizedManagementQuery(
             access,
             [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare]);
+
+    private IQueryable<LeaseManagement> BuildLeaseWorkspaceReadManagementQuery(
+        LeaseManagementReadContext access) =>
+        BuildAuthorizedManagementQuery(
+            access,
+            [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingAgreementsPrepare]);
 
     public async Task<ReturnPossessionContextResponse> GetReturnPossessionContextAsync(
         LeaseManagementReadContext access,
@@ -633,6 +639,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             CurrentResidentCount = lifecycle.CurrentResidentCount,
             CurrentFinanciallyResponsiblePartyCount = lifecycle.CurrentFinanciallyResponsiblePartyCount,
             HasReconciliationException = lifecycle.HasReconciliationException,
+            HasGoverningAgreementWithoutPossession = lifecycle.HasGoverningAgreementWithoutPossession,
             PlannedPossessionAtUtc = management.PlannedPossessionAtUtc,
             PossessionGivenAtUtc = management.PossessionGivenAtUtc,
             PlannedMoveOutAtUtc = management.PlannedMoveOutAtUtc,
@@ -657,7 +664,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     internal IQueryable<LeaseManagementPartyResponse> BuildPartyQuery(
         LeaseManagementReadContext access,
         int leaseManagementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join party in _db.LeaseManagementParties.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { party.PortfolioId, party.LeaseManagementId }
@@ -670,7 +677,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             LeaseManagementPartyId = party.Id,
             LeaseManagementId = party.LeaseManagementId,
             TenantId = party.TenantId,
-            TenantName = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+            TenantName = (party.Tenant!.FirstName + " " + party.Tenant!.LastName).Trim(),
             Email = party.Tenant.Email,
             Phone = party.Tenant.Phone,
             Role = party.Role,
@@ -678,6 +685,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             EffectiveThrough = party.EffectiveThrough,
             IsCurrent = party.EffectiveFrom <= lifecycle.BusinessDate
                 && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate),
+            CanGrantTenantPortalAccess = party.EffectiveThrough == null
+                || party.EffectiveThrough >= lifecycle.BusinessDate,
             GuarantorLegalNoticeEligible = party.GuarantorLegalNoticeEligible,
         };
 
@@ -693,7 +702,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     internal IQueryable<ActiveTenantUserAccessResponse> BuildCurrentPartyAccessQuery(
         LeaseManagementReadContext access,
         int leaseManagementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
@@ -704,9 +713,34 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             on new { party.PortfolioId, LeaseManagementPartyId = party.Id }
             equals new { tenantAccess.PortfolioId, tenantAccess.LeaseManagementPartyId }
         where management.Id == leaseManagementId
-            && party.EffectiveFrom <= lifecycle.BusinessDate
             && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
             && tenantAccess.RevokedAtUtc == null
+        let requiresAccountActivation = tenantAccess.ApplicationUser!.PasswordHash == null
+        let hasTenantPortalAuthority = _db.WorkspaceAccessContexts.AsNoTracking().Any(context =>
+            context.Id == tenantAccess.AccessContextId &&
+            context.UserId == tenantAccess.ApplicationUserId &&
+            context.PortfolioId == tenantAccess.PortfolioId &&
+            context.Status == WorkspaceAccessContextStatus.Active &&
+            context.SuspendedAtUtc == null &&
+            context.RevokedAtUtc == null &&
+            context.Membership != null &&
+            context.Membership.PortfolioId == tenantAccess.PortfolioId &&
+            context.Membership.DefaultExperience == WorkspaceExperience.Tenant &&
+            context.Membership.Status == WorkspaceMembershipStatus.Active &&
+            context.Membership.SuspendedAtUtc == null &&
+            context.Membership.RevokedAtUtc == null &&
+            context.Membership.EffectiveFromUtc <= lifecycle.EffectiveNowUtc &&
+            (context.Membership.EffectiveToUtc == null ||
+                context.Membership.EffectiveToUtc > lifecycle.EffectiveNowUtc) &&
+            context.Membership.RoleAssignments.Any(assignment =>
+                assignment.PortfolioId == tenantAccess.PortfolioId &&
+                assignment.RoleProfile!.Key == RoleProfileKeys.TenantPortal &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.EffectiveFromUtc <= lifecycle.EffectiveNowUtc &&
+                (assignment.EffectiveToUtc == null ||
+                    assignment.EffectiveToUtc > lifecycle.EffectiveNowUtc)))
         orderby party.Role,
             party.Tenant!.FirstName,
             party.Tenant!.LastName,
@@ -720,18 +754,28 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             LeaseManagementPartyId = tenantAccess.LeaseManagementPartyId,
             AccessContextId = tenantAccess.AccessContextId,
             ApplicationUserId = tenantAccess.ApplicationUserId,
-            TenantName = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+            TenantName = (party.Tenant!.FirstName + " " + party.Tenant!.LastName).Trim(),
             UserDisplayName = tenantAccess.ApplicationUser!.DisplayName,
             UserEmail = tenantAccess.ApplicationUser.Email ?? string.Empty,
             GrantedAtUtc = tenantAccess.GrantedAtUtc,
             Reason = tenantAccess.Reason,
+            RequiresAccountActivation = requiresAccountActivation,
+            HasPendingActivationInvitation = requiresAccountActivation && hasTenantPortalAuthority &&
+                _db.WorkspaceInvitations.AsNoTracking().Any(invitation =>
+                    invitation.PortfolioId == tenantAccess.PortfolioId &&
+                    invitation.WorkspaceMembership!.AccessContextId == tenantAccess.AccessContextId &&
+                    invitation.InvitedUserId == tenantAccess.ApplicationUserId &&
+                    invitation.AcceptedAtUtc == null &&
+                    invitation.RevokedAtUtc == null &&
+                    invitation.ExpiresAtUtc > lifecycle.EffectiveNowUtc),
+            IsPortalLoginReady = !requiresAccountActivation && hasTenantPortalAuthority,
         };
 
     internal IQueryable<LeaseAgreementDraftDetailReadRow> BuildAgreementDraftDetailQuery(
         LeaseManagementReadContext access,
         int leaseManagementId,
         int leaseAgreementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { agreement.PortfolioId, agreement.LeaseManagementId }
@@ -840,7 +884,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     internal IQueryable<LeaseAddendumEligibleBaseAgreementResponse> BuildAddendumEligibleBaseAgreementQuery(
         LeaseManagementReadContext access,
         int leaseManagementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { agreement.PortfolioId, agreement.LeaseManagementId }
@@ -865,7 +909,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseManagementReadContext access,
         int leaseManagementId,
         int leaseAddendumId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join addendum in _db.LeaseAddenda.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { addendum.PortfolioId, addendum.LeaseManagementId }
@@ -955,7 +999,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseManagementReadContext access,
         int leaseManagementId,
         int leaseAgreementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { agreement.PortfolioId, agreement.LeaseManagementId }
@@ -1078,7 +1122,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                         || newer.SupersededEffectiveOn > businessDate.First())));
 
         return
-            from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            from management in BuildLeaseWorkspaceReadManagementQuery(access)
             join sourceAgreement in _db.LeaseAgreements.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { sourceAgreement.PortfolioId, sourceAgreement.LeaseManagementId }
@@ -1148,7 +1192,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
     internal IQueryable<LeaseLegalHistoryCountsReadRow> BuildLegalHistoryCountsQuery(
         LeaseManagementReadContext access,
         int leaseManagementId) =>
-        BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        BuildLeaseWorkspaceReadManagementQuery(access)
             .Where(management => management.Id == leaseManagementId)
             .Select(management => new LeaseLegalHistoryCountsReadRow
             {
@@ -1178,7 +1222,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseLegalHistoryQuery query)
     {
         var rows =
-            from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            from management in BuildLeaseWorkspaceReadManagementQuery(access)
             join agreement in _db.LeaseAgreements.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { agreement.PortfolioId, agreement.LeaseManagementId }
@@ -1288,7 +1332,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseLegalHistoryQuery query)
     {
         var rows =
-            from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+            from management in BuildLeaseWorkspaceReadManagementQuery(access)
             join addendum in _db.LeaseAddenda.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { addendum.PortfolioId, addendum.LeaseManagementId }
@@ -1388,7 +1432,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         int leaseManagementId,
         int leaseAgreementId,
         int artifactId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { agreement.PortfolioId, agreement.LeaseManagementId }
@@ -1409,7 +1453,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         int leaseManagementId,
         int leaseAddendumId,
         int artifactId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join addendum in _db.LeaseAddenda.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { addendum.PortfolioId, addendum.LeaseManagementId }
@@ -1429,7 +1473,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         LeaseManagementReadContext access,
         int leaseManagementId,
         int leaseAgreementId) =>
-        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        from management in BuildLeaseWorkspaceReadManagementQuery(access)
         join agreement in _db.LeaseAgreements.AsNoTracking()
             on new { management.PortfolioId, LeaseManagementId = management.Id }
             equals new { agreement.PortfolioId, agreement.LeaseManagementId }

@@ -3,6 +3,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Reflection;
 using RentalCommand.Api.Services.Esign;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Esign;
 using RentalCommand.Data.Esign;
 using RentalCommand.Engine.Services;
 
@@ -13,12 +15,14 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
     private readonly ServiceProvider _provider;
     private readonly StubExecutionService _execution = new();
     private readonly StubClaimStore _claims = new();
+    private readonly StubAtomicUnitOfWork _atomic = new();
 
     public NativeEsignReconciliationServiceTests()
     {
         var services = new ServiceCollection();
         services.AddSingleton<INativeEsignExecutionService>(_execution);
         services.AddSingleton<INativeEsignExecutionClaimStore>(_claims);
+        services.AddSingleton<IAtomicUnitOfWork>(_atomic);
         _provider = services.BuildServiceProvider();
     }
 
@@ -37,6 +41,27 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
             Enumerable.Range(1, NativeEsignReconciliationService.BatchSize));
         _claims.LastBatchSize.Should().Be(NativeEsignReconciliationService.BatchSize);
         _claims.LastLeaseDuration.Should().Be(NativeEsignReconciliationService.ClaimLease);
+        _atomic.LastBatchSize.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_UsesOneSetBasedBatchForCompletedAgreementFinancialReconciliation()
+    {
+        _claims.Claims =
+        [
+            new NativeEsignExecutionClaim(1, Guid.NewGuid(), Guid.NewGuid()),
+        ];
+        _claims.HasCompletedAgreementFinancialReconciliations = true;
+        _atomic.DepositChargeCount = 2;
+        var service = NewService();
+
+        var completed = await service.ReconcileAsync();
+
+        completed.Should().Be(3);
+        _execution.RequestIds.Should().Equal(1);
+        _atomic.LastBatchSize.Should()
+            .Be(NativeEsignReconciliationService.BatchSize - 1);
+        _atomic.CommandType.Should().Be("native-esign.agreement-financials.batch-reconcile");
     }
 
     [Fact]
@@ -65,6 +90,24 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         sql.Should().Contain("@leaseDuration");
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("@now");
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_SkipsFinancialBatchWhenCompletedAgreementProbeIsEmpty()
+    {
+        _claims.Claims =
+        [
+            new NativeEsignExecutionClaim(1, Guid.NewGuid(), Guid.NewGuid()),
+        ];
+        _claims.HasCompletedAgreementFinancialReconciliations = false;
+        var service = NewService();
+
+        var completed = await service.ReconcileAsync();
+
+        completed.Should().Be(1);
+        _execution.RequestIds.Should().Equal(1);
+        _claims.CompletedFinancialProbeCount.Should().Be(1);
+        _atomic.LastBatchSize.Should().BeNull();
     }
 
     [Fact]
@@ -114,8 +157,10 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
     private sealed class StubClaimStore : INativeEsignExecutionClaimStore
     {
         public IReadOnlyList<NativeEsignExecutionClaim> Claims { get; set; } = [];
+        public bool HasCompletedAgreementFinancialReconciliations { get; set; }
         public int LastBatchSize { get; private set; }
         public TimeSpan LastLeaseDuration { get; private set; }
+        public int CompletedFinancialProbeCount { get; private set; }
 
         public Task<IReadOnlyList<NativeEsignExecutionClaim>> ClaimBatchAsync(
             string claimOwner, TimeSpan leaseDuration, int batchSize,
@@ -134,5 +179,39 @@ public sealed class NativeEsignReconciliationServiceTests : IDisposable
         public Task<int> ReleaseForRetryAsync(
             int signatureRequestId, Guid claimToken, string? error,
             CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<bool> HasCompletedAgreementFinancialReconciliationsAsync(
+            CancellationToken ct = default)
+        {
+            CompletedFinancialProbeCount++;
+            return Task.FromResult(HasCompletedAgreementFinancialReconciliations);
+        }
+    }
+
+    private sealed class StubAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public int DepositChargeCount { get; set; }
+        public int? LastBatchSize { get; private set; }
+        public string? CommandType { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            command.Should().BeOfType<ReconcileNativeEsignAgreementFinancialsBatchCommand>();
+            var batch = (ReconcileNativeEsignAgreementFinancialsBatchCommand)(object)command;
+            LastBatchSize = batch.BatchSize;
+            CommandType = identity.CommandType;
+            var result = (TResult)(object)new ReconcileNativeEsignAgreementFinancialsBatchResult(
+                DepositChargeCount);
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        }
     }
 }

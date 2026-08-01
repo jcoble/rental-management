@@ -31,7 +31,7 @@ public sealed class CoreCrudAtomicContractTests
     public void CoreCrudHandlerReauthorizesReplaysAndHasNoDirectSetBasedEscapeHatch()
     {
         typeof(AtomicCoreCrudMutationHandler)
-            .Should().Implement<IAtomicReplayAuthorizer<AtomicCoreCrudMutationCommand>>();
+            .Should().Implement<IAtomicCommandHandler<AtomicCoreCrudMutationCommand, AtomicCoreCrudMutationResult>>();
 
         var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
         source.Should().Contain("BindSemanticAudit");
@@ -39,6 +39,19 @@ public sealed class CoreCrudAtomicContractTests
         source.Should().Contain("ReadDatabaseClockUtcAsync");
         source.Should().NotContain("ExecuteUpdateAsync");
         source.Should().NotContain("ExecuteDeleteAsync");
+    }
+
+    [Fact]
+    public void UnitDeleteEndpointLetsAtomicReplayAuthorizeTombstonedUnitReceipts()
+    {
+        var controller = ReadSource("RentalCommand.Api", "Controllers", "UnitController.cs");
+        var deleteStart = controller.IndexOf("public async Task<IActionResult> Delete(", StringComparison.Ordinal);
+        var deleteEnd = controller.IndexOf("catch (UnauthorizedAccessException ex)", deleteStart, StringComparison.Ordinal);
+        var deleteEndpoint = controller[deleteStart..deleteEnd];
+
+        deleteEndpoint.Should().Contain("_service.DeleteAsync(scope, id, operationKey, ct)");
+        deleteEndpoint.Should().NotContain("UnitCapabilityAuthorizationTarget",
+            "a successful delete receipt must be replayable after the Unit row is soft-deleted");
     }
 
     [Fact]
@@ -96,7 +109,7 @@ public sealed class CoreCrudAtomicContractTests
             parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key")
             .Should().BeTrue();
         typeof(AtomicGuidedTenantSetupHandler)
-            .Should().Implement<IAtomicReplayAuthorizer<AtomicGuidedTenantSetupCommand>>();
+            .Should().Implement<IAtomicCommandHandler<AtomicGuidedTenantSetupCommand, AtomicGuidedTenantSetupResult>>();
 
         var handler = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "AtomicGuidedTenantSetup.cs");

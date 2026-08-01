@@ -18,6 +18,7 @@ public sealed record ApplyAccountingPullResultCommand(
     IReadOnlyList<ExtPaymentDto> Payments,
     IReadOnlyList<ExtExpenseDto> Expenses,
     string NextCursorsJson,
+    [property: AtomicFingerprintIgnore]
     DateTime AppliedAtUtc) : IAtomicCommandData;
 
 public sealed record ApplyAccountingPullResult(
@@ -26,15 +27,4 @@ public sealed record ApplyAccountingPullResult(
     int AccountsMapped,
     int PaymentsImported,
     int ExpensesImported,
-    int NeedsReview) : IAtomicResultData;
-
-/// <summary>
-/// PostgreSQL-owned accounting merge boundary. Its implementation executes one set statement;
-/// handlers cannot obtain a DbContext, connection, transaction, or raw-SQL escape hatch.
-/// </summary>
-public interface IAtomicAccountingPersistence
-{
-    Task<ApplyAccountingPullResult> ApplyPullAsync(
-        ApplyAccountingPullResultCommand command,
-        CancellationToken ct = default);
-}
+    int NeedsReview);

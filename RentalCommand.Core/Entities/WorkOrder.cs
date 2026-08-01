@@ -32,6 +32,7 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public decimal? ActualCost { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public DateTime? ChronologyRepairOriginalUpdatedAtUtc { get; set; }
     public DateTime? DeletedAt { get; set; }   // soft-delete (preserves maintenance history)
 
     /// <summary>
@@ -45,6 +46,17 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     /// Kept separate from general Property/Unit notes so the field experience never leaks office notes.
     /// </summary>
     public string? TechnicianAccessInstructions { get; set; }
+    public string? SubmittedByLabel { get; set; }
+    public string? RequesterName { get; set; }
+    public string? RequesterPhone { get; set; }
+    public string? RequesterEmail { get; set; }
+    public bool? ResidentMustBePresent { get; set; }
+    public bool? CallBeforeEntry { get; set; }
+    public bool? CallIfNotHome { get; set; }
+    public bool? PermissionToEnter { get; set; }
+    public string? EntryNotes { get; set; }
+    public string? PetWarnings { get; set; }
+    public string? AccessWarnings { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }

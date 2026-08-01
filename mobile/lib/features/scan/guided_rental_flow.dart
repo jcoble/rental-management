@@ -65,7 +65,10 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   final _dueDay = TextEditingController(text: '1');
   DateTime? _start;
   DateTime? _end;
+  DateTime? _possessionGivenOn;
   String? _reviewDisposition;
+  String _rentTrackingStartMode = 'ForwardOnly';
+  DateTime? _rentTrackingStartOn;
 
   @override
   void initState() {
@@ -181,6 +184,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     _dueDay.text = v.rentDueDay.isEmpty ? '1' : v.rentDueDay;
     _start = DateTime.tryParse(v.startDate);
     _end = DateTime.tryParse(v.endDate);
+    _possessionGivenOn = DateTime.tryParse(v.possessionGivenOn);
     setState(() => _loading = false);
   }
 
@@ -286,6 +290,15 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     if (_reviewDisposition != null) {
       o['reviewDisposition'] = _reviewDisposition;
     }
+    if (_reviewDisposition == 'AlreadyFullySigned' &&
+        _possessionGivenOn != null) {
+      o['possessionGivenAtUtc'] = _iso(_possessionGivenOn!);
+    }
+    o['rentTrackingStartMode'] = _rentTrackingStartMode;
+    if (_rentTrackingStartMode == 'CustomCutoffDate' &&
+        _rentTrackingStartOn != null) {
+      o['rentTrackingStartOn'] = _iso(_rentTrackingStartOn!);
+    }
     return jsonEncode(o);
   }
 
@@ -312,6 +325,9 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     } else if (_step == 3) {
       if (_reviewDisposition == null) {
         err = 'Choose whether the lease is already signed.';
+      } else if (_rentTrackingStartMode == 'CustomCutoffDate' &&
+          _rentTrackingStartOn == null) {
+        err = 'Pick the custom rent start date.';
       } else if (_start == null || _end == null) {
         err = 'Pick the lease start and end dates.';
       } else if ((num.tryParse(_rent.text.trim()) ?? 0) <= 0) {
@@ -597,6 +613,57 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
               keyboard: TextInputType.number,
             ),
             const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              key: ValueKey(_rentTrackingStartMode),
+              initialValue: _rentTrackingStartMode,
+              decoration: const InputDecoration(
+                labelText: 'Begin rent charges',
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'ForwardOnly',
+                  child: Text('Start from the current date'),
+                ),
+                DropdownMenuItem(
+                  value: 'BackfillFromLeaseStart',
+                  child: Text('Backfill from the lease start'),
+                ),
+                DropdownMenuItem(
+                  value: 'CustomCutoffDate',
+                  child: Text('Start from a custom date'),
+                ),
+              ],
+              onChanged: (value) => setState(() {
+                _rentTrackingStartMode = value ?? 'ForwardOnly';
+                if (_rentTrackingStartMode != 'CustomCutoffDate') {
+                  _rentTrackingStartOn = null;
+                }
+              }),
+            ),
+            if (_rentTrackingStartMode == 'CustomCutoffDate')
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Custom rent start date'),
+                subtitle: Text(
+                  _rentTrackingStartOn == null
+                      ? 'Pick a date'
+                      : _iso(_rentTrackingStartOn!),
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = _start ?? DateTime(2000);
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: _rentTrackingStartOn ?? firstDate,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                  );
+                  if (selected != null && mounted) {
+                    setState(() => _rentTrackingStartOn = selected);
+                  }
+                },
+              ),
+            const SizedBox(height: 8),
             Text(
               'What signing state is this lease in?',
               style: Theme.of(
@@ -613,6 +680,38 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
                 'Import the uploaded document as the executed agreement.',
               ),
             ),
+            if (_reviewDisposition == 'AlreadyFullySigned')
+              ListTile(
+                key: const ValueKey('guided-rental-possession-given-date'),
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Possession given'),
+                subtitle: Text(
+                  _possessionGivenOn == null
+                      ? 'Pick a date'
+                      : _iso(_possessionGivenOn!),
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = _start ?? DateTime(2000);
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: _possessionGivenOn ?? firstDate,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                    helpText: 'Possession given',
+                  );
+                  if (selected != null && mounted) {
+                    setState(() => _possessionGivenOn = selected);
+                  }
+                },
+              ),
+            if (_reviewDisposition == 'AlreadyFullySigned')
+              Text(
+                'Required when the signed lease term has started and the tenant already received possession.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
             RadioListTile<String>(
               contentPadding: EdgeInsets.zero,
               value: 'NeedsSignatures',

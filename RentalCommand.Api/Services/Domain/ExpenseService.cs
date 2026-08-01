@@ -5,6 +5,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -294,7 +295,8 @@ public class ExpenseService : IExpenseService
         WorkspaceReadScope scope, CreateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -305,7 +307,8 @@ public class ExpenseService : IExpenseService
         WorkspaceReadScope scope, int id, UpdateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, id, idempotencyKey, request);
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, id, idempotencyKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
@@ -316,7 +319,8 @@ public class ExpenseService : IExpenseService
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
+            AtomicMoneyDomain.Expense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;

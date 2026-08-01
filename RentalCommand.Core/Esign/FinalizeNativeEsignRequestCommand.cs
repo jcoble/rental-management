@@ -44,4 +44,4 @@ public sealed record FinalizeNativeEsignRequestResult(
     int SignatureRequestId,
     int? LeaseAgreementId,
     int? LeaseAddendumId,
-    int ExecutedArtifactId) : IAtomicResultData;
+    int ExecutedArtifactId);

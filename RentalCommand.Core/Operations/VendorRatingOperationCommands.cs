@@ -9,10 +9,11 @@ public sealed record CreateVendorRatingCommand(
     int? WorkOrderId,
     int Stars,
     string? Comment,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record VendorRatingMutationResult(
     OperationMutationOutcome Outcome,
     int RatingId,
     int VendorId,
-    string? ResponseJson = null) : IAtomicResultData;
+    string? ResponseJson = null);

@@ -42,6 +42,15 @@ public class ReportsService : IReportsService
 
     // ── Catalog ──────────────────────────────────────────────────────────────────────────────────
 
+    public async Task<int> GetDefaultAnnualReportYearAsync(WorkspaceReadScope scope, CancellationToken ct = default)
+    {
+        var businessDate = await _db.Database
+            .SqlQuery<DateOnly>($"SELECT rc_business_date({scope.PortfolioId}) AS \"Value\"")
+            .SingleAsync(ct);
+
+        return businessDate.Year;
+    }
+
     public ReportsCatalogResponse GetCatalog()
     {
         return new ReportsCatalogResponse
@@ -388,7 +397,7 @@ public class ReportsService : IReportsService
             Leases = DeserializeRentLedgerLeases(row.LeasesJson),
             TotalCharged = row.TotalCharged,
             TotalCredits = row.TotalCredits,
-            TotalBalance = row.TotalCharged - row.TotalCredits,
+            TotalBalance = row.TotalBalance,
         };
     }
 
@@ -458,6 +467,39 @@ public class ReportsService : IReportsService
               ON property."Id" = management."PropertyId"
             WHERE management."PortfolioId" = @portfolioId
         ),
+        reversal_totals AS MATERIALIZED (
+            SELECT reversal."PortfolioId",
+                   reversal."TenantAccountId",
+                   reversal."ReversesEntryId",
+                   SUM(reversal."Amount") AS "ReversedAmount"
+            FROM "TenantLedgerEntries" AS reversal
+            WHERE reversal."PortfolioId" = @portfolioId
+              AND reversal."EntryType" = 'Reversal'
+              AND reversal."EffectiveOn" <= @toOn
+            GROUP BY reversal."PortfolioId",
+                     reversal."TenantAccountId",
+                     reversal."ReversesEntryId"
+        ),
+        effective_entries AS MATERIALIZED (
+            SELECT entry."PortfolioId",
+                   entry."TenantAccountId",
+                   entry."Id",
+                   entry."EffectiveOn",
+                   entry."Direction",
+                   entry."EntryType",
+                   GREATEST(
+                       entry."Amount" - COALESCE(reversal_totals."ReversedAmount", 0::numeric),
+                       0::numeric) AS "NetAmount"
+            FROM "TenantLedgerEntries" AS entry
+            LEFT JOIN reversal_totals
+              ON reversal_totals."PortfolioId" = entry."PortfolioId"
+             AND reversal_totals."TenantAccountId" = entry."TenantAccountId"
+             AND reversal_totals."ReversesEntryId" = entry."Id"
+            WHERE entry."PortfolioId" = @portfolioId
+              AND entry."EntryType" <> 'Reversal'
+              AND entry."EffectiveOn" >= @fromOn
+              AND entry."EffectiveOn" <= @toOn
+        ),
         activity AS MATERIALIZED (
             SELECT management."Id" AS "LeaseManagementId",
                    management."RelationshipNumber",
@@ -469,14 +511,14 @@ public class ReportsService : IReportsService
                    entry."EffectiveOn",
                    CASE WHEN entry."Direction" = 'Debit' THEN 0 ELSE 1 END AS "EntryKind",
                    entry."EntryType",
-                   entry."Amount",
-                   SUM(CASE WHEN entry."Direction" = 'Debit' THEN entry."Amount" ELSE -entry."Amount" END)
+                   entry."NetAmount" AS "Amount",
+                   SUM(CASE WHEN entry."Direction" = 'Debit' THEN entry."NetAmount" ELSE -entry."NetAmount" END)
                        OVER (PARTITION BY management."Id"
                              ORDER BY entry."EffectiveOn",
                                       CASE WHEN entry."Direction" = 'Debit' THEN 0 ELSE 1 END,
                                       entry."Id"
                              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "RunningBalance"
-            FROM "TenantLedgerEntries" AS entry
+            FROM effective_entries AS entry
             JOIN "TenantAccounts" AS account
               ON account."PortfolioId" = entry."PortfolioId"
              AND account."Id" = entry."TenantAccountId"
@@ -494,8 +536,7 @@ public class ReportsService : IReportsService
              AND lifecycle."LeaseManagementId" = management."Id"
             WHERE entry."PortfolioId" = @portfolioId
               AND management."PortfolioId" = @portfolioId
-              AND entry."EffectiveOn" >= @fromOn
-              AND entry."EffectiveOn" <= @toOn
+              AND entry."NetAmount" > 0::numeric
               AND (NOT @applyPropertyFilter OR management."PropertyId" = ANY(@propertyIds))
         ),
         relationship_ledgers AS MATERIALIZED (
@@ -552,7 +593,10 @@ public class ReportsService : IReportsService
                                 relationship_ledgers."LeaseManagementId"),
                    '[]'::jsonb)::text AS "LeasesJson",
                COALESCE(SUM(relationship_ledgers."TotalCharged"), 0::numeric) AS "TotalCharged",
-               COALESCE(SUM(relationship_ledgers."TotalCredits"), 0::numeric) AS "TotalCredits"
+               COALESCE(SUM(relationship_ledgers."TotalCredits"), 0::numeric) AS "TotalCredits",
+               COALESCE(
+                   SUM(relationship_ledgers."TotalCharged" - relationship_ledgers."TotalCredits"),
+                   0::numeric) AS "TotalBalance"
         FROM relationship_ledgers
         """;
 
@@ -714,92 +758,36 @@ public class ReportsService : IReportsService
 
     public async Task<CashFlowResponse> GetCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
-        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
-        var hasPropertyFilter = query.PropertyId.HasValue || (query.PropertyIds?.Count > 0);
-        var allPropertiesReportsReadAuthority = BuildAllPropertiesAuthorityQuery(scope, CapabilityKeys.ReportsRead);
-
-        // Money in: income is ACTUAL CASH RECEIVED — Rent + LateFee that is Paid (full Amount) or
-        // Partial (the collected AmountPaid). Security deposits are a liability, never income (§7/§18).
-        // Cash is dated on PaidDate (falling back to DueDate). The range filter + monthly GROUP BY + SUM
-        // all run SQL-side (this query was previously materialized + grouped in memory — a hard-rule
-        // violation that §18 required rewriting; it is now one EF-translated aggregate).
-        var fromDate = DateOnly.FromDateTime(from);
-        var toDate = DateOnly.FromDateTime(to);
-        var tenantIncomeQuery =
-            from allocation in _db.TenantLedgerAllocations.AsNoTracking()
-            join receipt in _db.TenantLedgerEntries.AsNoTracking()
-                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
-                equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
-            join charge in _db.TenantLedgerEntries.AsNoTracking()
-                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
-                equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
-                equals new { account.PortfolioId, account.Id }
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, Id = account.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            where allocation.PortfolioId == portfolioId
-                && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
-                && receipt.EffectiveOn >= fromDate
-                && receipt.EffectiveOn <= toDate
-                && (charge.EntryType == TenantLedgerEntryType.RentCharge
-                    || charge.EntryType == TenantLedgerEntryType.LateFeeCharge)
-            select new
-            {
-                PropertyId = (int?)management.PropertyId,
-                Year = receipt.EffectiveOn.Year,
-                Month = receipt.EffectiveOn.Month,
-                Amount = allocation.Amount,
-            };
-        var applicationIncomeQuery = _db.ApplicationFinancialEntries
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .Where(entry =>
-                entry.PortfolioId == portfolioId &&
-                entry.EffectiveOn >= fromDate &&
-                entry.EffectiveOn <= toDate)
-            .Select(entry => new
-            {
-                entry.PropertyId,
-                Year = entry.EffectiveOn.Year,
-                Month = entry.EffectiveOn.Month,
-                Amount = entry.Direction == ApplicationFinancialDirection.Increase
-                    ? entry.Amount
-                    : -entry.Amount,
-            });
-
-        var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
-
-        incomeQuery = incomeQuery.Where(row => row.PropertyId != null &&
-            authorizedProperties.Any(property => property.Id == row.PropertyId.Value));
-
-        // Money out: expenses, cash dated on PaidAt (falling back to IncurredAt). A property filter only
-        // matches expenses tied to a property; unassigned expenses are excluded when a filter is set.
-        // Range filter + monthly GROUP BY + SUM all run SQL-side.
-        var expenseQuery = FinancialReportProjections.BuildExpenseAllocationProjection(_db, portfolioId)
-            .Where(expense => expense.EffectiveAt >= from && expense.EffectiveAt <= to)
-            .Where(expense =>
-                (expense.PropertyId != null &&
-                    authorizedProperties.Any(property => property.Id == expense.PropertyId.Value)) ||
-                (expense.PropertyId == null && !hasPropertyFilter && allPropertiesReportsReadAuthority.Any()));
+        var requestedPropertyIds = BuildRequestedPropertyIds(query);
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var incomeQuery = FinancialReportProjections.BuildAuthorizedCashFlowIncomeProjection(
+            _db,
+            scope,
+            CapabilityKeys.ReportsRead,
+            utcNow,
+            from,
+            to,
+            requestedPropertyIds);
+        var expenseQuery = FinancialReportProjections.BuildAuthorizedCashFlowExpenseProjection(
+            _db,
+            scope,
+            CapabilityKeys.ReportsRead,
+            utcNow,
+            from,
+            to,
+            requestedPropertyIds);
 
         var monthCount = CountMonths(from, to);
-        var anchor = _db.Portfolios
-            .AsNoTracking()
-            .Where(candidate => candidate.Id == portfolioId && authorizedProperties.Any())
-            .Select(_ => 1);
+        var anchor = FinancialReportProjections.BuildAuthorizedCashFlowAnchor(
+            _db,
+            scope,
+            CapabilityKeys.ReportsRead,
+            utcNow,
+            requestedPropertyIds);
         var monthRows = await FinancialReportProjections.BuildCashFlowMonthProjection(
                 anchor,
-                incomeQuery.Select(row => new FinancialReportIncomeProjection
-                {
-                    PropertyId = row.PropertyId,
-                    Year = row.Year,
-                    Month = row.Month,
-                    Amount = row.Amount,
-                }),
+                incomeQuery,
                 expenseQuery,
                 from.Year,
                 from.Month,
@@ -842,6 +830,12 @@ public class ReportsService : IReportsService
             TotalNet = totalIncome - totalExpense,
         };
     }
+
+    private static int[] BuildRequestedPropertyIds(ReportRangeQuery query) =>
+        (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
 
     internal static int CountMonths(DateTime from, DateTime to) =>
         ((to.Year - from.Year) * 12) + to.Month - from.Month + 1;
@@ -890,8 +884,7 @@ public class ReportsService : IReportsService
                 && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
                 && receipt.EffectiveOn >= fromDate
                 && receipt.EffectiveOn <= toDate
-                && (charge.EntryType == TenantLedgerEntryType.RentCharge
-                    || charge.EntryType == TenantLedgerEntryType.LateFeeCharge)
+                && charge.EntryType != TenantLedgerEntryType.DepositCharge
             select new
             {
                 PropertyId = (int?)management.PropertyId,
@@ -934,12 +927,13 @@ public class ReportsService : IReportsService
                             ((e.Category == ScheduleECategory.Taxes && l.EscrowCoversTaxes) ||
                              (e.Category == ScheduleECategory.Insurance && l.EscrowCoversInsurance))))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
-                DebtService = _db.LoanPayments
+                DebtService = LoanPaymentEffectiveQuery.From(_db)
                     .Where(lp =>
                         lp.PortfolioId == portfolioId &&
-                        lp.Loan != null &&
-                        lp.Loan.PropertyId == p.Id &&
-                        lp.DueDate >= from && lp.DueDate <= to)
+                        lp.Status == LoanPaymentStatus.Paid &&
+                        lp.PaidDate != null &&
+                        _db.Loans.Any(loan => loan.Id == lp.LoanId && loan.PropertyId == p.Id) &&
+                        lp.PaidDate >= from && lp.PaidDate <= to)
                     .Sum(lp => (decimal?)lp.TotalAmount) ?? 0m,
             })
             .Where(r => r.Income != 0m || r.OperatingExpenses != 0m || r.DebtService != 0m);
@@ -1726,6 +1720,7 @@ public class ReportsService : IReportsService
         public string LeasesJson { get; set; } = "[]";
         public decimal TotalCharged { get; set; }
         public decimal TotalCredits { get; set; }
+        public decimal TotalBalance { get; set; }
     }
 
     private sealed class GeneralLedgerQueryRow
@@ -1942,6 +1937,7 @@ public class ReportsService : IReportsService
         var endOn = startOn.AddYears(1);
         var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var activeOwnershipAt = _timeProvider.GetUtcNow().UtcDateTime;
 
         var propertyNetRows =
             from ownership in _db.PropertyOwnerships.AsNoTracking()
@@ -2007,36 +2003,55 @@ public class ReportsService : IReportsService
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
                         distribution.OwnerEntityId == group.Key.OwnerId &&
-                        distribution.PropertyId != null &&
+                        distribution.Status == OwnerDistributionStatus.Approved &&
                         distribution.Date >= start &&
                         distribution.Date < end &&
-                        authorizedProperties.Any(property =>
-                            property.Id == distribution.PropertyId.Value))
+                        (distribution.PropertyId != null
+                            ? authorizedProperties.Any(property =>
+                                property.Id == distribution.PropertyId.Value)
+                            : _db.PropertyOwnerships.AsNoTracking().Any(ownership =>
+                                  ownership.PortfolioId == portfolioId &&
+                                  ownership.OwnerEntityId == group.Key.OwnerId &&
+                                  ownership.Property!.DeletedAt == null &&
+                                  ownership.EffectiveFromUtc <= activeOwnershipAt &&
+                                  (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > activeOwnershipAt) &&
+                                  authorizedProperties.Any(property => property.Id == ownership.PropertyId))
+                              && !_db.PropertyOwnerships.AsNoTracking().Any(ownership =>
+                                  ownership.PortfolioId == portfolioId &&
+                                  ownership.OwnerEntityId == group.Key.OwnerId &&
+                                  ownership.Property!.DeletedAt == null &&
+                                  ownership.EffectiveFromUtc <= activeOwnershipAt &&
+                                  (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > activeOwnershipAt) &&
+                                  !authorizedProperties.Any(property => property.Id == ownership.PropertyId))))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
             });
 
-        var rows = await summaries
+        var rowsWithTotals = await summaries
             .OrderBy(summary => summary.OwnerName)
-            .Select(summary => new OwnerDistributionRow
+            .Select(summary => new
             {
                 OwnerId = summary.OwnerId,
                 OwnerName = summary.OwnerName,
                 NetToOwner = summary.NetToOwner,
                 TotalDistributed = summary.TotalDistributed,
                 Undistributed = summary.NetToOwner - summary.TotalDistributed,
+                PortfolioTotalNetToOwners = summaries.Sum(total => total.NetToOwner),
+                PortfolioTotalDistributed = summaries.Sum(total => total.TotalDistributed),
             })
             .ToListAsync(ct);
 
-        var totals = await summaries
-            .GroupBy(_ => 1)
-            .Select(group => new
+        var totalNetToOwners = rowsWithTotals.FirstOrDefault()?.PortfolioTotalNetToOwners ?? 0m;
+        var totalDistributed = rowsWithTotals.FirstOrDefault()?.PortfolioTotalDistributed ?? 0m;
+        var rows = rowsWithTotals
+            .Select(row => new OwnerDistributionRow
             {
-                TotalNetToOwners = group.Sum(summary => summary.NetToOwner),
-                TotalDistributed = group.Sum(summary => summary.TotalDistributed),
+                OwnerId = row.OwnerId,
+                OwnerName = row.OwnerName,
+                NetToOwner = row.NetToOwner,
+                TotalDistributed = row.TotalDistributed,
+                Undistributed = row.Undistributed,
             })
-            .SingleOrDefaultAsync(ct);
-        var totalNetToOwners = totals?.TotalNetToOwners ?? 0m;
-        var totalDistributed = totals?.TotalDistributed ?? 0m;
+            .ToList();
 
         return new OwnerDistributionsResponse
         {

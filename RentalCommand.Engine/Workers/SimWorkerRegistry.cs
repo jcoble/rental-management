@@ -31,6 +31,7 @@ public sealed class SimWorkerRegistry
             [SimWorkerKeys.RecurringExpense]     = (sp, ct) => sp.GetRequiredService<IRecurringExpenseGenerationService>().GenerateAsync(ct),
             [SimWorkerKeys.RecurringMaintenance] = (sp, ct) => sp.GetRequiredService<IRecurringMaintenanceService>().GenerateAsync(ct),
             [SimWorkerKeys.DailyBriefing]        = (sp, ct) => sp.GetRequiredService<IDailyBriefingDeliveryService>().EnqueueDueAsync(null, ct),
+            [SimWorkerKeys.ScanProcessing]       = (sp, ct) => sp.GetRequiredService<IScanProcessingCycleService>().RunOneCycleAsync(sp, ct),
         };
     }
 

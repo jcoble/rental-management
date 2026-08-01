@@ -8,16 +8,19 @@ using RentalCommand.Core.Leasing;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class CreateLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<CreateLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>,
-      IAtomicReplayAuthorizer<CreateLeaseAddendumDraftCommand>
+    : IAtomicCommandHandler<CreateLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        CreateLeaseAddendumDraftCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
-        var relationship = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, attempt.Persistence, times.WallClockUtc)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+        var relationship = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, times.WallClockUtc)
             .Select(item => new
             {
                 Relationship = item,
@@ -34,21 +37,21 @@ public sealed class CreateLeaseAddendumDraftHandler
                 "An Addendum must amend a fully executed, nonvoid Agreement in this relationship.");
         }
         if (!await LeaseAddendumCommandSupport.ValidateReferencesAsync(command, relationship.BaseAgreement.Currency,
-                attempt.Persistence, ct))
+                _db, ct))
         {
             return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
                 command, 0, Guid.Empty, 0, 0, null,
                 "The template, signer provenance, and financial-effect currency must belong to this relationship.");
         }
         if (!await LeaseAddendumCommandSupport.ValidateSignerScopeAsync(
-                command, command.Signers, attempt.Leasing, ct))
+                command, command.Signers, _db, context, ct))
         {
             return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
                 command, 0, Guid.Empty, 0, 0, null,
                 "Every Addendum signer must reference its exact relationship party and tenant pair.");
         }
-        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-            command.PortfolioId, relationship.Relationship.PropertyId, command.LeaseManagementId,
+        var sourceVersion = await AtomicLeaseMutationPersistence.ResolveAuthoredDocumentSourceVersionAsync(_db,
+            context, command.PortfolioId, relationship.Relationship.PropertyId, command.LeaseManagementId,
             command.DocumentTemplateId,
             command.ActorUserId, times.WallClockUtc, ct);
         if (!sourceVersion.Resolved)
@@ -78,35 +81,37 @@ public sealed class CreateLeaseAddendumDraftHandler
             UpdatedAtUtc = times.WallClockUtc,
             DraftRevision = 1,
         };
-        attempt.Persistence.Add(addendum);
-        attempt.BindSemanticAudit(addendum, LeaseAddendumCommandSupport.Created(command,
+        _db.Add(addendum);
+        context.BindSemanticAudit(addendum, LeaseAddendumCommandSupport.Created(command,
             "Created a standalone Addendum draft attached to an exact executed Agreement."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var (signerIds, effectIds) = await LeaseAddendumCommandSupport.InsertChildrenAsync(
-            command, addendum.Id, attempt, times.WallClockUtc, ct);
-        LeaseAddendumCommandSupport.StageOutbox(attempt, command, times.WallClockUtc, addendum.Id,
+            command, addendum.Id, _db, context, times.WallClockUtc, ct);
+        LeaseAddendumCommandSupport.StageOutbox(context, command, times.WallClockUtc, addendum.Id,
             "addendum-draft-created");
         return new(LeaseAddendumDraftMutationOutcome.Applied, command.LeaseManagementId, addendum.Id,
             addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision, null,
             signerIds, effectIds, null);
     }
 
-    public Task AuthorizeReplayAsync(CreateLeaseAddendumDraftCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(CreateLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class EditLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<EditLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>,
-      IAtomicReplayAuthorizer<EditLeaseAddendumDraftCommand>
+    : IAtomicCommandHandler<EditLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public EditLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        EditLeaseAddendumDraftCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var addendum = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, attempt.Persistence, now)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var addendum = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)
             .Include(item => item.BaseAgreement)
             .Include(item => item.Signers)
@@ -128,22 +133,22 @@ public sealed class EditLeaseAddendumDraftHandler
                 addendum.ReplacesAddendumId, "DraftRevision is stale; reload before editing.");
         }
         if (addendum.BaseAgreement is null || !await LeaseAddendumCommandSupport.ValidateReferencesAsync(
-                command, addendum.BaseAgreement.Currency, attempt.Persistence, ct))
+                command, addendum.BaseAgreement.Currency, _db, ct))
         {
             return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
                 command, addendum.Id, addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision,
                 addendum.ReplacesAddendumId, "The template, signer provenance, and effects are invalid.");
         }
         if (!await LeaseAddendumCommandSupport.ValidateSignerScopeAsync(
-                command, command.Signers, attempt.Leasing, ct))
+                command, command.Signers, _db, context, ct))
         {
             return LeaseAddendumCommandSupport.Error(LeaseAddendumDraftMutationOutcome.InvalidSigners,
                 command, addendum.Id, addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision,
                 addendum.ReplacesAddendumId,
                 "Every Addendum signer must reference its exact relationship party and tenant pair.");
         }
-        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-            command.PortfolioId, 0, command.LeaseManagementId, command.DocumentTemplateId,
+        var sourceVersion = await AtomicLeaseMutationPersistence.ResolveAuthoredDocumentSourceVersionAsync(_db,
+            context, command.PortfolioId, 0, command.LeaseManagementId, command.DocumentTemplateId,
             command.ActorUserId, now, ct);
         if (!sourceVersion.Resolved)
         {
@@ -162,47 +167,49 @@ public sealed class EditLeaseAddendumDraftHandler
         addendum.DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId;
         addendum.UpdatedAtUtc = now;
         addendum.DraftRevision++;
-        attempt.BindSemanticAudit(addendum, LeaseAddendumCommandSupport.Updated(command, addendum.Id,
+        context.BindSemanticAudit(addendum, LeaseAddendumCommandSupport.Updated(command, addendum.Id,
             "Edited Addendum draft terms, signers, and financial effects."));
         foreach (var signer in addendum.Signers)
         {
-            attempt.BindSemanticAudit(signer, new AtomicSemanticAudit(command.PortfolioId,
+            _db.Remove(signer);
+            context.BindSemanticAudit(signer, new AtomicSemanticAudit(command.PortfolioId,
                 nameof(LeaseAddendumSigner), signer.Id, AuditLogOperation.Deleted,
                 UserId: command.ActorUserId, ChangeReason: "Replaced Addendum draft signer snapshot."));
-            attempt.Persistence.Remove(signer);
         }
         foreach (var effect in addendum.FinancialEffects)
         {
-            attempt.BindSemanticAudit(effect, new AtomicSemanticAudit(command.PortfolioId,
+            _db.Remove(effect);
+            context.BindSemanticAudit(effect, new AtomicSemanticAudit(command.PortfolioId,
                 nameof(LeaseAddendumFinancialEffect), effect.Id, AuditLogOperation.Deleted,
                 UserId: command.ActorUserId, ChangeReason: "Replaced Addendum draft financial effect."));
-            attempt.Persistence.Remove(effect);
         }
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var (signerIds, effectIds) = await LeaseAddendumCommandSupport.InsertChildrenAsync(
-            command, addendum.Id, attempt, now, ct);
-        LeaseAddendumCommandSupport.StageOutbox(attempt, command, now, addendum.Id, "addendum-draft-edited");
+            command, addendum.Id, _db, context, now, ct);
+        LeaseAddendumCommandSupport.StageOutbox(context, command, now, addendum.Id, "addendum-draft-edited");
         return new(LeaseAddendumDraftMutationOutcome.Applied, command.LeaseManagementId, addendum.Id,
             addendum.SeriesPublicId, addendum.VersionNumber, addendum.DraftRevision,
             addendum.ReplacesAddendumId, signerIds, effectIds, null);
     }
 
-    public Task AuthorizeReplayAsync(EditLeaseAddendumDraftCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(EditLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 public sealed class CorrectLeaseAddendumDraftHandler
-    : IAtomicCommandHandler<CorrectLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>,
-      IAtomicReplayAuthorizer<CorrectLeaseAddendumDraftCommand>
+    : IAtomicCommandHandler<CorrectLeaseAddendumDraftCommand, LeaseAddendumDraftMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CorrectLeaseAddendumDraftHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<LeaseAddendumDraftMutationResult> HandleAsync(
-        CorrectLeaseAddendumDraftCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         LeaseAddendumCommandSupport.Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var source = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, attempt.Persistence, now)
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        var source = await LeaseAddendumCommandSupport.AuthorizedRelationships(command, _db, now)
             .SelectMany(item => item.Addenda)
             .Where(item => item.Id == command.SourceAddendumId)
             .Select(item => new
@@ -235,7 +242,7 @@ public sealed class CorrectLeaseAddendumDraftHandler
                 "Only the latest executed, nonvoid Addendum can be corrected within its effective range.");
         }
         var existingSuccessor = await LeaseAddendumCommandSupport.LiveCorrectionSuccessors(
-                attempt.Persistence.Query<LeaseAddendum>(),
+                _db.Set<LeaseAddendum>(),
                 command.PortfolioId,
                 command.LeaseManagementId,
                 source.Id)
@@ -247,7 +254,7 @@ public sealed class CorrectLeaseAddendumDraftHandler
                 command, 0, source.SeriesPublicId, source.VersionNumber + 1, 0, source.Id,
                 "The source Addendum already has a durable correction successor.");
         }
-        var nextVersion = await attempt.Persistence.Query<LeaseAddendum>()
+        var nextVersion = await _db.Set<LeaseAddendum>()
             .Where(item => item.PortfolioId == command.PortfolioId
                 && item.LeaseManagementId == command.LeaseManagementId
                 && item.SeriesPublicId == source.SeriesPublicId)
@@ -273,12 +280,12 @@ public sealed class CorrectLeaseAddendumDraftHandler
             UpdatedAtUtc = now,
             DraftRevision = 1,
         };
-        attempt.Persistence.Add(correction);
-        attempt.BindSemanticAudit(correction, LeaseAddendumCommandSupport.Created(command,
+        _db.Add(correction);
+        context.BindSemanticAudit(correction, LeaseAddendumCommandSupport.Created(command,
             "Created a new editable Addendum correction version without changing the issued source."));
-        await attempt.FlushBusinessAsync(ct);
-        var childCopy = await attempt.Leasing.CopyAddendumCorrectionChildrenAsync(
-            command.PortfolioId,
+        await context.FlushBusinessAsync(ct);
+        var childCopy = await AtomicLeaseMutationPersistence.CopyAddendumCorrectionChildrenAsync(_db,
+            context, command.PortfolioId,
             command.LeaseManagementId,
             source.Id,
             correction.Id,
@@ -290,35 +297,34 @@ public sealed class CorrectLeaseAddendumDraftHandler
         }
         foreach (var signerId in childCopy.CreatedSignerIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId, nameof(LeaseAddendumSigner), signerId, AuditLogOperation.Created,
                 UserId: command.ActorUserId,
                 ChangeReason: "Copied signer snapshot into Addendum correction draft."), now);
         }
         foreach (var effectId in childCopy.CreatedFinancialEffectIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId, nameof(LeaseAddendumFinancialEffect), effectId, AuditLogOperation.Created,
                 UserId: command.ActorUserId,
                 ChangeReason: "Copied financial effect into Addendum correction draft."), now);
         }
-        LeaseAddendumCommandSupport.StageOutbox(attempt, command, now, correction.Id,
+        LeaseAddendumCommandSupport.StageOutbox(context, command, now, correction.Id,
             "addendum-correction-draft-created");
         return new(LeaseAddendumDraftMutationOutcome.Applied, command.LeaseManagementId,
             correction.Id, correction.SeriesPublicId, correction.VersionNumber, correction.DraftRevision,
             source.Id, childCopy.CreatedSignerIds, childCopy.CreatedFinancialEffectIds, null);
     }
 
-    public Task AuthorizeReplayAsync(CorrectLeaseAddendumDraftCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+    public Task AuthorizeReplayAsync(CorrectLeaseAddendumDraftCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        LeaseAddendumCommandSupport.AuthorizeReplayAsync(command, _db, ct);
 }
 
 internal static class LeaseAddendumCommandSupport
 {
     internal static IQueryable<LeaseManagement> AuthorizedRelationships(
-        ILeaseAddendumCommand command, IAtomicPersistenceSession persistence, DateTime now) =>
-        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, persistence, now);
+        ILeaseAddendumCommand command, RentalCommandDbContext db, DateTime now) =>
+        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, db, now);
 
     internal static IQueryable<LeaseAddendum> LiveCorrectionSuccessors(
         IQueryable<LeaseAddendum> addenda,
@@ -331,12 +337,12 @@ internal static class LeaseAddendumCommandSupport
             && candidate.DraftCanceledAtUtc == null
             && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null));
 
-    internal static async Task AuthorizeReplayAsync<T>(T command, IAtomicPersistenceSession persistence,
+    internal static async Task AuthorizeReplayAsync<T>(T command, RentalCommandDbContext db,
         CancellationToken ct) where T : ILeaseAddendumCommand
     {
         ValidateAuthorization(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await AuthorizedRelationships(command, persistence, now).AnyAsync(ct)) throw Unauthorized();
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await AuthorizedRelationships(command, db, now).AnyAsync(ct)) throw Unauthorized();
     }
 
     internal static void Validate(CreateLeaseAddendumDraftCommand command)
@@ -419,20 +425,23 @@ internal static class LeaseAddendumCommandSupport
     }
 
     internal static async Task<bool> ValidateReferencesAsync(CreateLeaseAddendumDraftCommand command,
-        string currency, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        string currency, RentalCommandDbContext db, CancellationToken ct) =>
         await ValidateReferencesAsync(command, command.FinancialEffects,
-            command.DocumentTemplateId, currency, persistence, ct);
+            command.DocumentTemplateId, currency, db, ct);
 
     internal static async Task<bool> ValidateReferencesAsync(EditLeaseAddendumDraftCommand command,
-        string currency, IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        string currency, RentalCommandDbContext db, CancellationToken ct) =>
         await ValidateReferencesAsync(command, command.FinancialEffects,
-            command.DocumentTemplateId, currency, persistence, ct);
+            command.DocumentTemplateId, currency, db, ct);
 
     internal static Task<bool> ValidateSignerScopeAsync(
         ILeaseAddendumCommand command,
         IReadOnlyList<LeaseAddendumDraftSignerInput> signers,
-        IAtomicLeaseMutationPersistence persistence,
-        CancellationToken ct) => persistence.ValidateAgreementDraftSignerScopeAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        CancellationToken ct) => AtomicLeaseMutationPersistence.ValidateAgreementDraftSignerScopeAsync(
+            db,
+            context,
             command.PortfolioId,
             command.LeaseManagementId,
             signers.Select(signer => new AtomicAgreementDraftSignerInput(
@@ -447,11 +456,11 @@ internal static class LeaseAddendumCommandSupport
 
     private static async Task<bool> ValidateReferencesAsync(ILeaseAddendumCommand command,
         IReadOnlyList<LeaseAddendumFinancialEffectInput> effects, int templateId,
-        string currency, IAtomicPersistenceSession persistence, CancellationToken ct)
+        string currency, RentalCommandDbContext db, CancellationToken ct)
     {
-        var templateValid = await persistence.Query<LeaseManagement>()
+        var templateValid = await db.Set<LeaseManagement>()
             .Where(item => item.Id == command.LeaseManagementId && item.PortfolioId == command.PortfolioId)
-            .AnyAsync(item => persistence.Query<DocumentTemplate>().Any(template =>
+            .AnyAsync(item => db.Set<DocumentTemplate>().Any(template =>
                     template.Id == templateId && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
@@ -462,18 +471,21 @@ internal static class LeaseAddendumCommandSupport
     }
 
     internal static async Task<(int[] SignerIds, int[] EffectIds)> InsertChildrenAsync(
-        CreateLeaseAddendumDraftCommand command, int addendumId, IAtomicWriteAttempt attempt,
+        CreateLeaseAddendumDraftCommand command, int addendumId, RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now, CancellationToken ct) => await InsertChildrenAsync(command, addendumId,
-            command.Signers, command.FinancialEffects, attempt, now, ct);
+            command.Signers, command.FinancialEffects, db, context, now, ct);
 
     internal static async Task<(int[] SignerIds, int[] EffectIds)> InsertChildrenAsync(
-        EditLeaseAddendumDraftCommand command, int addendumId, IAtomicWriteAttempt attempt,
+        EditLeaseAddendumDraftCommand command, int addendumId, RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now, CancellationToken ct) => await InsertChildrenAsync(command, addendumId,
-            command.Signers, command.FinancialEffects, attempt, now, ct);
+            command.Signers, command.FinancialEffects, db, context, now, ct);
 
     private static async Task<(int[] SignerIds, int[] EffectIds)> InsertChildrenAsync(
         ILeaseAddendumCommand command, int addendumId, IReadOnlyList<LeaseAddendumDraftSignerInput> signerInputs,
-        IReadOnlyList<LeaseAddendumFinancialEffectInput> effectInputs, IAtomicWriteAttempt attempt,
+        IReadOnlyList<LeaseAddendumFinancialEffectInput> effectInputs, RentalCommandDbContext db,
+        IAtomicCommandContext context,
         DateTime now, CancellationToken ct)
     {
         var signers = signerInputs.Select(item => new LeaseAddendumSigner
@@ -492,15 +504,15 @@ internal static class LeaseAddendumCommandSupport
             EffectiveFromOn = item.EffectiveFromOn, EffectiveThroughOn = item.EffectiveThroughOn,
             DueOn = item.DueOn, Description = item.Description.Trim(),
         }).ToArray();
-        attempt.Persistence.AddRange(signers);
-        attempt.Persistence.AddRange(effects);
-        foreach (var signer in signers) attempt.BindSemanticAudit(signer, new AtomicSemanticAudit(
+        db.AddRange(signers);
+        db.AddRange(effects);
+        foreach (var signer in signers) context.BindSemanticAudit(signer, new AtomicSemanticAudit(
             command.PortfolioId, nameof(LeaseAddendumSigner), 0, AuditLogOperation.Created,
             UserId: command.ActorUserId, ChangeReason: "Created Addendum draft signer snapshot."));
-        foreach (var effect in effects) attempt.BindSemanticAudit(effect, new AtomicSemanticAudit(
+        foreach (var effect in effects) context.BindSemanticAudit(effect, new AtomicSemanticAudit(
             command.PortfolioId, nameof(LeaseAddendumFinancialEffect), 0, AuditLogOperation.Created,
             UserId: command.ActorUserId, ChangeReason: "Created Addendum draft financial effect."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         return (signers.Select(item => item.Id).ToArray(), effects.Select(item => item.Id).ToArray());
     }
 
@@ -510,10 +522,10 @@ internal static class LeaseAddendumCommandSupport
     internal static AtomicSemanticAudit Updated(ILeaseAddendumCommand command, int id, string reason) => new(
         command.PortfolioId, nameof(LeaseAddendum), id, AuditLogOperation.Updated,
         UserId: command.ActorUserId, ChangeReason: reason);
-    internal static void StageOutbox(IAtomicWriteAttempt attempt, ILeaseAddendumCommand command,
-        DateTime now, int id, string action) => attempt.StageOutbox(new OutboxMessage
+    internal static void StageOutbox(IAtomicCommandContext context, ILeaseAddendumCommand command,
+        DateTime now, int id, string action) => context.StageOutbox(new OutboxMessage
         {
-            PortfolioId = command.PortfolioId, MessageType = "entity-update",
+            PortfolioId = command.PortfolioId, MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = nameof(LeaseAddendum), entityId = id,
                 leaseManagementId = command.LeaseManagementId, action }),
             IdempotencyKey = command.DeliveryIdempotencyKey, CreatedAtUtc = now, NextAttemptAtUtc = now,

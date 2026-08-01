@@ -13,20 +13,23 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class LateFeeService : ILateFeeService
 {
-    private static readonly AtomicJsonResultCodec<ApplyScheduledTenantChargeBatchResult> ResultCodec =
+    private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> ResultCodec =
         new("scheduled-tenant-charges.late-fee.apply.v1");
     private const int BatchSize = 200;
 
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly TimeProvider _timeProvider;
     private readonly NotificationsConfig _defaults;
     private readonly ILogger<LateFeeService> _logger;
 
     public LateFeeService(
         IAtomicUnitOfWork atomic,
+        TimeProvider timeProvider,
         IOptions<NotificationsConfig> options,
         ILogger<LateFeeService> logger)
     {
         _atomic = atomic;
+        _timeProvider = timeProvider;
         _defaults = options.Value;
         _logger = logger;
     }
@@ -47,12 +50,11 @@ public sealed class LateFeeService : ILateFeeService
                 new AtomicCommandIdentity(
                     "scheduled-tenant-charges.late-fee.apply",
                     runToken.ToString("N")),
-                new ApplyScheduledTenantChargeBatchCommand(
+                new ApplyScheduledLateFeeChargeBatchCommand(
                     runToken,
+                    _timeProvider.GetUtcNow().UtcDateTime,
                     BatchSize,
-                    IncludeRentCharges: false,
-                    IncludeLateFeeCharges: true,
-                    StateLateFeeCapsJson: capsJson),
+                    capsJson),
                 ResultCodec,
                 ct);
 

@@ -67,7 +67,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             FinalizeScanUploadCommand,
             FinalizeScanUploadResult,
             FinalizeScanUploadHandler>();
-        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        services.AddPendingFileUploadStore();
         services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
@@ -179,6 +179,62 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             receipt.CommandType == "scan-upload.finalize")).Should().Be(1);
         (await db.OutboxMessages.CountAsync(message =>
             message.MessageType == "data-update")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Duplicate_content_in_same_active_capture_context_reuses_existing_draft()
+    {
+        SkipIfNoDocker();
+        var first = await UploadAsync("same-scan-first", [Pdf("mortgage.pdf", "same")]);
+        await using (var markReviewing = NewContext())
+        {
+            await markReviewing.ScanDrafts
+                .Where(draft => draft.Id == first.Drafts.Single().DraftId)
+                .ExecuteUpdateAsync(update => update.SetProperty(draft => draft.Status, "Reviewing"));
+        }
+
+        var duplicate = await UploadAsync("same-scan-duplicate", [Pdf("mortgage.pdf", "same")]);
+
+        duplicate.Drafts.Should().BeEquivalentTo(first.Drafts.Select(draft =>
+            new FinalizedScanDraft(draft.DraftId, "Reviewing", draft.FilePath)));
+        await using var db = NewContext();
+        (await db.ScanDrafts.CountAsync()).Should().Be(1);
+        (await db.StoredFiles.CountAsync()).Should().Be(1);
+        var retainedSourceStoredFileId = await db.ScanDrafts
+            .Select(draft => draft.SourceStoredFileId)
+            .SingleAsync();
+        retainedSourceStoredFileId.Should().NotBeNull();
+        (await db.PendingFileUploads.CountAsync(upload =>
+            upload.State == PendingFileUploadState.Finalized
+            && upload.StoredFileId == retainedSourceStoredFileId)).Should().Be(2);
+        (await db.PendingFileUploads.CountAsync(upload =>
+            upload.State == PendingFileUploadState.Finalized)).Should().Be(2);
+        var duplicateCleanup = await db.OutboxMessages.SingleAsync(message =>
+            message.IdempotencyKey.StartsWith("scan-upload-duplicate-blob:"));
+        duplicateCleanup.MessageType.Should().Be("blob-delete");
+        duplicateCleanup.Payload.Should().Contain("mortgage.pdf");
+        (await db.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey.StartsWith("scan-draft-created:"))).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Rejected_or_failed_scan_allows_legitimate_rescan()
+    {
+        SkipIfNoDocker();
+        var first = await UploadAsync("rescan-first", [Pdf("rescan.pdf", "same")]);
+        await using (var reject = NewContext())
+        {
+            await reject.ScanDrafts
+                .Where(draft => draft.Id == first.Drafts.Single().DraftId)
+                .ExecuteUpdateAsync(update => update.SetProperty(draft => draft.Status, "Rejected"));
+        }
+
+        var rescan = await UploadAsync("rescan-second", [Pdf("rescan.pdf", "same")]);
+
+        rescan.Drafts.Single().DraftId.Should().NotBe(first.Drafts.Single().DraftId);
+        await using var db = NewContext();
+        (await db.ScanDrafts.CountAsync()).Should().Be(2);
+        (await db.StoredFiles.CountAsync()).Should().Be(2);
     }
 
     [SkippableFact]
@@ -541,8 +597,7 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         var codec = new AtomicJsonResultCodec<FinalizeScanUploadResult>(
             "scan-upload.finalize.result.v1");
 
-        var rejected = () => _services!.GetRequiredService<IAtomicUnitOfWork>()
-            .ExecuteAsync(identity, command, codec);
+        var rejected = () => ExecuteAtomicAsync(identity, command, codec);
         await rejected.Should().ThrowAsync<InvalidOperationException>();
 
         await using var db = NewContext();
@@ -597,6 +652,19 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     private TestFileStorage Storage => _services!.GetRequiredService<TestFileStorage>();
     private SqlProbe Probe => _services!.GetRequiredService<SqlProbe>();
     private AuditFailureInterceptor Failure => _services!.GetRequiredService<AuditFailureInterceptor>();
+
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is not available; scan-upload PostgreSQL proof skipped.");

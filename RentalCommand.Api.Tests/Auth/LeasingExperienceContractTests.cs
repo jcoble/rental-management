@@ -31,6 +31,8 @@ public sealed class LeasingExperienceContractTests
     {
         var source = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+        var leaseManagementQuerySource = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeaseManagementQueryService.cs");
 
         source.Should().Contain(nameof(CapabilityKeys.LeasingApplicationsManage));
         source.Should().Contain(nameof(CapabilityKeys.LeasingListingsManage));
@@ -52,9 +54,32 @@ public sealed class LeasingExperienceContractTests
             "agreement.Id == (lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId)");
         source.Should().Contain("agreement.FullyExecutedAtUtc != null");
         source.Should().Contain("agreement.VoidedAtUtc == null");
+        leaseManagementQuerySource.Should().Contain("BuildLeaseWorkspaceReadManagementQuery");
+        leaseManagementQuerySource.Should().Contain("[CapabilityKeys.RentalsRead, CapabilityKeys.LeasingAgreementsPrepare]");
         source.Should().NotContain("AgreementFullyExecuted = management.Agreements.Any");
         source.Should().NotContain("AsEnumerable");
         source.Should().NotContain("GroupBy(");
+    }
+
+    [Fact]
+    public void LeasingTodayUsesCanonicalScopeAndCapabilityScopedCounts()
+    {
+        var source = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+
+        source.Should().Contain("public Task<LeasingTodayResponse?> GetTodayAsync");
+        source.Should().Contain("_db.Portfolios");
+        source.Should().Contain("portfolio.Id == scope.PortfolioId");
+        source.Should().NotContain("_db.AuthSessions");
+        source.Should().Contain("scope, CapabilityKeys.LeasingApplicationsManage, now");
+        source.Should().Contain("scope, CapabilityKeys.LeasingListingsManage, now");
+        source.Should().Contain("scope, CapabilityKeys.LeasingShowingsManage, now");
+        source.Should().Contain("[CapabilityKeys.LeasingOnboardingManage], now");
+        source.Should().Contain("ApplicationsToReview = applications.Count");
+        source.Should().Contain("ListingsNeedingAttention = _db.RentalListings.Count");
+        source.Should().Contain("ShowingsToday = _db.Appointments.Count");
+        source.Should().Contain("UpcomingMoveIns = _db.LeaseManagements.Count");
+        source.Should().Contain("UnreadConversations = conversations.Count");
     }
 
     [Fact]
@@ -66,8 +91,14 @@ public sealed class LeasingExperienceContractTests
             "web", "src", "lib", "auth", "experience-policy.ts");
         var detailPage = ReadSource(
             "web", "src", "routes", "(protected)", "leasing", "[record]", "[id]", "+page.svelte");
+        var applicationDetailPage = ReadSource(
+            "web", "src", "routes", "(protected)", "leasing", "applications", "[id]", "+page.svelte");
+        var applicationDetailComponent = ReadSource(
+            "web", "src", "lib", "components", "records", "ApplicationDetail.svelte");
         var workspaceTypes = ReadSource(
             "web", "src", "lib", "api", "endpoints", "leasing-workspace.ts");
+        var workspaceService = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
 
         listPage.Should().Contain("/leasing/rentals/");
         listPage.Should().Contain("/leasing/applications/");
@@ -81,18 +112,43 @@ public sealed class LeasingExperienceContractTests
         detailPage.Should().Contain("<ListingTab unitId={detail.unitId} />");
         detailPage.Should().Contain("{#if detail.canViewApplications}");
         detailPage.Should().Contain("{#if detail.canViewShowings}");
+        detailPage.Should().Contain("activeCapabilities.has(CAPABILITY.leasingAgreementsPrepare)");
+        detailPage.Should().Contain("data-testid=\"leasing-rental-open-agreement-workspace\"");
+        detailPage.Should().Contain("href={`/leases/${detail.leaseManagementId}`}");
+        detailPage.Should().Contain("data-testid=\"leasing-move-in-open-agreement-workspace\"");
+        detailPage.Should().Contain("href={`/leases/${detail.id}`}");
         detailPage.Should().NotContain("units.");
         detailPage.Should().NotContain("properties.");
+        applicationDetailPage.Should().Contain("leasingWorkspace.application(id)");
+        applicationDetailPage.Should().Contain("showApplicationActions={false}");
+        applicationDetailPage.Should().Contain("showScreening={false}");
+        applicationDetailPage.Should().Contain("showTenantLink={false}");
+        applicationDetailPage.Should().Contain("applicationQueryScope=\"leasing\"");
+        applicationDetailPage.Should().NotContain("applications.get");
+        applicationDetailPage.Should().NotContain("applications.screening");
+        applicationDetailComponent.Should().Contain("loadApplication = applications.get");
+        applicationDetailComponent.Should().Contain("queryKey: ['application', applicationQueryScope, id]");
+        applicationDetailComponent.Should().Contain("showScreening && !isNaN(id) && id > 0");
         listPage.Should().Contain("{#if item.canViewApplications || item.canViewShowings}");
         workspaceTypes.Should().Contain("canViewApplications: boolean;");
         workspaceTypes.Should().Contain("canViewShowings: boolean;");
+        workspaceTypes.Should().Contain("leaseManagementId?: number | null;");
+        workspaceTypes.Should().Contain("approvedTenantId?: number | null;");
+        workspaceService.Should().Contain("AuthorizedApplications(scope, _time.GetUtcNow().UtcDateTime)");
+        workspaceService.Should().Contain("ApprovedTenantId = application.ApprovedTenantId");
+        workspaceService.Should().Contain("LeaseManagementId = unit.LeaseManagements");
+        workspaceService.Should().Contain("management.CanceledAtUtc == null");
+        workspaceService.Should().Contain("management.PossessionReturnedAtUtc == null");
         routePolicy.Should().Contain("prefix: '/units', experiences: ['Management']");
         routePolicy.Should().Contain("prefix: '/properties', experiences: ['Management']");
+        routePolicy.Should().Contain("prefix: '/leases',");
+        routePolicy.Should().Contain("CAPABILITY.leasingAgreementsPrepare");
 
         var listingTab = ReadSource(
             "web", "src", "lib", "components", "unit", "tabs", "ListingTab.svelte");
-        listingTab.Should().Contain("let { unitId }: { unitId: number } = $props();");
-        listingTab.Should().NotContain("UnitDashboard");
+        listingTab.Should().Contain("let { unitId: propUnitId, dashboard }");
+        listingTab.Should().Contain("const unitId = $derived(dashboard?.unit.id ?? propUnitId ?? 0);");
+        detailPage.Should().NotContain("dashboard={");
     }
 
     [Fact]
@@ -120,12 +176,24 @@ public sealed class LeasingExperienceContractTests
     }
 
     [Fact]
+    public void LeasingApplicationDetailCarriesApprovedTenantForScopedPrepareMoveIn()
+    {
+        typeof(LeasingApplicationDetailResponse)
+            .GetProperty(nameof(LeasingApplicationDetailResponse.ApprovedTenantId))!
+            .PropertyType.Should().Be(typeof(int?));
+    }
+
+    [Fact]
     public void LeasingRentalDtosDistinguishHiddenFactsFromEmptyFacts()
     {
+        typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.LeaseManagementId))!
+            .PropertyType.Should().Be(typeof(int?));
         typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewApplications))!
             .PropertyType.Should().Be(typeof(bool));
         typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewShowings))!
             .PropertyType.Should().Be(typeof(bool));
+        typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.LeaseManagementId))!
+            .PropertyType.Should().Be(typeof(int?));
         typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewApplications))!
             .PropertyType.Should().Be(typeof(bool));
         typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewShowings))!
@@ -162,12 +230,12 @@ public sealed class LeasingExperienceContractTests
             "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
 
         var sessionLock = handler.IndexOf(
-            "AtomicLockResource.AuthSession, managementAccess.SessionId", StringComparison.Ordinal);
+            "\"AuthSession\", managementAccess.SessionId", StringComparison.Ordinal);
         var contextLock = handler.IndexOf(
-            "AtomicLockResource.WorkspaceAccessContext, managementAccess.AccessContextId",
+            "\"WorkspaceAccessContext\", managementAccess.AccessContextId",
             StringComparison.Ordinal);
         var conversationLock = handler.IndexOf(
-            "AtomicLockResource.Conversation, conversationId", StringComparison.Ordinal);
+            "\"Conversation\", conversationId", StringComparison.Ordinal);
 
         sessionLock.Should().BeGreaterThan(0);
         contextLock.Should().BeGreaterThan(sessionLock);

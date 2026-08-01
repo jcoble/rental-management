@@ -11,6 +11,10 @@ public sealed record MorningBriefingSettingsResponse(
 public sealed record UpdateMorningBriefingSettingsRequest(
     bool Enabled, int SendHourLocal, bool IncludeEmpty);
 
+public sealed record LateFeeAutomationSettingsResponse(
+    bool RentChargesAlwaysOn, bool EnableLateFees, int LateFeeGraceDays);
+public sealed record UpdateLateFeeAutomationSettingsRequest(bool EnableLateFees, int LateFeeGraceDays);
+
 public sealed record TeamRoutingRecipientRequest(int UserId, string Reason);
 public sealed record UpsertTeamRoutingRuleRequest(TeamRoutingTopic Topic, int? PropertyId,
     bool UseWorkspaceAdministratorFallback, IReadOnlyList<TeamRoutingRecipientRequest> Recipients);

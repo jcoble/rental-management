@@ -1,4 +1,6 @@
+using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -17,11 +19,13 @@ public class LoanServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly List<string> _commands = [];
+    private readonly SqliteTestContext _ctx;
     private readonly LoanService _sut;
 
     public LoanServiceTests()
     {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _sut = new LoanService(_ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
     }
 
@@ -95,6 +99,49 @@ public class LoanServiceTests : IDisposable
         schedule[1].PeriodKey.Should().Be("2024-02");
     }
 
+    [Fact]
+    public async Task GetPaymentsAsync_AppliesStatusDueDateSortAndPagingServerSide()
+    {
+        var property = SeedProperty();
+        var loan = SeedLoan(property.Id);
+
+        _ctx.Db.LoanPayments.AddRange(
+            MakePayment(loan, "2024-01", 199_800.90m,
+                dueDate: new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                status: LoanPaymentStatus.Paid),
+            MakePayment(loan, "2024-02", 199_600.80m,
+                dueDate: new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-03", 199_400.70m,
+                dueDate: new DateTime(2024, 3, 1, 0, 0, 0, DateTimeKind.Utc)),
+            MakePayment(loan, "2024-04", 199_200.60m,
+                dueDate: new DateTime(2024, 4, 1, 0, 0, 0, DateTimeKind.Utc)));
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+
+        var schedule = await _sut.GetPaymentsAsync(PortfolioId, loan.Id, new LoanPaymentQuery
+        {
+            Status = LoanPaymentStatus.Scheduled,
+            Sort = "dueDate",
+            Skip = 1,
+            Take = 1,
+        });
+
+        schedule.Should().NotBeNull();
+        schedule!.Should().ContainSingle();
+        schedule[0].PeriodKey.Should().Be("2024-03");
+        _commands.Should().HaveCount(2,
+            "the loan read uses one scope check and one effective schedule reader");
+        var scheduleSql = _commands.Single(sql =>
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.OrdinalIgnoreCase));
+        scheduleSql.Should()
+            .Contain("\"LoanPayments\"")
+            .And.Contain("\"LoanPaymentCorrections\"")
+            .And.Contain("ORDER BY")
+            .And.Contain("LIMIT")
+            .And.Contain("OFFSET");
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -145,18 +192,45 @@ public class LoanServiceTests : IDisposable
         return loan;
     }
 
-    private static LoanPayment MakePayment(Loan loan, string periodKey, decimal balanceAfter) => new()
+    private static LoanPayment MakePayment(
+        Loan loan,
+        string periodKey,
+        decimal balanceAfter,
+        DateTime? dueDate = null,
+        LoanPaymentStatus status = LoanPaymentStatus.Scheduled) => new()
     {
         PortfolioId = loan.PortfolioId,
         LoanId = loan.Id,
         PeriodKey = periodKey,
-        DueDate = DateTime.UtcNow,
+        DueDate = dueDate ?? DateTime.UtcNow,
         InterestAmount = 1000m,
         PrincipalAmount = 199.10m,
         EscrowAmount = 0m,
         TotalAmount = 1199.10m,
         BalanceAfter = balanceAfter,
-        Status = LoanPaymentStatus.Scheduled,
+        Status = status,
         CreatedAt = DateTime.UtcNow,
     };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }

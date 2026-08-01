@@ -44,6 +44,7 @@ services:
       Jwt__Audience: RentalCommandWeb
       Cors__AllowedOrigins__0: ${WEB_ORIGIN}
       App__WebBaseUrl: ${WEB_ORIGIN}
+      Simulation__Enabled: "true"
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
       Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
@@ -91,6 +92,7 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
+      Simulation__Enabled: "true"
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
       Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
@@ -129,6 +131,7 @@ services:
       PORT: "3000"
       ORIGIN: ${WEB_ORIGIN}
       API_URL: http://api:8080
+      PUBLIC_SIMULATION_ENABLED: "true"
       PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
     depends_on: [api]

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 
 namespace RentalCommand.Data.Outbox;
 
@@ -40,7 +41,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
 {
     private const string ClaimSql = """
         WITH clock AS MATERIALIZED (
-            SELECT clock_timestamp() AS now_utc
+            SELECT COALESCE(@effectiveNowUtc, clock_timestamp()) AS now_utc
         ), candidates AS (
             SELECT candidate."Id"
             FROM "OutboxMessages" AS candidate
@@ -74,7 +75,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         """;
 
     private const string MarkAcceptedSql = """
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        WITH clock AS MATERIALIZED (SELECT COALESCE(@effectiveNowUtc, clock_timestamp()) AS now_utc)
         UPDATE "OutboxMessages" AS message
         SET "AcceptedAtUtc" = clock.now_utc,
             "Provider" = @provider,
@@ -91,7 +92,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         """;
 
     private const string MarkRetryableSql = """
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        WITH clock AS MATERIALIZED (SELECT COALESCE(@effectiveNowUtc, clock_timestamp()) AS now_utc)
         UPDATE "OutboxMessages" AS message
         SET "NextAttemptAtUtc" = clock.now_utc + @retryDelay,
             "FailureKind" = @failureKind,
@@ -106,7 +107,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         """;
 
     private const string MarkDeadLetteredSql = """
-        WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now_utc)
+        WITH clock AS MATERIALIZED (SELECT COALESCE(@effectiveNowUtc, clock_timestamp()) AS now_utc)
         UPDATE "OutboxMessages" AS message
         SET "DeadLetteredAtUtc" = clock.now_utc,
             "FailureKind" = @failureKind,
@@ -121,8 +122,16 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         """;
 
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public OutboxClaimStore(RentalCommandDbContext db) => _db = db;
+    public OutboxClaimStore(RentalCommandDbContext db)
+        : this(db, TimeProvider.System) { }
+
+    public OutboxClaimStore(RentalCommandDbContext db, TimeProvider timeProvider)
+    {
+        _db = db;
+        _timeProvider = timeProvider;
+    }
 
     public async Task<IReadOnlyList<OutboxClaim>> ClaimAsync(
         string claimOwner,
@@ -143,6 +152,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         {
             await using var command = connection.CreateCommand();
             command.CommandText = ClaimSql;
+            command.Parameters.Add(EffectiveNowParameter());
             command.Parameters.Add(new NpgsqlParameter("claimOwner", NpgsqlDbType.Text) { Value = claimOwner });
             command.Parameters.Add(new NpgsqlParameter("leaseDuration", NpgsqlDbType.Interval) { Value = leaseDuration });
             command.Parameters.Add(new NpgsqlParameter("batchSize", NpgsqlDbType.Integer) { Value = batchSize });
@@ -223,6 +233,7 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         {
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
+            command.Parameters.Add(EffectiveNowParameter());
             command.Parameters.Add(new NpgsqlParameter("id", NpgsqlDbType.Bigint) { Value = id });
             command.Parameters.Add(new NpgsqlParameter("claimToken", NpgsqlDbType.Uuid) { Value = claimToken });
             foreach (var parameter in parameters) command.Parameters.Add(parameter);
@@ -238,4 +249,12 @@ public sealed class OutboxClaimStore : IOutboxClaimStore
         string.IsNullOrWhiteSpace(error)
             ? "Delivery failed without an error message."
             : error.Length <= 4000 ? error : error[..4000];
+
+    private NpgsqlParameter EffectiveNowParameter() =>
+        new("effectiveNowUtc", NpgsqlDbType.TimestampTz)
+        {
+            Value = ReferenceEquals(_timeProvider, TimeProvider.System)
+                ? DBNull.Value
+                : (object)_timeProvider.UtcNow()
+        };
 }

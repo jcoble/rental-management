@@ -40,6 +40,24 @@ describe('security deposit tenant-account read contract', () => {
 		assert.doesNotMatch(detailPageSource, /deposit\.id/);
 	});
 
+	it('uses the API business date for deposit money date defaults and Today shortcuts', () => {
+		assert.match(detailPageSource, /const businessDate = \$derived\(deposit\?\.businessDate\?\.slice\(0, 10\) \|\| today\(\)\)/);
+		assert.match(detailPageSource, /fundEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /deductionEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /refundEffectiveOn = businessDate/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-fund-date"/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-deduction-date"/);
+		assert.match(detailPageSource, /todayValue=\{businessDate\} testid="deposit-refund-date"/);
+	});
+
+	it('carries scanned source provenance into deposit funding from the scan handoff', () => {
+		assert.match(detailPageSource, /positiveQueryInt\(page\.url\.searchParams\.get\('sourceStoredFileId'\)\)/);
+		assert.match(detailPageSource, /positiveQueryInt\(page\.url\.searchParams\.get\('sourceDraftId'\)\)/);
+		assert.match(detailPageSource, /openFund\(\)/);
+		assert.match(detailPageSource, /data-testid="deposit-fund-source"/);
+		assert.match(detailPageSource, /body\.sourceStoredFileId = sourceStoredFileId/);
+	});
+
 	it('sends canonical database sort fields from the server-side grid', () => {
 		assert.match(listPageSource, /key: 'propertyName'/);
 		assert.match(listPageSource, /key: 'heldBalance'/);

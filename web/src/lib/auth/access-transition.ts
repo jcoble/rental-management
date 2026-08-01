@@ -1,6 +1,5 @@
 import type { QueryClient } from '@tanstack/svelte-query';
 import type { AccessEnvelope } from '$lib/types/user';
-import { assistantChat } from '$lib/stores/assistantChat.svelte';
 import { notificationStore } from '$lib/stores/notifications.svelte';
 import { initPortfolio } from '$lib/stores/portfolio.svelte';
 
@@ -10,7 +9,6 @@ export function resetAccessDependentClientState(
 	access: AccessEnvelope
 ): void {
 	queryClient.clear();
-	assistantChat.resetForAccessChange();
 	notificationStore.resetForAccessChange();
 	initPortfolio(access.selectedContext.portfolioId);
 }

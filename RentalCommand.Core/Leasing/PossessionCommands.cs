@@ -7,10 +7,11 @@ public sealed record GivePossessionCommand(
     int LeaseManagementId,
     int UnitId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum GivePossessionOutcome
 {
@@ -27,7 +28,38 @@ public sealed record GivePossessionResult(
     int LeaseManagementId,
     int UnitId,
     DateTime? PossessionGivenAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);
+
+public sealed record ReconcileHistoricalPossessionCommand(
+    int PortfolioId,
+    int LeaseManagementId,
+    int UnitId,
+    DateOnly PossessionGivenOn,
+    int CreatedByUserId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public enum ReconcileHistoricalPossessionOutcome
+{
+    Reconciled,
+    AlreadyReconciled,
+    RelationshipNotEligible,
+    AgreementNotExecuted,
+    AccountNotOpen,
+    DateOutsideAgreementTerm,
+    DateAfterBusinessDate,
+    UnitUnavailable,
+}
+
+public sealed record ReconcileHistoricalPossessionResult(
+    ReconcileHistoricalPossessionOutcome Outcome,
+    int LeaseManagementId,
+    int UnitId,
+    DateTime? PossessionGivenAtUtc,
+    string? Error);
 
 /// <summary>
 /// Confirms the complete physical move-in as one receipt-backed command. The handler derives the
@@ -43,10 +75,11 @@ public sealed record ConfirmMoveInCommand(
     string? DepositExternalReference,
     int? MoveInAppointmentId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum ConfirmMoveInOutcome
 {
@@ -69,7 +102,7 @@ public sealed record ConfirmMoveInResult(
     long? SecurityDepositEntryId,
     long? TenantLedgerEntryId,
     int? CompletedAppointmentId,
-    string? Error) : IAtomicResultData;
+    string? Error);
 
 public enum ReturnPartyDisposition
 {
@@ -96,13 +129,14 @@ public sealed record ReturnPossessionCommand(
     int LeaseManagementId,
     int UnitId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
     IReadOnlyList<ReturnPossessionParty> Parties,
     IReadOnlyList<ReturnPossessionAccess> Accesses,
     string TurnoverReason,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum ReturnPossessionOutcome
 {
@@ -120,17 +154,18 @@ public sealed record ReturnPossessionResult(
     int UnitId,
     int? TurnoverPeriodId,
     DateTime? PossessionReturnedAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);
 
 public sealed record CompleteTurnoverCommand(
     int PortfolioId,
     int UnitId,
     int TurnoverPeriodId,
     int CreatedByUserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public enum CompleteTurnoverOutcome
 {
@@ -144,4 +179,4 @@ public sealed record CompleteTurnoverResult(
     int UnitId,
     int TurnoverPeriodId,
     DateTime? CompletedAtUtc,
-    string? Error) : IAtomicResultData;
+    string? Error);

@@ -13,26 +13,31 @@ using RentalCommand.Data.Payments;
 namespace RentalCommand.Data.Leasing;
 
 public sealed class GivePossessionHandler
-    : IAtomicCommandHandler<GivePossessionCommand, GivePossessionResult>,
-      IAtomicReplayAuthorizer<GivePossessionCommand>
+    : IAtomicCommandHandler<GivePossessionCommand, GivePossessionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public GivePossessionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<GivePossessionResult> HandleAsync(
         GivePossessionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, command.LeaseManagementId,
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
+            command.ExpectedAccessRevision, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
 
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
 
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
         var target = await PossessionCommandAuthorization.AuthorizedRelationships(
-                attempt.Persistence, command.PortfolioId, command.LeaseManagementId, command.UnitId,
+                _db, command.PortfolioId, command.LeaseManagementId, command.UnitId,
                 command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, nowUtc)
+                command.ExpectedAccessRevision, businessNowUtc, securityNowUtc)
             .Select(relationship => new GiveTarget(
                 relationship,
                 relationship.TenantAccount != null && relationship.TenantAccount.ClosedAtUtc == null,
@@ -41,22 +46,22 @@ public sealed class GivePossessionHandler
                     && agreement.ExecutedArtifactId != null
                     && agreement.VoidedAtUtc == null
                     && agreement.DraftCanceledAtUtc == null
-                    && attempt.Persistence.Query<LeaseAgreementStatusProjection>().Any(status =>
+                    && _db.Set<LeaseAgreementStatusProjection>().Any(status =>
                         status.PortfolioId == command.PortfolioId
                         && status.LeaseManagementId == relationship.Id
                         && status.AgreementId == agreement.Id
                         && status.IsGoverning)),
-                attempt.Persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                _db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
                     lifecycle.PortfolioId == command.PortfolioId
                     && lifecycle.LeaseManagementId == relationship.Id
                     && lifecycle.CurrentResidentCount > 0),
-                attempt.Persistence.Query<LeaseManagement>().Any(other =>
+                _db.Set<LeaseManagement>().Any(other =>
                     other.PortfolioId == command.PortfolioId
                     && other.UnitId == command.UnitId
                     && other.Id != relationship.Id
                     && other.PossessionGivenAtUtc != null
                     && other.PossessionReturnedAtUtc == null),
-                attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
+                _db.Set<UnitOperationalPeriod>().Any(period =>
                     period.PortfolioId == command.PortfolioId
                     && period.UnitId == command.UnitId
                     && period.EndedAtUtc == null)))
@@ -69,7 +74,7 @@ public sealed class GivePossessionHandler
         if (target.Relationship.CanceledAtUtc is not null || target.Relationship.PossessionReturnedAtUtc is not null)
         {
             return Empty(GivePossessionOutcome.RelationshipNotEligible, command,
-                "The lease relationship is not eligible for possession.");
+                "The lease relationship is not eligible for posdb.");
         }
         if (target.Relationship.PossessionGivenAtUtc is not null)
         {
@@ -96,29 +101,29 @@ public sealed class GivePossessionHandler
                 "The unit has conflicting possession or an open operational period.");
         }
 
-        target.Relationship.PossessionGivenAtUtc = nowUtc;
-        target.Relationship.UpdatedAtUtc = nowUtc;
+        target.Relationship.PossessionGivenAtUtc = businessNowUtc;
+        target.Relationship.UpdatedAtUtc = businessNowUtc;
         target.Relationship.RowVersion = Guid.NewGuid();
-        attempt.BindSemanticAudit(target.Relationship, Updated(command.PortfolioId, command.LeaseManagementId,
+        context.BindSemanticAudit(target.Relationship, Updated(command.PortfolioId, command.LeaseManagementId,
             command.CreatedByUserId, "Possession given under an executed governing agreement."));
-        attempt.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
-            nowUtc, "possession-given", nameof(LeaseManagement), command.LeaseManagementId,
+        context.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
+            businessNowUtc, "possession-given", nameof(LeaseManagement), command.LeaseManagementId,
             command.LeaseManagementId, command.UnitId));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
 
-        return new(GivePossessionOutcome.Given, command.LeaseManagementId, command.UnitId, nowUtc, null);
+        return new(GivePossessionOutcome.Given, command.LeaseManagementId, command.UnitId, businessNowUtc, null);
     }
 
-    public async Task AuthorizeReplayAsync(GivePossessionCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(GivePossessionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, command.LeaseManagementId,
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await PossessionCommandAuthorization.AuthorizedRelationships(persistence, command.PortfolioId,
+            command.ExpectedAccessRevision, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await PossessionCommandAuthorization.AuthorizedRelationships(_db, command.PortfolioId,
                 command.LeaseManagementId, command.UnitId, command.CreatedByUserId, command.AuthSessionId,
-                command.AccessContextId, command.ExpectedAccessRevision, nowUtc).AnyAsync(ct))
+                command.AccessContextId, command.ExpectedAccessRevision, command.BusinessNowUtc,
+                securityNowUtc).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException("The lease relationship is not authorized in the current property scope.");
         }
@@ -136,28 +141,278 @@ public sealed class GivePossessionHandler
         bool HasOpenOperationalPeriod);
 }
 
+public sealed class ReconcileHistoricalPossessionHandler
+    : IAtomicCommandHandler<ReconcileHistoricalPossessionCommand, ReconcileHistoricalPossessionResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public ReconcileHistoricalPossessionHandler(RentalCommandDbContext db) => _db = db;
+
+    private const string EligibleExceptionCode = "GoverningAgreementWithoutPossession";
+
+    public async Task<ReconcileHistoricalPossessionResult> HandleAsync(
+        ReconcileHistoricalPossessionCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
+
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        var target = await LoadTarget(command, _db, businessNowUtc, securityNowUtc)
+            .SingleOrDefaultAsync(ct);
+
+        if (target is null)
+        {
+            throw new UnauthorizedAccessException(
+                "The lease relationship is not authorized in the current property scope.");
+        }
+        if (target.Relationship.CanceledAtUtc is not null
+            || target.Relationship.PossessionReturnedAtUtc is not null
+            || !target.HasOnlyGoverningAgreementWithoutPossessionException)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.RelationshipNotEligible, command,
+                "Historical possession can only reconcile a governing agreement without posdb.");
+        }
+        if (target.Relationship.PossessionGivenAtUtc is not null)
+        {
+            return new ReconcileHistoricalPossessionResult(
+                ReconcileHistoricalPossessionOutcome.AlreadyReconciled,
+                command.LeaseManagementId,
+                command.UnitId,
+                target.Relationship.PossessionGivenAtUtc,
+                "Possession has already been reconciled.");
+        }
+        if (!target.HasCurrentResident)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.RelationshipNotEligible, command,
+                "The lease relationship has no current resident party.");
+        }
+        if (!target.HasOpenAccount)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.AccountNotOpen, command,
+                "The tenant account must be open.");
+        }
+        if (!target.HasExecutedGoverningAgreement
+            || target.GoverningTermStartOn is null)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.AgreementNotExecuted, command,
+                "An executed governing agreement is required before possession can be reconciled.");
+        }
+        if (command.PossessionGivenOn > target.BusinessDate)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.DateAfterBusinessDate, command,
+                "Possession date cannot be after the current business date.");
+        }
+        if (command.PossessionGivenOn < target.GoverningTermStartOn.Value
+            || (target.GoverningTermEndOn is { } endOn && command.PossessionGivenOn > endOn))
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.DateOutsideAgreementTerm, command,
+                "Possession date must fall within the governing agreement term.");
+        }
+        if (target.HasOtherPossession || target.HasOpenOperationalPeriod)
+        {
+            return Empty(ReconcileHistoricalPossessionOutcome.UnitUnavailable, command,
+                "The unit has conflicting possession or an open operational period.");
+        }
+
+        var possessionGivenAtUtc = command.PossessionGivenOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        target.Relationship.PossessionGivenAtUtc = possessionGivenAtUtc;
+        target.Relationship.UpdatedAtUtc = businessNowUtc;
+        target.Relationship.RowVersion = Guid.NewGuid();
+        context.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(LeaseManagement),
+            command.LeaseManagementId,
+            AuditLogOperation.Updated,
+            UserId: command.CreatedByUserId,
+            ChangeReason: "Historical possession reconciled under an executed governing agreement."));
+        context.StageOutbox(PossessionOutbox.Create(
+            command.PortfolioId,
+            command.DeliveryIdempotencyKey,
+            businessNowUtc,
+            "historical-possession-reconciled",
+            nameof(LeaseManagement),
+            command.LeaseManagementId,
+            command.LeaseManagementId,
+            command.UnitId));
+        await context.FlushBusinessAsync(ct);
+
+        return new ReconcileHistoricalPossessionResult(
+            ReconcileHistoricalPossessionOutcome.Reconciled,
+            command.LeaseManagementId,
+            command.UnitId,
+            possessionGivenAtUtc,
+            null);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ReconcileHistoricalPossessionCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        Validate(command);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await PossessionCommandAuthorization.AuthorizedRelationships(
+                _db,
+                command.PortfolioId,
+                command.LeaseManagementId,
+                command.UnitId,
+                command.CreatedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision,
+                command.BusinessNowUtc,
+                securityNowUtc)
+            .AnyAsync(ct))
+        {
+            throw new UnauthorizedAccessException(
+                "The lease relationship is not authorized in the current property scope.");
+        }
+    }
+
+    internal static IQueryable<HistoricalPossessionTarget> LoadTarget(
+        ReconcileHistoricalPossessionCommand command,
+        RentalCommandDbContext db,
+        DateTime businessNowUtc,
+        DateTime securityNowUtc)
+    {
+        var statuses = db.Set<LeaseAgreementStatusProjection>();
+        var exceptions = db.Set<LeaseReconciliationExceptionProjection>();
+        return PossessionCommandAuthorization.AuthorizedRelationships(
+                db,
+                command.PortfolioId,
+                command.LeaseManagementId,
+                command.UnitId,
+                command.CreatedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision,
+                businessNowUtc,
+                securityNowUtc)
+            .Select(relationship => new HistoricalPossessionTarget(
+                relationship,
+                db.Set<LeaseManagementLifecycleProjection>()
+                    .Where(lifecycle => lifecycle.PortfolioId == command.PortfolioId
+                        && lifecycle.LeaseManagementId == relationship.Id)
+                    .Select(lifecycle => lifecycle.BusinessDate)
+                    .FirstOrDefault(),
+                relationship.TenantAccount != null
+                    && relationship.TenantAccount.ClosedAtUtc == null,
+                relationship.Agreements.Any(agreement =>
+                    agreement.FullyExecutedAtUtc != null
+                    && agreement.ExecutedArtifactId != null
+                    && agreement.VoidedAtUtc == null
+                    && agreement.DraftCanceledAtUtc == null
+                    && statuses.Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning)),
+                relationship.Agreements
+                    .Where(agreement => statuses.Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning))
+                    .Select(agreement => (DateOnly?)agreement.TermStartOn)
+                    .FirstOrDefault(),
+                relationship.Agreements
+                    .Where(agreement => statuses.Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning))
+                    .Select(agreement => agreement.TermEndOn)
+                    .FirstOrDefault(),
+                db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                    lifecycle.PortfolioId == command.PortfolioId
+                    && lifecycle.LeaseManagementId == relationship.Id
+                    && lifecycle.CurrentResidentCount > 0),
+                exceptions.Any(candidate =>
+                    candidate.PortfolioId == command.PortfolioId
+                    && candidate.LeaseManagementId == relationship.Id
+                    && candidate.ExceptionCode == EligibleExceptionCode)
+                && !exceptions.Any(candidate =>
+                    candidate.PortfolioId == command.PortfolioId
+                    && candidate.LeaseManagementId == relationship.Id
+                    && candidate.ExceptionCode != EligibleExceptionCode),
+                db.Set<LeaseManagement>().Any(other =>
+                    other.PortfolioId == command.PortfolioId
+                    && other.UnitId == command.UnitId
+                    && other.Id != relationship.Id
+                    && other.PossessionGivenAtUtc != null
+                    && other.PossessionReturnedAtUtc == null),
+                db.Set<UnitOperationalPeriod>().Any(period =>
+                    period.PortfolioId == command.PortfolioId
+                    && period.UnitId == command.UnitId
+                    && period.EndedAtUtc == null)));
+    }
+
+    private static void Validate(ReconcileHistoricalPossessionCommand command)
+    {
+        PossessionCommandAuthorization.ValidateShape(
+            command.PortfolioId,
+            command.LeaseManagementId,
+            command.UnitId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            command.BusinessNowUtc,
+            command.DeliveryIdempotencyKey);
+        if (command.PossessionGivenOn == default)
+        {
+            throw new ArgumentException("A historical possession date is required.");
+        }
+    }
+
+    private static ReconcileHistoricalPossessionResult Empty(
+        ReconcileHistoricalPossessionOutcome outcome,
+        ReconcileHistoricalPossessionCommand command,
+        string error) => new(outcome, command.LeaseManagementId, command.UnitId, null, error);
+
+    internal sealed record HistoricalPossessionTarget(
+        LeaseManagement Relationship,
+        DateOnly BusinessDate,
+        bool HasOpenAccount,
+        bool HasExecutedGoverningAgreement,
+        DateOnly? GoverningTermStartOn,
+        DateOnly? GoverningTermEndOn,
+        bool HasCurrentResident,
+        bool HasOnlyGoverningAgreementWithoutPossessionException,
+        bool HasOtherPossession,
+        bool HasOpenOperationalPeriod);
+}
+
 /// <summary>
 /// One transaction for the Unit Command Center's physical move-in confirmation. Deposit funding,
 /// possession, and the optional MoveIn appointment completion either all commit with one receipt or
 /// all roll back. Account ids and the governing deposit amount are always resolved in PostgreSQL.
 /// </summary>
 public sealed class ConfirmMoveInHandler
-    : IAtomicCommandHandler<ConfirmMoveInCommand, ConfirmMoveInResult>,
-      IAtomicReplayAuthorizer<ConfirmMoveInCommand>
+    : IAtomicCommandHandler<ConfirmMoveInCommand, ConfirmMoveInResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ConfirmMoveInHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ConfirmMoveInResult> HandleAsync(
         ConfirmMoveInCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        await context.AcquireLockAsync(
+            "LeaseManagement", command.LeaseManagementId, ct);
 
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        attempt.UseDatabaseWallClockForAudit(nowUtc);
-        var target = await LoadTarget(command, attempt.Persistence, nowUtc).SingleOrDefaultAsync(ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        var target = await LoadTarget(command, _db, businessNowUtc, securityNowUtc)
+            .SingleOrDefaultAsync(ct);
         if (target is null)
         {
             throw new UnauthorizedAccessException(
@@ -167,7 +422,7 @@ public sealed class ConfirmMoveInHandler
             || target.Relationship.PossessionReturnedAtUtc is not null)
         {
             return Empty(ConfirmMoveInOutcome.RelationshipNotEligible, command,
-                "The lease relationship is not eligible for possession.");
+                "The lease relationship is not eligible for posdb.");
         }
         if (target.Relationship.PossessionGivenAtUtc is not null)
         {
@@ -206,7 +461,7 @@ public sealed class ConfirmMoveInHandler
         Appointment? appointment = null;
         if (command.MoveInAppointmentId is { } appointmentId)
         {
-            appointment = await attempt.Persistence.Query<Appointment>()
+            appointment = await _db.Set<Appointment>()
                 .Where(candidate => candidate.Id == appointmentId
                     && candidate.PortfolioId == command.PortfolioId
                     && candidate.PropertyId == target.PropertyId
@@ -238,16 +493,16 @@ public sealed class ConfirmMoveInHandler
                     "Deposit received date and payment method are required.");
             }
 
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.TenantAccount, target.TenantAccountId.Value, ct);
+            await context.AcquireLockAsync(
+                "TenantAccount", target.TenantAccountId.Value, ct);
             var depositCommand = DepositCommand(
                 command,
                 target.TenantAccountId.Value,
                 target.SecurityDepositAccountId.Value,
                 target.GoverningAgreementNumber,
                 depositAmount);
-            fundedDeposit = await new FundSecurityDepositHandler()
-                .HandleAsync(depositCommand, attempt, ct);
+            fundedDeposit = await new FundSecurityDepositHandler(_db)
+                .HandleAsync(depositCommand, context, ct);
             if (!fundedDeposit.Applied)
             {
                 return Empty(ConfirmMoveInOutcome.DepositConflict, command,
@@ -255,20 +510,20 @@ public sealed class ConfirmMoveInHandler
             }
         }
 
-        target.Relationship.PossessionGivenAtUtc = nowUtc;
-        target.Relationship.UpdatedAtUtc = nowUtc;
+        target.Relationship.PossessionGivenAtUtc = businessNowUtc;
+        target.Relationship.UpdatedAtUtc = businessNowUtc;
         target.Relationship.RowVersion = Guid.NewGuid();
-        attempt.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(
+        context.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(
             command.PortfolioId,
             nameof(LeaseManagement),
             command.LeaseManagementId,
             AuditLogOperation.Updated,
             UserId: command.CreatedByUserId,
             ChangeReason: "Move-in confirmed under an executed governing agreement."));
-        attempt.StageOutbox(PossessionOutbox.Create(
+        context.StageOutbox(PossessionOutbox.Create(
             command.PortfolioId,
             $"{command.DeliveryIdempotencyKey}:possession",
-            nowUtc,
+            businessNowUtc,
             "move-in-confirmed",
             nameof(LeaseManagement),
             command.LeaseManagementId,
@@ -278,8 +533,8 @@ public sealed class ConfirmMoveInHandler
         if (appointment is not null)
         {
             appointment.Status = AppointmentStatus.Completed;
-            appointment.UpdatedAt = nowUtc;
-            attempt.BindSemanticAudit(appointment, new AtomicSemanticAudit(
+            appointment.UpdatedAt = businessNowUtc;
+            context.BindSemanticAudit(appointment, new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(Appointment),
                 appointment.Id,
@@ -287,10 +542,10 @@ public sealed class ConfirmMoveInHandler
                 UserId: command.CreatedByUserId,
                 NewValues: JsonSerializer.Serialize(new { appointment.Status }),
                 ChangeReason: "Completed when move-in was confirmed."));
-            attempt.StageOutbox(PossessionOutbox.Create(
+            context.StageOutbox(PossessionOutbox.Create(
                 command.PortfolioId,
                 $"{command.DeliveryIdempotencyKey}:appointment",
-                nowUtc,
+                businessNowUtc,
                 "move-in-appointment-completed",
                 nameof(Appointment),
                 appointment.Id,
@@ -298,12 +553,12 @@ public sealed class ConfirmMoveInHandler
                 command.UnitId));
         }
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         return new ConfirmMoveInResult(
             ConfirmMoveInOutcome.Confirmed,
             command.LeaseManagementId,
             command.UnitId,
-            nowUtc,
+            businessNowUtc,
             fundedDeposit?.SecurityDepositEntryId,
             fundedDeposit?.TenantLedgerEntryId,
             appointment?.Id,
@@ -311,13 +566,11 @@ public sealed class ConfirmMoveInHandler
     }
 
     public async Task AuthorizeReplayAsync(
-        ConfirmMoveInCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        ConfirmMoveInCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var target = await LoadTarget(command, persistence, nowUtc)
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var target = await LoadTarget(command, _db, command.BusinessNowUtc, securityNowUtc)
             .Select(candidate => new
             {
                 candidate.PropertyId,
@@ -338,8 +591,9 @@ public sealed class ConfirmMoveInHandler
                     command.ExpectedAccessRevision),
                 target.PropertyId,
                 CapabilityKeys.MoneyDepositsManage,
-                persistence,
-                nowUtc,
+                _db,
+                command.BusinessNowUtc,
+                securityNowUtc,
                 ct))
         {
             throw new UnauthorizedAccessException(
@@ -349,12 +603,13 @@ public sealed class ConfirmMoveInHandler
 
     private static IQueryable<ConfirmMoveInTarget> LoadTarget(
         ConfirmMoveInCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime nowUtc)
+        RentalCommandDbContext db,
+        DateTime businessNowUtc,
+        DateTime securityNowUtc)
     {
-        var statuses = persistence.Query<LeaseAgreementStatusProjection>();
+        var statuses = db.Set<LeaseAgreementStatusProjection>();
         return PossessionCommandAuthorization.AuthorizedRelationships(
-                persistence,
+                db,
                 command.PortfolioId,
                 command.LeaseManagementId,
                 command.UnitId,
@@ -362,7 +617,8 @@ public sealed class ConfirmMoveInHandler
                 command.AuthSessionId,
                 command.AccessContextId,
                 command.ExpectedAccessRevision,
-                nowUtc)
+                businessNowUtc,
+                securityNowUtc)
             .Select(relationship => new ConfirmMoveInTarget(
                 relationship,
                 relationship.PropertyId,
@@ -398,17 +654,17 @@ public sealed class ConfirmMoveInHandler
                         && status.IsGoverning))
                     .Select(agreement => agreement.AgreementNumber)
                     .FirstOrDefault(),
-                persistence.Query<LeaseManagement>().Any(other =>
+                db.Set<LeaseManagement>().Any(other =>
                     other.PortfolioId == command.PortfolioId
                     && other.UnitId == command.UnitId
                     && other.Id != relationship.Id
                     && other.PossessionGivenAtUtc != null
                     && other.PossessionReturnedAtUtc == null),
-                persistence.Query<UnitOperationalPeriod>().Any(period =>
+                db.Set<UnitOperationalPeriod>().Any(period =>
                     period.PortfolioId == command.PortfolioId
                     && period.UnitId == command.UnitId
                     && period.EndedAtUtc == null),
-                persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                db.Set<LeaseManagementLifecycleProjection>().Any(lifecycle =>
                     lifecycle.PortfolioId == command.PortfolioId
                     && lifecycle.LeaseManagementId == relationship.Id
                     && lifecycle.CurrentResidentCount > 0)));
@@ -447,6 +703,7 @@ public sealed class ConfirmMoveInHandler
             command.AuthSessionId,
             command.AccessContextId,
             command.ExpectedAccessRevision,
+            command.BusinessNowUtc,
             command.DeliveryIdempotencyKey);
         if (command.MoveInAppointmentId is <= 0
             || command.DepositPaymentMethodSummary?.Trim().Length > 200
@@ -488,23 +745,28 @@ public sealed class ConfirmMoveInHandler
 }
 
 public sealed class ReturnPossessionHandler
-    : IAtomicCommandHandler<ReturnPossessionCommand, ReturnPossessionResult>,
-      IAtomicReplayAuthorizer<ReturnPossessionCommand>
+    : IAtomicCommandHandler<ReturnPossessionCommand, ReturnPossessionResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ReturnPossessionHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ReturnPossessionResult> HandleAsync(
         ReturnPossessionCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        await context.AcquireLockAsync("LeaseManagement", command.LeaseManagementId, ct);
 
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
         var authorized = await PossessionCommandAuthorization.AuthorizedRelationships(
-                attempt.Persistence, command.PortfolioId, command.LeaseManagementId, command.UnitId,
+                _db, command.PortfolioId, command.LeaseManagementId, command.UnitId,
                 command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, nowUtc)
+                command.ExpectedAccessRevision, businessNowUtc, securityNowUtc)
             .AnyAsync(ct);
 
         if (!authorized)
@@ -512,8 +774,8 @@ public sealed class ReturnPossessionHandler
             throw new UnauthorizedAccessException("The lease relationship is not authorized in the current property scope.");
         }
 
-        var mutation = await attempt.Leasing.ReturnPossessionAsync(
-            command.PortfolioId,
+        var mutation = await AtomicLeaseMutationPersistence.ReturnPossessionAsync(_db,
+            context, command.PortfolioId,
             command.LeaseManagementId,
             command.UnitId,
             command.Parties.Select(item => new AtomicReturnPossessionPartyInput(
@@ -521,7 +783,7 @@ public sealed class ReturnPossessionHandler
             command.Accesses.Select(item => new AtomicReturnPossessionAccessInput(
                 item.TenantUserAccessId, item.Disposition)).ToArray(),
             command.CreatedByUserId,
-            nowUtc,
+            businessNowUtc,
             command.TurnoverReason,
             ct);
 
@@ -547,42 +809,42 @@ public sealed class ReturnPossessionHandler
 
         foreach (var partyId in mutation.EndedPartyIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+            context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
                 nameof(LeaseManagementParty), partyId, AuditLogOperation.Updated,
                 UserId: command.CreatedByUserId,
-                ChangeReason: "Party membership ended when possession returned."), nowUtc);
+                ChangeReason: "Party membership ended when possession returned."), businessNowUtc);
         }
         foreach (var accessId in mutation.RevokedAccessIds)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+            context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
                 nameof(TenantUserAccess), accessId, AuditLogOperation.Updated,
                 UserId: command.CreatedByUserId,
-                ChangeReason: "Tenant access revoked when possession returned."), nowUtc);
+                ChangeReason: "Tenant access revoked when possession returned."), businessNowUtc);
         }
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(LeaseManagement), command.LeaseManagementId, AuditLogOperation.Updated,
             UserId: command.CreatedByUserId,
-            ChangeReason: "Possession returned; tenant account remains open."), nowUtc);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+            ChangeReason: "Possession returned; tenant account remains open."), businessNowUtc);
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(UnitOperationalPeriod), mutation.TurnoverPeriodId!.Value, AuditLogOperation.Created,
             UserId: command.CreatedByUserId,
-            ChangeReason: "Turnover opened after possession return."), nowUtc);
-        attempt.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
-            nowUtc, "possession-returned", nameof(LeaseManagement), command.LeaseManagementId,
+            ChangeReason: "Turnover opened after possession return."), businessNowUtc);
+        context.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
+            businessNowUtc, "possession-returned", nameof(LeaseManagement), command.LeaseManagementId,
             command.LeaseManagementId, command.UnitId));
 
         return new(ReturnPossessionOutcome.Returned, command.LeaseManagementId, command.UnitId,
             mutation.TurnoverPeriodId, mutation.PossessionReturnedAtUtc, null);
     }
 
-    public async Task AuthorizeReplayAsync(ReturnPossessionCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(ReturnPossessionCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await PossessionCommandAuthorization.AuthorizedRelationships(persistence, command.PortfolioId,
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await PossessionCommandAuthorization.AuthorizedRelationships(_db, command.PortfolioId,
                 command.LeaseManagementId, command.UnitId, command.CreatedByUserId, command.AuthSessionId,
-                command.AccessContextId, command.ExpectedAccessRevision, nowUtc).AnyAsync(ct))
+                command.AccessContextId, command.ExpectedAccessRevision, command.BusinessNowUtc,
+                securityNowUtc).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException("The lease relationship is not authorized in the current property scope.");
         }
@@ -592,7 +854,7 @@ public sealed class ReturnPossessionHandler
     {
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, command.LeaseManagementId,
             command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
+            command.ExpectedAccessRevision, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (string.IsNullOrWhiteSpace(command.TurnoverReason)
             || command.TurnoverReason.Length > 1000
             || command.Parties.Count == 0
@@ -611,19 +873,24 @@ public sealed class ReturnPossessionHandler
 }
 
 public sealed class CompleteTurnoverHandler
-    : IAtomicCommandHandler<CompleteTurnoverCommand, CompleteTurnoverResult>,
-      IAtomicReplayAuthorizer<CompleteTurnoverCommand>
+    : IAtomicCommandHandler<CompleteTurnoverCommand, CompleteTurnoverResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CompleteTurnoverHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<CompleteTurnoverResult> HandleAsync(CompleteTurnoverCommand command,
-        IAtomicWriteAttempt attempt, CancellationToken ct)
+        IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
-        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var authorizedUnits = PossessionCommandAuthorization.AuthorizedUnits(attempt.Persistence,
+        await context.AcquireLockAsync("Unit", command.UnitId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        var authorizedUnits = PossessionCommandAuthorization.AuthorizedUnits(_db,
             command.PortfolioId, command.UnitId, command.CreatedByUserId, command.AuthSessionId,
-            command.AccessContextId, command.ExpectedAccessRevision, nowUtc);
-        var period = await attempt.Persistence.Query<UnitOperationalPeriod>()
+            command.AccessContextId, command.ExpectedAccessRevision, businessNowUtc, securityNowUtc);
+        var period = await _db.Set<UnitOperationalPeriod>()
             .Where(candidate => candidate.Id == command.TurnoverPeriodId
                 && candidate.PortfolioId == command.PortfolioId
                 && candidate.UnitId == command.UnitId
@@ -642,25 +909,24 @@ public sealed class CompleteTurnoverHandler
                 command.TurnoverPeriodId, period.EndedAtUtc, "Turnover has already been completed.");
         }
 
-        period.EndedAtUtc = nowUtc;
-        attempt.BindSemanticAudit(period, new AtomicSemanticAudit(command.PortfolioId,
+        period.EndedAtUtc = businessNowUtc;
+        context.BindSemanticAudit(period, new AtomicSemanticAudit(command.PortfolioId,
             nameof(UnitOperationalPeriod), period.Id, AuditLogOperation.Updated,
             UserId: command.CreatedByUserId, ChangeReason: "Turnover completed."));
-        attempt.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
-            nowUtc, "turnover-completed", nameof(UnitOperationalPeriod), period.Id,
+        context.StageOutbox(PossessionOutbox.Create(command.PortfolioId, command.DeliveryIdempotencyKey,
+            businessNowUtc, "turnover-completed", nameof(UnitOperationalPeriod), period.Id,
             period.SourceLeaseManagementId, command.UnitId));
-        await attempt.FlushBusinessAsync(ct);
-        return new(CompleteTurnoverOutcome.Completed, command.UnitId, period.Id, nowUtc, null);
+        await context.FlushBusinessAsync(ct);
+        return new(CompleteTurnoverOutcome.Completed, command.UnitId, period.Id, businessNowUtc, null);
     }
 
-    public async Task AuthorizeReplayAsync(CompleteTurnoverCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(CompleteTurnoverCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await PossessionCommandAuthorization.AuthorizedUnits(persistence, command.PortfolioId,
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        if (!await PossessionCommandAuthorization.AuthorizedUnits(_db, command.PortfolioId,
                 command.UnitId, command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-                command.ExpectedAccessRevision, nowUtc).AnyAsync(ct))
+                command.ExpectedAccessRevision, command.BusinessNowUtc, securityNowUtc).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException("The unit is not authorized in the current property scope.");
         }
@@ -670,7 +936,7 @@ public sealed class CompleteTurnoverHandler
     {
         PossessionCommandAuthorization.ValidateShape(command.PortfolioId, 1, command.UnitId,
             command.CreatedByUserId, command.AuthSessionId, command.AccessContextId,
-            command.ExpectedAccessRevision, command.DeliveryIdempotencyKey);
+            command.ExpectedAccessRevision, command.BusinessNowUtc, command.DeliveryIdempotencyKey);
         if (command.TurnoverPeriodId <= 0)
         {
             throw new ArgumentException("A turnover period id is required.");
@@ -680,14 +946,14 @@ public sealed class CompleteTurnoverHandler
 
 internal static class PossessionCommandAuthorization
 {
-    internal static IQueryable<LeaseManagement> AuthorizedRelationships(IAtomicPersistenceSession persistence,
+    internal static IQueryable<LeaseManagement> AuthorizedRelationships(RentalCommandDbContext db,
         int portfolioId, int relationshipId, int unitId, int userId, Guid sessionId,
-        int accessContextId, long accessRevision, DateTime nowUtc)
+        int accessContextId, long accessRevision, DateTime businessNowUtc, DateTime securityNowUtc)
     {
-        var memberships = AuthorizedMemberships(persistence, portfolioId, userId, sessionId,
-            accessContextId, accessRevision, nowUtc);
-        var assignments = EffectiveAssignments(persistence, portfolioId, nowUtc);
-        return persistence.Query<LeaseManagement>().Where(relationship =>
+        var memberships = AuthorizedMemberships(db, portfolioId, userId, sessionId,
+            accessContextId, accessRevision, businessNowUtc, securityNowUtc);
+        var assignments = EffectiveAssignments(db, portfolioId, businessNowUtc);
+        return db.Set<LeaseManagement>().Where(relationship =>
             relationship.Id == relationshipId && relationship.PortfolioId == portfolioId
             && relationship.UnitId == unitId && relationship.Unit != null
             && relationship.Unit.PortfolioId == portfolioId
@@ -708,14 +974,14 @@ internal static class PossessionCommandAuthorization
                             == CapabilityAuthorizationTargetKind.Property)))));
     }
 
-    internal static IQueryable<Unit> AuthorizedUnits(IAtomicPersistenceSession persistence,
+    internal static IQueryable<Unit> AuthorizedUnits(RentalCommandDbContext db,
         int portfolioId, int unitId, int userId, Guid sessionId, int accessContextId,
-        long accessRevision, DateTime nowUtc)
+        long accessRevision, DateTime businessNowUtc, DateTime securityNowUtc)
     {
-        var memberships = AuthorizedMemberships(persistence, portfolioId, userId, sessionId,
-            accessContextId, accessRevision, nowUtc);
-        var assignments = EffectiveAssignments(persistence, portfolioId, nowUtc);
-        return persistence.Query<Unit>().Where(unit => unit.Id == unitId && unit.PortfolioId == portfolioId
+        var memberships = AuthorizedMemberships(db, portfolioId, userId, sessionId,
+            accessContextId, accessRevision, businessNowUtc, securityNowUtc);
+        var assignments = EffectiveAssignments(db, portfolioId, businessNowUtc);
+        return db.Set<Unit>().Where(unit => unit.Id == unitId && unit.PortfolioId == portfolioId
             && unit.Property != null && unit.Property.PortfolioId == portfolioId
             && memberships.Any(membership => assignments.Any(assignment =>
                 assignment.WorkspaceMembershipId == membership.Id
@@ -734,26 +1000,26 @@ internal static class PossessionCommandAuthorization
     }
 
     private static IQueryable<WorkspaceMembership> AuthorizedMemberships(
-        IAtomicPersistenceSession persistence, int portfolioId, int userId, Guid sessionId,
-        int accessContextId, long accessRevision, DateTime nowUtc)
-        => persistence.Query<WorkspaceMembership>().Where(membership =>
-            persistence.Query<AuthSession>().Any(session => session.Id == sessionId
+        RentalCommandDbContext db, int portfolioId, int userId, Guid sessionId,
+        int accessContextId, long accessRevision, DateTime businessNowUtc, DateTime securityNowUtc)
+        => db.Set<WorkspaceMembership>().Where(membership =>
+            db.Set<AuthSession>().Any(session => session.Id == sessionId
                 && session.UserId == userId && session.ActiveAccessContextId == accessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > nowUtc)
-            && persistence.Query<WorkspaceAccessContext>().Any(context => context.Id == accessContextId
+                && session.ExpiresAtUtc > securityNowUtc)
+            && db.Set<WorkspaceAccessContext>().Any(context => context.Id == accessContextId
                 && context.UserId == userId && context.PortfolioId == portfolioId
                 && context.AccessRevision == accessRevision && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
                 && membership.AccessContextId == accessContextId && membership.PortfolioId == portfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
                 && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
-                && membership.EffectiveFromUtc <= nowUtc
-                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > nowUtc));
+                && membership.EffectiveFromUtc <= businessNowUtc
+                && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > businessNowUtc));
 
     private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
-        IAtomicPersistenceSession persistence, int portfolioId, DateTime nowUtc) =>
-        persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        RentalCommandDbContext db, int portfolioId, DateTime nowUtc) =>
+        db.Set<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == portfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
@@ -761,13 +1027,16 @@ internal static class PossessionCommandAuthorization
             && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > nowUtc));
 
     internal static void ValidateShape(int portfolioId, int relationshipId, int unitId, int userId,
-        Guid sessionId, int accessContextId, long accessRevision, string deliveryIdempotencyKey)
+        Guid sessionId, int accessContextId, long accessRevision, DateTime businessNowUtc,
+        string deliveryIdempotencyKey)
     {
         if (portfolioId <= 0 || relationshipId <= 0 || unitId <= 0 || userId <= 0
             || sessionId == Guid.Empty || accessContextId <= 0 || accessRevision <= 0
+            || businessNowUtc == default
             || string.IsNullOrWhiteSpace(deliveryIdempotencyKey) || deliveryIdempotencyKey.Length > 200)
         {
-            throw new ArgumentException("Portfolio, relationship, unit, actor, access, and delivery ids are required.");
+            throw new ArgumentException(
+                "Portfolio, relationship, unit, actor, access, business time, and delivery ids are required.");
         }
     }
 }

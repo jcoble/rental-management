@@ -1,12 +1,18 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Options;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Services;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
@@ -242,6 +248,8 @@ public class AccountingServiceTests : IAsyncLifetime
         row.UnitId.Should().Be(lease.LeaseManagement.UnitId, "the row carries the relationship's unit so the oldest charge link folds into the unit's Rent tab");
         row.OldestLedgerEntryId.Should().Be(oldest.Id);
         row.OldestDueOn.Should().Be(oldest.DueOn);
+        row.OldestLedgerEntryOpenAmount.Should().Be(900m,
+            "the receipt target amount must belong to the exact oldest charge, not the account aggregate");
         row.PastDueAmount.Should().Be(1275m);
         row.OverduePaymentCount.Should().Be(2);
 
@@ -257,6 +265,8 @@ public class AccountingServiceTests : IAsyncLifetime
         selects[1].Should().Contain("\"Tenants\"", "tenant labels should not require a post-materialization dictionary query");
         selects[1].Should().Contain("\"Properties\"", "property labels should not require a post-materialization dictionary query");
         selects[1].Should().Contain("\"Units\"", "unit labels should not require a post-materialization dictionary query");
+        selects[1].Should().Contain("\"OpenAmount\"",
+            "the exact target charge open amount must be projected by the same SQL row query");
         selects[1].Should().Contain("ORDER BY", "oldest-payment selection and row ordering should be SQL-side");
         selects[1].Should().Contain("LIMIT", "the row page must be bounded in SQL before materialization");
     }
@@ -372,6 +382,44 @@ public class AccountingServiceTests : IAsyncLifetime
             $"/tenant-accounts/{receipt.TenantAccountId}/entries/{receipt.Id}");
     }
 
+    [Theory]
+    [InlineData("Rent", TenantLedgerEntryType.RentCharge)]
+    [InlineData("RentCharge", TenantLedgerEntryType.RentCharge)]
+    [InlineData("LateFee", TenantLedgerEntryType.LateFeeCharge)]
+    [InlineData("LateFeeCharge", TenantLedgerEntryType.LateFeeCharge)]
+    public async Task GetTransactionsAsync_TenantCategoryIncludesChargeAndAllocatedReceipt(
+        string category,
+        TenantLedgerEntryType entryType)
+    {
+        var now = new DateTime(2027, 2, 15, 12, 0, 0, DateTimeKind.Utc);
+        var (_, lease) = SeedPropertyAndLease(now);
+        SeedPayment(
+            lease,
+            entryType == TenantLedgerEntryType.RentCharge ? 1_050m : 52.50m,
+            dueDate: now,
+            paidInFull: true,
+            paidDate: now,
+            entryType: entryType);
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery
+            {
+                Category = category,
+                Take = 20,
+            },
+            CancellationToken.None);
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Should().ContainSingle(row => row.Category == entryType.ToString());
+        result.Items.Should().ContainSingle(row => row.Category == nameof(TenantLedgerEntryType.PaymentReceipt));
+        _commands.Should().HaveCount(2, "the grid uses one count and one bounded page query");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("\"TenantLedgerAllocations\"", StringComparison.OrdinalIgnoreCase),
+            "both the count and page query must resolve receipt categories from allocations DB-side");
+    }
+
     [Fact]
     public async Task GetReportsAsync_ScheduleEUsesTaxRollupIncludingModeledInterestAndDepreciation()
     {
@@ -461,7 +509,8 @@ public class AccountingServiceTests : IAsyncLifetime
                 EscrowAmount = 0m,
                 TotalAmount = 700m,
                 BalanceAfter = 99_900m,
-                Status = LoanPaymentStatus.Scheduled,
+                Status = LoanPaymentStatus.Paid,
+                PaidDate = new DateTime(year, 01, 01, 0, 0, 0, DateTimeKind.Utc),
                 CreatedAt = now,
             },
             new LoanPayment
@@ -475,7 +524,8 @@ public class AccountingServiceTests : IAsyncLifetime
                 EscrowAmount = 0m,
                 TotalAmount = 700m,
                 BalanceAfter = 99_790m,
-                Status = LoanPaymentStatus.Scheduled,
+                Status = LoanPaymentStatus.Paid,
+                PaidDate = new DateTime(year, 02, 01, 0, 0, 0, DateTimeKind.Utc),
                 CreatedAt = now,
             });
         _db.SaveChanges();
@@ -499,12 +549,14 @@ public class AccountingServiceTests : IAsyncLifetime
             "regular Schedule E categories must be grouped and summed in SQL");
         _commands.Should().Contain(sql =>
             sql.Contains("FROM \"LoanPayments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
-            "modeled mortgage interest must be grouped and summed in SQL");
+            "modeled mortgage interest must select the latest correction and aggregate in SQL");
 
         var scheduleERollupSql = _commands.Where(sql =>
             sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LoanPayments", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LoanPaymentCorrections", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CapitalAssets", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("UNION ALL", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
@@ -514,6 +566,96 @@ public class AccountingServiceTests : IAsyncLifetime
         (scheduleERollupSql[0].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
          scheduleERollupSql[0].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("Schedule E category totals and counts must be aggregated in SQL");
+    }
+
+    [Fact]
+    public async Task BankingListTransactions_SelectsEffectiveLoanSuggestionInTwoSqlStatements()
+    {
+        var now = new DateTime(2027, 2, 20, 0, 0, 0, DateTimeKind.Utc);
+        var (property, _) = SeedPropertyAndLease(now);
+        var loan = new Loan
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Lender = "Correction Bank",
+            OriginalAmount = 200_000m,
+            CurrentBalance = 124_963m,
+            AnnualInterestRatePct = 4.5m,
+            TermMonths = 360,
+            StartDate = now.AddYears(-10),
+            DayOfMonthDue = 20,
+            MonthlyPrincipalInterest = 1_046m,
+            MonthlyEscrow = 318m,
+            Status = LoanStatus.Active,
+            CreatedAt = now.AddYears(-10),
+            UpdatedAt = now,
+        };
+        var payment = new LoanPayment
+        {
+            PortfolioId = PortfolioId,
+            Loan = loan,
+            PeriodKey = "2027-02",
+            DueDate = now.AddDays(-8),
+            InterestAmount = 470.23m,
+            PrincipalAmount = 583.77m,
+            EscrowAmount = 318m,
+            TotalAmount = 1_372m,
+            BalanceAfter = 124_810.23m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = now.AddDays(-8),
+        };
+        _db.LoanPayments.Add(payment);
+        _db.SaveChanges();
+        _db.LoanPaymentCorrections.Add(new LoanPaymentCorrection
+        {
+            PortfolioId = PortfolioId,
+            LoanPaymentId = payment.Id,
+            AttemptId = Guid.NewGuid(),
+            DueDate = now,
+            PaidDate = now,
+            InterestAmount = 615m,
+            PrincipalAmount = 431m,
+            EscrowAmount = 318m,
+            TotalAmount = 1_364m,
+            BalanceAfter = 124_963m,
+            Status = LoanPaymentStatus.Paid,
+            CreatedAtUtc = now,
+        });
+        var transaction = SeedBankTransaction(
+            "CORRECTION BANK 2027-02",
+            "Correction Bank",
+            -1_364m,
+            now,
+            "Mortgage",
+            "Unmatched");
+        transaction.PropertyId = property.Id;
+        _db.SaveChanges();
+
+        var banking = new BankingService(
+            _db,
+            new EphemeralDataProtectionProvider(),
+            Mock.Of<IPlaidBankingProvider>(),
+            Mock.Of<IAtomicUnitOfWork>(),
+            Options.Create(new PlaidOptions()),
+            TimeProvider.System);
+        _commands.Clear();
+
+        var result = await banking.ListTransactionsAsync(
+            PortfolioId, "Unmatched", skip: 0, take: 10);
+
+        result.Items.Should().ContainSingle();
+        result.Items[0].SuggestedMatch.Should().NotBeNull();
+        result.Items[0].SuggestedMatch!.EntityType.Should().Be("LoanPayment");
+        result.Items[0].SuggestedMatch!.EntityId.Should().Be(payment.Id);
+        _commands.Should().HaveCount(2,
+            "Banking uses one count and one bounded reader with SQL-ranked suggestions");
+        var readerSql = _commands.Single(sql =>
+            sql.Contains("\"LoanPaymentCorrections\"", StringComparison.OrdinalIgnoreCase));
+        readerSql.Should()
+            .Contain("\"LoanPayments\"")
+            .And.Contain("UNION ALL")
+            .And.Contain("ORDER BY")
+            .And.Contain("LIMIT");
     }
 
     [Fact]

@@ -604,8 +604,7 @@ public class UnitService : IUnitService
         string operationKey,
         CancellationToken ct = default)
     {
-        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
-            AtomicRentalMutationOperation.Update, id, operationKey, request);
+        var command = AtomicRentalMutation.UnitUpdateCommand(scope, id, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
         return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;

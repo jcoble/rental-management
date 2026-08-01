@@ -60,7 +60,13 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(typeof(UnreadCountResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<UnreadCountResponse>> UnreadCount(CancellationToken ct)
     {
-        var count = await _notifications.GetUnreadCountAsync(GetPortfolioId(), GetUserId(), ct);
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var experience = (NavigationExperience)(
+            active.LastAuthorizedExperience ?? active.DefaultExperience ?? WorkspaceExperience.Management);
+        var count = await _notifications.GetUnreadCountAsync(scope, experience, ct);
         return Ok(new UnreadCountResponse(count));
     }
 

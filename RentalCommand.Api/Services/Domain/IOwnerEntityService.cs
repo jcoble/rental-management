@@ -14,6 +14,18 @@ public interface IOwnerEntityService
     Task<OwnerEntityResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<OwnerEntityResponse?> CreateAsync(WorkspaceReadScope scope, CreateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
     Task<OwnerEntityResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
+    Task<ActivateOwnerPortalAccessResponse> ActivateOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        ActivateOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default);
+    Task<RevokeOwnerPortalAccessResponse> RevokeOwnerPortalAccessAsync(
+        WorkspaceReadScope scope,
+        int id,
+        RevokeOwnerPortalAccessRequest request,
+        string operationKey,
+        CancellationToken ct = default);
     Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,

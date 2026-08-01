@@ -1,24 +1,30 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Automation;
 
 public sealed class ApplyClaimedDebtServiceBatchHandler
     : IAtomicCommandHandler<ApplyClaimedDebtServiceBatchCommand, ApplyScheduledFinanceBatchResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyClaimedDebtServiceBatchHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaxOccurrencesPerSchedule = 36;
 
     public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
         ApplyClaimedDebtServiceBatchCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var loans = await attempt.ScheduledFinance.LockDebtServiceClaimsAsync(
-            command.LoanIds,
+        var loans = await AtomicScheduledFinancePersistence.LockDebtServiceClaimsAsync(_db,
+            context, command.LoanIds,
             command.ClaimToken,
             command.BusinessDateUtc,
             ct);
@@ -27,24 +33,32 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             throw new ScheduledFinanceClaimLostException("The debt-service claim is stale, expired, or owned by another worker.");
         }
 
-        var tails = await attempt.ScheduledFinance.LoadLoanPaymentTailsAsync(
-            loans.Select(loan => loan.Id).ToArray(), ct);
+        var tails = await AtomicScheduledFinancePersistence.LoadLoanPaymentTailsAsync(_db,
+            context, loans.Select(loan => loan.Id).ToArray(), ct);
         var generated = new List<LoanPayment>();
 
         foreach (var loan in loans)
         {
             var startMonth = Month(loan.StartDate);
-            var currentMonth = Month(command.BusinessDateUtc);
+            var dueDay = DueDay(loan.DayOfMonthDue);
             var lastPeriodToGenerate = Math.Min(
-                MonthsBetween(startMonth, currentMonth) + 1,
+                LastDuePeriodIndexOnOrBefore(command.BusinessDateUtc, startMonth, dueDay),
                 loan.TermMonths);
             tails.TryGetValue(loan.Id, out var tail);
-            var nextPeriod = tail is null
-                ? 1
-                : PeriodIndexFromKey(tail.PeriodKey, startMonth) + 1;
-            var openingBalance = tail?.BalanceAfter ?? loan.OriginalAmount;
-            var lastBalance = openingBalance;
-            var paidOff = false;
+            var firstEligiblePeriod = FirstDuePeriodIndexOnOrAfter(
+                Max(
+                    loan.StartDate,
+                    loan.DebtServiceAutomationStartDate ?? loan.CreatedAt),
+                startMonth,
+                dueDay);
+            var tailPeriod = tail is null ? (int?)null : PeriodIndexFromKey(tail.PeriodKey, startMonth);
+            // The automation boundary is business-effective; CreatedAt remains DB-wall audit time.
+            var nextPeriod = tailPeriod is null
+                ? firstEligiblePeriod
+                : Math.Max(tailPeriod.Value + 1, firstEligiblePeriod);
+            var openingBalance = tail is not null && tailPeriod.HasValue && tailPeriod.Value >= firstEligiblePeriod
+                ? tail.BalanceAfter
+                : loan.CurrentBalance;
             var generatedForLoan = 0;
 
             var batchLastPeriod = Math.Min(
@@ -58,16 +72,16 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                     loan.AnnualInterestRatePct,
                     loan.MonthlyPrincipalInterest,
                     loan.MonthlyEscrow);
-                var dueDay = Math.Min(
-                    loan.DayOfMonthDue <= 0 ? 1 : loan.DayOfMonthDue,
-                    DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month));
                 var payment = new LoanPayment
                 {
                     PortfolioId = loan.PortfolioId,
                     LoanId = loan.Id,
                     PeriodKey = $"{periodMonth.Year:D4}-{periodMonth.Month:D2}",
                     DueDate = new DateTime(
-                        periodMonth.Year, periodMonth.Month, dueDay, 0, 0, 0, DateTimeKind.Utc),
+                        periodMonth.Year,
+                        periodMonth.Month,
+                        Math.Min(dueDay, DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month)),
+                        0, 0, 0, DateTimeKind.Utc),
                     InterestAmount = split.Interest,
                     PrincipalAmount = split.Principal,
                     EscrowAmount = split.Escrow,
@@ -80,10 +94,8 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 generated.Add(payment);
                 generatedForLoan++;
                 openingBalance = split.BalanceAfter;
-                lastBalance = split.BalanceAfter;
                 if (split.PaidOff)
                 {
-                    paidOff = true;
                     break;
                 }
             }
@@ -91,12 +103,10 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             ClearClaim(loan);
             if (generatedForLoan > 0)
             {
-                loan.CurrentBalance = lastBalance;
                 loan.UpdatedAt = command.AppliedAtUtc;
-                if (paidOff) loan.Status = LoanStatus.PaidOff;
             }
 
-            attempt.BindSemanticAudit(loan, new AtomicSemanticAudit(
+            context.BindSemanticAudit(loan, new AtomicSemanticAudit(
                 loan.PortfolioId,
                 nameof(Loan),
                 loan.Id,
@@ -104,7 +114,6 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 ActorLabel: "system:debt-service",
                 NewValues: JsonSerializer.Serialize(new
                 {
-                    loan.CurrentBalance,
                     loan.Status,
                     GeneratedPayments = generatedForLoan,
                     ClaimReleased = true,
@@ -112,11 +121,11 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 ChangeReason: "Applied claimed debt-service schedule generation."));
         }
 
-        attempt.Persistence.AddRange(generated);
-        await attempt.FlushBusinessAsync(ct);
+        _db.AddRange(generated);
+        await context.FlushBusinessAsync(ct);
         foreach (var payment in generated)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 payment.PortfolioId,
                 nameof(LoanPayment),
                 payment.Id,
@@ -139,11 +148,64 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
             generated.Count);
     }
 
+    public async Task AuthorizeReplayAsync(
+        ApplyClaimedDebtServiceBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ValidateClaimedIds(command.LoanIds, command.ClaimToken, command.BusinessDateUtc, command.AppliedAtUtc);
+
+        var ids = command.LoanIds.Distinct().ToArray();
+        var scheduleCount = await _db.Set<Loan>()
+            .AsNoTracking()
+            .CountAsync(loan => ids.Contains(loan.Id), ct);
+        if (scheduleCount != ids.Length)
+        {
+            throw new UnauthorizedAccessException("The claimed debt-service schedules are unavailable.");
+        }
+    }
+
     private static DateTime Month(DateTime date) =>
         new(date.Year, date.Month, 1, 0, 0, 0, DateTimeKind.Utc);
 
     private static int MonthsBetween(DateTime from, DateTime to) =>
         (to.Year - from.Year) * 12 + to.Month - from.Month;
+
+    private static int DueDay(int dayOfMonthDue) => Math.Max(dayOfMonthDue, 1);
+
+    private static int FirstDuePeriodIndexOnOrAfter(
+        DateTime activationDate,
+        DateTime startMonth,
+        int dueDay)
+    {
+        var activationMonth = Month(activationDate);
+        var firstDueMonth = DueDate(activationMonth, dueDay) < activationDate.Date
+            ? activationMonth.AddMonths(1)
+            : activationMonth;
+        return Math.Max(1, MonthsBetween(startMonth, firstDueMonth) + 1);
+    }
+
+    private static int LastDuePeriodIndexOnOrBefore(
+        DateTime businessDate,
+        DateTime startMonth,
+        int dueDay)
+    {
+        var businessMonth = Month(businessDate);
+        var dueThroughMonth = DueDate(businessMonth, dueDay) > businessDate.Date
+            ? businessMonth.AddMonths(-1)
+            : businessMonth;
+        return MonthsBetween(startMonth, dueThroughMonth) + 1;
+    }
+
+    private static DateTime DueDate(DateTime month, int dueDay) =>
+        new(
+            month.Year,
+            month.Month,
+            Math.Min(dueDay, DateTime.DaysInMonth(month.Year, month.Month)),
+            0, 0, 0, DateTimeKind.Utc);
+
+    private static DateTime Max(DateTime left, DateTime right) =>
+        left >= right ? left : right;
 
     private static int PeriodIndexFromKey(string periodKey, DateTime startMonth)
     {
@@ -163,20 +225,43 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
         loan.WorkerClaimToken = null;
         loan.WorkerClaimExpiresAtUtc = null;
     }
+
+    internal static void ValidateClaimedIds(
+        IReadOnlyCollection<int> ids,
+        Guid claimToken,
+        DateTime businessDateUtc,
+        DateTime appliedAtUtc)
+    {
+        if (ids.Count == 0 ||
+            ids.Any(id => id <= 0) ||
+            ids.Distinct().Count() != ids.Count ||
+            claimToken == Guid.Empty ||
+            businessDateUtc == default ||
+            businessDateUtc.Kind != DateTimeKind.Utc ||
+            appliedAtUtc == default ||
+            appliedAtUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("A complete scheduled-finance claim batch is required.");
+        }
+    }
 }
 
 public sealed class ApplyClaimedRecurringExpenseBatchHandler
     : IAtomicCommandHandler<ApplyClaimedRecurringExpenseBatchCommand, ApplyScheduledFinanceBatchResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyClaimedRecurringExpenseBatchHandler(RentalCommandDbContext db) => _db = db;
+
     private const int MaxOccurrencesPerSchedule = 36;
 
     public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
         ApplyClaimedRecurringExpenseBatchCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
-        var templates = await attempt.ScheduledFinance.LockRecurringExpenseClaimsAsync(
-            command.RecurringExpenseIds,
+        var templates = await AtomicScheduledFinancePersistence.LockRecurringExpenseClaimsAsync(_db,
+            context, command.RecurringExpenseIds,
             command.ClaimToken,
             command.BusinessDateUtc,
             ct);
@@ -209,8 +294,8 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
                     UpdatedAt = command.AppliedAtUtc,
                 };
                 generated.Add(expense);
-                attempt.Persistence.Add(expense);
-                attempt.BindSemanticAudit(expense, new AtomicSemanticAudit(
+                _db.Add(expense);
+                context.BindSemanticAudit(expense, new AtomicSemanticAudit(
                     template.PortfolioId,
                     nameof(Expense),
                     0,
@@ -232,7 +317,7 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
             template.NextRunDate = runDate;
             template.UpdatedAt = command.AppliedAtUtc;
             ClearClaim(template);
-            attempt.BindSemanticAudit(template, new AtomicSemanticAudit(
+            context.BindSemanticAudit(template, new AtomicSemanticAudit(
                 template.PortfolioId,
                 nameof(RecurringExpense),
                 template.Id,
@@ -248,10 +333,39 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
                 ChangeReason: "Advanced a claimed recurring-expense schedule."));
         }
 
+        await context.FlushBusinessAsync(ct);
+        foreach (var expense in generated)
+        {
+            await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+                _db, context, expense, actorUserId: 0, ct: ct,
+                actorLabel: "system:recurring-expense");
+        }
+
         return new ApplyScheduledFinanceBatchResult(
             ScheduledFinanceApplyOutcome.Applied,
             templates.Count,
             generated.Count);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyClaimedRecurringExpenseBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ApplyClaimedDebtServiceBatchHandler.ValidateClaimedIds(
+            command.RecurringExpenseIds,
+            command.ClaimToken,
+            command.BusinessDateUtc,
+            command.AppliedAtUtc);
+
+        var ids = command.RecurringExpenseIds.Distinct().ToArray();
+        var scheduleCount = await _db.Set<RecurringExpense>()
+            .AsNoTracking()
+            .CountAsync(schedule => ids.Contains(schedule.Id), ct);
+        if (scheduleCount != ids.Length)
+        {
+            throw new UnauthorizedAccessException("The claimed recurring-expense schedules are unavailable.");
+        }
     }
 
     private static DateTime Advance(DateTime date, RecurringExpenseFrequency frequency) => frequency switch
@@ -273,9 +387,13 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
 public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
     : IAtomicCommandHandler<ApplyClaimedRecurringMaintenanceBatchCommand, ApplyScheduledFinanceBatchResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ApplyClaimedRecurringMaintenanceBatchHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
         ApplyClaimedRecurringMaintenanceBatchCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         var ids = command.RecurringMaintenanceTaskIds.Distinct().ToArray();
@@ -285,8 +403,8 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
             throw new ArgumentException("A complete recurring-maintenance claim batch is required.", nameof(command));
 
         var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(command.BusinessTimeZoneId);
-        var tasks = await attempt.ScheduledFinance.LockRecurringMaintenanceClaimsAsync(
-            ids, command.ClaimToken, command.BusinessDateUtc, ct);
+        var tasks = await AtomicScheduledFinancePersistence.LockRecurringMaintenanceClaimsAsync(_db,
+            context, ids, command.ClaimToken, command.BusinessDateUtc, ct);
         if (tasks.Count != ids.Length)
         {
             throw new ScheduledFinanceClaimLostException(
@@ -333,8 +451,8 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
                 CreatedAtUtc = command.AppliedAtUtc,
             });
             generated.Add(workOrder);
-            attempt.Persistence.Add(workOrder);
-            attempt.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
+            _db.Add(workOrder);
+            context.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
                 task.PortfolioId,
                 nameof(WorkOrder),
                 0,
@@ -355,7 +473,7 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
             task.NextDueDate = nextDueDate;
             task.UpdatedAt = command.AppliedAtUtc;
             ClearClaim(task);
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 task.PortfolioId,
                 nameof(RecurringMaintenanceTask),
                 task.Id,
@@ -371,16 +489,16 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
                 ChangeReason: "Advanced a claimed recurring-maintenance schedule."));
         }
 
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         foreach (var workOrder in generated)
         {
-            attempt.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
                 workOrder.PortfolioId,
                 nameof(WorkOrder),
                 workOrder.Id,
                 $"recurring-maintenance-work-order:{command.ClaimToken:N}:{workOrder.RecurringMaintenanceTaskId}",
                 command.AppliedAtUtc));
-            attempt.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
                 workOrder.PortfolioId,
                 nameof(RecurringMaintenanceTask),
                 workOrder.RecurringMaintenanceTaskId!.Value,
@@ -392,6 +510,29 @@ public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
             ScheduledFinanceApplyOutcome.Applied,
             tasks.Count,
             generated.Count);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ApplyClaimedRecurringMaintenanceBatchCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        ApplyClaimedDebtServiceBatchHandler.ValidateClaimedIds(
+            command.RecurringMaintenanceTaskIds,
+            command.ClaimToken,
+            command.BusinessDateUtc,
+            command.AppliedAtUtc);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.BusinessTimeZoneId);
+        TimeZoneInfo.FindSystemTimeZoneById(command.BusinessTimeZoneId);
+
+        var ids = command.RecurringMaintenanceTaskIds.Distinct().ToArray();
+        var scheduleCount = await _db.Set<RecurringMaintenanceTask>()
+            .AsNoTracking()
+            .CountAsync(task => ids.Contains(task.Id), ct);
+        if (scheduleCount != ids.Length)
+        {
+            throw new UnauthorizedAccessException("The claimed recurring-maintenance schedules are unavailable.");
+        }
     }
 
     private static DateTime Advance(DateTime date, RecurrenceInterval interval) => interval switch

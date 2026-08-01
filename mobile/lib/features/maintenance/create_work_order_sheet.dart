@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart' hide Vendor;
+import '../../core/time/app_clock.dart';
 import '../../core/utils/date_wire.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
@@ -160,7 +161,8 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   }
 
   Future<void> _pickScheduledDate() async {
-    final now = DateTime.now();
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showDatePicker(
       context: context,
       initialDate: _scheduledDate ?? now,
@@ -174,9 +176,13 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   }
 
   Future<void> _pickTime({required bool isStart}) async {
+    final now = await ref.read(appNowProvider.future);
+    if (!mounted) return;
     final picked = await showTimePicker(
       context: context,
-      initialTime: (isStart ? _startTime : _windowEndTime) ?? TimeOfDay.now(),
+      initialTime:
+          (isStart ? _startTime : _windowEndTime) ??
+          TimeOfDay.fromDateTime(now.toLocal()),
     );
     if (picked == null || !mounted) return;
     setState(() {

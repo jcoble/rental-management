@@ -20,6 +20,10 @@ const leaseFirstImportSource = readFileSync(
   new URL("../components/scan/LeaseFirstImport.svelte", import.meta.url),
   "utf8"
 );
+const leaseTermFieldsSource = readFileSync(
+  new URL("../components/forms/LeaseTermFields.svelte", import.meta.url),
+  "utf8"
+);
 
 describe("lease scan signature review contract", () => {
   it("explains the legal difference between importing a signed agreement and preparing a draft", () => {
@@ -76,5 +80,66 @@ describe("lease scan signature review contract", () => {
     );
     assert.match(generalReviewSource, /leaseSignatureChoiceInvalid/);
     assert.match(leaseFirstImportSource, /signatureChoiceInvalid/);
+  });
+
+  it("requires an explicit rent-charge start choice in both lease scan review entry points", () => {
+    for (const source of [generalReviewSource, leaseFirstImportSource]) {
+      assert.match(source, /Start from the current date/);
+      assert.match(source, /Backfill from the lease start/);
+      assert.match(source, /Start from a custom date/);
+      assert.match(source, /rentTrackingStartMode/);
+      assert.match(source, /rentTrackingStartOn/);
+      assert.match(source, /CustomCutoffDate/);
+    }
+
+    assert.match(
+      leaseFirstImportSource,
+      /o\.rentTrackingStartMode = rentTrackingStartMode/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /o\.rentTrackingStartOn = rentTrackingStartOn/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /Rent tracking cannot start before the agreement/
+    );
+  });
+
+  it("lets both signed-import entry points review and send the possession date required by leasing", () => {
+    for (const source of [generalReviewSource, leaseFirstImportSource]) {
+      assert.match(source, /Possession given/);
+      assert.match(source, /possessionGivenOn/);
+      assert.match(
+        source,
+        /AlreadyFullySigned' && possessionGivenOn/
+      );
+      assert.match(source, /possessionGivenAtUtc/);
+    }
+    assert.match(
+      generalReviewSource,
+      /testid="scan-possession-given-date"/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /testid="new-rental-possession-given-date"/
+    );
+  });
+
+  it("does not advertise unsupported lifecycle fields in the lease-first scan term review", () => {
+    assert.match(
+      leaseTermFieldsSource,
+      /showLifecycleFields = true/
+    );
+    assert.match(
+      leaseTermFieldsSource,
+      /showStatus = \$derived\(showLifecycleFields && \(section === 'all' \|\| section === 'status'\)\)/
+    );
+    assert.match(
+      leaseFirstImportSource,
+      /<LeaseTermFields[^>]*showLifecycleFields=\{false\}[^>]*testidPrefix="new-rental-lease"/s
+    );
+    assert.doesNotMatch(leaseFirstImportSource, /o\.status\s*=/);
+    assert.doesNotMatch(leaseFirstImportSource, /o\.notes\s*=/);
   });
 });

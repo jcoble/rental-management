@@ -427,11 +427,11 @@ public class AccountingConnectionService
     /// promote any transactions that were parked waiting on it (D-3). Stamps the confirming user for audit.
     /// </summary>
     public async Task<ConfirmAccountingMappingResponse> ConfirmMappingAsync(
-        int portfolioId, AccountingProvider provider, int userId,
+        WorkspaceReadScope scope, AccountingProvider provider,
         ConfirmAccountingMappingRequest request, CancellationToken ct)
     {
         var conn = await _db.AccountingConnections.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct)
+            .FirstOrDefaultAsync(c => c.PortfolioId == scope.PortfolioId && c.Provider == provider, ct)
             ?? throw new InvalidOperationException(
                 $"No {provider} connection. Connect the provider first.");
 
@@ -444,14 +444,18 @@ public class AccountingConnectionService
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "accounting.mapping.confirm",
-                $"{portfolioId}:{conn.Id}:{userId}:" +
+                $"{scope.PortfolioId}:{conn.Id}:{scope.UserId}:" +
                 $"{OperationDigest($"{externalType}\u001f{externalId}")}:" +
                 OperationDigest(clientOperationId)),
             new ConfirmAccountingMappingCommand(
-                portfolioId,
+                scope.PortfolioId,
                 conn.Id,
                 provider,
-                userId,
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
+                CapabilityKeys.IntegrationsManage,
                 externalType,
                 externalId,
                 Normalize(request.ExternalDisplayName),
@@ -473,9 +477,8 @@ public class AccountingConnectionService
             while (hasMore && outcome.Value.ContinuationId is Guid continuationId)
             {
                 var continued = await ContinueMappingPromotionAsync(
-                    portfolioId,
+                    scope,
                     provider,
-                    userId,
                     continuationId,
                     new ContinueAccountingMappingPromotionRequest
                     {
@@ -510,15 +513,14 @@ public class AccountingConnectionService
     }
 
     public async Task<ContinueAccountingMappingPromotionResponse> ContinueMappingPromotionAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AccountingProvider provider,
-        int userId,
         Guid continuationId,
         ContinueAccountingMappingPromotionRequest request,
         CancellationToken ct)
     {
         var connectionId = await _db.AccountingConnections.AsNoTracking()
-            .Where(row => row.PortfolioId == portfolioId && row.Provider == provider)
+            .Where(row => row.PortfolioId == scope.PortfolioId && row.Provider == provider)
             .Select(row => (int?)row.Id)
             .SingleOrDefaultAsync(ct)
             ?? throw new InvalidOperationException($"No {provider} connection. Connect the provider first.");
@@ -528,12 +530,16 @@ public class AccountingConnectionService
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "accounting.mapping.promote.continue",
-                $"{portfolioId}:{connectionId}:{continuationId:N}:{userId}:{OperationDigest(clientOperationId)}"),
+                $"{scope.PortfolioId}:{connectionId}:{continuationId:N}:{scope.UserId}:{OperationDigest(clientOperationId)}"),
             new ContinueAccountingMappingPromotionCommand(
-                portfolioId,
+                scope.PortfolioId,
                 connectionId,
                 continuationId,
-                userId,
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
+                CapabilityKeys.IntegrationsManage,
                 clientOperationId,
                 _timeProvider.UtcNow()),
             new AtomicJsonResultCodec<ContinueAccountingMappingPromotionResult>(

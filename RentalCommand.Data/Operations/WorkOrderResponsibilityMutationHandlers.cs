@@ -6,31 +6,43 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Operations;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Operations;
 
 public sealed class CloseWorkOrderResponsibilityHandler
-    : IAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>,
-      IAtomicReplayAuthorizer<CloseWorkOrderResponsibilityCommand>
+    : IAtomicCommandHandler<CloseWorkOrderResponsibilityCommand, CloseWorkOrderResponsibilityResult>
 {
+    private readonly RentalCommandDbContext _db;
+    private readonly WorkOrderResponsibilityAccessRevisionGuard _accessRevisionGuard;
+
+    public CloseWorkOrderResponsibilityHandler(
+        RentalCommandDbContext db,
+        WorkOrderResponsibilityAccessRevisionGuard accessRevisionGuard)
+    {
+        _db = db;
+        _accessRevisionGuard = accessRevisionGuard;
+    }
+
     public async Task<CloseWorkOrderResponsibilityResult> HandleAsync(
-        CloseWorkOrderResponsibilityCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.ActorAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", command.ActorAccessContextId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         await WorkOrderResponsibilityCommandAuthorization.AuthorizeManagerAsync(command.PortfolioId,
             command.ActorUserId, command.ActorAuthSessionId, command.ActorAccessContextId,
-            command.ActorAccessRevision, command.WorkOrderId, attempt.Persistence, now, ct);
+            command.ActorAccessRevision, command.WorkOrderId, _db, securityNowUtc, businessNowUtc, ct);
 
-        var responsibility = await attempt.Persistence.Query<WorkOrderResponsibility>()
+        var responsibility = await _db.Set<WorkOrderResponsibility>()
             .SingleOrDefaultAsync(item => item.Id == command.ResponsibilityId &&
                 item.WorkOrderId == command.WorkOrderId && item.PortfolioId == command.PortfolioId &&
                 item.EffectiveToUtc == null, ct)
             ?? throw new DomainValidationException("The responsibility is no longer current.");
-        var affectedContextId = await attempt.Persistence.Query<WorkspaceMembership>().AsNoTracking()
+        var affectedContextId = await _db.Set<WorkspaceMembership>().AsNoTracking()
             .Where(item => item.Id == responsibility.WorkspaceMembershipId &&
                            item.PortfolioId == command.PortfolioId)
             .Select(item => item.AccessContextId)
@@ -40,50 +52,52 @@ public sealed class CloseWorkOrderResponsibilityHandler
             throw new DomainValidationException("The access revision expectation must identify the assignee.");
 
         if (affectedContextId != command.ActorAccessContextId)
-            await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, affectedContextId, ct);
-        var context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            await context.AcquireLockAsync("WorkspaceAccessContext", affectedContextId, ct);
+        var accessContext = await _db.Set<WorkspaceAccessContext>()
             .SingleOrDefaultAsync(item => item.Id == affectedContextId &&
                                           item.PortfolioId == command.PortfolioId, ct)
             ?? throw new AccessContextUnavailableException();
         var expected = command.AccessRevisionExpectations[0].ExpectedRevision;
-        if (context.AccessRevision != expected)
-            throw new StaleAccessRevisionException(expected, context.AccessRevision);
-        context.UpdatedAtUtc = now;
-        context.AdvanceRevision(expected);
+        if (accessContext.AccessRevision != expected)
+            throw new StaleAccessRevisionException(expected, accessContext.AccessRevision);
+        accessContext.UpdatedAtUtc = securityNowUtc;
+        accessContext.AdvanceRevision(expected);
 
-        responsibility.EffectiveToUtc = now;
-        responsibility.EndedAtUtc = now;
+        responsibility.EffectiveToUtc = businessNowUtc;
+        responsibility.EndedAtUtc = businessNowUtc;
         responsibility.EndedByUserId = command.ActorUserId;
         responsibility.EndedByAccessContextId = command.ActorAccessContextId;
         responsibility.EndedReason = command.Reason.Trim();
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(WorkOrderResponsibility), command.WorkOrderId, AuditLogOperation.Updated,
             command.ActorUserId, NewValues: JsonSerializer.Serialize(new
             {
                 command.ResponsibilityId,
-                EffectiveToUtc = now,
-            }), ChangeReason: command.Reason.Trim()), now);
-        attempt.StageOutbox(new OutboxMessage
+                EffectiveToUtc = businessNowUtc,
+            }), ChangeReason: command.Reason.Trim()), businessNowUtc);
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = nameof(WorkOrder), entityId = command.WorkOrderId }),
             IdempotencyKey = $"work-order-responsibility-close:{command.DeliveryIdempotencyKey}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            NextAttemptAtUtc = businessNowUtc,
         });
-        return new(command.ResponsibilityId, command.WorkOrderId, now,
-            new Dictionary<int, long> { [context.Id] = context.AccessRevision });
+        await _accessRevisionGuard.ValidatePendingMutationAsync(
+            _db, command.AccessRevisionExpectations, ct);
+        return new(command.ResponsibilityId, command.WorkOrderId, businessNowUtc,
+            [new WorkspaceAccessRevisionExpectation(accessContext.Id, accessContext.AccessRevision)]);
     }
 
-    public async Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
         await WorkOrderResponsibilityCommandAuthorization.AuthorizeManagerAsync(command.PortfolioId,
             command.ActorUserId, command.ActorAuthSessionId, command.ActorAccessContextId,
-            command.ActorAccessRevision, command.WorkOrderId, persistence, now, ct);
+            command.ActorAccessRevision, command.WorkOrderId, _db, securityNowUtc, businessNowUtc, ct);
     }
 
     private static void Validate(CloseWorkOrderResponsibilityCommand command)
@@ -97,18 +111,23 @@ public sealed class CloseWorkOrderResponsibilityHandler
 }
 
 public sealed class UpdateAssignedWorkOrderHandler
-    : IAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>,
-      IAtomicReplayAuthorizer<UpdateAssignedWorkOrderCommand>
+    : IAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateAssignedWorkOrderHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<UpdateAssignedWorkOrderResult> HandleAsync(
-        UpdateAssignedWorkOrderCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkOrder, command.WorkOrderId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.ActorAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        var workOrder = await AuthorizeAndLoadAsync(command, attempt.Persistence, now, tracking: true, ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", command.ActorAccessContextId, ct);
+        var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        var workOrder = await AuthorizeAndLoadAsync(
+            command, _db, securityNowUtc, businessNowUtc, tracking: true, ct);
         if (workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc)
             return new(UpdateAssignedWorkOrderOutcome.Stale, workOrder.Id, workOrder.Status,
                 workOrder.ScheduledFor, workOrder.ScheduledWindowEnd, workOrder.CompletedAt, workOrder.UpdatedAt);
@@ -135,24 +154,27 @@ public sealed class UpdateAssignedWorkOrderHandler
         if (command.ScheduledForUtc is not null) workOrder.ScheduledFor = command.ScheduledForUtc;
         if (command.ScheduledWindowEndUtc is not null) workOrder.ScheduledWindowEnd = command.ScheduledWindowEndUtc;
         if (command.CompletedAtUtc is not null) workOrder.CompletedAt = command.CompletedAtUtc;
-        if (workOrder.Status == WorkOrderStatus.Completed) workOrder.CompletedAt ??= now;
-        workOrder.UpdatedAt = now;
+        if (workOrder.Status == WorkOrderStatus.Completed) workOrder.CompletedAt ??= businessNowUtc;
+        workOrder.UpdatedAt = businessNowUtc;
+        var eventNow = WorkOperationValidation.EventTimestamp(workOrder.RequestedAt, businessNowUtc);
 
         var note = command.TechnicianNote?.Trim();
         if (workOrder.Status != fromStatus || note is not null)
-            attempt.Persistence.Add(new WorkOrderStatusEvent
+            _db.Add(new WorkOrderStatusEvent
             {
                 PortfolioId = command.PortfolioId,
                 WorkOrderId = command.WorkOrderId,
                 FromStatus = fromStatus,
                 ToStatus = workOrder.Status,
+                Kind = note is null && workOrder.Status == fromStatus ? "Activity" : "Status",
+                Visibility = "Public",
                 Note = note,
                 ChangedByUserId = command.ActorUserId,
                 ChangedByLabel = "Maintenance technician",
-                CreatedAtUtc = now,
+                CreatedAtUtc = eventNow,
             });
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(WorkOrder),
+        context.UseDatabaseWallClockForAudit(businessNowUtc);
+        context.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(WorkOrder),
             command.WorkOrderId, AuditLogOperation.Updated, command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new
             {
@@ -161,43 +183,44 @@ public sealed class UpdateAssignedWorkOrderHandler
                 workOrder.ScheduledWindowEnd,
                 workOrder.CompletedAt,
                 TechnicianNote = note,
-            }), ChangeReason: "Assigned technician operational update"), now);
-        attempt.StageOutbox(new OutboxMessage
+            }), ChangeReason: "Assigned technician operational update"), businessNowUtc);
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "data-update",
             Payload = JsonSerializer.Serialize(new { entityType = nameof(WorkOrder), entityId = command.WorkOrderId }),
             IdempotencyKey = $"assigned-work-order-update:{command.DeliveryIdempotencyKey}",
-            CreatedAtUtc = now,
-            NextAttemptAtUtc = now,
+            CreatedAtUtc = businessNowUtc,
+            NextAttemptAtUtc = businessNowUtc,
         });
         return new(UpdateAssignedWorkOrderOutcome.Applied, workOrder.Id, workOrder.Status, workOrder.ScheduledFor,
-            workOrder.ScheduledWindowEnd, workOrder.CompletedAt, now);
+            workOrder.ScheduledWindowEnd, workOrder.CompletedAt, businessNowUtc);
     }
 
-    public async Task AuthorizeReplayAsync(UpdateAssignedWorkOrderCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        _ = await AuthorizeAndLoadAsync(command, persistence, now, tracking: false, ct);
+        var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var businessNowUtc = command.BusinessNowUtc;
+        _ = await AuthorizeAndLoadAsync(command, _db, securityNowUtc, businessNowUtc, tracking: false, ct);
     }
 
     private static async Task<WorkOrder> AuthorizeAndLoadAsync(UpdateAssignedWorkOrderCommand command,
-        IAtomicPersistenceSession persistence, DateTime now, bool tracking, CancellationToken ct)
+        RentalCommandDbContext db, DateTime securityNowUtc, DateTime businessNowUtc, bool tracking,
+        CancellationToken ct)
     {
-        var query = persistence.Query<WorkOrder>();
+        IQueryable<WorkOrder> query = db.Set<WorkOrder>();
         if (!tracking) query = query.AsNoTracking();
         var result = await query
             .Where(item => item.Id == command.WorkOrderId && item.PortfolioId == command.PortfolioId)
             .Where(item =>
-                persistence.Query<AuthSession>().Any(session =>
+                db.Set<AuthSession>().Any(session =>
                     session.Id == command.ActorAuthSessionId &&
                     session.UserId == command.ActorUserId &&
                     session.ActiveAccessContextId == command.ActorAccessContextId &&
                     session.Status == AuthSessionStatus.Active &&
                     session.RevokedAtUtc == null &&
-                    session.ExpiresAtUtc > now) &&
-                persistence.Query<WorkspaceAccessContext>().Any(context =>
+                    session.ExpiresAtUtc > securityNowUtc) &&
+                db.Set<WorkspaceAccessContext>().Any(context =>
                     context.Id == command.ActorAccessContextId &&
                     context.UserId == command.ActorUserId &&
                     context.PortfolioId == item.PortfolioId &&
@@ -207,24 +230,27 @@ public sealed class UpdateAssignedWorkOrderHandler
                     context.RevokedAtUtc == null &&
                     context.Membership != null &&
                     context.Membership.Status == WorkspaceMembershipStatus.Active &&
+                    context.Membership.EffectiveFromUtc <= businessNowUtc &&
+                    (context.Membership.EffectiveToUtc == null ||
+                     context.Membership.EffectiveToUtc > businessNowUtc) &&
                     context.Membership.RoleAssignments.Any(assignment =>
                         assignment.Status == MembershipRoleAssignmentStatus.Active &&
                         assignment.SuspendedAtUtc == null &&
                         assignment.RevokedAtUtc == null &&
-                        assignment.EffectiveFromUtc <= now &&
-                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
+                        assignment.EffectiveFromUtc <= businessNowUtc &&
+                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > businessNowUtc) &&
                         assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
                         assignment.RoleProfile!.Capabilities.Any(capability =>
                             capability.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate &&
                             capability.CapabilityDefinition.AuthorizationTargetKind ==
                                 CapabilityAuthorizationTargetKind.WorkOrder) &&
-                        persistence.Query<WorkOrderResponsibility>().Any(responsibility =>
+                        db.Set<WorkOrderResponsibility>().Any(responsibility =>
                             responsibility.WorkOrderId == item.Id &&
                             responsibility.PortfolioId == item.PortfolioId &&
                             responsibility.WorkspaceMembershipId == context.Membership.Id &&
                             responsibility.MembershipRoleAssignmentId == assignment.Id &&
-                            responsibility.EffectiveFromUtc <= now &&
-                            (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > now))))
+                            responsibility.EffectiveFromUtc <= businessNowUtc &&
+                            (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > businessNowUtc))))
             )
             .SingleOrDefaultAsync(ct);
         return result ?? throw new UnauthorizedAccessException("The technician is not currently assigned to this work order.");
@@ -256,14 +282,14 @@ public sealed class UpdateAssignedWorkOrderHandler
 internal static class WorkOrderResponsibilityCommandAuthorization
 {
     internal static async Task AuthorizeManagerAsync(int portfolioId, int actorUserId, Guid actorSessionId,
-        int actorContextId, long actorRevision, int workOrderId, IAtomicPersistenceSession persistence,
-        DateTime now, CancellationToken ct)
+        int actorContextId, long actorRevision, int workOrderId, RentalCommandDbContext db,
+        DateTime securityNowUtc, DateTime businessNowUtc, CancellationToken ct)
     {
-        var allowed = await persistence.Query<WorkOrder>()
+        var allowed = await db.Set<WorkOrder>()
             .AsNoTracking()
             .Where(item => item.Id == workOrderId && item.PortfolioId == portfolioId)
             .AnyAsync(
-                item => persistence.Query<WorkspaceAccessContext>().AsNoTracking().Any(context =>
+                item => db.Set<WorkspaceAccessContext>().AsNoTracking().Any(context =>
                     context.Id == actorContextId &&
                     context.UserId == actorUserId &&
                     context.PortfolioId == item.PortfolioId &&
@@ -271,21 +297,24 @@ internal static class WorkOrderResponsibilityCommandAuthorization
                     context.Status == WorkspaceAccessContextStatus.Active &&
                     context.SuspendedAtUtc == null &&
                     context.RevokedAtUtc == null &&
-                    persistence.Query<AuthSession>().AsNoTracking().Any(session =>
+                    db.Set<AuthSession>().AsNoTracking().Any(session =>
                         session.Id == actorSessionId &&
                         session.UserId == actorUserId &&
                         session.ActiveAccessContextId == context.Id &&
                         session.Status == AuthSessionStatus.Active &&
                         session.RevokedAtUtc == null &&
-                        session.ExpiresAtUtc > now) &&
+                        session.ExpiresAtUtc > securityNowUtc) &&
                     context.Membership != null &&
                     context.Membership.Status == WorkspaceMembershipStatus.Active &&
+                    context.Membership.EffectiveFromUtc <= businessNowUtc &&
+                    (context.Membership.EffectiveToUtc == null ||
+                     context.Membership.EffectiveToUtc > businessNowUtc) &&
                     context.Membership.RoleAssignments.Any(assignment =>
                         assignment.Status == MembershipRoleAssignmentStatus.Active &&
                         assignment.SuspendedAtUtc == null &&
                         assignment.RevokedAtUtc == null &&
-                        assignment.EffectiveFromUtc <= now &&
-                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
+                        assignment.EffectiveFromUtc <= businessNowUtc &&
+                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > businessNowUtc) &&
                         assignment.RoleProfile!.Capabilities.Any(capability =>
                             capability.CapabilityDefinition!.Key == CapabilityKeys.ResponsibilityAssignExistingMember &&
                             capability.CapabilityDefinition.AuthorizationTargetKind ==

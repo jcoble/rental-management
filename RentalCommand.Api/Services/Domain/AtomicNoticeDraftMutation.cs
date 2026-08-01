@@ -2,9 +2,13 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Notifications;
+using RentalCommand.Data.Notifications;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -13,12 +17,16 @@ public enum AtomicNoticeDraftOperation { Generate, Update, Dismiss }
 public sealed record AtomicNoticeDraftMutationCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicNoticeDraftOperation Operation,
     int NoticeDraftId,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicNoticeDraftMutationResult(
@@ -26,7 +34,7 @@ public sealed record AtomicNoticeDraftMutationResult(
     bool Applied,
     int NoticeDraftId,
     int CreatedCount,
-    string ResponseJson) : IAtomicResultData;
+    string ResponseJson);
 
 /// <summary>
 /// Receipt-backed tenant-notice draft generation and review. Generation delegates to the one
@@ -34,28 +42,31 @@ public sealed record AtomicNoticeDraftMutationResult(
 /// transaction as their semantic audit and durable data-update outbox message.
 /// </summary>
 public sealed class AtomicNoticeDraftMutationHandler
-    : IAtomicCommandHandler<AtomicNoticeDraftMutationCommand, AtomicNoticeDraftMutationResult>,
-      IAtomicReplayAuthorizer<AtomicNoticeDraftMutationCommand>
+    : IAtomicCommandHandler<AtomicNoticeDraftMutationCommand, AtomicNoticeDraftMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicNoticeDraftMutationHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicNoticeDraftMutationResult> HandleAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
         if (command.NoticeDraftId > 0)
         {
-            await attempt.Locking.AcquireAsync(
-                AtomicLockResource.NoticeDraft, command.NoticeDraftId, ct);
+            await attempt.AcquireLockAsync(
+                "NoticeDraft", command.NoticeDraftId, ct);
         }
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         attempt.UseDatabaseWallClockForAudit(now);
-        await RequireCurrentIdentityAsync(command, attempt.Persistence, now, ct);
+        await RequireCurrentIdentityAsync(command, _db, now, ct);
 
         return command.Operation switch
         {
@@ -71,32 +82,33 @@ public sealed class AtomicNoticeDraftMutationHandler
 
     public async Task AuthorizeReplayAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await RequireCurrentIdentityAsync(command, persistence, now, ct);
-        if (!await HasOperationAuthorityAsync(command, persistence, now, ct))
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        await RequireCurrentIdentityAsync(command, _db, now, ct);
+        if (!await HasOperationAuthorityAsync(command, _db, now, ct))
         {
             throw new UnauthorizedAccessException(
                 "The current Team role can no longer manage the requested tenant notice scope.");
         }
     }
 
-    private static async Task<AtomicNoticeDraftMutationResult> GenerateAsync(
+    private async Task<AtomicNoticeDraftMutationResult> GenerateAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
         var request = Read<GenerateNoticeDraftsRequest>(command);
-        if (!await HasGenerationAuthorityAsync(command, request, attempt.Persistence, now, ct))
+        if (!await HasGenerationAuthorityAsync(command, request, _db, now, ct))
         {
             return EmptyGeneration();
         }
 
-        var generated = await attempt.NoticeDrafts.GenerateManualAsync(
+        var generated = await AtomicNoticeDraftPersistence.GenerateManualAsync(_db,
+            attempt,
             Scope(command),
             request.RecipientTenantId,
             request.LeaseManagementId,
@@ -132,14 +144,14 @@ public sealed class AtomicNoticeDraftMutationHandler
             JsonSerializer.Serialize(response));
     }
 
-    private static async Task<AtomicNoticeDraftMutationResult> UpdateAsync(
+    private async Task<AtomicNoticeDraftMutationResult> UpdateAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
         var request = Read<UpdateNoticeDraftRequest>(command);
-        var draft = await AuthorizedDrafts(command, attempt.Persistence, now)
+        var draft = await AuthorizedDrafts(command, _db, now)
             .SingleOrDefaultAsync(candidate =>
                 candidate.Id == command.NoticeDraftId && candidate.Status == "Draft", ct);
         if (draft is null) return Missing();
@@ -151,16 +163,16 @@ public sealed class AtomicNoticeDraftMutationHandler
             command, draft.Id, AuditLogOperation.Updated, "Tenant notice draft copy updated"));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, draft.Id, "update", now);
-        return Applied(draft.Id, await SnapshotJsonAsync(command, attempt.Persistence, now, draft.Id, ct));
+        return Applied(draft.Id, await SnapshotJsonAsync(command, _db, now, draft.Id, ct));
     }
 
-    private static async Task<AtomicNoticeDraftMutationResult> DismissAsync(
+    private async Task<AtomicNoticeDraftMutationResult> DismissAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var draft = await AuthorizedDrafts(command, attempt.Persistence, now)
+        var draft = await AuthorizedDrafts(command, _db, now)
             .SingleOrDefaultAsync(candidate =>
                 candidate.Id == command.NoticeDraftId && candidate.Status == "Draft", ct);
         if (draft is null) return Missing();
@@ -172,36 +184,36 @@ public sealed class AtomicNoticeDraftMutationHandler
             command, draft.Id, AuditLogOperation.Updated, "Tenant notice draft dismissed"));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, draft.Id, "update", now);
-        return Applied(draft.Id, await SnapshotJsonAsync(command, attempt.Persistence, now, draft.Id, ct));
+        return Applied(draft.Id, await SnapshotJsonAsync(command, _db, now, draft.Id, ct));
     }
 
-    private static async Task<bool> HasOperationAuthorityAsync(
+    private async Task<bool> HasOperationAuthorityAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
         if (command.Operation is AtomicNoticeDraftOperation.Update or AtomicNoticeDraftOperation.Dismiss)
         {
-            return await AuthorizedDrafts(command, persistence, now)
+            return await AuthorizedDrafts(command, db, now)
                 .AnyAsync(draft => draft.Id == command.NoticeDraftId, ct);
         }
 
         return await HasGenerationAuthorityAsync(
-            command, Read<GenerateNoticeDraftsRequest>(command), persistence, now, ct);
+            command, Read<GenerateNoticeDraftsRequest>(command), db, now, ct);
     }
 
-    private static Task<bool> HasGenerationAuthorityAsync(
+    private Task<bool> HasGenerationAuthorityAsync(
         AtomicNoticeDraftMutationCommand command,
         GenerateNoticeDraftsRequest request,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        var authorizedProperties = AuthorizedProperties(command, persistence, now);
+        var authorizedProperties = AuthorizedProperties(command, db, now);
         if (!HasRelationshipFilter(request)) return authorizedProperties.AnyAsync(ct);
 
-        return persistence.Query<LeaseManagement>().AsNoTracking().AnyAsync(management =>
+        return db.Set<LeaseManagement>().AsNoTracking().AnyAsync(management =>
             management.PortfolioId == command.PortfolioId
             && authorizedProperties.Any(property =>
                 property.Id == management.PropertyId
@@ -220,13 +232,13 @@ public sealed class AtomicNoticeDraftMutationHandler
                     && entry.Id == request.TenantLedgerEntryId.Value)), ct);
     }
 
-    private static IQueryable<NoticeDraft> AuthorizedDrafts(
+    private IQueryable<NoticeDraft> AuthorizedDrafts(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var authorizedProperties = AuthorizedProperties(command, persistence, now);
-        return persistence.Query<NoticeDraft>().Where(draft =>
+        var authorizedProperties = AuthorizedProperties(command, db, now);
+        return db.Set<NoticeDraft>().Where(draft =>
                 draft.PortfolioId == command.PortfolioId
                 && draft.PropertyId != null
                 && authorizedProperties.Any(property =>
@@ -235,13 +247,13 @@ public sealed class AtomicNoticeDraftMutationHandler
             .AsTracking();
     }
 
-    private static IQueryable<Property> AuthorizedProperties(
+    private IQueryable<Property> AuthorizedProperties(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = EffectiveAssignments(command, persistence, now);
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        var assignments = EffectiveAssignments(command, db, now);
+        return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId
             && property.DeletedAt == null
             && assignments.Any(assignment =>
@@ -252,11 +264,11 @@ public sealed class AtomicNoticeDraftMutationHandler
                     && selected.PropertyId == property.Id)));
     }
 
-    private static IQueryable<MembershipRoleAssignment> EffectiveAssignments(
+    private IQueryable<MembershipRoleAssignment> EffectiveAssignments(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now) =>
-        persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+        db.Set<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null
@@ -271,17 +283,17 @@ public sealed class AtomicNoticeDraftMutationHandler
             && assignment.WorkspaceMembership.EffectiveFromUtc <= now
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
                 || assignment.WorkspaceMembership.EffectiveToUtc > now)
-            && IdentityAuthorized(command, persistence, now).Any()
+            && IdentityAuthorized(command, db, now).Any()
             && assignment.RoleProfile!.Capabilities.Any(grant =>
                 grant.CapabilityDefinition!.Key == CapabilityKeys.TenantNoticesManage
                 && grant.CapabilityDefinition.AuthorizationTargetKind
                     == CapabilityAuthorizationTargetKind.Property));
 
-    private static IQueryable<WorkspaceAccessContext> IdentityAuthorized(
+    private IQueryable<WorkspaceAccessContext> IdentityAuthorized(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now) =>
-        persistence.Query<WorkspaceAccessContext>().AsNoTracking().Where(context =>
+        db.Set<WorkspaceAccessContext>().AsNoTracking().Where(context =>
             context.Id == command.AccessContextId
             && context.UserId == command.ActorUserId
             && context.PortfolioId == command.PortfolioId
@@ -289,7 +301,7 @@ public sealed class AtomicNoticeDraftMutationHandler
             && context.Status == WorkspaceAccessContextStatus.Active
             && context.SuspendedAtUtc == null
             && context.RevokedAtUtc == null
-            && persistence.Query<AuthSession>().Any(session =>
+            && db.Set<AuthSession>().Any(session =>
                 session.Id == command.AuthSessionId
                 && session.UserId == command.ActorUserId
                 && session.ActiveAccessContextId == command.AccessContextId
@@ -297,23 +309,23 @@ public sealed class AtomicNoticeDraftMutationHandler
                 && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > now));
 
-    private static async Task RequireCurrentIdentityAsync(
+    private async Task RequireCurrentIdentityAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         CancellationToken ct)
     {
-        if (!await IdentityAuthorized(command, persistence, now).AnyAsync(ct))
+        if (!await IdentityAuthorized(command, db, now).AnyAsync(ct))
         {
             throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
         }
     }
 
-    private static IQueryable<NoticeDraftResponse> SnapshotQuery(
+    private IQueryable<NoticeDraftResponse> SnapshotQuery(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now) =>
-        AuthorizedDrafts(command, persistence, now).AsNoTracking().Select(draft =>
+        AuthorizedDrafts(command, db, now).AsNoTracking().Select(draft =>
             new NoticeDraftResponse
             {
                 Id = draft.Id,
@@ -343,16 +355,16 @@ public sealed class AtomicNoticeDraftMutationHandler
                 DismissedAt = draft.DismissedAt,
             });
 
-    private static async Task<string> SnapshotJsonAsync(
+    private async Task<string> SnapshotJsonAsync(
         AtomicNoticeDraftMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         int id,
         CancellationToken ct) =>
-        JsonSerializer.Serialize(await SnapshotQuery(command, persistence, now)
+        JsonSerializer.Serialize(await SnapshotQuery(command, db, now)
             .SingleAsync(draft => draft.Id == id, ct));
 
-    private static NoticeDraftResponse Map(AtomicGeneratedTenantNoticeDraft draft) => new()
+    private NoticeDraftResponse Map(AtomicGeneratedTenantNoticeDraft draft) => new()
     {
         Id = draft.DraftId,
         LeaseManagementId = draft.LeaseManagementId,
@@ -380,17 +392,17 @@ public sealed class AtomicNoticeDraftMutationHandler
         DismissedAt = draft.DismissedAt,
     };
 
-    private static bool HasRelationshipFilter(GenerateNoticeDraftsRequest request) =>
+    private bool HasRelationshipFilter(GenerateNoticeDraftsRequest request) =>
         request.RecipientTenantId is not null
         || request.LeaseManagementId is not null
         || request.TenantAccountId is not null
         || request.TenantLedgerEntryId is not null;
 
-    private static WorkspaceReadScope Scope(AtomicNoticeDraftMutationCommand command) =>
+    private WorkspaceReadScope Scope(AtomicNoticeDraftMutationCommand command) =>
         new(command.PortfolioId, command.ActorUserId, command.AuthSessionId,
             command.AccessContextId, command.ExpectedAccessRevision);
 
-    private static AtomicSemanticAudit Audit(
+    private AtomicSemanticAudit Audit(
         AtomicNoticeDraftMutationCommand command,
         int id,
         AuditLogOperation operation,
@@ -398,8 +410,8 @@ public sealed class AtomicNoticeDraftMutationHandler
         new(command.PortfolioId, nameof(NoticeDraft), id, operation,
             UserId: command.ActorUserId, ChangeReason: reason);
 
-    private static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+    private void StageDataUpdate(
+        IAtomicCommandContext attempt,
         AtomicNoticeDraftMutationCommand command,
         int entityId,
         string operation,
@@ -420,11 +432,11 @@ public sealed class AtomicNoticeDraftMutationHandler
             NextAttemptAtUtc = now,
         });
 
-    private static T Read<T>(AtomicNoticeDraftMutationCommand command) where T : class =>
+    private T Read<T>(AtomicNoticeDraftMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Tenant notice mutation request payload is invalid.");
 
-    private static void Validate(AtomicNoticeDraftMutationCommand command)
+    private void Validate(AtomicNoticeDraftMutationCommand command)
     {
         if (command.PortfolioId <= 0
             || command.ActorUserId <= 0
@@ -443,12 +455,12 @@ public sealed class AtomicNoticeDraftMutationHandler
         }
     }
 
-    private static AtomicNoticeDraftMutationResult EmptyGeneration() =>
+    private AtomicNoticeDraftMutationResult EmptyGeneration() =>
         new(true, false, 0, 0, JsonSerializer.Serialize(new GenerateNoticeDraftsResponse()));
 
-    private static AtomicNoticeDraftMutationResult Missing() => new(false, false, 0, 0, "{}");
+    private AtomicNoticeDraftMutationResult Missing() => new(false, false, 0, 0, "{}");
 
-    private static AtomicNoticeDraftMutationResult Applied(int id, string responseJson) =>
+    private AtomicNoticeDraftMutationResult Applied(int id, string responseJson) =>
         new(true, true, id, 0, responseJson);
 }
 

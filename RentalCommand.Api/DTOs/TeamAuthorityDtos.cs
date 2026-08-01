@@ -31,6 +31,7 @@ public sealed record TeamAssignmentSummaryDto(
     MembershipRoleAssignmentStatus Status,
     MembershipRoleAssignmentScopeKind ScopeKind,
     int SelectedPropertyCount,
+    IReadOnlyList<int> SelectedPropertyIds,
     DateTime EffectiveFromUtc,
     DateTime? EffectiveToUtc);
 

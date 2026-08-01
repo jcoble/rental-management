@@ -54,10 +54,16 @@ class _OnboardingChoiceScreenState
         _submitting = false;
         _selected = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
+  }
+
+  Future<void> _signInWithDifferentAccount() async {
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    await ref.read(authControllerProvider.notifier).logout();
   }
 
   @override
@@ -167,8 +173,11 @@ class _OnboardingChoiceScreenState
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.check_rounded,
-                          size: 15, color: scheme.primary),
+                      Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: scheme.primary,
+                      ),
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
@@ -182,6 +191,13 @@ class _OnboardingChoiceScreenState
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    key: const Key('onboarding-sign-out'),
+                    onPressed: _submitting ? null : _signInWithDifferentAccount,
+                    icon: const Icon(Icons.logout_rounded),
+                    label: const Text('Sign in with a different account'),
                   ),
                 ],
               ),
@@ -270,8 +286,10 @@ class _ChoiceCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: accentContainer,
                     borderRadius: BorderRadius.circular(999),
@@ -322,8 +340,11 @@ class _ChoiceCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(Icons.arrow_forward_rounded,
-                          size: 18, color: accent),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 18,
+                        color: accent,
+                      ),
                     ],
                   ],
                 ),

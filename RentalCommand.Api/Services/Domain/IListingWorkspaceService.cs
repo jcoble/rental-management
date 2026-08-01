@@ -28,7 +28,7 @@ public interface IListingWorkspaceService
     Task<ListingWorkspaceResponse?> UnpublishConnectedAsync(WorkspaceReadScope scope, int unitId, int publicationId,
         string clientOperationId, CancellationToken ct = default);
     Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default);
-    Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
+    Task<ExternalListingSignalResponse?> IngestSignalAsync(WorkspaceReadScope scope, int unitId, int publicationId,
         string providerMessageKey, IngestExternalListingSignalRequest request, CancellationToken ct = default);
     Task<ListingWorkspaceResponse?> ConfirmSignalAsync(WorkspaceReadScope scope, int unitId, int signalId, bool accept,
         string clientOperationId,

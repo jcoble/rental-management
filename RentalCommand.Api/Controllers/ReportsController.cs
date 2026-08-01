@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -22,12 +21,11 @@ namespace RentalCommand.Api.Controllers;
 public class ReportsController : ManagementControllerBase
 {
     private readonly IReportsService _service;
-    private readonly TimeProvider _timeProvider;
 
     public ReportsController(IReportsService service, TimeProvider timeProvider)
     {
         _service = service;
-        _timeProvider = timeProvider;
+        _ = timeProvider;
     }
 
     /// <summary>
@@ -128,22 +126,30 @@ public class ReportsController : ManagementControllerBase
     /// <summary>
     /// Vendor 1099 &amp; Payments — per 1099-eligible vendor (and any vendor paid in the year): total paid
     /// in <paramref name="year"/>, whether a W-9 is on file, and review flags (needs W-9, needs 1099).
-    /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
+    /// Defaults to the portfolio business year when <paramref name="year"/> is omitted.
     /// </summary>
     [HttpGet("vendor-1099")]
     [ProducesResponseType(typeof(Vendor1099Response), StatusCodes.Status200OK)]
     public async Task<ActionResult<Vendor1099Response>> Vendor1099([FromQuery] int? year, CancellationToken ct)
-        => Ok(await _service.GetVendor1099Async(GetWorkspaceReadScope(), year ?? _timeProvider.UtcNow().Year, ct));
+    {
+        var scope = GetWorkspaceReadScope();
+        var reportYear = year ?? await _service.GetDefaultAnnualReportYearAsync(scope, ct);
+        return Ok(await _service.GetVendor1099Async(scope, reportYear, ct));
+    }
 
     /// <summary>
     /// Owner Distributions — net distribution per owner for <paramref name="year"/> (rental income minus
     /// expenses and management fee, matching the per-owner statement), with a portfolio total. Defaults to
-    /// the current UTC year when omitted.
+    /// the portfolio business year when omitted.
     /// </summary>
     [HttpGet("owner-distributions")]
     [ProducesResponseType(typeof(OwnerDistributionsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<OwnerDistributionsResponse>> OwnerDistributions([FromQuery] int? year, CancellationToken ct)
-        => Ok(await _service.GetOwnerDistributionsAsync(GetWorkspaceReadScope(), year ?? _timeProvider.UtcNow().Year, ct));
+    {
+        var scope = GetWorkspaceReadScope();
+        var reportYear = year ?? await _service.GetDefaultAnnualReportYearAsync(scope, ct);
+        return Ok(await _service.GetOwnerDistributionsAsync(scope, reportYear, ct));
+    }
 
     /// <summary>
     /// Work Orders / Maintenance — work orders requested in <c>from</c>..<c>to</c>, with per-status counts

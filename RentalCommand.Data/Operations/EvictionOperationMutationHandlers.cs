@@ -10,43 +10,48 @@ using RentalCommand.Core.Operations;
 namespace RentalCommand.Data.Operations;
 
 public sealed class CreateEvictionCaseHandler
-    : IAtomicCommandHandler<CreateEvictionCaseCommand, OperationMutationResult>,
-      IAtomicReplayAuthorizer<CreateEvictionCaseCommand>
+    : IAtomicCommandHandler<CreateEvictionCaseCommand, OperationMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public CreateEvictionCaseHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<OperationMutationResult> HandleAsync(
-        CreateEvictionCaseCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var respondentIds = command.RespondentLeaseManagementPartyIds.Distinct().ToArray();
-        var context = await EvictionOperationAuthorization.AuthorizedManagements(
-                command.PortfolioId, command.Actor, attempt.Persistence, now)
+        var managementContext = await EvictionOperationAuthorization.AuthorizedManagements(
+                command.PortfolioId, command.Actor, _db, businessNow, securityNow)
             .Where(management => management.Id == command.LeaseManagementId)
             .Select(management => new
             {
                 management.PropertyId,
                 management.UnitId,
                 AgreementValid = !command.LeaseAgreementId.HasValue ||
-                    attempt.Persistence.Query<LeaseAgreement>().Any(agreement =>
+                    _db.Set<LeaseAgreement>().Any(agreement =>
                         agreement.Id == command.LeaseAgreementId.Value &&
                         agreement.PortfolioId == command.PortfolioId &&
                         agreement.LeaseManagementId == management.Id),
-                RespondentCount = attempt.Persistence.Query<LeaseManagementParty>().Count(party =>
+                RespondentCount = _db.Set<LeaseManagementParty>().Count(party =>
                     respondentIds.Contains(party.Id) && party.PortfolioId == command.PortfolioId &&
                     party.LeaseManagementId == management.Id),
             })
             .SingleOrDefaultAsync(ct);
-        if (context is null || !context.AgreementValid || context.RespondentCount != respondentIds.Length)
+        if (managementContext is null || !managementContext.AgreementValid ||
+            managementContext.RespondentCount != respondentIds.Length)
             return new(OperationMutationOutcome.NotFound, 0);
 
-        var eventDate = command.FiledOnDateUtc?.Date ?? now.Date;
+        var eventDate = command.FiledOnDateUtc?.Date ?? businessNow.Date;
         var entity = new EvictionCase
         {
             PortfolioId = command.PortfolioId,
             LeaseManagementId = command.LeaseManagementId,
             LeaseAgreementId = command.LeaseAgreementId,
-            PropertyId = context.PropertyId,
-            UnitId = context.UnitId,
+            PropertyId = managementContext.PropertyId,
+            UnitId = managementContext.UnitId,
             Status = command.Status,
             FiledOnDate = command.FiledOnDateUtc?.Date ??
                 (command.Status >= EvictionCaseStatus.Filed ? eventDate : null),
@@ -54,8 +59,8 @@ public sealed class CreateEvictionCaseHandler
             CourtName = EvictionOperationValidation.Normalize(command.CourtName),
             CaseNumber = EvictionOperationValidation.Normalize(command.CaseNumber),
             Notes = EvictionOperationValidation.Normalize(command.Notes),
-            CreatedAt = now,
-            UpdatedAt = now,
+            CreatedAt = businessNow,
+            UpdatedAt = businessNow,
         };
         foreach (var partyId in respondentIds)
         {
@@ -75,54 +80,58 @@ public sealed class CreateEvictionCaseHandler
                 EventType = initialType.Value,
                 EventDate = eventDate,
                 Notes = entity.Notes ?? "Case opened.",
-                CreatedAt = now,
-                UpdatedAt = now,
+                CreatedAt = businessNow,
+                UpdatedAt = businessNow,
             });
         }
 
-        attempt.Persistence.Add(entity);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(entity, EvictionOperationAudit.Case(
+        _db.Add(entity);
+        context.UseDatabaseWallClockForAudit(businessNow);
+        context.BindSemanticAudit(entity, EvictionOperationAudit.Case(
             command.PortfolioId, 0, AuditLogOperation.Created, command.Actor.UserId,
             entity.Status, entity.CaseNumber, "Created eviction case."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
-            attempt.Persistence, command.PortfolioId, entity.Id, ct);
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            _db, command.PortfolioId, entity.Id, ct);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
-            $"eviction-case-create:{command.DeliveryIdempotencyKey}", now));
+            $"eviction-case-create:{command.DeliveryIdempotencyKey}", businessNow));
         foreach (var evt in entity.Events)
         {
-            attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
                 command.PortfolioId, nameof(EvictionCaseEvent), evt.Id,
-                $"eviction-event-create:{command.DeliveryIdempotencyKey}:{evt.Id}", now));
+                $"eviction-event-create:{command.DeliveryIdempotencyKey}:{evt.Id}", businessNow));
         }
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(CreateEvictionCaseCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(CreateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await EvictionOperationAuthorization.AuthorizedManagements(
-                command.PortfolioId, command.Actor, persistence, now)
+                command.PortfolioId, command.Actor, _db, command.BusinessNowUtc, securityNow)
             .AnyAsync(management => management.Id == command.LeaseManagementId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this eviction case.");
     }
 }
 
 public sealed class UpdateEvictionCaseHandler
-    : IAtomicCommandHandler<UpdateEvictionCaseCommand, OperationMutationResult>,
-      IAtomicReplayAuthorizer<UpdateEvictionCaseCommand>
+    : IAtomicCommandHandler<UpdateEvictionCaseCommand, OperationMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public UpdateEvictionCaseHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<OperationMutationResult> HandleAsync(
-        UpdateEvictionCaseCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await EvictionOperationAuthorization.AuthorizedCases(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, _db,
+                businessNow, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.EvictionCaseId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.EvictionCaseId);
 
@@ -134,44 +143,49 @@ public sealed class UpdateEvictionCaseHandler
         if (command.CaseNumber is not null) entity.CaseNumber = EvictionOperationValidation.Normalize(command.CaseNumber);
         if (command.Resolution is not null) entity.Resolution = EvictionOperationValidation.Normalize(command.Resolution);
         if (command.Notes is not null) entity.Notes = EvictionOperationValidation.Normalize(command.Notes);
-        entity.UpdatedAt = now;
+        entity.UpdatedAt = businessNow;
 
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(entity, EvictionOperationAudit.Case(
+        context.UseDatabaseWallClockForAudit(businessNow);
+        context.BindSemanticAudit(entity, EvictionOperationAudit.Case(
             command.PortfolioId, entity.Id, AuditLogOperation.Updated, command.Actor.UserId,
             entity.Status, entity.CaseNumber, "Updated eviction case."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
-            attempt.Persistence, command.PortfolioId, entity.Id, ct);
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            _db, command.PortfolioId, entity.Id, ct);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
-            $"eviction-case-update:{command.DeliveryIdempotencyKey}", now));
+            $"eviction-case-update:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(UpdateEvictionCaseCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(UpdateEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await EvictionOperationAuthorization.AuthorizedCases(
-                command.PortfolioId, command.Actor, persistence, now, tracking: false)
+                command.PortfolioId, command.Actor, _db,
+                command.BusinessNowUtc, securityNow, tracking: false)
             .AnyAsync(item => item.Id == command.EvictionCaseId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this eviction case.");
     }
 }
 
 public sealed class AddEvictionCaseEventHandler
-    : IAtomicCommandHandler<AddEvictionCaseEventCommand, OperationMutationResult>,
-      IAtomicReplayAuthorizer<AddEvictionCaseEventCommand>
+    : IAtomicCommandHandler<AddEvictionCaseEventCommand, OperationMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AddEvictionCaseEventHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<OperationMutationResult> HandleAsync(
-        AddEvictionCaseEventCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await EvictionOperationAuthorization.AuthorizedCases(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, _db,
+                businessNow, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.EvictionCaseId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.EvictionCaseId);
 
@@ -182,82 +196,86 @@ public sealed class AddEvictionCaseEventHandler
             EventType = command.EventType,
             EventDate = command.EventDateUtc.Date,
             Notes = EvictionOperationValidation.Normalize(command.Notes),
-            CreatedAt = now,
-            UpdatedAt = now,
+            CreatedAt = businessNow,
+            UpdatedAt = businessNow,
         };
-        attempt.Persistence.Add(evt);
-        EvictionOperationValidation.ApplyEventToCase(entity, evt, now);
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(evt, new AtomicSemanticAudit(
+        _db.Add(evt);
+        EvictionOperationValidation.ApplyEventToCase(entity, evt, businessNow);
+        context.UseDatabaseWallClockForAudit(businessNow);
+        context.BindSemanticAudit(evt, new AtomicSemanticAudit(
             command.PortfolioId, nameof(EvictionCaseEvent), 0, AuditLogOperation.Created,
             command.Actor.UserId, NewValues: JsonSerializer.Serialize(new
             {
                 evt.EvictionCaseId, evt.EventType, evt.EventDate,
             }), ChangeReason: "Added eviction case event."));
-        attempt.BindSemanticAudit(entity, EvictionOperationAudit.Case(
+        context.BindSemanticAudit(entity, EvictionOperationAudit.Case(
             command.PortfolioId, entity.Id, AuditLogOperation.Updated, command.Actor.UserId,
             entity.Status, entity.CaseNumber, "Applied eviction case event."));
-        await attempt.FlushBusinessAsync(ct);
+        await context.FlushBusinessAsync(ct);
         var snapshot = await EvictionCaseSnapshot.LoadAsync(
-            attempt.Persistence, command.PortfolioId, entity.Id, ct);
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            _db, command.PortfolioId, entity.Id, ct);
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId, nameof(EvictionCaseEvent), evt.Id,
-            $"eviction-event-create:{command.DeliveryIdempotencyKey}", now));
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+            $"eviction-event-create:{command.DeliveryIdempotencyKey}", businessNow));
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
-            $"eviction-case-event:{command.DeliveryIdempotencyKey}", now));
+            $"eviction-case-event:{command.DeliveryIdempotencyKey}", businessNow));
         return new(OperationMutationOutcome.Applied, entity.Id, snapshot);
     }
 
-    public async Task AuthorizeReplayAsync(AddEvictionCaseEventCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(AddEvictionCaseEventCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await EvictionOperationAuthorization.AuthorizedCases(
-                command.PortfolioId, command.Actor, persistence, now, tracking: false)
+                command.PortfolioId, command.Actor, _db,
+                command.BusinessNowUtc, securityNow, tracking: false)
             .AnyAsync(item => item.Id == command.EvictionCaseId, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this eviction case.");
     }
 }
 
 public sealed class DeleteEvictionCaseHandler
-    : IAtomicCommandHandler<DeleteEvictionCaseCommand, OperationMutationResult>,
-      IAtomicReplayAuthorizer<DeleteEvictionCaseCommand>
+    : IAtomicCommandHandler<DeleteEvictionCaseCommand, OperationMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public DeleteEvictionCaseHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<OperationMutationResult> HandleAsync(
-        DeleteEvictionCaseCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+        DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
+        var businessNow = command.BusinessNowUtc;
         var entity = await EvictionOperationAuthorization.AuthorizedCases(
-                command.PortfolioId, command.Actor, attempt.Persistence, now, tracking: true)
+                command.PortfolioId, command.Actor, _db,
+                businessNow, securityNow, tracking: true)
             .SingleOrDefaultAsync(item => item.Id == command.EvictionCaseId, ct);
         if (entity is null) return new(OperationMutationOutcome.NotFound, command.EvictionCaseId);
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(entity, EvictionOperationAudit.Case(
+        entity.DeletedAt = businessNow;
+        entity.UpdatedAt = businessNow;
+        context.UseDatabaseWallClockForAudit(businessNow);
+        context.BindSemanticAudit(entity, EvictionOperationAudit.Case(
             command.PortfolioId, entity.Id, AuditLogOperation.Deleted, command.Actor.UserId,
             entity.Status, entity.CaseNumber, "Deleted eviction case."));
-        attempt.StageOutbox(CreateWorkOrderHandler.DataUpdate(
+        context.StageOutbox(CreateWorkOrderHandler.DataUpdate(
             command.PortfolioId, nameof(EvictionCase), entity.Id,
-            $"eviction-case-delete:{command.DeliveryIdempotencyKey}", now, operation: "delete"));
+            $"eviction-case-delete:{command.DeliveryIdempotencyKey}", businessNow, operation: "delete"));
         return new(OperationMutationOutcome.Applied, entity.Id);
     }
 
-    public async Task AuthorizeReplayAsync(DeleteEvictionCaseCommand command,
-        IAtomicPersistenceSession persistence, CancellationToken ct)
+    public async Task AuthorizeReplayAsync(DeleteEvictionCaseCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         EvictionOperationValidation.Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        var propertyId = await persistence.Query<EvictionCase>().IgnoreQueryFilters().AsNoTracking()
+        var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
+        var propertyId = await _db.Set<EvictionCase>().IgnoreQueryFilters().AsNoTracking()
             .Where(item => item.Id == command.EvictionCaseId && item.PortfolioId == command.PortfolioId)
             .Select(item => (int?)item.PropertyId)
             .SingleOrDefaultAsync(ct);
         if (!propertyId.HasValue || !await StaffOperationAuthorization.CanManagePropertyAsync(
                 command.PortfolioId, command.Actor, propertyId.Value, CapabilityKeys.RentalsManage,
-                persistence, now, ct))
+                _db, command.BusinessNowUtc, securityNow, ct))
             throw new UnauthorizedAccessException("The active assignment cannot manage this eviction case.");
     }
 }
@@ -265,22 +283,23 @@ public sealed class DeleteEvictionCaseHandler
 internal static class EvictionOperationAuthorization
 {
     internal static IQueryable<LeaseManagement> AuthorizedManagements(
-        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence, DateTime now)
+        int portfolioId, StaffOperationActor actor, RentalCommandDbContext db,
+        DateTime businessNow, DateTime securityNow)
     {
         var properties = StaffOperationAuthorization.AuthorizedProperties(
-            portfolioId, actor, CapabilityKeys.RentalsManage, persistence, now);
-        return persistence.Query<LeaseManagement>().AsNoTracking().Where(management =>
+            portfolioId, actor, CapabilityKeys.RentalsManage, db, businessNow, securityNow);
+        return db.Set<LeaseManagement>().AsNoTracking().Where(management =>
             management.PortfolioId == portfolioId &&
             properties.Any(property => property.Id == management.PropertyId));
     }
 
     internal static IQueryable<EvictionCase> AuthorizedCases(
-        int portfolioId, StaffOperationActor actor, IAtomicPersistenceSession persistence,
-        DateTime now, bool tracking)
+        int portfolioId, StaffOperationActor actor, RentalCommandDbContext db,
+        DateTime businessNow, DateTime securityNow, bool tracking)
     {
         var properties = StaffOperationAuthorization.AuthorizedProperties(
-            portfolioId, actor, CapabilityKeys.RentalsManage, persistence, now);
-        var query = persistence.Query<EvictionCase>().Where(item =>
+            portfolioId, actor, CapabilityKeys.RentalsManage, db, businessNow, securityNow);
+        var query = db.Set<EvictionCase>().Where(item =>
             item.PortfolioId == portfolioId && properties.Any(property => property.Id == item.PropertyId));
         return tracking ? query : query.AsNoTracking();
     }
@@ -373,10 +392,10 @@ internal static class EvictionOperationAudit
 
 internal static class EvictionCaseSnapshot
 {
-    internal static async Task<string> LoadAsync(IAtomicPersistenceSession persistence,
+    internal static async Task<string> LoadAsync(RentalCommandDbContext db,
         int portfolioId, int id, CancellationToken ct)
     {
-        var row = await persistence.Query<EvictionCase>().AsNoTracking()
+        var row = await db.Set<EvictionCase>().AsNoTracking()
             .Where(item => item.Id == id && item.PortfolioId == portfolioId)
             .Select(item => new
             {

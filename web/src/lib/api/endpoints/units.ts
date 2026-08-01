@@ -22,6 +22,8 @@ const idempotencyHeaders = (key: string): RequestInit => ({
 
 export interface UnitHealthListParams extends ListParams {
 	propertyId?: number;
+	status?: string;
+	stage?: string;
 }
 
 export interface UnitListParams extends ListParams {
@@ -84,14 +86,14 @@ export const units = {
 
 	/** Units with cheap health badges for the /units page (one projection query server-side). */
 	listWithHealth: (params?: UnitHealthListParams) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<UnitHealth[]>(`/units/list-with-health${buildListQuery(list, { propertyId })}`);
+		const { propertyId, status, stage, ...list } = params ?? {};
+		return api.get<UnitHealth[]>(`/units/list-with-health${buildListQuery(list, { propertyId, status, stage })}`);
 	},
 
 	listWithHealthPage: (params?: UnitHealthListParams) => {
-		const { propertyId, ...list } = params ?? {};
+		const { propertyId, status, stage, ...list } = params ?? {};
 		return api.get<UnitHealthListResponse>(
-			`/units/list-with-health/page${buildListQuery(list, { propertyId })}`
+			`/units/list-with-health/page${buildListQuery(list, { propertyId, status, stage })}`
 		);
 	},
 

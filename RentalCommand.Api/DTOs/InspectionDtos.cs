@@ -270,6 +270,32 @@ public class CompleteInspectionResponse
     public IReadOnlyList<int> CreatedWorkOrderIds { get; set; } = [];
 }
 
+/// <summary>One-time recovery body for a completed inspection whose report was stamped with runtime wall-clock metadata.</summary>
+public class RecoverInspectionChronologyRequest
+{
+    [Required]
+    public DateTime ExpectedContaminatedCompletedAtUtc { get; set; }
+
+    [Required]
+    [Range(1, int.MaxValue)]
+    public int ExpectedContaminatedReportStoredFileId { get; set; }
+
+    [Required]
+    public DateTime ExpectedContaminatedReportUploadedAtUtc { get; set; }
+
+    [Required]
+    public DateTime CorrectCompletedAtUtc { get; set; }
+}
+
+/// <summary>Result of the one-time inspection chronology recovery and regenerated report attachment.</summary>
+public class RecoverInspectionChronologyResponse
+{
+    public int InspectionId { get; set; }
+    public DateTime CompletedAt { get; set; }
+    public int RetiredReportStoredFileId { get; set; }
+    public int? ReportStoredFileId { get; set; }
+}
+
 public class CreateInspectionRequest
 {
     [Required]

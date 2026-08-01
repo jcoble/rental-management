@@ -86,4 +86,33 @@ public class ScanProcessingWorkerSchemaTests
             "property_id",
         ]);
     }
+
+    [Fact]
+    public void ChooseExtractionSchema_LeaseEndingNoticeTarget_UsesMoveOutNoticeSchema()
+    {
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("LeaseEndingNotice");
+
+        schema.Instructions.Should().Be(LeaseEndingNoticeExtractionSchema.Instructions);
+        schema.Instructions.Should().Contain("move-out");
+        schema.Instructions.Should().Contain("non-renewal");
+        schema.Instructions.Should().Contain("NOT a lease");
+        schema.Fields.Select(f => f.Name).Should().Contain([
+            "lease_management_id",
+            "unit_id",
+            "notice_given_date",
+            "planned_move_out_date",
+            "notice_type",
+            "reason",
+        ]);
+    }
+
+    [Fact]
+    public void ClassificationSchema_RoutesMoveOutNoticesAwayFromLeaseAgreement()
+    {
+        DocumentClassificationExtractionSchema.AllowedTargets.Should().Contain("LeaseEndingNotice");
+        DocumentClassificationExtractionSchema.Instructions.Should().Contain("tenant move-out");
+        DocumentClassificationExtractionSchema.Instructions.Should().Contain("non-renewal");
+        DocumentClassificationExtractionSchema.Instructions.Should().Contain("LeaseEndingNotice");
+        DocumentClassificationExtractionSchema.Instructions.Should().Contain("LeaseAgreement only");
+    }
 }

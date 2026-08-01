@@ -197,6 +197,8 @@ public class PastDueLeaseResponse
 
     /// <summary>Id of this lease's oldest past-due payment, so the row can deep-link into its detail.</summary>
     public long OldestLedgerEntryId { get; set; }
+    /// <summary>Open amount of the exact charge identified by <see cref="OldestLedgerEntryId"/>.</summary>
+    public decimal OldestLedgerEntryOpenAmount { get; set; }
 }
 
 /// <summary>

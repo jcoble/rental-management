@@ -5,6 +5,8 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Api.Services;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -13,63 +15,70 @@ public enum AtomicRecurringMaintenanceOperation { Create, Update, SetActive, Del
 public sealed record AtomicRecurringMaintenanceMutationCommand(
     int PortfolioId,
     int ActorUserId,
+    [property: AtomicFingerprintIgnore]
     Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore]
     int AccessContextId,
+    [property: AtomicFingerprintIgnore]
     long ExpectedAccessRevision,
     AtomicRecurringMaintenanceOperation Operation,
     int EntityId,
     string RequestJson,
+    [property: AtomicFingerprintIgnore]
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AtomicRecurringMaintenanceMutationResult(
     bool Found,
     bool Applied,
     int EntityId,
-    string? ResponseJson = null) : IAtomicResultData;
+    string? ResponseJson = null);
 
 public sealed class AtomicRecurringMaintenanceMutationHandler
-    : IAtomicCommandHandler<AtomicRecurringMaintenanceMutationCommand, AtomicRecurringMaintenanceMutationResult>,
-      IAtomicReplayAuthorizer<AtomicRecurringMaintenanceMutationCommand>
+    : IAtomicCommandHandler<AtomicRecurringMaintenanceMutationCommand, AtomicRecurringMaintenanceMutationResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public AtomicRecurringMaintenanceMutationHandler(RentalCommandDbContext db) => _db = db;
+
     public async Task<AtomicRecurringMaintenanceMutationResult> HandleAsync(
         AtomicRecurringMaintenanceMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         CancellationToken ct)
     {
         Validate(command);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
-        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        await attempt.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
+        await attempt.AcquireLockAsync(
+            "WorkspaceAccessContext", command.AccessContextId, ct);
+        await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
 
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await AtomicCommandDbClock.ReadDatabaseClockUtcAsync(_db, ct);
         attempt.UseDatabaseWallClockForAudit(now);
-        await AuthorizeAsync(command, attempt.Persistence, now, replay: false, ct);
+        await AuthorizeAsync(command, _db, now, replay: false, ct);
 
         return await MutateAsync(command, attempt, now, ct);
     }
 
     public async Task AuthorizeReplayAsync(
         AtomicRecurringMaintenanceMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         Validate(command);
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeAsync(command, persistence, now, replay: true, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
+        await AuthorizeAsync(command, _db, now, replay: true, ct);
     }
 
-    private static async Task<AtomicRecurringMaintenanceMutationResult> MutateAsync(
+    private async Task<AtomicRecurringMaintenanceMutationResult> MutateAsync(
         AtomicRecurringMaintenanceMutationCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext attempt,
         DateTime now,
         CancellationToken ct)
     {
-        var persistence = attempt.Persistence;
+        var db = _db;
         RecurringMaintenanceTask? entity = null;
         if (command.Operation != AtomicRecurringMaintenanceOperation.Create)
         {
-            entity = await persistence.Query<RecurringMaintenanceTask>()
+            entity = await db.Set<RecurringMaintenanceTask>()
                 .SingleOrDefaultAsync(task => task.Id == command.EntityId
                     && task.PortfolioId == command.PortfolioId && task.DeletedAt == null, ct);
             if (entity is null)
@@ -91,7 +100,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
         {
             var request = Read<CreateRecurringMaintenanceTaskRequest>(command);
             if (!await ReferencesExistAsync(command.PortfolioId, request.PropertyId,
-                    request.UnitId, request.VendorId, persistence, ct))
+                    request.UnitId, request.VendorId, db, ct))
                 return Missing(0);
 
             entity = new RecurringMaintenanceTask
@@ -112,7 +121,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
                 CreatedAt = now,
                 UpdatedAt = now,
             };
-            persistence.Add(entity);
+            db.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, 0,
                 AuditLogOperation.Created, $"Recurring maintenance task {entity.Title} created"));
         }
@@ -131,7 +140,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             var effectiveUnitId = request.UnitId ?? entity!.UnitId;
             var effectiveVendorId = request.VendorId ?? entity.VendorId;
             if (!await ReferencesExistAsync(command.PortfolioId, entity.PropertyId,
-                    effectiveUnitId, effectiveVendorId, persistence, ct))
+                    effectiveUnitId, effectiveVendorId, db, ct))
                 return Missing(entity.Id);
 
             if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
@@ -158,14 +167,14 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
 
         await attempt.FlushBusinessAsync(ct);
         var responseJson = await SnapshotAsync(
-            persistence, command.PortfolioId, entity!.Id, ct);
+            db, command.PortfolioId, entity!.Id, ct);
         StageDataUpdate(attempt, command, entity.Id, now, responseJson);
         return Applied(entity.Id, responseJson);
     }
 
-    private static async Task AuthorizeAsync(
+    private async Task AuthorizeAsync(
         AtomicRecurringMaintenanceMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now,
         bool replay,
         CancellationToken ct)
@@ -177,14 +186,14 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
         }
         else
         {
-            var tasks = persistence.Query<RecurringMaintenanceTask>().IgnoreQueryFilters();
+            var tasks = db.Set<RecurringMaintenanceTask>().IgnoreQueryFilters();
             propertyId = await tasks.Where(task => task.Id == command.EntityId
                     && task.PortfolioId == command.PortfolioId)
                 .Select(task => (int?)task.PropertyId)
                 .SingleOrDefaultAsync(ct);
         }
 
-        var authorized = propertyId.HasValue && await AuthorizedProperties(command, persistence, now)
+        var authorized = propertyId.HasValue && await AuthorizedProperties(command, db, now)
             .AnyAsync(property => property.Id == propertyId.Value, ct);
         if (!authorized)
         {
@@ -195,12 +204,12 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
         }
     }
 
-    private static IQueryable<Property> AuthorizedProperties(
+    private IQueryable<Property> AuthorizedProperties(
         AtomicRecurringMaintenanceMutationCommand command,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         DateTime now)
     {
-        var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking()
+        var assignments = db.Set<MembershipRoleAssignment>().AsNoTracking()
             .Where(assignment =>
                 assignment.PortfolioId == command.PortfolioId
                 && assignment.Status == MembershipRoleAssignmentStatus.Active
@@ -215,13 +224,13 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
                 && assignment.WorkspaceMembership.EffectiveFromUtc <= now
                 && (assignment.WorkspaceMembership.EffectiveToUtc == null
                     || assignment.WorkspaceMembership.EffectiveToUtc > now)
-                && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                && db.Set<WorkspaceAccessContext>().Any(context =>
                     context.Id == command.AccessContextId && context.UserId == command.ActorUserId
                     && context.PortfolioId == command.PortfolioId
                     && context.AccessRevision == command.ExpectedAccessRevision
                     && context.Status == WorkspaceAccessContextStatus.Active
                     && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-                && persistence.Query<AuthSession>().Any(session =>
+                && db.Set<AuthSession>().Any(session =>
                     session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
                     && session.ActiveAccessContextId == command.AccessContextId
                     && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
@@ -231,7 +240,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
                     && grant.CapabilityDefinition.AuthorizationTargetKind ==
                         CapabilityAuthorizationTargetKind.Property));
 
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        return db.Set<Property>().AsNoTracking().Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
             && assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
@@ -241,31 +250,31 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
                         && selected.PropertyId == property.Id))));
     }
 
-    private static Task<bool> ReferencesExistAsync(
+    private Task<bool> ReferencesExistAsync(
         int portfolioId,
         int propertyId,
         int? unitId,
         int? vendorId,
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         CancellationToken ct) =>
-        persistence.Query<Property>().AsNoTracking()
+        db.Set<Property>().AsNoTracking()
             .Where(property => property.Id == propertyId && property.PortfolioId == portfolioId
                 && property.DeletedAt == null)
             .AnyAsync(property =>
-                (unitId == null || persistence.Query<Unit>().Any(unit =>
+                (unitId == null || db.Set<Unit>().Any(unit =>
                     unit.Id == unitId && unit.PortfolioId == portfolioId
                     && unit.PropertyId == property.Id && unit.DeletedAt == null))
-                && (vendorId == null || persistence.Query<Vendor>().Any(vendor =>
+                && (vendorId == null || db.Set<Vendor>().Any(vendor =>
                     vendor.Id == vendorId && vendor.PortfolioId == portfolioId
                     && vendor.DeletedAt == null)), ct);
 
-    private static async Task<string> SnapshotAsync(
-        IAtomicPersistenceSession persistence,
+    private async Task<string> SnapshotAsync(
+        RentalCommandDbContext db,
         int portfolioId,
         int entityId,
         CancellationToken ct)
     {
-        var response = await ProjectResponse(persistence.Query<RecurringMaintenanceTask>()
+        var response = await ProjectResponse(db.Set<RecurringMaintenanceTask>()
                 .AsNoTracking().Where(task => task.Id == entityId && task.PortfolioId == portfolioId))
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
@@ -316,8 +325,8 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             UpdatedAt = task.UpdatedAt,
         });
 
-    private static void StageDataUpdate(
-        IAtomicWriteAttempt attempt,
+    private void StageDataUpdate(
+        IAtomicCommandContext attempt,
         AtomicRecurringMaintenanceMutationCommand command,
         int entityId,
         DateTime now,
@@ -345,7 +354,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
         });
     }
 
-    private static AtomicSemanticAudit Audit(
+    private AtomicSemanticAudit Audit(
         AtomicRecurringMaintenanceMutationCommand command,
         int entityId,
         AuditLogOperation operation,
@@ -357,14 +366,14 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             UserId: command.ActorUserId,
             ChangeReason: reason);
 
-    private static DateTime NormalizeDate(DateTime value) =>
+    private DateTime NormalizeDate(DateTime value) =>
         DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
 
-    private static T Read<T>(AtomicRecurringMaintenanceMutationCommand command) where T : class =>
+    private T Read<T>(AtomicRecurringMaintenanceMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
         ?? throw new ArgumentException("Recurring maintenance mutation request payload is invalid.");
 
-    private static void Validate(AtomicRecurringMaintenanceMutationCommand command)
+    private void Validate(AtomicRecurringMaintenanceMutationCommand command)
     {
         if (command.PortfolioId <= 0 || command.ActorUserId <= 0
             || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
@@ -376,10 +385,10 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
             throw new ArgumentException("Recurring maintenance atomic command is invalid.");
     }
 
-    private static AtomicRecurringMaintenanceMutationResult Missing(int entityId) =>
+    private AtomicRecurringMaintenanceMutationResult Missing(int entityId) =>
         new(false, false, entityId);
 
-    private static AtomicRecurringMaintenanceMutationResult Applied(
+    private AtomicRecurringMaintenanceMutationResult Applied(
         int entityId, string? responseJson = null) =>
         new(true, true, entityId, responseJson);
 }

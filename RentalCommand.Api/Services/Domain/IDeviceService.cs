@@ -3,15 +3,16 @@ using RentalCommand.Core.Authorization;
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
-/// Manages push-notification device tokens. Registration is an upsert by token value so a
-/// re-installing Flutter app never creates duplicate rows. Unregistration is scoped to the
-    /// calling user so a user cannot remove another user's token.
+/// Manages push-notification device tokens. Registration is an upsert by selected workspace
+/// and token value so a re-installing Flutter app never creates duplicate rows inside one
+/// workspace. Unregistration is scoped to the calling user so a user cannot remove another
+/// user's token.
 /// </summary>
 public interface IDeviceService
 {
     /// <summary>
-    /// Upserts the device token. If a row with <paramref name="token"/> already exists its
-    /// <c>UserId</c>, <c>PortfolioId</c>, <c>Platform</c>, and <c>LastSeenAt</c> are updated;
+    /// Upserts the device token for the current workspace. If a row with <paramref name="token"/>
+    /// already exists in that workspace, its <c>UserId</c>, <c>Platform</c>, and <c>LastSeenAt</c> are updated;
     /// otherwise a new row is inserted with <c>CreatedAt</c> = <c>LastSeenAt</c> = UtcNow.
     /// </summary>
     Task RegisterAsync(WorkspaceReadScope scope, string token, string platform,

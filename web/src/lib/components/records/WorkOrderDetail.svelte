@@ -8,7 +8,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { workOrderDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { formatDateOnly } from '$lib/utils/date';
+	import { formatDateOnly, localInputToOffsetIso } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -31,7 +31,6 @@
 		dispatchVendorBlockReason,
 		formatStatusTransitionCopy,
 		shouldShowActiveDispatchHint,
-		workOrderStatusActionTargets,
 	} from '$lib/maintenance/work-order-dispatch';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 	import { hasCapability } from '$lib/stores/auth.svelte';
@@ -72,8 +71,7 @@
 	}
 
 	const wo = $derived(workOrderQuery.data);
-	const canManageWork = $derived(hasCapability('work.manage'));
-	const canAssignWork = $derived(hasCapability('responsibility.assign-existing-member'));
+	const caps = $derived(workOrderCapabilities(wo));
 
 	const responsibilitiesQuery = createQuery(() => ({
 		queryKey: ['work-order-responsibilities', workOrderId],
@@ -83,7 +81,7 @@
 	const candidatesQuery = createQuery(() => ({
 		queryKey: ['work-order-responsibility-candidates', workOrderId],
 		queryFn: () => workOrders.responsibilityCandidates(workOrderId),
-		enabled: workOrderId > 0 && canAssignWork,
+		enabled: workOrderId > 0 && caps.canAssign,
 	}));
 	const currentPrimary = $derived(
 		(responsibilitiesQuery.data ?? []).find((item) => item.kind === 'Primary' && !item.effectiveToUtc) ?? null
@@ -154,9 +152,10 @@
 		priority: 'Normal',
 		category: 'General',
 		// Costs & timing (editable directly, including on Completed orders — no reopen workflow).
-		// Dates are bound as `yyyy-MM-dd` for the DatePicker; costs as plain numeric strings.
+		// Requested/completed are date-only; schedule fields are datetime-local wall-clock strings.
 		requestedAt: '',
 		scheduledFor: '',
+		scheduledWindowEnd: '',
 		completedAt: '',
 		estimatedCost: '',
 		actualCost: '',
@@ -164,12 +163,12 @@
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
 	let selectedPropertyLabel = $state<string | null>(null);
+	let commentBody = $state('');
+	let commentPrivate = $state(false);
 
-	// Snapshot of the timing dates (yyyy-MM-dd) exactly as seeded when editing began, so save() re-sends
-	// ONLY a date the user actually changed. These fields bind a full timestamp as date-only; re-submitting
-	// an untouched date would overwrite the stored instant's time-of-day with 00:00:00Z (BUG-3). A field
-	// left equal to its seed is dropped from the PATCH → "leave unchanged" server-side.
-	let seededDates = $state({ requestedAt: '', scheduledFor: '', completedAt: '' });
+	// Snapshot of timing values exactly as seeded when editing began, so save() only re-sends values
+	// the user actually changed. PATCH null/missing means "leave unchanged" for schedule fields.
+	let seededDates = $state({ requestedAt: '', scheduledFor: '', scheduledWindowEnd: '', completedAt: '' });
 
 	function startEditing() {
 		if (!wo) return;
@@ -180,18 +179,19 @@
 			technicianAccessInstructions: wo.technicianAccessInstructions ?? '',
 			priority: wo.priority,
 			category: wo.category,
-			// Work-order timing fields are full timestamps; the DatePicker edits the calendar day,
-			// so seed with just the date part. Costs seed as strings ('' when not set).
+			// Requested/completed remain date-only; schedule fields preserve the local wall-clock time.
 			requestedAt: wo.requestedAt?.slice(0, 10) ?? '',
-			scheduledFor: wo.scheduledFor?.slice(0, 10) ?? '',
+			scheduledFor: utcIsoToLocalInput(wo.scheduledFor),
+			scheduledWindowEnd: utcIsoToLocalInput(wo.scheduledWindowEnd),
 			completedAt: wo.completedAt?.slice(0, 10) ?? '',
 			estimatedCost: wo.estimatedCost != null ? String(wo.estimatedCost) : '',
 			actualCost: wo.actualCost != null ? String(wo.actualCost) : '',
 		};
-		// Remember the seeded date-only values to dirty-check against on save (see seededDates).
+		// Remember the seeded timing values to dirty-check against on save (see seededDates).
 		seededDates = {
 			requestedAt: form.requestedAt,
 			scheduledFor: form.scheduledFor,
+			scheduledWindowEnd: form.scheduledWindowEnd,
 			completedAt: form.completedAt,
 		};
 		selectedPropertyLabel = wo.propertyName ?? null;
@@ -205,17 +205,25 @@
 	}
 	function save() {
 		const result = parseForm(workOrderDetailSchema, form);
-		if (result.errors) {
-			formErrors = result.errors;
+		const errors = { ...(result.errors ?? {}), ...workOrderWindowErrors() };
+		if (Object.keys(errors).length > 0) {
+			formErrors = errors;
 			return;
 		}
+		if (!result.data) return;
 		formErrors = {};
-		// Drop any timing date the user didn't actually change so an unchanged value isn't re-sent and
-		// truncated to UTC-midnight (BUG-3); a dropped field is left untouched server-side. Costs and the
-		// Request fields always go through.
+		// Drop unchanged timing values. Schedule fields that changed are sent with the browser's local
+		// offset so the server stores the true instant and WorkOrderAppointmentSync keeps the same window.
 		const data: Record<string, unknown> = { ...result.data };
-		for (const field of ['requestedAt', 'scheduledFor', 'completedAt'] as const) {
+		for (const field of ['requestedAt', 'completedAt'] as const) {
 			if (form[field] === seededDates[field]) delete data[field];
+		}
+		for (const field of ['scheduledFor', 'scheduledWindowEnd'] as const) {
+			if (form[field] === seededDates[field]) {
+				delete data[field];
+			} else {
+				data[field] = localInputToOffsetIso(form[field]);
+			}
 		}
 		saveMutation.mutate({ portfolioId, ...data });
 	}
@@ -255,7 +263,7 @@
 
 	const statusMutation = createMutation(() => ({
 		mutationFn: ({ id: woId, status, note }: { id: number; status: string; note?: string }) =>
-			canManageWork
+			caps.canEdit
 				? workOrders.updateStatus(woId, status, note)
 				: technician.update(woId, {
 						status,
@@ -279,6 +287,26 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	const commentMutation = createMutation(() => ({
+		mutationFn: () =>
+			workOrders.comment(workOrderId, {
+				body: commentBody.trim(),
+				isPrivate: caps.canCommentPrivately && commentPrivate
+			}),
+		onSuccess: () => {
+			showSuccess('Comment added.');
+			commentBody = '';
+			commentPrivate = false;
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submitComment() {
+		if (!commentBody.trim()) return;
+		commentMutation.mutate();
+	}
 
 	// --- Dispatch to a vendor (text them the job) ---
 	// Vendors are only loaded once the dispatch dialog is opened, to keep the page light.
@@ -309,7 +337,7 @@
 	const assignedVendorQuery = createQuery(() => ({
 		queryKey: ['vendor', wo?.vendorId],
 		queryFn: () => vendors.get(wo!.vendorId!),
-		enabled: canManageWork && (wo?.vendorId ?? 0) > 0
+		enabled: caps.canContactVendor && (wo?.vendorId ?? 0) > 0
 	}));
 	const canConfirmDispatch = $derived(canDispatchToVendor(selectedDispatchVendor));
 	const dispatchBlockReason = $derived(dispatchVendorBlockReason(selectedDispatchVendor));
@@ -317,7 +345,7 @@
 	// The vendor assigned to this work order (when any), resolved by its exact id so the page does not
 	// preload a capped vendor list. tel:/sms: hrefs strip everything but digits and a leading +, and the
 	// whole value is URL-encoded.
-	const assignedVendor = $derived(canManageWork ? assignedVendorQuery.data ?? null : null);
+	const assignedVendor = $derived(caps.canContactVendor ? assignedVendorQuery.data ?? null : null);
 	function telHref(scheme: 'tel' | 'sms', phone: string | null | undefined): string | null {
 		if (!phone) return null;
 		const cleaned = phone.replace(/[^\d+]/g, '');
@@ -392,12 +420,89 @@
 	}
 
 	const availableTransitions = $derived(
-		wo ? workOrderStatusActionTargets(wo.status, !canManageWork) : []
+		wo ? caps.allowedStatusTransitions : []
 	);
 
 	function formatCurrency(val: number | undefined | null): string {
 		if (val == null) return '—';
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+	}
+
+	function utcIsoToLocalInput(value: string | null | undefined): string {
+		if (!value) return '';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '';
+		const pad = (n: number) => String(n).padStart(2, '0');
+		return (
+			`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+			`T${pad(date.getHours())}:${pad(date.getMinutes())}:00`
+		);
+	}
+
+	function formatDateTime(value: string | null | undefined): string {
+		if (!value) return '';
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) return '';
+		return date.toLocaleString('en-US', {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
+
+	function workOrderWindowErrors(): Record<string, string> {
+		if (form.scheduledFor && form.scheduledWindowEnd) {
+			const start = new Date(form.scheduledFor).getTime();
+			const end = new Date(form.scheduledWindowEnd).getTime();
+			if (!Number.isNaN(start) && !Number.isNaN(end) && end <= start) {
+				return { scheduledWindowEnd: 'Window end must be after the start time.' };
+			}
+		}
+		return {};
+	}
+
+	function workOrderCapabilities(workOrder: typeof wo) {
+		const source = (workOrder?.capabilities ?? {}) as Record<string, unknown>;
+		const bool = (key: string) => typeof source[key] === 'boolean' ? Boolean(source[key]) : false;
+		const transitions = source.allowedStatusTransitions;
+		return {
+			canEdit: bool('canEditRequestFields') || bool('canEditManagementFields'),
+			canDelete: bool('canEditManagementFields'),
+			canAssign: bool('canAssignTechnician'),
+			canUpdateStatus: Array.isArray(transitions) && transitions.length > 0,
+			canCommentPublicly: bool('canCommentPublicly'),
+			canCommentPrivately: bool('canCommentPrivately'),
+			canUploadPhoto: bool('canUploadPhoto'),
+			canDeletePhoto: bool('canDeletePhoto'),
+			canCancel: bool('canCancel'),
+			canEditRequestFields: bool('canEditRequestFields'),
+			canEditManagementFields: bool('canEditManagementFields'),
+			canDispatchVendor: bool('canDispatchVendor'),
+			canContactVendor: bool('canDispatchVendor'),
+			canRateVendor: bool('canEditManagementFields'),
+			canViewTenantContact: bool('canViewTenantContact'),
+			canViewResidents: bool('canViewResidents'),
+			canViewAccessInstructions: bool('canViewAccessInstructions'),
+			canViewCosts: bool('canViewCosts'),
+			canViewPrivateNotes: bool('canViewPrivateManagementNotes'),
+			allowedStatusTransitions: Array.isArray(transitions) ? transitions.map(String) : []
+		};
+	}
+
+	function accessRows(workOrder: typeof wo): Array<[string, string]> {
+		if (!workOrder) return [];
+		const rows: Array<[string, string]> = [];
+		if (workOrder.residentMustBePresent != null) rows.push(['Presence', workOrder.residentMustBePresent ? 'Resident must be present' : 'Resident does not need to be present']);
+		if (workOrder.callBeforeEntry) rows.push(['Call before entry', 'Yes']);
+		if (workOrder.callIfNotHome) rows.push(['Call if not home', 'Yes']);
+		if (workOrder.permissionToEnter != null) rows.push(['Permission to enter', workOrder.permissionToEnter ? 'Yes' : 'No']);
+		if (workOrder.entryNotes) rows.push(['Entry notes', workOrder.entryNotes]);
+		if (workOrder.petWarnings) rows.push(['Pets', workOrder.petWarnings]);
+		if (workOrder.accessWarnings) rows.push(['Access warnings', workOrder.accessWarnings]);
+		if (workOrder.technicianAccessInstructions) rows.push(['Technician access', workOrder.technicianAccessInstructions]);
+		return rows;
 	}
 </script>
 
@@ -504,7 +609,7 @@
 						</Button>
 					{/each}
 					<!-- Text a vendor the job (they reply DONE to close it) -->
-					{#if canManageWork && wo.status !== 'Completed' && wo.status !== 'Cancelled'}
+					{#if caps.canDispatchVendor && wo.status !== 'Completed' && wo.status !== 'Cancelled'}
 						<Button
 							variant="outline"
 							size="sm"
@@ -516,7 +621,7 @@
 						</Button>
 					{/if}
 					<!-- Rate the vendor once the job is done -->
-					{#if canManageWork && wo.status === 'Completed' && wo.vendorId}
+					{#if caps.canRateVendor && wo.status === 'Completed' && wo.vendorId}
 						<Button
 							variant="outline"
 							size="sm"
@@ -527,7 +632,7 @@
 							Rate this vendor
 						</Button>
 					{/if}
-					{#if canManageWork}<Button
+					{#if caps.canEdit}<Button
 						variant="outline"
 						size="sm"
 						data-testid="work-order-edit"
@@ -536,7 +641,7 @@
 						<Pencil class="h-4 w-4" />
 						Edit
 					</Button>{/if}
-					{#if canManageWork}<Button
+					{#if caps.canDelete}<Button
 						variant="outline"
 						size="sm"
 						class="hover:text-destructive"
@@ -557,7 +662,7 @@
 					{currentPrimary ? `${currentPrimary.memberDisplayName} is assigned to this work order.` : 'No technician is assigned yet.'}
 				</Card.Description>
 			</Card.Header>
-			{#if canAssignWork}
+			{#if caps.canAssign}
 				<Card.Content class="flex flex-wrap items-end gap-3">
 					<label class="grid min-w-64 gap-1 text-sm">
 						<span>Technician</span>
@@ -674,6 +779,80 @@
 			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
 		</DetailCard>
 
+		{#if ((caps.canViewTenantContact && (wo.requesterName || wo.requesterPhone || wo.requesterEmail)) || (caps.canViewResidents && (wo.residentNames?.length ?? 0) > 0) || (caps.canViewAccessInstructions && accessRows(wo).length > 0))}
+			<Card.Root class="mt-6" data-testid="work-order-job-context">
+				<Card.Header>
+					<Card.Title>Job context</Card.Title>
+				</Card.Header>
+				<Card.Content class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					{#if caps.canViewTenantContact && (wo.requesterName || wo.requesterPhone || wo.requesterEmail)}
+						<div class="rounded-md border border-border p-3" data-testid="work-order-requestor">
+							<p class="text-xs font-medium text-muted-foreground">Requestor</p>
+							<p class="font-medium">{wo.requesterName ?? 'Resident'}</p>
+							{#if wo.requesterPhone}<p class="text-sm text-muted-foreground">{wo.requesterPhone}</p>{/if}
+							{#if wo.requesterEmail}<p class="text-sm text-muted-foreground">{wo.requesterEmail}</p>{/if}
+						</div>
+					{/if}
+					{#if caps.canViewResidents && (wo.residentNames?.length ?? 0) > 0}
+						<div class="rounded-md border border-border p-3" data-testid="work-order-residents">
+							<p class="text-xs font-medium text-muted-foreground">Residents</p>
+							<p class="font-medium">{wo.residentNames?.join(', ')}</p>
+						</div>
+					{/if}
+					{#if caps.canViewAccessInstructions}
+						{#each accessRows(wo) as [label, value]}
+							<div class="rounded-md border border-border p-3" data-testid="work-order-access-row">
+								<p class="text-xs font-medium text-muted-foreground">{label}</p>
+								<p class="font-medium">{value}</p>
+							</div>
+						{/each}
+					{/if}
+				</Card.Content>
+			</Card.Root>
+		{/if}
+
+		{#if caps.canViewPrivateNotes && wo.privateManagementNotes}
+			<Card.Root class="mt-6" data-testid="work-order-private-notes">
+				<Card.Header>
+					<Card.Title>Private management notes</Card.Title>
+				</Card.Header>
+				<Card.Content>
+					<p class="whitespace-pre-line text-sm">{wo.privateManagementNotes}</p>
+				</Card.Content>
+			</Card.Root>
+		{/if}
+
+		{#if caps.canCommentPublicly || caps.canCommentPrivately}
+			<div class="mt-6 rounded-md border border-border p-3" data-testid="work-order-comment-actions">
+				<label for="work-order-comment" class="text-sm font-medium">Add comment</label>
+				<textarea
+					id="work-order-comment"
+					bind:value={commentBody}
+					rows="3"
+					class="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+					placeholder="Add a work-order update"
+					data-testid="work-order-comment-body"
+				></textarea>
+				<div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+					{#if caps.canCommentPrivately}
+						<label class="inline-flex items-center gap-2 text-sm text-muted-foreground">
+							<input type="checkbox" bind:checked={commentPrivate} />
+							Private management comment
+						</label>
+					{/if}
+					<Button
+						type="button"
+						size="sm"
+						onclick={submitComment}
+						disabled={!commentBody.trim() || commentMutation.isPending}
+						data-testid="work-order-comment-submit"
+					>
+						{commentMutation.isPending ? 'Adding...' : 'Add comment'}
+					</Button>
+				</div>
+			</div>
+		{/if}
+
 		<!--
 		  Costs & timing are editable directly in the page's edit mode (user decision: no reopen
 		  workflow — works on Completed orders too; every change is audited in History below). In
@@ -683,15 +862,18 @@
 		<DetailCard title="Costs & timing" icon={Coins} accent="muted" testid="work-order-detail-costs" class="mt-6" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
 			{@render dateField({ label: 'Requested', value: form.requestedAt, setValue: (v) => (form.requestedAt = v), display: formatDateOnly(wo.requestedAt), error: formErrors.requestedAt, testid: 'work-order-detail-requested' })}
 			{#if editing || wo.scheduledFor}
-				{@render dateField({ label: 'Scheduled For', value: form.scheduledFor, setValue: (v) => (form.scheduledFor = v), display: wo.scheduledFor ? formatDateOnly(wo.scheduledFor) : '', error: formErrors.scheduledFor, testid: 'work-order-detail-scheduled' })}
+				<InlineField label="Scheduled start" type="datetime-local" bind:value={form.scheduledFor} display={wo.scheduledFor ? formatDateTime(wo.scheduledFor) : ''} {editing} error={formErrors.scheduledFor} testid="work-order-detail-scheduled" />
+			{/if}
+			{#if editing || wo.scheduledWindowEnd}
+				<InlineField label="Service window end" type="datetime-local" bind:value={form.scheduledWindowEnd} display={wo.scheduledWindowEnd ? formatDateTime(wo.scheduledWindowEnd) : ''} {editing} error={formErrors.scheduledWindowEnd} testid="work-order-detail-scheduled-window-end" />
 			{/if}
 			{#if editing || wo.completedAt}
 				{@render dateField({ label: 'Completed', value: form.completedAt, setValue: (v) => (form.completedAt = v), display: wo.completedAt ? formatDateOnly(wo.completedAt) : '', error: formErrors.completedAt, testid: 'work-order-detail-completed' })}
 			{/if}
-			{#if editing || wo.estimatedCost != null}
+			{#if caps.canViewCosts && (editing || wo.estimatedCost != null)}
 				<InlineField label="Estimated Cost" type="number" bind:value={form.estimatedCost} display={wo.estimatedCost != null ? formatCurrency(wo.estimatedCost) : ''} {editing} error={formErrors.estimatedCost} testid="work-order-detail-estimated-cost" placeholder="0.00" />
 			{/if}
-			{#if editing || wo.actualCost != null}
+			{#if caps.canViewCosts && (editing || wo.actualCost != null)}
 				<InlineField label="Actual Cost" type="number" bind:value={form.actualCost} display={wo.actualCost != null ? formatCurrency(wo.actualCost) : ''} {editing} error={formErrors.actualCost} testid="work-order-detail-actual-cost" placeholder="0.00" />
 			{/if}
 		</DetailCard>
@@ -711,19 +893,51 @@
 
 		<!-- Documents section -->
 		<div class="mt-6" data-testid="work-order-detail-documents">
-			<DocumentsPanel entityType="WorkOrder" entityId={workOrderId} title="Photos & documents" />
+			<DocumentsPanel entityType="WorkOrder" entityId={workOrderId} title="Photos & documents" canUpload={caps.canUploadPhoto} canDelete={caps.canDeletePhoto} />
 		</div>
+
+		{#if (wo.photos?.length ?? 0) > 0}
+			<Card.Root class="mt-6" data-testid="work-order-photo-summary">
+				<Card.Header>
+					<Card.Title>Photo notes</Card.Title>
+				</Card.Header>
+				<Card.Content class="flex flex-wrap gap-2">
+					{#each wo.photos ?? [] as photo}
+						<span class="rounded-full border border-border px-3 py-1 text-sm">{photo.caption ?? photo.fileName}</span>
+					{/each}
+				</Card.Content>
+			</Card.Root>
+		{/if}
+
+		{#if (wo.activity?.length ?? 0) > 0}
+			<Card.Root class="mt-6" data-testid="work-order-meaningful-activity">
+				<Card.Header>
+					<Card.Title>Activity</Card.Title>
+				</Card.Header>
+				<Card.Content class="space-y-3">
+					{#each wo.activity ?? [] as item}
+						<div class="rounded-md border border-border p-3">
+							<p class="font-medium">{item.label ?? item.kind ?? 'Activity'}</p>
+							{#if item.body || item.note}<p class="mt-1 text-sm text-muted-foreground">{item.body ?? item.note}</p>{/if}
+							{#if item.actorLabel}<p class="mt-1 text-xs text-muted-foreground">{item.actorLabel}</p>{/if}
+						</div>
+					{/each}
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		<!--
 		  Per-record audit history. The status timeline above tracks status moves; this surfaces
 		  every other recorded change (property, costs, timing dates, etc.) — who, what, and when —
 		  so edits made here (incl. on Completed orders) are visible like any other field edit.
 		-->
-		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="work-order-history-section">
-			<h2 class="mb-1 text-base font-semibold">History</h2>
-			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this work order — who, what, and when.</p>
-			<RecordHistory entityType="WorkOrder" entityId={workOrderId} />
-		</div>
+		{#if caps.canViewPrivateNotes}
+			<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="work-order-history-section">
+				<h2 class="mb-1 text-base font-semibold">History</h2>
+				<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this work order — who, what, and when.</p>
+				<RecordHistory entityType="WorkOrder" entityId={workOrderId} />
+			</div>
+		{/if}
 	{/if}
 </div>
 

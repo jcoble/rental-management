@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Data;
+using RentalCommand.Data.Sandbox;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -36,8 +37,7 @@ internal static class CanonicalDemoLeaseSeeder
 {
     public static async Task<CanonicalDemoLeaseSeedResult> SeedAsync(
         RentalCommandDbContext db,
-        ILegalDocumentSourceVersionResolver sourceVersions,
-        IAtomicExecutionState atomicExecution,
+        IAtomicCommandContext attempt,
         int portfolioId,
         int actorUserId,
         string currency,
@@ -47,20 +47,12 @@ internal static class CanonicalDemoLeaseSeeder
         IReadOnlyList<Tenant> tenants,
         CancellationToken ct)
     {
-        if (!atomicExecution.IsInfrastructureActive)
-        {
-            throw new AtomicArchitectureException(
-                "Canonical demo lease facts must be seeded inside the admitted infrastructure transaction.");
-        }
-
         // Demo agreements use the same supplied renderer available to a real workspace. Do not
         // create an active placeholder template with no immutable PDF and expose it as issuable.
-        var sourceVersionId = await sourceVersions.ResolveBuiltInAsync(
+        var sourceVersionId = await DemoSeedPersistence.ResolveBuiltInLeaseSourceAsync(
+            db,
+            attempt,
             portfolioId,
-            BuiltInLeaseAgreementSource.BusinessKey,
-            BuiltInLeaseAgreementSource.RendererKey,
-            BuiltInLeaseAgreementSource.RendererVersion,
-            BuiltInLeaseAgreementSource.SnapshotPayload,
             actorUserId,
             now,
             ct);
@@ -337,11 +329,11 @@ internal static class CanonicalDemoLeaseSeeder
             }
         }
 
-        await db.SaveChangesAsync(ct);
+        await attempt.FlushBusinessAsync(ct);
 
         // Closing an account before its historical ledger is inserted correctly trips the
         // database guard that forbids new money on closed accounts. Seed the complete history,
-        // then close the expired relationships in the same infrastructure transaction.
+        // then close the expired relationships in the same receipt-backed transaction.
         foreach (var graph in graphs.Where(graph => !graph.IsCurrent))
         {
             graph.Account.ClosedAtUtc = graph.End;
@@ -350,7 +342,7 @@ internal static class CanonicalDemoLeaseSeeder
             graph.Management.AccountClosedAtUtc = graph.End;
         }
 
-        await db.SaveChangesAsync(ct);
+        await attempt.FlushBusinessAsync(ct);
         return new CanonicalDemoLeaseSeedResult(
             activeManagements,
             graphs.Count - activeManagements.Count,
@@ -361,46 +353,20 @@ internal static class CanonicalDemoLeaseSeeder
 
     public static async Task<CanonicalDemoLeaseSeedResult> ReconcileAsync(
         RentalCommandDbContext db,
-        IAtomicExecutionState atomicExecution,
+        IAtomicCommandContext attempt,
         int portfolioId,
         int actorUserId,
         DateTime now,
         CancellationToken ct)
     {
-        if (!atomicExecution.IsInfrastructureActive)
-        {
-            throw new AtomicArchitectureException(
-                "Canonical demo lease reconciliation must run inside the admitted infrastructure transaction.");
-        }
-
-        var rowVersion = Guid.NewGuid();
-        var openRelationshipIds = db.TenantAccounts
-            .Where(account => account.PortfolioId == portfolioId && account.ClosedAtUtc == null)
-            .Select(account => account.LeaseManagementId);
-        await db.LeaseManagements
-            .Where(relationship => relationship.PortfolioId == portfolioId
-                && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
-                && relationship.PossessionGivenAtUtc != null
-                && relationship.PossessionReturnedAtUtc == null
-                && openRelationshipIds.Contains(relationship.Id)
-                && relationship.EndingDisposition == LeaseManagementEndingDisposition.Undecided)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(relationship => relationship.PlannedMoveOutAtUtc, (DateTime?)null)
-                .SetProperty(relationship => relationship.EndingDispositionDecidedAtUtc, (DateTime?)null)
-                .SetProperty(relationship => relationship.EndingDispositionDecidedByUserId, (int?)null)
-                .SetProperty(relationship => relationship.UpdatedAtUtc, now)
-                .SetProperty(relationship => relationship.RowVersion, rowVersion)
-                .SetProperty(
-                    relationship => relationship.PossessionAgreementExceptionReason,
-                    relationship => relationship.RelationshipNumber == "DEMO-LM-ACTIVE-017"
-                        ? "Demo imported possession is intentionally retained without a governing Agreement."
-                        : relationship.PossessionAgreementExceptionReason)
-                .SetProperty(
-                    relationship => relationship.PossessionAgreementExceptionAuthorizedByUserId,
-                    relationship => relationship.RelationshipNumber == "DEMO-LM-ACTIVE-017"
-                        ? actorUserId
-                        : relationship.PossessionAgreementExceptionAuthorizedByUserId),
-                ct);
+        await DemoSeedPersistence.ReconcileLeaseFactsAsync(
+            db,
+            attempt,
+            portfolioId,
+            actorUserId,
+            now,
+            Guid.NewGuid(),
+            ct);
         return new CanonicalDemoLeaseSeedResult(
             [],
             0,
@@ -409,7 +375,7 @@ internal static class CanonicalDemoLeaseSeeder
             await BuildLegalDocumentIntentAsync(db, portfolioId, actorUserId, now, ct));
     }
 
-    private static async Task<CanonicalDemoLegalDocumentIntent?> BuildLegalDocumentIntentAsync(
+    internal static async Task<CanonicalDemoLegalDocumentIntent?> BuildLegalDocumentIntentAsync(
         RentalCommandDbContext db,
         int portfolioId,
         int actorUserId,

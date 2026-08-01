@@ -117,6 +117,70 @@ public class UnitServiceCreateTests : IAsyncLifetime
         rentUpdate!.MarketRent.Should().Be(1500m);
     }
 
+    [Fact]
+    public async Task UpdateAsync_UnchangedFieldsDoNotTouchUnitOrEmitAuditOrOutbox()
+    {
+        var property = SeedProperty();
+        var create = NewUnit(property.Id, "101");
+        create.FloorPlan = "Garden 1B";
+        create.Bedrooms = 1m;
+        create.Bathrooms = 1m;
+        create.SquareFeet = 625;
+        create.MarketRent = 1135m;
+        create.Notes = "North garden entrance";
+        var unit = await _sut.CreateAsync(_scope, create, Guid.NewGuid().ToString("N"));
+        var updatedAt = unit!.UpdatedAt;
+        var auditCount = _ctx.Db.AtomicAuditLogs.Count(row =>
+            row.EntityType == nameof(Unit) && row.EntityId == unit.Id);
+        var outboxCount = _ctx.Db.OutboxMessages.Count();
+        var request = new UpdateUnitRequest
+        {
+            UnitNumber = unit.UnitNumber,
+            FloorPlan = unit.FloorPlan,
+            Bedrooms = unit.Bedrooms,
+            Bathrooms = unit.Bathrooms,
+            SquareFeet = unit.SquareFeet,
+            MarketRent = unit.MarketRent,
+            Notes = unit.Notes,
+        };
+
+        var unchanged = await _sut.UpdateAsync(
+            _scope, unit.Id, request, Guid.NewGuid().ToString("N"));
+
+        unchanged.Should().NotBeNull();
+        unchanged!.UpdatedAt.Should().Be(updatedAt);
+        _ctx.Db.AtomicAuditLogs.Count(row =>
+            row.EntityType == nameof(Unit) && row.EntityId == unit.Id).Should().Be(auditCount);
+        _ctx.Db.OutboxMessages.Count().Should().Be(outboxCount);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ExplicitNullClearsOptionalTextAndExactReplayMutatesOnce()
+    {
+        var property = SeedProperty();
+        var create = NewUnit(property.Id, "101");
+        create.FloorPlan = "Garden";
+        create.Notes = "Assigned parking";
+        var unit = await _sut.CreateAsync(_scope, create, Guid.NewGuid().ToString("N"));
+        var operationKey = Guid.NewGuid().ToString("N");
+        var request = new UpdateUnitRequest { FloorPlan = null, Notes = null };
+        var identity = AtomicRentalMutation.Identity(
+            AtomicRentalMutation.UnitUpdateCommand(_scope, unit!.Id, operationKey, request));
+
+        var updated = await _sut.UpdateAsync(_scope, unit.Id, request, operationKey);
+        var replayed = await _sut.UpdateAsync(_scope, unit.Id, request, operationKey);
+
+        updated.Should().NotBeNull();
+        updated!.FloorPlan.Should().BeNull();
+        updated.Notes.Should().BeNull();
+        replayed.Should().BeEquivalentTo(updated);
+        _ctx.Db.Units.Single(row => row.Id == unit.Id).Should().Match<Unit>(
+            row => row.FloorPlan == null && row.Notes == null);
+        _ctx.Db.AtomicCommandReceipts.Count(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey).Should().Be(1);
+    }
+
     private Property SeedProperty(string name = "Test Property")
     {
         var now = DateTime.UtcNow;

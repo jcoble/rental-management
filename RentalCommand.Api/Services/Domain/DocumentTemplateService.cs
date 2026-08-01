@@ -21,6 +21,12 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IDocumentTemplateService"/>
 public sealed class DocumentTemplateService : IDocumentTemplateService
 {
+    private static readonly string[] TemplateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
+
     private static readonly AtomicJsonResultCodec<DocumentTemplateMutationResult> MutationCodec =
         new("document-template.mutation.v1");
     private readonly RentalCommandDbContext _db;
@@ -182,8 +188,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         string idempotencyKey, CancellationToken ct = default)
     {
         var digest = Digest(idempotencyKey);
+        var businessNowUtc = _timeProvider.UtcNow();
         var command = new CreateDocumentTemplateCommand(
-            scope.PortfolioId, Actor(scope), request.Kind, request.RenderMode, request.Name,
+            scope.PortfolioId, Actor(scope), businessNowUtc, request.Kind, request.RenderMode, request.Name,
             request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
             request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
         var outcome = await _atomic.ExecuteAsync(
@@ -212,10 +219,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         {
             return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid("Template name is required.");
         }
-        if (!await CanCreateTemplateAsync(scope, propertyId, ct))
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound(
-                "Document template target not found");
-
         var safeFileName = DiskFileStorage.SanitizeFileName(fileName);
         await using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, ct);
@@ -240,10 +243,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             propertyId,
         }));
         const string purpose = "document-template-pdf";
-        var now = _timeProvider.UtcNow();
+        var businessNowUtc = _timeProvider.UtcNow();
         var admission = await _pendingUploads.PrepareAsync(
             portfolioId, scope.UserId, purpose, idempotencyKey, fingerprint,
-            safeFileName, contentType, bytes.LongLength, now, ct);
+            safeFileName, contentType, bytes.LongLength, businessNowUtc, ct);
         if (admission.State == PendingFileUploadState.Prepared)
         {
             await using var upload = new MemoryStream(bytes, writable: false);
@@ -252,7 +255,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 
         var digest = Digest(idempotencyKey);
         var command = new FinalizeDocumentTemplateUploadCommand(
-            portfolioId, Actor(scope), admission.Id, purpose, digest, fingerprint,
+            portfolioId, Actor(scope), businessNowUtc, admission.Id, purpose, digest, fingerprint,
             admission.StoragePath, safeFileName, contentType, bytes.LongLength, sha256,
             normalizedName, normalizedDescription, defaultForPortfolio, propertyId, digest);
         var outcome = await _atomic.ExecuteAsync(
@@ -266,8 +269,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         string idempotencyKey, CancellationToken ct = default)
     {
         var digest = Digest(idempotencyKey);
+        var businessNowUtc = _timeProvider.UtcNow();
         var command = new UpdateDocumentTemplateCommand(
-            scope.PortfolioId, Actor(scope), id, request.Status, request.RenderMode, request.Name,
+            scope.PortfolioId, Actor(scope), businessNowUtc, id, request.Status, request.RenderMode, request.Name,
             request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
             request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
         var outcome = await _atomic.ExecuteAsync(
@@ -287,8 +291,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.NotFound("Document template not found");
         var catalogItem = _catalog.Find(templateKind.Value, request.FieldKey);
         var digest = Digest(idempotencyKey);
+        var businessNowUtc = _timeProvider.UtcNow();
         var command = new AddDocumentTemplateFieldCommand(
-            scope.PortfolioId, Actor(scope), templateId, request.FieldKey,
+            scope.PortfolioId, Actor(scope), businessNowUtc, templateId, request.FieldKey,
             NormalizeNullable(request.Label) ?? catalogItem?.Label ?? request.FieldKey.Trim(),
             request.Kind, request.SignerRole, request.PageNumber, request.XPct, request.YPct,
             request.WidthPct, request.HeightPct,
@@ -304,8 +309,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         string idempotencyKey, CancellationToken ct = default)
     {
         var digest = Digest(idempotencyKey);
+        var businessNowUtc = _timeProvider.UtcNow();
         var command = new UpdateDocumentTemplateFieldCommand(
-            scope.PortfolioId, Actor(scope), templateId, fieldId, request.FieldKey, request.Label,
+            scope.PortfolioId, Actor(scope), businessNowUtc, templateId, fieldId, request.FieldKey, request.Label,
             request.Kind, request.SignerRole, request.PageNumber, request.XPct, request.YPct,
             request.WidthPct, request.HeightPct, request.Required, request.Locked,
             request.SortOrder, request.DefaultText, digest);
@@ -319,8 +325,9 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         string idempotencyKey, CancellationToken ct = default)
     {
         var digest = Digest(idempotencyKey);
+        var businessNowUtc = _timeProvider.UtcNow();
         var command = new DeleteDocumentTemplateFieldCommand(
-            scope.PortfolioId, Actor(scope), templateId, fieldId, digest);
+            scope.PortfolioId, Actor(scope), businessNowUtc, templateId, fieldId, digest);
         var outcome = await _atomic.ExecuteAsync(
             Identity("document-template.field.delete", scope.PortfolioId, digest), command, MutationCodec, ct);
         return outcome.Value.Outcome switch
@@ -426,7 +433,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             && agreement.DraftCanceledAtUtc == null
             && agreement.VoidedAtUtc == null
             && _db.Properties.AsNoTracking()
-                .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
+                .WhereAuthorized(_db, scope, TemplateCapabilityKeys, _timeProvider.UtcNow())
                 .Any(property => property.Id == agreement.LeaseManagement!.PropertyId)
         select new LeaseAgreementPreviewReadRow
         {
@@ -605,10 +612,10 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     {
         var authorizedProperties = _db.Properties
             .AsNoTracking()
-            .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow());
+            .WhereAuthorized(_db, scope, TemplateCapabilityKeys, _timeProvider.UtcNow());
         var allProperties = _db.AuthorizedWorkspaceAssignments(
             scope,
-            [CapabilityKeys.LeasingAgreementsPrepare],
+            TemplateCapabilityKeys,
             CapabilityAuthorizationTargetKind.Property,
             _timeProvider.UtcNow());
 
@@ -616,26 +623,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             template.PortfolioId == scope.PortfolioId &&
             (template.PropertyId.HasValue
                 ? authorizedProperties.Any(property => property.Id == template.PropertyId.Value)
-                : allProperties.Any()));
-    }
-
-    private Task<bool> CanCreateTemplateAsync(
-        WorkspaceReadScope scope, int? propertyId, CancellationToken ct)
-    {
-        if (propertyId.HasValue)
-        {
-            return _db.Properties.AsNoTracking()
-                .WhereAuthorized(
-                    _db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
-                .AnyAsync(property => property.Id == propertyId.Value, ct);
-        }
-
-        return _db.AuthorizedWorkspaceAssignments(
-                scope,
-                [CapabilityKeys.LeasingAgreementsPrepare],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow())
-            .AnyAsync(ct);
+                : allProperties.Any() || authorizedProperties.Any()));
     }
 
 }

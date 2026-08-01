@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +43,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new("auth-email-confirm-result:v1");
     private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
         new("auth-password-reset-result:v1");
+    private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
+        new("auth-password-change-result:v1");
 
     private readonly DateTime _now = CurrentTestTimeUtc();
     private PostgreSqlContainer? _postgres;
@@ -129,6 +132,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             ResetAccountPasswordResult,
             ResetAccountPasswordHandler>();
         services.AddAtomicCommandHandler<
+            ChangePasswordCommand,
+            ChangePasswordResult,
+            ChangePasswordHandler>();
+        services.AddAtomicCommandHandler<
             ConfirmGoogleAccountEmailCommand,
             ConfirmAccountEmailResult,
             ConfirmGoogleAccountEmailHandler>();
@@ -169,7 +176,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         AtomicCommandOutcome<LoginContextSelectionChallengeResult> issued;
         try
         {
-            issued = await RuntimeAtomic.ExecuteAsync(
+            issued = await ExecuteRuntimeAtomicAsync(
                 SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
                 challenge,
                 ChallengeCodec);
@@ -181,7 +188,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
                 _queryCapture!.DescribeRecentCommands(),
                 exception);
         }
-        var issuedReplay = await RuntimeAtomic.ExecuteAsync(
+        var issuedReplay = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
@@ -192,11 +199,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         var startOperation = Guid.NewGuid();
         var start = Start(challenge);
-        var started = await RuntimeAtomic.ExecuteAsync(
+        var started = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
-        var startedReplay = await RuntimeAtomic.ExecuteAsync(
+        var startedReplay = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
@@ -219,12 +226,12 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var challenge = Challenge();
-        await RuntimeAtomic.ExecuteAsync(
+        await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             challenge,
             ChallengeCodec);
         var start = Start(challenge);
-        var started = await RuntimeAtomic.ExecuteAsync(
+        var started = await ExecuteRuntimeAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
@@ -283,8 +290,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             $"auth.email.{emailKind}",
             $"{_userId}:{operationDigest}");
 
-        var enqueued = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
+        var enqueued = await ExecuteRuntimeAtomicAsync(identity, command, AuthEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, AuthEmailCodec);
 
         enqueued.Value.Enqueued.Should().BeTrue();
         enqueued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -314,8 +321,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.email.confirm",
             $"{_userId}:{operationDigest}");
 
-        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var confirmed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
 
         confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
         confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -345,8 +352,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.password.reset",
             $"{_userId}:{operationDigest}");
 
-        var reset = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+        var reset = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
 
         reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
         reset.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -363,6 +370,117 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task PasswordReset_RevokesEveryExistingSessionSoPreResetBearerCannotResolve()
+    {
+        SkipIfNoDocker();
+        var firstSession = await RuntimeStartSessionAsync();
+        var secondSession = await RuntimeStartSessionAsync();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ResetAccountPasswordCommand(
+            _userId,
+            _securityStamp,
+            true,
+            "reset-revocation-password-hash",
+            LowerSha256($"{_userId}\0reset-password-session-revocation"));
+        var identity = new AtomicCommandIdentity(
+            "auth.password.reset",
+            $"{_userId}:{operationDigest}");
+
+        var reset = await ExecuteRuntimeAtomicAsync(identity, command, ResetPasswordCodec);
+
+        reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
+        await using var verify = NewPlainContext();
+        var revoked = await verify.AuthSessions
+            .IgnoreQueryFilters()
+            .Where(session => session.Id == firstSession.AuthSessionId || session.Id == secondSession.AuthSessionId)
+            .Select(session => new { session.Id, session.Status, session.RevokedAtUtc })
+            .ToListAsync();
+        revoked.Should().HaveCount(2);
+        revoked.Should().OnlyContain(session =>
+            session.Status == AuthSessionStatus.Revoked && session.RevokedAtUtc != null);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == reset.AttemptId &&
+            row.ChangeReason == "Password reset completed")).Should().Be(1);
+
+        await using var runtimeScope = RuntimeServices.CreateAsyncScope();
+        var query = new AccessEnvelopeQuery(
+            runtimeScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        (await query.GetAsync(
+                firstSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("a bearer issued before the reset must no longer resolve to protected access");
+        (await query.GetAsync(
+                secondSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("reset signs out every existing session");
+    }
+
+    [SkippableFact]
+    public async Task ChangePassword_RevokesOtherSessionsButKeepsCurrentSessionResolving()
+    {
+        SkipIfNoDocker();
+        var staleSession = await RuntimeStartSessionAsync();
+        var currentSession = await RuntimeStartSessionAsync();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ChangePasswordCommand(
+            currentSession.AuthSessionId,
+            _userId,
+            _firstContextId,
+            1,
+            "OldPassword123!",
+            "NewPassword123!",
+            LowerSha256($"{_userId}\0change-password-session-revocation"));
+        var identity = new AtomicCommandIdentity(
+            "auth.password.change",
+            $"{_userId}:{_firstContextId}:{operationDigest}");
+
+        var changed = await ExecuteAtomicAsync(identity, command, ChangePasswordCodec);
+
+        changed.Value.Outcome.Should().Be(ChangePasswordOutcome.Changed);
+        await using var verify = NewPlainContext();
+        var sessions = await verify.AuthSessions
+            .IgnoreQueryFilters()
+            .Where(session => session.Id == staleSession.AuthSessionId || session.Id == currentSession.AuthSessionId)
+            .Select(session => new { session.Id, session.Status, session.RevokedAtUtc })
+            .ToListAsync();
+        sessions.Single(session => session.Id == staleSession.AuthSessionId).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        sessions.Single(session => session.Id == staleSession.AuthSessionId).RevokedAtUtc
+            .Should().NotBeNull();
+        sessions.Single(session => session.Id == currentSession.AuthSessionId).Status
+            .Should().Be(AuthSessionStatus.Active);
+        sessions.Single(session => session.Id == currentSession.AuthSessionId).RevokedAtUtc
+            .Should().BeNull();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == changed.AttemptId &&
+            row.ChangeReason == "Password changed by account user.")).Should().Be(1);
+
+        await using var runtimeScope = RuntimeServices.CreateAsyncScope();
+        var query = new AccessEnvelopeQuery(
+            runtimeScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        (await query.GetAsync(
+                staleSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("a bearer issued before the password change must no longer resolve");
+        (await query.GetAsync(
+                currentSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().NotBeNull("the command session remains active for the signed-in user");
+    }
+
+    [SkippableFact]
     public async Task RuntimeApiRole_WithBlankScope_ConfirmsAndReplaysGoogleVerifiedAccountEmail()
     {
         SkipIfNoDocker();
@@ -375,8 +493,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             "auth.email.google-confirm",
             $"{_userId}:{subjectHash}");
 
-        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
-        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var confirmed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await ExecuteRuntimeAtomicAsync(identity, command, ConfirmEmailCodec);
 
         confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
         confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
@@ -397,11 +515,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var challengeOperation = Guid.NewGuid();
         var challenge = Challenge();
 
-        var firstChallenge = await Atomic.ExecuteAsync(
+        var firstChallenge = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
-        var replayedChallenge = await Atomic.ExecuteAsync(
+        var replayedChallenge = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
             ChallengeCodec);
@@ -413,11 +531,11 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         var startOperation = Guid.NewGuid();
         var start = Start(challenge);
-        var firstStart = await Atomic.ExecuteAsync(
+        var firstStart = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
-        var replayedStart = await Atomic.ExecuteAsync(
+        var replayedStart = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(startOperation),
             start,
             StartCodec);
@@ -452,7 +570,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var operation = Guid.NewGuid();
         _failureInterceptor!.FailNextSessionStart = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(operation),
             start,
             StartCodec);
@@ -488,8 +606,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         };
 
         var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), first, StartCodec),
-            Atomic.ExecuteAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), second, StartCodec));
+            ExecuteAtomicAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), first, StartCodec),
+            ExecuteAtomicAsync(SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()), second, StartCodec));
 
         outcomes.Count(item => item.Value.Started).Should().Be(1);
         outcomes.Count(item => !item.Value.Started).Should().Be(1);
@@ -511,7 +629,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var expired = await IssueChallengeAsync(expiresAtUtc: _now.AddMinutes(1));
         var expiredStart = Start(expired) with { IssuedAtUtc = _now.AddMinutes(1) };
 
-        var expiredOutcome = await Atomic.ExecuteAsync(
+        var expiredOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             expiredStart,
             StartCodec);
@@ -528,14 +646,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             await revokeDb.SaveChangesAsync();
         }
 
-        var staleOutcome = await Atomic.ExecuteAsync(
+        var staleOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             Start(stale) with { IssuedAtUtc = _now.AddSeconds(2) },
             StartCodec);
         staleOutcome.Value.Started.Should().BeFalse(
             "a challenge issued for multiple choices must not silently become a single-context login");
         var noLongerNeeded = Challenge() with { IssuedAtUtc = _now.AddSeconds(2) };
-        var issueOutcome = await Atomic.ExecuteAsync(
+        var issueOutcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             noLongerNeeded,
             ChallengeCodec);
@@ -567,7 +685,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         }
 
         var start = Start(challenge) with { IssuedAtUtc = _now.AddSeconds(2) };
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
             start,
             StartCodec);
@@ -587,7 +705,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var challenge = Challenge();
         _failureInterceptor!.FailNextChallengeIssue = true;
 
-        var act = async () => await Atomic.ExecuteAsync(
+        var act = async () => await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(operation),
             challenge,
             ChallengeCodec);
@@ -619,7 +737,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         _queryCapture!.Reset();
         var query = new EffectiveAccessContextSelectionQuery(db);
-        var options = await query.ListAsync(_userId, null, _now);
+        var options = await query.ListAsync(_userId, null);
 
         options.Should().HaveCount(2);
         options.Should().OnlyContain(item => item.TotalEffectiveContexts == 2);
@@ -631,11 +749,65 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
 
         _queryCapture.Reset();
-        var selected = await query.ListAsync(_userId, _secondContextId, _now);
+        var selected = await query.ListAsync(_userId, _secondContextId);
         selected.Should().ContainSingle(item =>
             item.AccessContextId == _secondContextId && item.TotalEffectiveContexts == 2);
         _queryCapture.ReaderCommands.Should().HaveCount(1);
         _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
+    }
+
+    [SkippableFact]
+    public async Task EffectiveContextSelection_UsesRealDatabaseClockUnderSimAheadAmbientClock()
+    {
+        SkipIfNoDocker();
+        await using var db = NewPlainContext();
+        var simAheadUtc = _now.AddYears(1);
+        var futurePortfolio = Portfolio("Future Simulation Workspace");
+        db.Add(futurePortfolio);
+        await db.SaveChangesAsync();
+
+        var future = CreateAccessRoot(
+            _userId,
+            futurePortfolio.Id,
+            WorkspaceExperience.Management,
+            simAheadUtc);
+        db.WorkspaceAccessContexts.Add(future.Context);
+        await db.SaveChangesAsync();
+        future.Membership.AccessContextId = future.Context.Id;
+        db.WorkspaceMemberships.Add(future.Membership);
+        await db.SaveChangesAsync();
+        future.Assignment.WorkspaceMembershipId = future.Membership.Id;
+        db.MembershipRoleAssignments.Add(future.Assignment);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var query = new EffectiveAccessContextSelectionQuery(db);
+
+        var options = await query.ListAsync(_userId, null);
+        var selectedFuture = await query.ListAsync(_userId, future.Context.Id);
+        var start = StartWithoutChallenge(future.Context.Id, future.Context.AccessRevision) with
+        {
+            IssuedAtUtc = simAheadUtc,
+            SessionExpiresAtUtc = simAheadUtc.AddDays(30),
+            CredentialExpiresAtUtc = simAheadUtc.AddDays(7),
+            AbsoluteFamilyExpiresAtUtc = simAheadUtc.AddDays(30),
+        };
+        var started = await ExecuteAtomicAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            start,
+            StartCodec);
+        var currentChallenge = await IssueChallengeAsync();
+        var currentStarted = await ExecuteAtomicAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            Start(currentChallenge),
+            StartCodec);
+
+        options.Should().NotContain(item => item.AccessContextId == future.Context.Id);
+        selectedFuture.Should().BeEmpty("the selector must use PostgreSQL real time, not simulated ambient time");
+        started.Value.Started.Should().BeFalse(
+            "the atomic session guard also revalidates eligibility with PostgreSQL real time");
+        currentStarted.Value.Started.Should().BeTrue(
+            "moving simulation time ahead must not break normal currently effective membership login");
     }
 
     [SkippableFact]
@@ -831,18 +1003,27 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         var tenantAccess = new TenantUserAccess
         {
-            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
-            AccessContextId = tenantContext.Id, ApplicationUserId = tenantUser.Id,
-            LeaseManagementPartyId = party.Id, GrantedAtUtc = now,
-            GrantedByUserId = ownerUser.Id, Reason = "proof",
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            AccessContextId = tenantContext.Id,
+            ApplicationUserId = tenantUser.Id,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = now.AddMinutes(-2),
+            GrantedByUserId = ownerUser.Id,
+            Reason = "proof",
         };
         db.AddRange(
             new OwnerUserAccess
             {
-                PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
-                AccessContextId = ownerContext.Id, ApplicationUserId = ownerUser.Id,
-                OwnerEntityId = owner.Id, EffectiveFromUtc = now.AddMinutes(-1),
-                GrantedAtUtc = now, GrantedByUserId = ownerUser.Id, Reason = "proof",
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolio.Id,
+                AccessContextId = ownerContext.Id,
+                ApplicationUserId = ownerUser.Id,
+                OwnerEntityId = owner.Id,
+                EffectiveFromUtc = now.AddMinutes(-1),
+                GrantedAtUtc = now,
+                GrantedByUserId = ownerUser.Id,
+                Reason = "proof",
             },
             tenantAccess);
         await db.SaveChangesAsync();
@@ -875,9 +1056,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         db.ChangeTracker.Clear();
 
         var ownerOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(ownerUser.Id, null, now);
+            .ListAsync(ownerUser.Id, null);
         var tenantOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(tenantUser.Id, null, now);
+            .ListAsync(tenantUser.Id, null);
         ownerOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Owner);
         tenantOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Tenant);
 
@@ -943,6 +1124,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         resolvedManagement.AccessContextId.Should().Be(managementContext.Id);
         resolvedManagement.PortfolioId.Should().Be(managementContext.PortfolioId);
         resolvedManagement.AccessRevision.Should().Be(managementContext.AccessRevision);
+        resolvedManagement.LastAuthorizedExperience.Should().Be(WorkspaceExperience.Management);
         resolvedManagement.WorkspaceMembershipId.Should().Be(_firstMembershipId);
         resolvedManagement.DefaultExperience.Should().Be(WorkspaceExperience.Management);
         _queryCapture.ReaderCommands.Should().ContainSingle()
@@ -970,15 +1152,15 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
         tenantAccess = await db.TenantUserAccesses.SingleAsync(item => item.Id == tenantAccess.Id);
         tenantContext = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == tenantContext.Id);
-        tenantAccess.RevokedAtUtc = now.AddMinutes(1);
+        tenantAccess.RevokedAtUtc = now.AddMinutes(-1);
         tenantAccess.RevokedByUserId = ownerUser.Id;
         tenantContext.AdvanceRevision(1);
-        tenantContext.UpdatedAtUtc = now.AddMinutes(1);
+        tenantContext.UpdatedAtUtc = now;
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
         (await new EffectiveAccessContextSelectionQuery(db).ListAsync(
-            tenantUser.Id, null, now.AddMinutes(1)))
+            tenantUser.Id, null))
             .Should().BeEmpty("revoking the relationship removes the relationship-only login context");
         (await ReadEnvelopeViewAsync(db, tenantUser.Id, tenantContext.Id)).Should().BeNull();
         (await db.EffectiveTenantAccess.AnyAsync(item => item.AccessContextId == tenantContext.Id))
@@ -1007,12 +1189,24 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         DateTime? expiresAtUtc = null)
     {
         var command = Challenge(expiresAtUtc);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
             command,
             ChallengeCodec);
         outcome.Value.Issued.Should().BeTrue();
         return command;
+    }
+
+    private async Task<StartAuthSessionResult> RuntimeStartSessionAsync()
+    {
+        var challenge = await IssueChallengeAsync();
+        var start = Start(challenge);
+        var started = await ExecuteRuntimeAtomicAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            start,
+            StartCodec);
+        started.Value.Started.Should().BeTrue();
+        return started.Value;
     }
 
     private IssueLoginContextSelectionChallengeCommand Challenge(DateTime? expiresAtUtc = null) =>
@@ -1077,8 +1271,27 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _securityStamp = user.SecurityStamp!;
     }
 
-    private AccessRoot CreateAccessRoot(int userId, int portfolioId, WorkspaceExperience experience)
+    private StartAuthSessionCommand StartWithoutChallenge(int accessContextId, long accessRevision) =>
+        new(
+            _userId,
+            accessContextId,
+            accessRevision,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Hash(Guid.NewGuid().ToString("N")),
+            _now,
+            _now.AddDays(30),
+            _now.AddDays(7),
+            _now.AddDays(30));
+
+    private AccessRoot CreateAccessRoot(
+        int userId,
+        int portfolioId,
+        WorkspaceExperience experience,
+        DateTime? effectiveFromUtc = null)
     {
+        var effectiveFrom = effectiveFromUtc ?? _now.AddDays(-1);
         var context = new WorkspaceAccessContext
         {
             UserId = userId,
@@ -1092,7 +1305,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             PortfolioId = portfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = experience,
-            EffectiveFromUtc = _now.AddDays(-1),
+            EffectiveFromUtc = effectiveFrom,
             CreatedAtUtc = _now.AddDays(-1),
             UpdatedAtUtc = _now.AddDays(-1),
         };
@@ -1104,7 +1317,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             ScopeKind = experience == WorkspaceExperience.Leasing
                 ? MembershipRoleAssignmentScopeKind.SelectedProperties
                 : MembershipRoleAssignmentScopeKind.AllProperties,
-            EffectiveFromUtc = _now.AddDays(-1),
+            EffectiveFromUtc = effectiveFrom,
             CreatedAtUtc = _now.AddDays(-1),
             UpdatedAtUtc = _now.AddDays(-1),
         };
@@ -1116,26 +1329,32 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         int portfolioId,
         WorkspaceExperience experience,
         DateTime now) => new()
-    {
-        UserId = userId,
-        PortfolioId = portfolioId,
-        Status = WorkspaceAccessContextStatus.Active,
-        LastAuthorizedExperience = experience,
-        CreatedAtUtc = now,
-        UpdatedAtUtc = now,
-    };
+        {
+            UserId = userId,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = experience,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
 
-    private ApplicationUser User(string email, string displayName) => new()
+    private ApplicationUser User(string email, string displayName)
     {
-        UserName = email,
-        NormalizedUserName = email.ToUpperInvariant(),
-        Email = email,
-        NormalizedEmail = email.ToUpperInvariant(),
-        DisplayName = displayName,
-        SecurityStamp = Guid.NewGuid().ToString("N"),
-        ConcurrencyStamp = Guid.NewGuid().ToString("N"),
-        CreatedAt = _now.AddDays(-2),
-    };
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = displayName,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now.AddDays(-2),
+        };
+        user.PasswordHash = new PasswordHasher<ApplicationUser>()
+            .HashPassword(user, "OldPassword123!");
+        return user;
+    }
 
     private Portfolio Portfolio(string name) => new()
     {
@@ -1205,11 +1424,38 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private IServiceProvider Services =>
         _services ?? throw new InvalidOperationException("Auth start services are unavailable.");
 
-    private IAtomicUnitOfWork Atomic => Services.GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        ExecuteAtomicAsync(Services, identity, command, codec);
 
-    private IAtomicUnitOfWork RuntimeAtomic =>
-        (_runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
-        .GetRequiredService<IAtomicUnitOfWork>();
+    private Task<AtomicCommandOutcome<TResult>> ExecuteRuntimeAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull =>
+        ExecuteAtomicAsync(RuntimeServices, identity, command, codec);
+
+    private static async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        IServiceProvider services,
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = services.CreateAsyncScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<IAtomicUnitOfWork>()
+            .ExecuteAsync(identity, command, codec);
+    }
+
+    private ServiceProvider RuntimeServices =>
+        _runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable.");
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; auth start PostgreSQL proof skipped.");

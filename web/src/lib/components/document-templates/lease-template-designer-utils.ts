@@ -7,6 +7,9 @@ export type FieldRect = {
 
 export type FieldResizeHandle = 'east' | 'south' | 'southEast';
 
+export const MIN_FIELD_DIMENSION_PERCENT = 3;
+export const MAX_FIELD_DIMENSION_PERCENT = 100;
+
 const DEFAULT_LIMITS = {
 	minWidthPct: 0.03,
 	minHeightPct: 0.025,
@@ -16,6 +19,26 @@ const DEFAULT_LIMITS = {
 
 export function clampDesignerZoom(zoomPct: number) {
 	return Math.min(220, Math.max(50, Math.round(zoomPct)));
+}
+
+export function parseFieldDimensionPercent(
+	rawValue: string
+): { valuePct: number; error: null } | { valuePct: null; error: string } {
+	const value = Number(rawValue.trim());
+	if (
+		rawValue.trim() === '' ||
+		!Number.isFinite(value) ||
+		!Number.isInteger(value) ||
+		value < MIN_FIELD_DIMENSION_PERCENT ||
+		value > MAX_FIELD_DIMENSION_PERCENT
+	) {
+		return {
+			valuePct: null,
+			error: `Enter a whole number from ${MIN_FIELD_DIMENSION_PERCENT} to ${MAX_FIELD_DIMENSION_PERCENT}.`
+		};
+	}
+
+	return { valuePct: value / 100, error: null };
 }
 
 export function clampFieldRect(rect: FieldRect): FieldRect {

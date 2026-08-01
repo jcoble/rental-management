@@ -26,6 +26,7 @@ enum MobileNavigationDestination {
   leasingAppointment,
   leasingConversation,
   leasingMoveIn,
+  tenantAccount,
 }
 
 enum MobileNavigationAction { open, review, resolve }

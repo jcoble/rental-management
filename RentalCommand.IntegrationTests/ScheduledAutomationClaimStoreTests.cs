@@ -219,6 +219,117 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
             .And.Contain("LIMIT @batchSize");
     }
 
+    [SkippableFact]
+    public async Task Imported_historical_debt_is_not_claimed_until_first_due_date_after_import()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var importDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
+        var (portfolioId, propertyId) = await SeedScopeAsync(importDate);
+
+        await using (var seed = NewContext())
+        {
+            seed.Loans.Add(Loan(
+                portfolioId,
+                propertyId,
+                new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                LoanStatus.Active,
+                createdAt: importDate,
+                dayOfMonthDue: 12));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var beforeDue = NewContext();
+        (await new ScheduledAutomationClaimStore(beforeDue).ClaimDebtServiceAsync(
+                "debt-before-due", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+
+        await using var onDue = NewContext();
+        (await new ScheduledAutomationClaimStore(onDue).ClaimDebtServiceAsync(
+                "debt-on-due", firstDueDate, TimeSpan.FromMinutes(2), 1))
+            .Should().ContainSingle();
+    }
+
+    [SkippableFact]
+    public async Task Imported_historical_debt_created_after_due_day_is_not_claimed_until_next_month_due_date()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var importDate = new DateTime(2027, 1, 13, 0, 0, 0, DateTimeKind.Utc);
+        var nextDueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc);
+        var (portfolioId, propertyId) = await SeedScopeAsync(importDate);
+
+        await using (var seed = NewContext())
+        {
+            seed.Loans.Add(Loan(
+                portfolioId,
+                propertyId,
+                new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                LoanStatus.Active,
+                createdAt: importDate,
+                dayOfMonthDue: 12));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var beforeNextDue = NewContext();
+        (await new ScheduledAutomationClaimStore(beforeNextDue).ClaimDebtServiceAsync(
+                "debt-before-next-due", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+
+        await using var onNextDue = NewContext();
+        (await new ScheduledAutomationClaimStore(onNextDue).ClaimDebtServiceAsync(
+                "debt-on-next-due", nextDueDate, TimeSpan.FromMinutes(2), 1))
+            .Should().ContainSingle();
+    }
+
+    [SkippableFact]
+    public async Task Imported_historical_debt_with_pre_import_tail_is_not_claimed_before_import_due_date()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
+        var importDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
+        var (portfolioId, propertyId) = await SeedScopeAsync(importDate);
+
+        await using (var seed = NewContext())
+        {
+            var loan = Loan(
+                portfolioId,
+                propertyId,
+                new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+                LoanStatus.Active,
+                createdAt: importDate,
+                dayOfMonthDue: 12);
+            seed.Loans.Add(loan);
+            await seed.SaveChangesAsync();
+            seed.LoanPayments.Add(new LoanPayment
+            {
+                PortfolioId = portfolioId,
+                LoanId = loan.Id,
+                PeriodKey = "2026-07",
+                DueDate = new DateTime(2026, 7, 12, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 100m,
+                PrincipalAmount = 500m,
+                TotalAmount = 600m,
+                BalanceAfter = 50_000m,
+                CreatedAt = importDate,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var beforeDue = NewContext();
+        var store = new ScheduledAutomationClaimStore(beforeDue);
+        (await store.ClaimDebtServiceAsync(
+                "debt-before-due-first", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+        (await store.ClaimDebtServiceAsync(
+                "debt-before-due-second", importDate, TimeSpan.FromMinutes(2), 1))
+            .Should().BeEmpty();
+
+        await using var onDue = NewContext();
+        (await new ScheduledAutomationClaimStore(onDue).ClaimDebtServiceAsync(
+                "debt-on-due", firstDueDate, TimeSpan.FromMinutes(2), 1))
+            .Should().ContainSingle();
+    }
+
     private async Task<(int PortfolioId, int PropertyId)> SeedScopeAsync(DateTime now)
     {
         await using var db = NewContext();
@@ -245,7 +356,13 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         return (portfolio.Id, property.Id);
     }
 
-    private static Loan Loan(int portfolioId, int propertyId, DateTime start, LoanStatus status) => new()
+    private static Loan Loan(
+        int portfolioId,
+        int propertyId,
+        DateTime start,
+        LoanStatus status,
+        DateTime? createdAt = null,
+        int dayOfMonthDue = 1) => new()
     {
         PortfolioId = portfolioId,
         PropertyId = propertyId,
@@ -255,10 +372,11 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
         AnnualInterestRatePct = 5m,
         TermMonths = 360,
         StartDate = start,
+        DayOfMonthDue = dayOfMonthDue,
         MonthlyPrincipalInterest = 600m,
         Status = status,
-        CreatedAt = start,
-        UpdatedAt = start,
+        CreatedAt = createdAt ?? start,
+        UpdatedAt = createdAt ?? start,
     };
 
     private static RecurringExpense Expense(int portfolioId, int propertyId, DateTime due, bool active) => new()

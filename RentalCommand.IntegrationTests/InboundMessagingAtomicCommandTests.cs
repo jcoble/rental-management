@@ -106,8 +106,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             [],
             _now);
 
-        var first = await Atomic.ExecuteAsync(startIdentity, start, ConversationCodec);
-        var replay = await Atomic.ExecuteAsync(startIdentity, start, ConversationCodec);
+        var first = await ExecuteAtomicAsync(startIdentity, start, ConversationCodec);
+        var replay = await ExecuteAtomicAsync(startIdentity, start, ConversationCodec);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
         replay.Value.ConversationId.Should().Be(first.Value.ConversationId);
 
@@ -119,8 +119,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             Body = "It is getting worse.",
             CreatedAtUtc = _now.AddMinutes(2),
         };
-        await Atomic.ExecuteAsync(postIdentity, post, ConversationCodec);
-        await Atomic.ExecuteAsync(postIdentity, post, ConversationCodec);
+        await ExecuteAtomicAsync(postIdentity, post, ConversationCodec);
+        await ExecuteAtomicAsync(postIdentity, post, ConversationCodec);
 
         await using var db = NewContext();
         (await db.Conversations.CountAsync(conversation => conversation.Subject == "Kitchen leak"))
@@ -152,8 +152,8 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         var command = VendorDone("SM-provider-stable-1");
         var identity = VendorIdentity(command.ProviderEventId);
 
-        var first = await Atomic.ExecuteAsync(identity, command, VendorDoneCodec);
-        var replay = await Atomic.ExecuteAsync(identity, command, VendorDoneCodec);
+        var first = await ExecuteAtomicAsync(identity, command, VendorDoneCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, VendorDoneCodec);
         first.Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.Applied);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
 
@@ -163,9 +163,9 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         }
 
         var concurrent = await Task.WhenAll(
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 VendorIdentity("SM-concurrent-a"), VendorDone("SM-concurrent-a", _now.AddMinutes(1)), VendorDoneCodec),
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 VendorIdentity("SM-concurrent-b"), VendorDone("SM-concurrent-b", _now.AddMinutes(1)), VendorDoneCodec));
         concurrent.Count(result => result.Value.Outcome == CompleteVendorDispatchFromInboundOutcome.Applied)
             .Should().Be(1);
@@ -211,6 +211,44 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         _probe.Commands.Count(sql => sql.Contains(
             "TSK-668 event-time team routing with direct responsibility and visible administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
+        typeof(CompleteVendorDispatchFromInboundHandler).Should()
+            .Implement<IAtomicCommandHandler<CompleteVendorDispatchFromInboundCommand, CompleteVendorDispatchFromInboundResult>>();
+    }
+
+    [SkippableFact]
+    public async Task VendorDoneReplay_PreservesNoOpenDispatchAfterPhoneRowsChange()
+    {
+        SkipIfNoDocker();
+        var command = new CompleteVendorDispatchFromInboundCommand(
+            "SM-replay-preserve-no-open",
+            "+16145550000",
+            true,
+            _now);
+        var identity = VendorIdentity(command.ProviderEventId);
+        var first = await ExecuteAtomicAsync(identity, command, VendorDoneCodec);
+        first.Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.NoOpenDispatch);
+
+        await using (var mutate = NewContext())
+        {
+            var vendor = await mutate.Vendors.SingleAsync(row => row.Id == _facts.VendorId);
+            vendor.Phone = "+1 (614) 555-0000";
+            await mutate.SaveChangesAsync();
+        }
+
+        // SmsWebhookController verifies the provider signature before this command is admitted.
+        // Replay must therefore preserve the verified event's original NoOpenDispatch receipt
+        // instead of changing meaning when mutable phone/dispatch rows later match.
+        var replay = await ExecuteAtomicAsync(identity, command, VendorDoneCodec);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().BeEquivalentTo(first.Value);
+
+        await using var verify = NewContext();
+        (await verify.WorkOrderStatusEvents.CountAsync(status =>
+            status.WorkOrderId == _facts.WorkOrderId
+            && status.ToStatus == WorkOrderStatus.Completed)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -236,7 +274,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         _probe.Commands.Clear();
 
         var identity = VendorIdentity("SM-same-portfolio-ambiguous");
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             identity,
             VendorDone("SM-same-portfolio-ambiguous"),
             VendorDoneCodec);
@@ -266,7 +304,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         var identity = VendorIdentity("SM-not-done");
         _probe.Commands.Clear();
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             identity,
             new CompleteVendorDispatchFromInboundCommand(
                 "SM-not-done", "+16145550199", false, _now),
@@ -289,7 +327,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
     public async Task SiblingDispatchAfterCompletedWorkOrderDoesNotInflateVendorJobsCompleted()
     {
         SkipIfNoDocker();
-        await Atomic.ExecuteAsync(
+        await ExecuteAtomicAsync(
             VendorIdentity("SM-first-completion"),
             VendorDone("SM-first-completion"),
             VendorDoneCodec);
@@ -304,7 +342,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             await db.SaveChangesAsync();
         }
 
-        (await Atomic.ExecuteAsync(
+        (await ExecuteAtomicAsync(
             VendorIdentity("SM-sibling-completion"),
             VendorDone("SM-sibling-completion", _now.AddMinutes(2)),
             VendorDoneCodec)).Value.Outcome.Should().Be(CompleteVendorDispatchFromInboundOutcome.Applied);
@@ -340,11 +378,11 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         }
 
         var completions = await Task.WhenAll(
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 VendorIdentity("SM-first-phone"),
                 VendorDone("SM-first-phone"),
                 VendorDoneCodec),
-            Atomic.ExecuteAsync(
+            ExecuteAtomicAsync(
                 VendorIdentity("SM-second-phone"),
                 new CompleteVendorDispatchFromInboundCommand(
                     "SM-second-phone", "+16145550200", true, _now),
@@ -372,7 +410,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         var identity = VendorIdentity(command.ProviderEventId);
         _probe.FailOnAtomicAuditInsert = true;
 
-        var attempt = async () => await Atomic.ExecuteAsync(identity, command, VendorDoneCodec);
+        var attempt = async () => await ExecuteAtomicAsync(identity, command, VendorDoneCodec);
         var failure = await attempt.Should().ThrowAsync<DbUpdateException>();
         failure.Which.InnerException.Should().BeOfType<InjectedCompanionFailure>();
         _probe.FailOnAtomicAuditInsert = false;
@@ -388,7 +426,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
                 && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().BeFalse();
         }
 
-        (await Atomic.ExecuteAsync(identity, command, VendorDoneCodec)).Value.Outcome
+        (await ExecuteAtomicAsync(identity, command, VendorDoneCodec)).Value.Outcome
             .Should().Be(CompleteVendorDispatchFromInboundOutcome.Applied);
     }
 
@@ -402,7 +440,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         }
         _probe.Commands.Clear();
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             VendorIdentity("SM-query-count"),
             VendorDone("SM-query-count"),
             VendorDoneCodec);
@@ -439,7 +477,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             [],
             _now);
 
-        var result = await Atomic.ExecuteAsync(
+        var result = await ExecuteAtomicAsync(
             new AtomicCommandIdentity("conversation.tenant-post-message", "tenant:cross-scope"),
             command,
             ConversationCodec);
@@ -450,7 +488,18 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             message.ConversationId == _facts.ConversationId)).Should().Be(1);
     }
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> resultCodec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+    }
 
     private CompleteVendorDispatchFromInboundCommand VendorDone(string eventId, DateTime? receivedAt = null) =>
         new(eventId, "+16145550199", true, receivedAt ?? _now);

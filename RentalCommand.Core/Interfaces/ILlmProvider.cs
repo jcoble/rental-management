@@ -4,7 +4,7 @@ namespace RentalCommand.Core.Interfaces;
 /// Abstraction over an LLM provider. Phase 0 defines the contract only; a concrete
 /// Anthropic/OpenAI implementation lands in Phase 2/3.
 /// </summary>
-public interface ILlmProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
+public interface ILlmProvider
 {
     /// <summary>Single-shot chat completion.</summary>
     Task<string> ChatAsync(string prompt, CancellationToken ct = default);
@@ -88,7 +88,8 @@ public interface ILlmUsageEvidenceRecorder
         int inputUnits,
         int outputUnits,
         decimal estimatedCostUsd,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        string? usageEventIdentity = null);
 }
 
 /// <summary>Provider-specific, side-effect-free credential validation.</summary>

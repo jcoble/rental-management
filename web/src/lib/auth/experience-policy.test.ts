@@ -40,6 +40,12 @@ describe('experience route policy', () => {
 		assert.equal(canAccessRoute('/properties', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/properties/12', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/leasing/rentals/12', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leases', 'Leasing', capabilities), false);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', capabilities), false);
+		capabilities.add(CAPABILITY.leasingAgreementsPrepare);
+		assert.equal(canAccessRoute('/leases', 'Leasing', capabilities), false);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leases/39', 'Leasing', new Set([CAPABILITY.leasingTermsRead])), false);
 		assert.equal(canAccessRoute('/profile', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), false);
 		capabilities.add(CAPABILITY.leasingOnboardingManage);
@@ -178,11 +184,17 @@ describe('experience route policy', () => {
 	it('keeps workspace setup with the Workspace Administrator', () => {
 		const administrator = new Set([CAPABILITY.securityManage, CAPABILITY.rentalsManage]);
 		const propertyManager = new Set([CAPABILITY.rentalsManage, CAPABILITY.rentalsRead]);
+		const securityOnlyManager = new Set([CAPABILITY.securityManage]);
 
 		assert.equal(canAccessRoute('/onboarding', 'Management', administrator), true);
 		assert.equal(canAccessRoute('/get-started', 'Management', administrator), true);
+		assert.equal(canAccessRoute('/get-started', 'Management', securityOnlyManager), true);
 		assert.equal(canAccessRoute('/onboarding', 'Management', propertyManager), false);
 		assert.equal(canAccessRoute('/get-started', 'Management', propertyManager), false);
+
+		const dashboardPage = readFileSync(new URL('../../routes/(protected)/+page.svelte', import.meta.url), 'utf8');
+		assert.match(dashboardPage, /hasCapability\('security\.manage'\)/);
+		assert.match(dashboardPage, /\{#if canOpenGettingStarted\}[\s\S]*<GettingStartedCard \/>/);
 	});
 
 	it('splits operational reconciliation from bank administration', () => {

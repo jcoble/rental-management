@@ -82,9 +82,80 @@ void main() {
     expect(adapter.queryParameters, containsPair('take', 5));
     expect(adapter.queryParameters, containsPair('sort', 'fieldQueue'));
   });
+
+  test('getWorkOrderDetail parses server detail capabilities', () async {
+    final adapter = _RecordingAdapter(
+      detailResponse: {
+        'id': 17,
+        'portfolioId': 1,
+        'propertyId': 7,
+        'title': 'Kitchen sink leak',
+        'description': 'Water under the cabinet',
+        'category': 'Plumbing',
+        'priority': 'High',
+        'status': 'New',
+        'requestedAt': '2026-06-01T00:00:00.000Z',
+        'updatedAt': '2026-06-02T00:00:00.000Z',
+        'capabilities': {
+          'allowedStatusTransitions': ['Scheduled', 'Cancelled'],
+          'canDispatchVendor': false,
+          'canViewCosts': false,
+        },
+        'timeline': [],
+      },
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = WorkOrdersRepository(dio);
+
+    final detail = await repo.getWorkOrderDetail(17);
+    final roleAware = detail as RoleAwareWorkOrderDetail;
+
+    expect(adapter.path, '/work-orders/17');
+    expect(roleAware.capabilities.canUpdateStatus, isTrue);
+    expect(roleAware.capabilities.allowedStatusTransitions, [
+      'Scheduled',
+      'Cancelled',
+    ]);
+    expect(roleAware.capabilities.canDispatchVendor, isFalse);
+    expect(roleAware.capabilities.canViewCosts, isFalse);
+    expect(roleAware.capabilities.canEdit, isFalse);
+  });
+
+  test('getWorkOrderDetail defaults missing capabilities closed', () async {
+    final adapter = _RecordingAdapter(
+      detailResponse: {
+        'id': 17,
+        'portfolioId': 1,
+        'propertyId': 7,
+        'title': 'Kitchen sink leak',
+        'description': 'Water under the cabinet',
+        'category': 'Plumbing',
+        'priority': 'High',
+        'status': 'New',
+        'requestedAt': '2026-06-01T00:00:00.000Z',
+        'updatedAt': '2026-06-02T00:00:00.000Z',
+        'timeline': [],
+      },
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+      ..httpClientAdapter = adapter;
+    final repo = WorkOrdersRepository(dio);
+
+    final detail = await repo.getWorkOrderDetail(17);
+    final roleAware = detail as RoleAwareWorkOrderDetail;
+
+    expect(roleAware.capabilities.canEdit, isFalse);
+    expect(roleAware.capabilities.canAssignTechnician, isFalse);
+    expect(roleAware.capabilities.canUpdateStatus, isFalse);
+    expect(roleAware.capabilities.canViewCosts, isFalse);
+  });
 }
 
 class _RecordingAdapter implements HttpClientAdapter {
+  _RecordingAdapter({this.detailResponse});
+
+  final Map<String, dynamic>? detailResponse;
   String? path;
   Map<String, dynamic>? queryParameters;
 
@@ -97,26 +168,30 @@ class _RecordingAdapter implements HttpClientAdapter {
     path = options.path;
     queryParameters = Map<String, dynamic>.from(options.queryParameters);
 
+    final body = detailResponse != null && options.path == '/work-orders/17'
+        ? detailResponse
+        : {
+            'items': [
+              {
+                'id': 17,
+                'portfolioId': 1,
+                'propertyId': 7,
+                'title': 'Kitchen sink leak',
+                'description': 'Water under the cabinet',
+                'category': 'Plumbing',
+                'priority': 'High',
+                'status': 'New',
+                'requestedAt': '2026-06-01T00:00:00.000Z',
+                'updatedAt': '2026-06-02T00:00:00.000Z',
+              },
+            ],
+            'totalCount': 1,
+            'skip': options.queryParameters['skip'] ?? 0,
+            'take': options.queryParameters['take'] ?? 25,
+          };
+
     return ResponseBody.fromString(
-      jsonEncode({
-        'items': [
-          {
-            'id': 17,
-            'portfolioId': 1,
-            'propertyId': 7,
-            'title': 'Kitchen sink leak',
-            'description': 'Water under the cabinet',
-            'category': 'Plumbing',
-            'priority': 'High',
-            'status': 'New',
-            'requestedAt': '2026-06-01T00:00:00.000Z',
-            'updatedAt': '2026-06-02T00:00:00.000Z',
-          },
-        ],
-        'totalCount': 1,
-        'skip': options.queryParameters['skip'] ?? 0,
-        'take': options.queryParameters['take'] ?? 25,
-      }),
+      jsonEncode(body),
       200,
       headers: {
         Headers.contentTypeHeader: [Headers.jsonContentType],

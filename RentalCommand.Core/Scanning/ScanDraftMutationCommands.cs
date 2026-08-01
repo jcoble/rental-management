@@ -15,17 +15,17 @@ public sealed record RetryScanDraftCommand(
     int PortfolioId,
     int DraftId,
     int UserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record CreateVoiceScanDraftCommand(
     int PortfolioId,
     int UserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string TargetEntityType,
     string ExtractedFieldsJson,
     string ModelId,
@@ -36,22 +36,32 @@ public sealed record CreateVoiceScanDraftCommand(
     string? SourceContentType,
     long SourceFileSize,
     string? SourceContentSha256,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AnswerVoiceScanDraftCommand(
     int PortfolioId,
     int DraftId,
     int UserId,
-    Guid AuthSessionId,
-    int AccessContextId,
-    long ExpectedAccessRevision,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string ExpectedExtractedFieldsJson,
     string TargetEntityType,
     string MergedExtractedFieldsJson,
     string ModelId,
     int? TokensUsed,
     int? CapturePropertyId,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public sealed record SetScanDraftPaymentAccountCommand(
+    int PortfolioId,
+    int DraftId,
+    int UserId,
+    [property: AtomicFingerprintIgnore] Guid AuthSessionId,
+    [property: AtomicFingerprintIgnore] int AccessContextId,
+    [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
+    int TenantAccountId,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record ScanDraftReceiptSnapshot(
     int Id,
@@ -83,9 +93,9 @@ public sealed record ScanDraftReceiptSnapshot(
     DateTime? ReviewedAt,
     string? ReviewedBy,
     DateTime? ConfirmedAt,
-    int? ConfirmedEntityId) : IAtomicResultData;
+    int? ConfirmedEntityId);
 
 public sealed record ScanDraftMutationResult(
     ScanDraftMutationOutcome Outcome,
     int DraftId,
-    ScanDraftReceiptSnapshot? Snapshot = null) : IAtomicResultData;
+    ScanDraftReceiptSnapshot? Snapshot = null);

@@ -17,11 +17,15 @@ class TenantAccountOption {
     required this.relationshipNumber,
     required this.propertyName,
     required this.unitNumber,
+    this.propertyId,
+    this.unitId,
     this.primaryTenantName,
   });
 
   final int tenantAccountId;
   final int leaseManagementId;
+  final int? propertyId;
+  final int? unitId;
   final String relationshipNumber;
   final String propertyName;
   final String unitNumber;
@@ -31,6 +35,8 @@ class TenantAccountOption {
       TenantAccountOption(
         tenantAccountId: (json['tenantAccountId'] as num).toInt(),
         leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+        propertyId: (json['propertyId'] as num?)?.toInt(),
+        unitId: (json['unitId'] as num?)?.toInt(),
         relationshipNumber: json['relationshipNumber'] as String? ?? '',
         propertyName: json['propertyName'] as String? ?? '',
         unitNumber: json['unitNumber'] as String? ?? '',
@@ -105,6 +111,7 @@ class ScanRepository {
 
   final Dio _dio;
   final Map<int, String> _confirmOperationIds = {};
+  final Map<(int, int), String> _paymentAccountOperationIds = {};
 
   /// Lists scan drafts for the caller's portfolio, newest first.
   Future<List<ScanDraft>> listDrafts({String? status}) async {
@@ -168,49 +175,146 @@ class ScanRepository {
     String? sourceLabel,
     void Function(double progress)? onSendProgress,
   }) async {
+    final operationId = clientOperationId ?? const Uuid().v4();
     try {
-      final formData = FormData.fromMap({
-        'file': MultipartFile.fromBytes(
-          bytes,
-          filename: filename,
-          contentType: DioMediaType.parse(contentType),
-        ),
-        'targetEntityType': targetEntityType,
-        'clientOperationId': clientOperationId ?? const Uuid().v4(),
-        'propertyId': ?propertyId,
-        'unitId': ?unitId,
-        'leaseManagementId': ?leaseManagementId,
-        'leaseAgreementId': ?leaseAgreementId,
-        'tenantAccountId': ?tenantAccountId,
-        'tenantLedgerEntryId': ?tenantLedgerEntryId,
-        'workOrderId': ?workOrderId,
-        'applicationId': ?applicationId,
-        'rentalListingId': ?rentalListingId,
-        if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
-          'sourceLabel': sourceLabel.trim(),
-      });
-
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/scans',
-        data: formData,
-        onSendProgress: onSendProgress != null
-            ? (sent, total) {
-                if (total > 0) onSendProgress(sent / total);
-              }
-            : null,
+      return await _postScanUpload(
+        bytes,
+        filename,
+        contentType,
+        targetEntityType: targetEntityType,
+        clientOperationId: operationId,
+        propertyId: propertyId,
+        unitId: unitId,
+        leaseManagementId: leaseManagementId,
+        leaseAgreementId: leaseAgreementId,
+        tenantAccountId: tenantAccountId,
+        tenantLedgerEntryId: tenantLedgerEntryId,
+        workOrderId: workOrderId,
+        applicationId: applicationId,
+        rentalListingId: rentalListingId,
+        sourceLabel: sourceLabel,
+        onSendProgress: onSendProgress,
       );
-
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return ScanCreatedResponse.fromJson(data);
     } on DioException catch (e) {
+      if (e.type == DioExceptionType.receiveTimeout) {
+        try {
+          return await _postScanUpload(
+            bytes,
+            filename,
+            contentType,
+            targetEntityType: targetEntityType,
+            clientOperationId: operationId,
+            propertyId: propertyId,
+            unitId: unitId,
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: leaseAgreementId,
+            tenantAccountId: tenantAccountId,
+            tenantLedgerEntryId: tenantLedgerEntryId,
+            workOrderId: workOrderId,
+            applicationId: applicationId,
+            rentalListingId: rentalListingId,
+            sourceLabel: sourceLabel,
+            onSendProgress: null,
+          );
+        } on DioException catch (retryError) {
+          throw ApiException.fromDioException(retryError);
+        }
+      }
       throw ApiException.fromDioException(e);
     }
+  }
+
+  Future<ScanCreatedResponse> _postScanUpload(
+    Uint8List bytes,
+    String filename,
+    String contentType, {
+    required String targetEntityType,
+    required String clientOperationId,
+    int? propertyId,
+    int? unitId,
+    int? leaseManagementId,
+    int? leaseAgreementId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
+    int? workOrderId,
+    int? applicationId,
+    int? rentalListingId,
+    String? sourceLabel,
+    void Function(double progress)? onSendProgress,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/scans',
+      data: _scanUploadFormData(
+        bytes,
+        filename,
+        contentType,
+        targetEntityType: targetEntityType,
+        clientOperationId: clientOperationId,
+        propertyId: propertyId,
+        unitId: unitId,
+        leaseManagementId: leaseManagementId,
+        leaseAgreementId: leaseAgreementId,
+        tenantAccountId: tenantAccountId,
+        tenantLedgerEntryId: tenantLedgerEntryId,
+        workOrderId: workOrderId,
+        applicationId: applicationId,
+        rentalListingId: rentalListingId,
+        sourceLabel: sourceLabel,
+      ),
+      onSendProgress: onSendProgress != null
+          ? (sent, total) {
+              if (total > 0) onSendProgress(sent / total);
+            }
+          : null,
+    );
+
+    final data = response.data;
+    if (data == null) {
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Empty response from server.',
+      );
+    }
+    return ScanCreatedResponse.fromJson(data);
+  }
+
+  FormData _scanUploadFormData(
+    Uint8List bytes,
+    String filename,
+    String contentType, {
+    required String targetEntityType,
+    required String clientOperationId,
+    int? propertyId,
+    int? unitId,
+    int? leaseManagementId,
+    int? leaseAgreementId,
+    int? tenantAccountId,
+    int? tenantLedgerEntryId,
+    int? workOrderId,
+    int? applicationId,
+    int? rentalListingId,
+    String? sourceLabel,
+  }) {
+    return FormData.fromMap({
+      'file': MultipartFile.fromBytes(
+        bytes,
+        filename: filename,
+        contentType: DioMediaType.parse(contentType),
+      ),
+      'targetEntityType': targetEntityType,
+      'clientOperationId': clientOperationId,
+      'propertyId': ?propertyId,
+      'unitId': ?unitId,
+      'leaseManagementId': ?leaseManagementId,
+      'leaseAgreementId': ?leaseAgreementId,
+      'tenantAccountId': ?tenantAccountId,
+      'tenantLedgerEntryId': ?tenantLedgerEntryId,
+      'workOrderId': ?workOrderId,
+      'applicationId': ?applicationId,
+      'rentalListingId': ?rentalListingId,
+      if (sourceLabel != null && sourceLabel.trim().isNotEmpty)
+        'sourceLabel': sourceLabel.trim(),
+    });
   }
 
   /// Uploads a recorded voice note and creates a reviewable AI draft.
@@ -315,6 +419,57 @@ class ScanRepository {
       );
       _confirmOperationIds.remove(id);
       return response.data;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Persists the reviewer-selected canonical account for a payment draft.
+  Future<ScanDraft> setPaymentAccount(int id, int tenantAccountId) async {
+    final operationKey = (id, tenantAccountId);
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/scans/$id/payment-account',
+        data: {
+          'tenantAccountId': tenantAccountId,
+          'clientOperationId': _paymentAccountOperationIds.putIfAbsent(
+            operationKey,
+            () => const Uuid().v4(),
+          ),
+        },
+      );
+      _paymentAccountOperationIds.remove(operationKey);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Requeues a failed draft for extraction and returns the updated draft.
+  Future<ScanDraft> retry(int id) async {
+    try {
+      final response = await IdempotentMutation.run(
+        'scan:retry:$id',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/scans/$id/retry',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

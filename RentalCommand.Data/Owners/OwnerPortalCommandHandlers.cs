@@ -11,12 +11,15 @@ using RentalCommand.Core.Owners;
 namespace RentalCommand.Data.Owners;
 
 public sealed class DecideOwnerApprovalHandler
-    : IAtomicCommandHandler<DecideOwnerApprovalCommand, OwnerPortalCommandResult>,
-      IAtomicReplayAuthorizer<DecideOwnerApprovalCommand>
+    : IAtomicCommandHandler<DecideOwnerApprovalCommand, OwnerPortalCommandResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public DecideOwnerApprovalHandler(RentalCommandDbContext db) => _db = db;
+
     public Task<OwnerPortalCommandResult> HandleAsync(
         DecideOwnerApprovalCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (!Enum.IsDefined(command.Decision)
@@ -27,7 +30,8 @@ public sealed class DecideOwnerApprovalHandler
         }
 
         return OwnerPortalCommandSupport.RecordAsync(
-            attempt,
+            _db,
+            context,
             command.PortfolioId,
             command.ActorUserId,
             command.ActorSessionId,
@@ -45,11 +49,9 @@ public sealed class DecideOwnerApprovalHandler
     }
 
     public Task AuthorizeReplayAsync(
-        DecideOwnerApprovalCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        DecideOwnerApprovalCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         OwnerPortalCommandSupport.AuthorizeReplayAsync(
-            persistence,
+            _db,
             command.PortfolioId,
             command.ActorUserId,
             command.ActorSessionId,
@@ -61,19 +63,23 @@ public sealed class DecideOwnerApprovalHandler
 }
 
 public sealed class ReplyToOwnerMessageHandler
-    : IAtomicCommandHandler<ReplyToOwnerMessageCommand, OwnerPortalCommandResult>,
-      IAtomicReplayAuthorizer<ReplyToOwnerMessageCommand>
+    : IAtomicCommandHandler<ReplyToOwnerMessageCommand, OwnerPortalCommandResult>
 {
+    private readonly RentalCommandDbContext _db;
+
+    public ReplyToOwnerMessageHandler(RentalCommandDbContext db) => _db = db;
+
     public Task<OwnerPortalCommandResult> HandleAsync(
         ReplyToOwnerMessageCommand command,
-        IAtomicWriteAttempt attempt,
+        IAtomicCommandContext context,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(command.Body) || command.Body.Trim().Length > 4000)
             throw new DomainValidationException("A reply of at most 4,000 characters is required.");
 
         return OwnerPortalCommandSupport.RecordAsync(
-            attempt,
+            _db,
+            context,
             command.PortfolioId,
             command.ActorUserId,
             command.ActorSessionId,
@@ -89,11 +95,9 @@ public sealed class ReplyToOwnerMessageHandler
     }
 
     public Task AuthorizeReplayAsync(
-        ReplyToOwnerMessageCommand command,
-        IAtomicPersistenceSession persistence,
-        CancellationToken ct) =>
+        ReplyToOwnerMessageCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         OwnerPortalCommandSupport.AuthorizeReplayAsync(
-            persistence,
+            _db,
             command.PortfolioId,
             command.ActorUserId,
             command.ActorSessionId,
@@ -107,7 +111,8 @@ public sealed class ReplyToOwnerMessageHandler
 internal static class OwnerPortalCommandSupport
 {
     internal static async Task<OwnerPortalCommandResult> RecordAsync(
-        IAtomicWriteAttempt attempt,
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
         int portfolioId,
         int actorUserId,
         Guid actorSessionId,
@@ -123,11 +128,11 @@ internal static class OwnerPortalCommandSupport
     {
         ValidateEnvelope(portfolioId, actorUserId, actorSessionId, actorAccessContextId,
             actorAccessRevision, sourceNotificationId, deliveryIdempotencyKey);
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, actorAccessContextId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await context.AcquireLockAsync(
+            "WorkspaceAccessContext", actorAccessContextId, ct);
+        var now = await context.ReadDatabaseClockUtcAsync(ct);
         var source = await AuthorizeSourceAsync(
-            attempt.Persistence,
+            db,
             portfolioId,
             actorUserId,
             actorSessionId,
@@ -138,14 +143,14 @@ internal static class OwnerPortalCommandSupport
             now,
             ct);
 
-        var alreadyRead = await attempt.Persistence.Query<NotificationReadState>()
+        var alreadyRead = await db.Set<NotificationReadState>()
             .AsNoTracking()
             .AnyAsync(read => read.PortfolioId == portfolioId
                 && read.NotificationId == sourceNotificationId
                 && read.UserId == actorUserId, ct);
         if (!alreadyRead)
         {
-            attempt.Persistence.Add(new NotificationReadState
+            db.Add(new NotificationReadState
             {
                 PortfolioId = portfolioId,
                 NotificationId = sourceNotificationId,
@@ -155,7 +160,7 @@ internal static class OwnerPortalCommandSupport
         }
 
         var recipients = await StaffRecipientsForOwner(
-                attempt.Persistence, portfolioId, source.OwnerEntityId, now)
+                db, portfolioId, source.OwnerEntityId, now)
             .OrderBy(recipient => recipient.UserId)
             .ToListAsync(ct);
         var body = string.IsNullOrWhiteSpace(responseBody)
@@ -184,13 +189,13 @@ internal static class OwnerPortalCommandSupport
             RelatedEntityId = source.OwnerEntityId,
             CreatedAt = now,
         }).ToArray();
-        foreach (var notification in notifications) attempt.Persistence.Add(notification);
-        await attempt.FlushBusinessAsync(ct);
+        foreach (var notification in notifications) db.Add(notification);
+        await context.FlushBusinessAsync(ct);
 
-        attempt.UseDatabaseWallClockForAudit(now);
+        context.UseDatabaseWallClockForAudit(now);
         if (!alreadyRead)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 portfolioId,
                 nameof(NotificationReadState),
                 sourceNotificationId,
@@ -206,7 +211,7 @@ internal static class OwnerPortalCommandSupport
         }
         foreach (var notification in notifications)
         {
-            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            context.StageSemanticEvent(new AtomicSemanticAudit(
                 portfolioId,
                 nameof(Notification),
                 notification.Id,
@@ -221,7 +226,7 @@ internal static class OwnerPortalCommandSupport
                 }),
                 ChangeReason: "Owner portal response routed to authorized staff."), now);
         }
-        attempt.StageOutbox(new OutboxMessage
+        context.StageOutbox(new OutboxMessage
         {
             PortfolioId = portfolioId,
             MessageType = "data-update",
@@ -244,7 +249,7 @@ internal static class OwnerPortalCommandSupport
     }
 
     internal static async Task AuthorizeReplayAsync(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         int portfolioId,
         int actorUserId,
         Guid actorSessionId,
@@ -256,9 +261,9 @@ internal static class OwnerPortalCommandSupport
     {
         ValidateEnvelope(portfolioId, actorUserId, actorSessionId, actorAccessContextId,
             actorAccessRevision, sourceNotificationId, "replay");
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = await db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         _ = await AuthorizeSourceAsync(
-            persistence,
+            db,
             portfolioId,
             actorUserId,
             actorSessionId,
@@ -271,7 +276,7 @@ internal static class OwnerPortalCommandSupport
     }
 
     private static async Task<OwnerSource> AuthorizeSourceAsync(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         int portfolioId,
         int actorUserId,
         Guid actorSessionId,
@@ -282,7 +287,7 @@ internal static class OwnerPortalCommandSupport
         DateTime now,
         CancellationToken ct)
     {
-        var source = await persistence.Query<Notification>()
+        var source = await db.Set<Notification>()
             .AsNoTracking()
             .Where(notification =>
                 notification.Id == sourceNotificationId
@@ -291,7 +296,7 @@ internal static class OwnerPortalCommandSupport
                 && notification.Type == requiredSourceType
                 && notification.RelatedEntityType == "OwnerEntity"
                 && notification.RelatedEntityId != null)
-            .Where(notification => persistence.Query<OwnerUserAccess>().Any(access =>
+            .Where(notification => db.Set<OwnerUserAccess>().Any(access =>
                 access.PortfolioId == portfolioId
                 && access.ApplicationUserId == actorUserId
                 && access.AccessContextId == actorAccessContextId
@@ -304,7 +309,7 @@ internal static class OwnerPortalCommandSupport
                 && access.AccessContext.Status == WorkspaceAccessContextStatus.Active
                 && access.AccessContext.SuspendedAtUtc == null
                 && access.AccessContext.RevokedAtUtc == null
-                && persistence.Query<AuthSession>().Any(session =>
+                && db.Set<AuthSession>().Any(session =>
                     session.Id == actorSessionId
                     && session.UserId == actorUserId
                     && session.ActiveAccessContextId == actorAccessContextId
@@ -318,12 +323,12 @@ internal static class OwnerPortalCommandSupport
     }
 
     private static IQueryable<StaffRecipient> StaffRecipientsForOwner(
-        IAtomicPersistenceSession persistence,
+        RentalCommandDbContext db,
         int portfolioId,
         int ownerEntityId,
         DateTime now)
     {
-        var ownerPropertyIds = persistence.Query<PropertyOwnership>()
+        var ownerPropertyIds = db.Set<PropertyOwnership>()
             .Where(ownership => ownership.PortfolioId == portfolioId
                 && ownership.OwnerEntityId == ownerEntityId
                 && ownership.EffectiveFromUtc <= now
@@ -333,11 +338,11 @@ internal static class OwnerPortalCommandSupport
             .Select(ownership => ownership.PropertyId);
 
         return (
-            from context in persistence.Query<WorkspaceAccessContext>()
-            join membership in persistence.Query<WorkspaceMembership>()
+            from context in db.Set<WorkspaceAccessContext>()
+            join membership in db.Set<WorkspaceMembership>()
                 on new { AccessContextId = context.Id, context.PortfolioId }
                 equals new { membership.AccessContextId, membership.PortfolioId }
-            join assignment in persistence.Query<MembershipRoleAssignment>()
+            join assignment in db.Set<MembershipRoleAssignment>()
                 on new { WorkspaceMembershipId = membership.Id, membership.PortfolioId }
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
             where context.PortfolioId == portfolioId

@@ -5,6 +5,7 @@ import { formatDateOnly, localInputToOffsetIso } from './date.ts';
 test('formatDateOnly preserves UTC-midnight calendar dates', () => {
 	assert.equal(formatDateOnly('2026-09-22T00:00:00Z'), 'Sep 22, 2026');
 	assert.equal(formatDateOnly('2026-09-22'), 'Sep 22, 2026');
+	assert.equal(formatDateOnly('2027-01-10T00:00:00Z'), 'Jan 10, 2027');
 });
 
 // The work-order schedule FROZEN contract: a `datetime-local` wall-clock value must serialize to an

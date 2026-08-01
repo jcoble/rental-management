@@ -17,6 +17,7 @@ public static class SimWorkerKeys
     public const string RecurringExpense = "recurring-expense";
     public const string RecurringMaintenance = "recurring-maintenance";
     public const string DailyBriefing = "daily-briefing";
+    public const string ScanProcessing = "scan-processing";
 
     /// <summary>Runs the full due-order batch (<see cref="RunDueSequence"/>) in one command.</summary>
     public const string RunDue = "run-due";
@@ -25,7 +26,7 @@ public static class SimWorkerKeys
     public static readonly IReadOnlyList<string> All = new[]
     {
         RentCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
-        DebtService, RecurringExpense, RecurringMaintenance, DailyBriefing,
+        DebtService, RecurringExpense, RecurringMaintenance, DailyBriefing, ScanProcessing,
     };
 
     /// <summary>

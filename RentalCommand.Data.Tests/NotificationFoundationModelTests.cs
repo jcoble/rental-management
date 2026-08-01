@@ -69,6 +69,20 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
+    public void RentCharges_AreAlwaysEnabledAtTheDatabaseBoundary()
+    {
+        using var db = CreateDb();
+        var designTimeModel = db.GetService<IDesignTimeModel>().Model;
+        var entity = designTimeModel.FindEntityType(typeof(AutomationSettings))!;
+
+        entity.FindProperty(nameof(AutomationSettings.EnableRentCharges))!
+            .GetDefaultValue().Should().Be(true);
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_AutomationSettings_RentChargesAlwaysEnabled" &&
+            constraint.Sql == "\"EnableRentCharges\" = TRUE");
+    }
+
+    [Fact]
     public void WorkspaceRouting_IsUniqueEvenWhenPropertyIdIsNull()
     {
         using var db = CreateDb();

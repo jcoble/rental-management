@@ -29,6 +29,10 @@ describe("Who's behind canonical paging contract", () => {
       typeSource,
       /interface PastDueResponse[\s\S]*businessDate: string \| null;[\s\S]*skip: number;[\s\S]*take: number;/
     );
+    assert.match(
+      typeSource,
+      /interface PastDueLease[\s\S]*oldestLedgerEntryId: number;[\s\S]*oldestLedgerEntryOpenAmount: number;/
+    );
   });
 
   it("keeps canonical receipt and tenant-account context while paging server results", () => {
@@ -37,10 +41,13 @@ describe("Who's behind canonical paging contract", () => {
       /accounting\.pastDue\(\{ skip, take: PAGE_SIZE \}\)/
     );
     assert.match(pageSource, /payments\.recordReceipt\(lease\.tenantAccountId/);
+    assert.match(pageSource, /targetChargeEntryId: lease\.oldestLedgerEntryId/);
+    assert.match(pageSource, /amount: lease\.oldestLedgerEntryOpenAmount/);
     assert.match(pageSource, /tenantAccount=\$\{lease\.tenantAccountId\}/);
     assert.match(pageSource, /data-testid="past-due-pagination"/);
     assert.match(pageSource, /result\.businessDate/);
     assert.doesNotMatch(pageSource, /daysFromTodayUtc|Date\.now|Tenant account #/);
     assert.doesNotMatch(pageSource, /leaseId|oldestPaymentId/);
+    assert.doesNotMatch(pageSource, /allocateOldestCharges/);
   });
 });

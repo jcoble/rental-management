@@ -39,6 +39,7 @@ export interface RouteAccessRule {
 	exact?: boolean;
 	experiences?: readonly WorkspaceExperience[];
 	anyCapabilities?: readonly string[];
+	capabilitiesByExperience?: Partial<Record<WorkspaceExperience, readonly string[]>>;
 }
 
 /**
@@ -223,8 +224,11 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/leases',
-		experiences: ['Management'],
-		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingTermsRead]
+		experiences: ['Management', 'Leasing'],
+		capabilitiesByExperience: {
+			Management: [CAPABILITY.rentalsRead, CAPABILITY.leasingTermsRead],
+			Leasing: [CAPABILITY.leasingAgreementsPrepare]
+		}
 	},
 	{
 		prefix: '/lease-templates',
@@ -298,8 +302,11 @@ export function canAccessRoute(
 	// for every experience, including full Management access.
 	if (!rule) return false;
 	if (rule.experiences && (!experience || !rule.experiences.includes(experience))) return false;
-	if (!rule.anyCapabilities || rule.anyCapabilities.length === 0) return true;
-	return rule.anyCapabilities.some((capability) => capabilities.has(capability));
+	const requiredCapabilities = experience
+		? rule.capabilitiesByExperience?.[experience] ?? rule.anyCapabilities
+		: rule.anyCapabilities;
+	if (!requiredCapabilities || requiredCapabilities.length === 0) return true;
+	return requiredCapabilities.some((capability) => capabilities.has(capability));
 }
 
 const LANDING_CANDIDATES: Record<WorkspaceExperience, readonly string[]> = {

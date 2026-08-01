@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -114,7 +115,8 @@ public class CapitalAssetService : ICapitalAssetService
         CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Create, 0, operationKey, request);
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Create, 0, operationKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found
@@ -130,7 +132,8 @@ public class CapitalAssetService : ICapitalAssetService
         CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Update, id, operationKey, request);
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Update, id, operationKey, request,
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found
@@ -147,7 +150,7 @@ public class CapitalAssetService : ICapitalAssetService
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.CapitalizeExpense,
-            expenseId, operationKey, request);
+            expenseId, operationKey, request, _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found
@@ -162,7 +165,8 @@ public class CapitalAssetService : ICapitalAssetService
         CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
-            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Delete, id, operationKey, new object());
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Delete, id, operationKey, new object(),
+            _timeProvider.UtcNow());
         var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         return outcome.Value.Found;

@@ -22,11 +22,16 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         new("assigned-work-order.update.v1");
     private readonly ITechnicianExperienceService _service;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly TimeProvider _timeProvider;
 
-    public TechnicianController(ITechnicianExperienceService service, IAtomicUnitOfWork atomic)
+    public TechnicianController(
+        ITechnicianExperienceService service,
+        IAtomicUnitOfWork atomic,
+        TimeProvider timeProvider)
     {
         _service = service;
         _atomic = atomic;
+        _timeProvider = timeProvider;
     }
 
     [HttpGet("assignments")]
@@ -84,6 +89,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
             request.ScheduledFor?.UtcDateTime,
             request.ScheduledWindowEnd?.UtcDateTime,
             request.CompletedAt?.UtcDateTime,
+            _timeProvider.GetUtcNow().UtcDateTime,
             digest);
         try
         {

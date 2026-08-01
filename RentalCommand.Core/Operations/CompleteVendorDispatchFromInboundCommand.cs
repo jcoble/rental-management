@@ -6,7 +6,7 @@ public sealed record CompleteVendorDispatchFromInboundCommand(
     string ProviderEventId,
     string NormalizedFromPhone,
     bool IsCompletionRequest,
-    DateTime ReceivedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime ReceivedAtUtc) : IAtomicCommandData;
 
 public enum CompleteVendorDispatchFromInboundOutcome
 {
@@ -20,4 +20,4 @@ public sealed record CompleteVendorDispatchFromInboundResult(
     int DispatchId,
     int WorkOrderId,
     int VendorId,
-    IReadOnlyList<int> NotificationIds) : IAtomicResultData;
+    IReadOnlyList<int> NotificationIds);

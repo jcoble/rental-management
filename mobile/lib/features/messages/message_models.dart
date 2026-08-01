@@ -58,6 +58,7 @@ class Conversation {
   final int id;
   final int tenantId;
   final String tenantName;
+  final String counterpartyName;
   final String subject;
   final String? propertyName;
   final String? lastMessagePreview;
@@ -72,6 +73,7 @@ class Conversation {
     required this.id,
     required this.tenantId,
     required this.tenantName,
+    String? counterpartyName,
     required this.subject,
     this.propertyName,
     this.lastMessagePreview,
@@ -79,9 +81,15 @@ class Conversation {
     required this.unreadCount,
     required this.messageCount,
     this.messages = const [],
-  });
+  }) : counterpartyName = counterpartyName ?? tenantName;
 
   bool get hasUnread => unreadCount > 0;
+  String get displayName {
+    final counterparty = counterpartyName.trim();
+    if (counterparty.isNotEmpty) return counterparty;
+    final tenant = tenantName.trim();
+    return tenant.isEmpty ? 'Conversation' : tenant;
+  }
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
     final rawMessages = json['messages'];
@@ -89,6 +97,7 @@ class Conversation {
       id: (json['id'] as num).toInt(),
       tenantId: (json['tenantId'] as num).toInt(),
       tenantName: json['tenantName'] as String? ?? 'Tenant',
+      counterpartyName: json['counterpartyName'] as String?,
       subject: json['subject'] as String? ?? '',
       propertyName: json['propertyName'] as String?,
       lastMessagePreview: json['lastMessagePreview'] as String?,

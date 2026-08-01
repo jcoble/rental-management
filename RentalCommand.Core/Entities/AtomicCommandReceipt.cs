@@ -1,4 +1,4 @@
-using RentalCommand.Core.Enums;
+using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Core.Entities;
 

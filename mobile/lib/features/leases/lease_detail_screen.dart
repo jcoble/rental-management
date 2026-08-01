@@ -225,6 +225,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       useSafeArea: true,
+      useRootNavigator: true,
       builder: (sheetContext) => Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -243,12 +244,14 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
-              onPressed: () => Navigator.of(sheetContext).pop(true),
+              onPressed: () =>
+                  Navigator.of(sheetContext, rootNavigator: true).pop(true),
               icon: const Icon(Icons.key_outlined),
               label: const Text('Confirm possession'),
             ),
             TextButton(
-              onPressed: () => Navigator.of(sheetContext).pop(false),
+              onPressed: () =>
+                  Navigator.of(sheetContext, rootNavigator: true).pop(false),
               child: const Text('Cancel'),
             ),
           ],
@@ -271,8 +274,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
       );
       if (result == null || !context.mounted) return;
-      ref.invalidate(leaseManagementDetailProvider(summary.id));
-      await ref.read(leaseManagementDetailProvider(summary.id).future);
+      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -359,7 +361,7 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ),
       );
       if (result == null || !context.mounted) return;
-      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
+      final _ = await ref.refresh(leaseManagementDetailProvider(summary.id).future);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Lease ending decision recorded.')),
@@ -518,6 +520,7 @@ class _HouseholdCard extends ConsumerWidget {
               data: (value) => Column(
                 children: [
                   for (final party in value.parties)
+                    if (_canShowHouseholdAction(party))
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const CircleAvatar(
@@ -547,7 +550,8 @@ class _HouseholdCard extends ConsumerWidget {
                                   child: Text('End membership'),
                                 ),
                                 if (_accessFor(value, party.id) == null &&
-                                    party.email != null)
+                                    party.email != null &&
+                                    party.canGrantTenantPortalAccess)
                                   const PopupMenuItem(
                                     value: HouseholdAction.grantAccess,
                                     child: Text('Create resident login'),
@@ -572,7 +576,8 @@ class _HouseholdCard extends ConsumerWidget {
                         ),
                       ),
                     ),
-                  if (management.parties.any((party) => !party.isCurrent)) ...[
+                  if (management.parties
+                      .any((party) => !_canShowHouseholdAction(party))) ...[
                     const Divider(),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -582,7 +587,7 @@ class _HouseholdCard extends ConsumerWidget {
                       ),
                     ),
                     for (final party in management.parties)
-                      if (!party.isCurrent)
+                      if (!_canShowHouseholdAction(party))
                         ListTile(
                           contentPadding: EdgeInsets.zero,
                           leading: const Icon(Icons.history_outlined),
@@ -610,6 +615,9 @@ class _HouseholdCard extends ConsumerWidget {
     }
     return null;
   }
+
+  bool _canShowHouseholdAction(LeaseManagementParty party) =>
+      party.isCurrent || party.canGrantTenantPortalAccess;
 
   Future<void> _open(
     BuildContext context,

@@ -39,6 +39,13 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 {
+    private const string DocumentTemplateEntityType = "DocumentTemplate";
+    private static readonly string[] DocumentTemplateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
+
     // Content types safe to render inline (no active content that could run scripts).
     private static readonly HashSet<string> InlineSafeContentTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -139,6 +146,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         }
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
+            return NotFound(new { error = "The referenced record was not found in your portfolio." });
+        if (!isStaff && !await TenantMayAccessEntityAsync(target.ToString(), entityId, portfolioId, ct))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
         string contentSha256;
@@ -283,9 +292,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         // ID scans, owner financials). 404 (not 403) so a foreign id is indistinguishable from a missing one.
         if (HasWorkspaceMembership())
         {
-            if (!TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
-                !TryReadWorkspaceScope(out var scope) ||
-                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: false, ct))
+            if (!TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessStoredFileTargetAsync(scope, row, write: false, ct))
                 return NotFound(new { error = "Document not found." });
         }
         else if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
@@ -365,14 +373,13 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         WorkspaceReadScope? staffScope = null;
         if (isStaff)
         {
-            var row = await _documents.FindAsync(portfolioId, id, ct);
-            if (row is null || !TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
-                !TryReadWorkspaceScope(out var scope) ||
-                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: true, ct))
+            if (!TryReadWorkspaceScope(out var scope))
                 return NotFound(new { error = "Document not found." });
             staffScope = scope;
         }
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
+        if (!isStaff)
+            return NotFound(new { error = "Document not found." });
         var deleted = await _documents.DeleteAsync(
             portfolioId,
             id,
@@ -564,6 +571,80 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                     && properties.Any(property => property.Id == ownership.PropertyId)), ct),
             _ => Task.FromResult(false),
         };
+    }
+
+    private Task<bool> StaffMayAccessStoredFileTargetAsync(
+        WorkspaceReadScope scope,
+        Core.Entities.StoredFile row,
+        bool write,
+        CancellationToken ct)
+    {
+        if (string.Equals(row.EntityType?.Trim(), DocumentTemplateEntityType, StringComparison.OrdinalIgnoreCase))
+        {
+            return !write && row.EntityId is >= int.MinValue and <= int.MaxValue
+                ? StaffMayAccessDocumentTemplateAsync(scope, (int)row.EntityId.Value, row.Id, ct)
+                : Task.FromResult(false);
+        }
+
+        return TryParseTarget(row.EntityType ?? string.Empty, out var target)
+            ? StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write, ct)
+            : Task.FromResult(false);
+    }
+
+    private Task<bool> StaffMayAccessDocumentTemplateAsync(
+        WorkspaceReadScope scope,
+        int documentTemplateId,
+        int storedFileId,
+        CancellationToken ct)
+    {
+        var utcNow = DateTime.UtcNow;
+        var assignments = _db.MembershipRoleAssignments.AsNoTracking()
+            .Where(assignment =>
+                assignment.PortfolioId == scope.PortfolioId &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.EffectiveFromUtc <= utcNow &&
+                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.WorkspaceMembership != null &&
+                assignment.WorkspaceMembership.AccessContextId == scope.AccessContextId &&
+                assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId &&
+                assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+                assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
+                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+                 assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
+                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.RevokedAtUtc == null &&
+                assignment.WorkspaceMembership.AccessContext != null &&
+                assignment.WorkspaceMembership.AccessContext.UserId == scope.UserId &&
+                assignment.WorkspaceMembership.AccessContext.PortfolioId == scope.PortfolioId &&
+                assignment.WorkspaceMembership.AccessContext.AccessRevision == scope.AccessRevision &&
+                assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
+                assignment.RoleProfile != null &&
+                assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                    profileCapability.CapabilityDefinition != null &&
+                    DocumentTemplateCapabilityKeys.Contains(profileCapability.CapabilityDefinition.Key) &&
+                    profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
+
+        return _db.DocumentTemplates.AsNoTracking().AnyAsync(template =>
+            template.Id == documentTemplateId &&
+            template.PortfolioId == scope.PortfolioId &&
+            (template.OriginalStoredFileId == storedFileId || template.CompiledStoredFileId == storedFileId) &&
+            (template.PropertyId.HasValue
+                ? assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == scope.PortfolioId &&
+                        selected.PropertyId == template.PropertyId.Value))
+                : assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == scope.PortfolioId))), ct);
     }
 
 

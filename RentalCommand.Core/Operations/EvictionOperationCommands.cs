@@ -8,19 +8,24 @@ public sealed record CreateEvictionCaseCommand(
     int? LeaseAgreementId, int[] RespondentLeaseManagementPartyIds,
     EvictionCaseStatus Status, DateTime? FiledOnDateUtc, DateTime? HearingDateUtc,
     string? CourtName, string? CaseNumber, string? Notes,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record UpdateEvictionCaseCommand(
     int PortfolioId, StaffOperationActor Actor, int EvictionCaseId,
     EvictionCaseStatus? Status, DateTime? FiledOnDateUtc, DateTime? HearingDateUtc,
     DateTime? ResolvedOnDateUtc, string? CourtName, string? CaseNumber,
-    string? Resolution, string? Notes, string DeliveryIdempotencyKey) : IAtomicCommandData;
+    string? Resolution, string? Notes,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record AddEvictionCaseEventCommand(
     int PortfolioId, StaffOperationActor Actor, int EvictionCaseId,
     EvictionEventType EventType, DateTime EventDateUtc, string? Notes,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;
 
 public sealed record DeleteEvictionCaseCommand(
     int PortfolioId, StaffOperationActor Actor, int EvictionCaseId,
-    string DeliveryIdempotencyKey) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc,
+    [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey) : IAtomicCommandData;

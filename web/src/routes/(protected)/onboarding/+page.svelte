@@ -67,6 +67,7 @@
 		NEW_ONBOARDING_PROPERTY_VALUE,
 		buildOnboardingPropertyPayload,
 		onboardingPropertyFormFromProperty,
+		onboardingPropertyPrefillCandidate,
 		onboardingPropertyRecordOptions,
 	} from '$lib/onboarding/property-payload';
 	import { defaultLeaseNumber } from '$lib/leases/lease-number';
@@ -285,19 +286,27 @@
 	// Runs once after detection settles so manual back/next work afterward.
 	// ---------------------------------------------------------------------------
 	let autoAdvanced = $state(false);
+	// Build the arrays before reducing them so every TanStack result property is read on the first
+	// derived pass. A short-circuiting &&/|| chain leaves later query properties untracked; if those
+	// requests settle before an earlier query, their proxy never notifies this component and setup
+	// can remain on the detection screen until a manual refetch.
 	const detectionReady = $derived(
-		portfolioQuery.isSuccess &&
-			ownersQuery.isSuccess &&
-			propertiesQuery.isSuccess &&
-			tenantsQuery.isSuccess &&
+		[
+			portfolioQuery.isSuccess,
+			ownersQuery.isSuccess,
+			propertiesQuery.isSuccess,
+			tenantsQuery.isSuccess,
 			leasesQuery.isSuccess
+		].every(Boolean)
 	);
 	const detectionFailed = $derived(
-		portfolioQuery.isError ||
-			ownersQuery.isError ||
-			propertiesQuery.isError ||
-			tenantsQuery.isError ||
+		[
+			portfolioQuery.isError,
+			ownersQuery.isError,
+			propertiesQuery.isError,
+			tenantsQuery.isError,
 			leasesQuery.isError
+		].some(Boolean)
 	);
 	function retryExistingDataDetection() {
 		void portfolioQuery.refetch();
@@ -560,6 +569,7 @@
 	let propertyDeleteTarget = $state<Property | null>(null);
 	let unitDeleteTarget = $state<Unit | null>(null);
 	let propertySelectionPrefilled = false;
+	let propertySelectionTouched = false;
 	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
 		createdProperty,
 		existingProperties: propertiesQuery.data?.items ?? []
@@ -589,6 +599,7 @@
 	}
 
 	function selectPropertyRecord(value: string | undefined) {
+		propertySelectionTouched = true;
 		selectedPropertyId = value || NEW_ONBOARDING_PROPERTY_VALUE;
 		propertyErrors = {};
 		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
@@ -618,6 +629,7 @@
 	}
 
 	async function selectRemotePropertyRecord(value: string) {
+		propertySelectionTouched = true;
 		if (!value) {
 			selectedRemoteProperty = null;
 			selectPropertyRecord(NEW_ONBOARDING_PROPERTY_VALUE);
@@ -644,7 +656,11 @@
 
 	$effect(() => {
 		if (propertySelectionPrefilled) return;
-		const property = createdProperty ?? propertyRecordOptions[0] ?? null;
+		const property = onboardingPropertyPrefillCandidate({
+			createdProperty,
+			propertyRecordOptions,
+			selectionTouched: propertySelectionTouched
+		});
 		if (!property) return;
 		propertySelectionPrefilled = true;
 		selectedPropertyId = String(property.id);
@@ -682,7 +698,7 @@
 		return `${compactNumber.format(unit.bedrooms ?? 0)} bd · ${compactNumber.format(unit.bathrooms ?? 0)} ba · ${rent}/mo`;
 	}
 
-	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
+	const emptyUnit = () => ({ unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
 	let unitRowErrors = $state<Record<string, string>[]>([{}]);
 
@@ -704,9 +720,12 @@
 		return (
 			unitRows.length === 1 &&
 			!unitRows[0].unitNumber &&
+			!unitRows[0].floorPlan &&
 			!unitRows[0].bedrooms &&
 			!unitRows[0].bathrooms &&
-			!unitRows[0].marketRent
+			!unitRows[0].squareFeet &&
+			!unitRows[0].marketRent &&
+			!unitRows[0].notes
 		);
 	}
 	// A single rental still gets one canonical Unit underneath, but the setup copy presents the
@@ -715,7 +734,7 @@
 		if (!unitsAreDefaultEmpty()) return; // never clobber units the user already entered
 		if (isSingleRental && propertyIdFromSelection() == null) {
 			unitRows = [
-				{ unitNumber: propertyForm.name.trim() || '1', bedrooms: '1', bathrooms: '1', marketRent: '0' },
+				{ unitNumber: propertyForm.name.trim() || '1', floorPlan: '', bedrooms: '1', bathrooms: '1', squareFeet: '', marketRent: '0', notes: '' },
 			];
 			unitRowErrors = [{}];
 		}
@@ -725,9 +744,12 @@
 		const n = Math.max(1, Math.min(50, parseInt(unitCount, 10) || 0));
 		unitRows = Array.from({ length: n }, (_, i) => ({
 			unitNumber: String(i + 1),
+			floorPlan: '',
 			bedrooms: '',
 			bathrooms: '',
+			squareFeet: '',
 			marketRent: '',
+			notes: '',
 		}));
 		unitRowErrors = unitRows.map(() => ({}));
 	}
@@ -848,7 +870,7 @@
 		const validUnits: Record<string, unknown>[] = [];
 		let hasUnitError = false;
 		unitRows.forEach((row, i) => {
-			const blank = !row.unitNumber.trim() && !row.bedrooms.trim() && !row.bathrooms.trim() && !row.marketRent.trim();
+			const blank = !row.unitNumber.trim() && !row.floorPlan.trim() && !row.bedrooms.trim() && !row.bathrooms.trim() && !row.squareFeet.trim() && !row.marketRent.trim() && !row.notes.trim();
 			if (blank) return;
 			const res = parseForm(unitSchema, row);
 			if (res.errors) {
@@ -1774,6 +1796,23 @@
 															{/if}
 														</div>
 														{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
+													</div>
+												</div>
+												<div class="mt-3 grid gap-2 sm:grid-cols-3">
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Square feet</span>
+														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-square-feet-{i}" bind:value={row.squareFeet} placeholder="1425" />
+														{#if unitRowErrors[i]?.squareFeet}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].squareFeet}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Floor plan</span>
+														<Input data-testid="onboarding-unit-floor-plan-{i}" bind:value={row.floorPlan} placeholder="Garden 2B" />
+														{#if unitRowErrors[i]?.floorPlan}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].floorPlan}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Notes</span>
+														<Input data-testid="onboarding-unit-notes-{i}" bind:value={row.notes} placeholder="Access or parking notes" />
+														{#if unitRowErrors[i]?.notes}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].notes}</p>{/if}
 													</div>
 												</div>
 											</div>

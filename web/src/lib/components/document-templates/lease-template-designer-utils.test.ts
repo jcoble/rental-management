@@ -6,6 +6,7 @@ import {
 	clampDesignerZoom,
 	clampFieldRect,
 	moveFieldRect,
+	parseFieldDimensionPercent,
 	resizeFieldRect,
 	type FieldRect
 } from './lease-template-designer-utils.ts';
@@ -63,4 +64,16 @@ test('clampDesignerZoom keeps manual PDF zoom usable', () => {
 	assert.equal(clampDesignerZoom(20), 50);
 	assert.equal(clampDesignerZoom(175), 175);
 	assert.equal(clampDesignerZoom(260), 220);
+});
+
+test('parseFieldDimensionPercent accepts only displayed whole-number percentages', () => {
+	assert.deepEqual(parseFieldDimensionPercent('3'), { valuePct: 0.03, error: null });
+	assert.deepEqual(parseFieldDimensionPercent('100'), { valuePct: 1, error: null });
+
+	for (const invalid of ['', '2', '101', '3.5', 'not-a-number']) {
+		assert.deepEqual(parseFieldDimensionPercent(invalid), {
+			valuePct: null,
+			error: 'Enter a whole number from 3 to 100.'
+		});
+	}
 });
