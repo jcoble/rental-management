@@ -62,6 +62,8 @@ public static class MoneyAccountingPosting
         var current = await CurrentExpenseJournalsAsync(db, expense, ct);
         if (current.Count == 0)
             return false;
+        if (await ExpenseJournalFactsMatchAsync(db, expense, current, ct))
+            return false;
 
         foreach (var original in current)
         {
@@ -950,6 +952,121 @@ public static class MoneyAccountingPosting
                     && reversal.ReversesJournalEntryId == entry.Id))
             .OrderBy(entry => entry.Id)
             .ToListAsync(ct);
+
+    private static async Task<bool> ExpenseJournalFactsMatchAsync(
+        RentalCommandDbContext db,
+        Expense expense,
+        IReadOnlyList<JournalEntry> current,
+        CancellationToken ct)
+    {
+        if (expense.Status is ExpenseStatus.Draft or ExpenseStatus.Rejected)
+            return false;
+
+        var hasBillIncurred = current.Any(entry => entry.SourceType == JournalSourceType.BillIncurred);
+        var hasBillPayment = current.Any(entry => entry.SourceType == JournalSourceType.BillPayment);
+        var isPaid = expense.Status == ExpenseStatus.Paid || expense.PaidAt is not null;
+        var currency = await PortfolioCurrencyAsync(db, expense.PortfolioId, ct);
+        var expectedTypes = hasBillIncurred && isPaid
+            ? hasBillPayment
+                ? new[] { JournalSourceType.BillIncurred, JournalSourceType.BillPayment }
+                : new[] { JournalSourceType.BillIncurred }
+            : isPaid
+                ? new[] { JournalSourceType.ExpensePayment }
+                : new[] { JournalSourceType.BillIncurred };
+
+        var expenseAccount = await AccountAsync(
+            db, expense.PortfolioId, ExpenseSystemKey(expense.Category), ct);
+        var cash = expectedTypes.Any(type =>
+                type is JournalSourceType.ExpensePayment or JournalSourceType.BillPayment)
+            ? await AccountAsync(db, expense.PortfolioId, OperatingCash, ct)
+            : 0;
+        var payable = expectedTypes.Any(type =>
+                type is JournalSourceType.BillIncurred or JournalSourceType.BillPayment)
+            ? await AccountAsync(db, expense.PortfolioId, AccountsPayable, ct)
+            : 0;
+        var expected = new List<ExpensePostingJournalFact>(expectedTypes.Length);
+        foreach (var sourceType in expectedTypes)
+        {
+            var effectiveOn = sourceType == JournalSourceType.ExpensePayment
+                ? DateOnly.FromDateTime(expense.PaidAt ?? expense.IncurredAt)
+                : DateOnly.FromDateTime(expense.IncurredAt);
+            var (debitAccount, creditAccount) = sourceType switch
+            {
+                JournalSourceType.BillIncurred => (expenseAccount, payable),
+                JournalSourceType.BillPayment => (payable, cash),
+                JournalSourceType.ExpensePayment => (expenseAccount, cash),
+                _ => throw new InvalidOperationException("Unexpected expense journal source type."),
+            };
+            expected.Add(new ExpensePostingJournalFact(
+                sourceType,
+                effectiveOn,
+                currency,
+                [
+                    new ExpensePostingLineFact(
+                        debitAccount, expense.Amount, 0m, expense.PropertyId, expense.UnitId, null),
+                    new ExpensePostingLineFact(
+                        creditAccount, 0m, expense.Amount, expense.PropertyId, expense.UnitId, null),
+                ]));
+        }
+
+        if (current.Count != expected.Count)
+            return false;
+
+        var matchedEntryIds = new HashSet<int>();
+        foreach (var expectedJournal in expected)
+        {
+            var actual = current.FirstOrDefault(entry =>
+                !matchedEntryIds.Contains(entry.Id)
+                && entry.SourceType == expectedJournal.SourceType
+                && entry.Currency == expectedJournal.Currency
+                && entry.EffectiveOn == expectedJournal.EffectiveOn);
+            if (actual is null || !JournalLinesMatch(actual.Lines, expectedJournal.Lines))
+                return false;
+            matchedEntryIds.Add(actual.Id);
+        }
+
+        return true;
+    }
+
+    private static bool JournalLinesMatch(
+        ICollection<JournalLine> actual,
+        IReadOnlyList<ExpensePostingLineFact> expected)
+    {
+        if (actual.Count != expected.Count)
+            return false;
+
+        var matchedLineIds = new HashSet<int>();
+        foreach (var expectedLine in expected)
+        {
+            var actualLine = actual.FirstOrDefault(line =>
+                !matchedLineIds.Contains(line.Id)
+                && line.LedgerAccountId == expectedLine.LedgerAccountId
+                && line.DebitAmount == expectedLine.DebitAmount
+                && line.CreditAmount == expectedLine.CreditAmount
+                && line.PropertyId == expectedLine.PropertyId
+                && line.UnitId == expectedLine.UnitId
+                && line.TenantAccountId == expectedLine.TenantAccountId);
+            if (actualLine is null)
+                return false;
+            matchedLineIds.Add(actualLine.Id);
+        }
+
+        return true;
+    }
+
+    private sealed record ExpensePostingJournalFact(
+        JournalSourceType SourceType,
+        DateOnly EffectiveOn,
+        string Currency,
+        IReadOnlyList<ExpensePostingLineFact> Lines);
+
+    private sealed record ExpensePostingLineFact(
+        int LedgerAccountId,
+        decimal DebitAmount,
+        decimal CreditAmount,
+        int? PropertyId,
+        int? UnitId,
+        int? TenantAccountId);
 
     private static Task<JournalEntry?> CurrentCapitalPurchaseAsync(
         RentalCommandDbContext db,
