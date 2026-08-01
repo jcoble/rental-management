@@ -1,0 +1,94 @@
+diff --git a/RentalCommand.Api/Controllers/AccountingController.cs b/RentalCommand.Api/Controllers/AccountingController.cs
+--- a/RentalCommand.Api/Controllers/AccountingController.cs
++++ b/RentalCommand.Api/Controllers/AccountingController.cs
+@@ -161,4 +161,4 @@
+     public Task<AccountingPage<GeneralLedgerRow>> GeneralLedger(
+         [FromQuery] GeneralLedgerQuery query, CancellationToken ct) =>
+-        _ledgerReadModels.GetGeneralLedgerAsync(GetPortfolioId(), query, ct);
++        _ledgerReadModels.GetGeneralLedgerAsync(GetWorkspaceReadScope(), query, ct);
+ 
+@@ -168,22 +168,34 @@
+     public async Task<ActionResult<JournalDetail>> JournalEntry(Guid publicId, CancellationToken ct)
+     {
+-        var detail = await _ledgerReadModels.GetJournalDetailAsync(GetPortfolioId(), publicId, ct);
++        var detail = await _ledgerReadModels.GetJournalDetailAsync(GetWorkspaceReadScope(), publicId, ct);
+         return detail is null ? NotFound() : Ok(detail);
+     }
+ 
++    [HttpGet("source-journals")]
++    [ProducesResponseType(typeof(IReadOnlyList<SourceJournalSummary>), StatusCodes.Status200OK)]
++    public Task<IReadOnlyList<SourceJournalSummary>> SourceJournals(
++        [FromQuery] SourceJournalQuery query, CancellationToken ct) =>
++        _ledgerReadModels.GetSourceJournalsAsync(GetWorkspaceReadScope(), query, ct);
++
++    [HttpGet("money-position")]
++    [ProducesResponseType(typeof(MoneyPositionResponse), StatusCodes.Status200OK)]
++    public Task<MoneyPositionResponse> MoneyPosition(
++        [FromQuery] MoneyPositionQuery query, CancellationToken ct) =>
++        _ledgerReadModels.GetMoneyPositionAsync(GetWorkspaceReadScope(), query, ct);
++
+     [HttpGet("trial-balance")]
+     [ProducesResponseType(typeof(TrialBalanceResponse), StatusCodes.Status200OK)]
+     public Task<TrialBalanceResponse> TrialBalance([FromQuery] StatementQuery query, CancellationToken ct) =>
+-        _ledgerReadModels.GetTrialBalanceAsync(GetPortfolioId(), query, ct);
++        _ledgerReadModels.GetTrialBalanceAsync(GetWorkspaceReadScope(), query, ct);
+ 
+     [HttpGet("balance-sheet")]
+     [ProducesResponseType(typeof(FinancialStatementResponse), StatusCodes.Status200OK)]
+     public Task<FinancialStatementResponse> BalanceSheet([FromQuery] StatementQuery query, CancellationToken ct) =>
+-        _ledgerReadModels.GetBalanceSheetAsync(GetPortfolioId(), query, ct);
++        _ledgerReadModels.GetBalanceSheetAsync(GetWorkspaceReadScope(), query, ct);
+ 
+     [HttpGet("income-statement")]
+     [ProducesResponseType(typeof(FinancialStatementResponse), StatusCodes.Status200OK)]
+     public Task<FinancialStatementResponse> IncomeStatement([FromQuery] StatementQuery query, CancellationToken ct) =>
+-        _ledgerReadModels.GetIncomeStatementAsync(GetPortfolioId(), query, ct);
++        _ledgerReadModels.GetIncomeStatementAsync(GetWorkspaceReadScope(), query, ct);
+ 
+     /// <summary>
+diff --git a/RentalCommand.Api/Controllers/TenantAccountMoneyController.cs b/RentalCommand.Api/Controllers/TenantAccountMoneyController.cs
+--- a/RentalCommand.Api/Controllers/TenantAccountMoneyController.cs
++++ b/RentalCommand.Api/Controllers/TenantAccountMoneyController.cs
+@@ -9,5 +9,6 @@
+ using RentalCommand.Core.Entities;
+ using RentalCommand.Core.Payments;
+ using RentalCommand.Data;
++using RentalCommand.Data.Authorization;
+ 
+ namespace RentalCommand.Api.Controllers;
+@@ -51,5 +52,7 @@
+         int tenantAccountId, [FromQuery] TenantLedgerQuery query, CancellationToken ct)
+     {
+-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
++        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
++                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
++            return NotFound();
+         var page = await _ledgerReadModels.GetTenantLedgerAsync(GetPortfolioId(), tenantAccountId, query, ct);
+         return page is null ? NotFound() : Ok(page);
+@@ -62,5 +65,7 @@
+         int tenantAccountId, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
+     {
+-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
++        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
++                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
++            return NotFound();
+         var summary = await _ledgerReadModels.GetTenantMonthSummaryAsync(
+             GetPortfolioId(), tenantAccountId, query, ct);
+@@ -74,5 +79,7 @@
+         int tenantAccountId, [FromQuery] TenantLedgerPeriodSummaryQuery query, CancellationToken ct)
+     {
+-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
++        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
++                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
++            return NotFound();
+         try
+         {
+@@ -93,5 +100,7 @@
+         int tenantAccountId, [FromQuery] ListQuery query, CancellationToken ct)
+     {
+-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
++        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
++                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
++            return NotFound();
+         return Ok(await _ledgerReadModels.GetRecurringTenantChargesAsync(
+             GetPortfolioId(), tenantAccountId, query, ct));

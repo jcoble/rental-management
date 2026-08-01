@@ -75,6 +75,24 @@ public sealed class StatementQuery
     public int? UnitId { get; set; }
 }
 
+public sealed class SourceJournalQuery
+{
+    [FromQuery(Name = "sourceType")]
+    public JournalSourceType SourceType { get; set; }
+
+    [FromQuery(Name = "sourceId")]
+    public long SourceId { get; set; }
+}
+
+public sealed class MoneyPositionQuery
+{
+    [FromQuery(Name = "from")]
+    public DateOnly? From { get; set; }
+
+    [FromQuery(Name = "to")]
+    public DateOnly? To { get; set; }
+}
+
 public sealed class TenantMonthSummaryQuery
 {
     [FromQuery(Name = "from")]
@@ -139,6 +157,8 @@ public sealed class GeneralLedgerRow
     public int AccountId { get; init; }
     public string AccountCode { get; init; } = string.Empty;
     public string AccountName { get; init; } = string.Empty;
+    public AccountType AccountType { get; init; }
+    public NormalBalance NormalBalance { get; init; }
     public decimal DebitAmount { get; init; }
     public decimal CreditAmount { get; init; }
     public string Currency { get; init; } = string.Empty;
@@ -255,6 +275,19 @@ public sealed class JournalDetailLine
     public int? OwnerEntityId { get; init; }
 }
 
+public sealed class SourceJournalSummary
+{
+    public Guid PublicId { get; init; }
+    public DateOnly EffectiveOn { get; init; }
+    public DateTime PostedAtUtc { get; init; }
+    public JournalSourceType SourceType { get; init; }
+    public string Description { get; init; } = string.Empty;
+    public decimal TotalDebits { get; init; }
+    public decimal TotalCredits { get; init; }
+    public bool IsReversal { get; init; }
+    public Guid? ReversesPublicId { get; init; }
+}
+
 public sealed class BankReconciliationEvidence
 {
     public int? BankTransactionId { get; init; }
@@ -304,12 +337,31 @@ public sealed class StatementTotals
     public decimal? NetIncome { get; init; }
     public decimal? Assets { get; init; }
     public decimal? LiabilitiesAndEquity { get; init; }
+    public decimal? CurrentEarnings { get; init; }
+    public bool? IsBalanced { get; init; }
 }
 
 public sealed class FinancialStatementResponse
 {
     public IReadOnlyList<StatementSection> Sections { get; init; } = [];
     public StatementTotals Totals { get; init; } = new();
+}
+
+public sealed class MoneyPositionResponse
+{
+    public DateTime AsOfUtc { get; init; }
+    public DateTime FromUtc { get; init; }
+    public DateTime ToUtc { get; init; }
+    public decimal TotalCashOnHand { get; init; }
+    public decimal TenantDepositsHeld { get; init; }
+    public decimal CashAfterTenantDeposits { get; init; }
+    public decimal RentStillOwed { get; init; }
+    public decimal LoanBalance { get; init; }
+    public decimal BookEquity { get; init; }
+    public decimal CashReceived { get; init; }
+    public decimal CashPaid { get; init; }
+    public decimal NetCashMovement { get; init; }
+    public decimal ProfitOrLoss { get; init; }
 }
 
 public sealed class RecurringTenantChargeRow
