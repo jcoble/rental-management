@@ -123,10 +123,12 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         WorkspaceReadScope scope, GeneralLedgerQuery query, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
-        var lines = _db.JournalLines
+        var authorizationNowUtc = DateTime.UtcNow;
+        var authorizedLines = _db.JournalLines
             .AsNoTracking()
             .WhereAccountingAuthorized(
-                _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
+                _db, scope, CapabilityKeys.MoneyBalancesRead, authorizationNowUtc);
+        var lines = authorizedLines;
 
         if (query.AccountId is int accountId)
             lines = lines.Where(line => line.LedgerAccountId == accountId);
@@ -178,10 +180,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             TenantAccountId = line.TenantAccountId,
             OwnerEntityId = line.OwnerEntityId,
             RunningBalance = accountIsSelected
-                ? _db.JournalLines.AsNoTracking()
-                    .WhereAccountingAuthorized(
-                        _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow)
-                    .Where(previous => previous.JournalEntry!.PortfolioId == portfolioId
+                ? authorizedLines.Where(previous => previous.JournalEntry!.PortfolioId == portfolioId
                         && previous.LedgerAccountId == line.LedgerAccountId
                         && previous.JournalEntry.Currency == line.JournalEntry.Currency
                         && (previous.JournalEntry.EffectiveOn < line.JournalEntry.EffectiveOn

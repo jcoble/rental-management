@@ -58,6 +58,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         await new AccountingPostingService(setup.Db).PostAsync(proposal);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+        await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var accountPage = await service.GetGeneralLedgerAsync(scope, new GeneralLedgerQuery
@@ -96,6 +97,8 @@ public sealed class AccountingReadModelPostgreSqlTests
                 new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 1m },
                 new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 1m });
         }
+        commands.Reset();
+        await setup.ActivateApiScopeAsync(scope);
         commands.Reset();
 
         var service = new AccountingLedgerReadModelService(setup.Db);
@@ -143,6 +146,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         });
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+        await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var chart = await service.GetChartOfAccountsAsync(1, new ChartOfAccountsQuery { Take = 200 });
@@ -195,6 +199,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         await PostAsync(setup, 8202, new DateOnly(2026, 8, 2),
             new AccountingProposedLine { LedgerAccountId = income.Id, DebitAmount = 25m },
             new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 25m });
+        await setup.ActivateApiScopeAsync(scope);
 
         var page = await new AccountingLedgerReadModelService(setup.Db).GetGeneralLedgerAsync(
             scope,
@@ -223,6 +228,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         await PostAsync(setup, 8212, new DateOnly(2026, 8, 2),
             new AccountingProposedLine { LedgerAccountId = expense.Id, DebitAmount = 40m },
             new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 40m });
+        await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var query = new StatementQuery { To = new DateOnly(2026, 8, 31), Currency = "USD" };
@@ -269,6 +275,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         await PostAsync(setup, 8225, new DateOnly(2026, 8, 5),
             new AccountingProposedLine { LedgerAccountId = trustCash.Id, DebitAmount = 10m },
             new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 10m });
+        await setup.ActivateApiScopeAsync(scope);
 
         var result = await new AccountingLedgerReadModelService(setup.Db).GetMoneyPositionAsync(
             scope,
@@ -328,6 +335,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         setup.Db.StoredFiles.Add(file);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+        await setup.ActivateApiScopeAsync(scope);
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var sources = await service.GetSourceJournalsAsync(scope, new SourceJournalQuery
