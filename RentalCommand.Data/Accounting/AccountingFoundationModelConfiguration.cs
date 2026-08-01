@@ -95,13 +95,17 @@ internal static class AccountingFoundationModelConfiguration
             entity.HasOne(e => e.LedgerAccount).WithMany(e => e.JournalLines)
                 .HasForeignKey(e => e.LedgerAccountId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.Property).WithMany().HasForeignKey(e => e.PropertyId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_JournalLines_Properties_RestrictHistory");
             entity.HasOne(e => e.Unit).WithMany().HasForeignKey(e => e.UnitId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_JournalLines_Units_RestrictHistory");
             entity.HasOne(e => e.TenantAccount).WithMany().HasForeignKey(e => e.TenantAccountId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_JournalLines_TenantAccounts_RestrictHistory");
             entity.HasOne(e => e.OwnerEntity).WithMany().HasForeignKey(e => e.OwnerEntityId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_JournalLines_OwnerEntities_RestrictHistory");
             entity.ToTable(table => table.HasCheckConstraint(
                 "CK_JournalLines_Amounts",
                 "\"DebitAmount\" >= 0 AND \"CreditAmount\" >= 0 AND ((\"DebitAmount\" > 0 AND \"CreditAmount\" = 0) OR (\"DebitAmount\" = 0 AND \"CreditAmount\" > 0))"));
