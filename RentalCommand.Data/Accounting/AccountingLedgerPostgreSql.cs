@@ -6,42 +6,23 @@ internal static class AccountingLedgerPostgreSql
     internal const string ApplySql = """
         ALTER TABLE "LedgerAccounts" ENABLE ROW LEVEL SECURITY;
         ALTER TABLE "LedgerAccounts" FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_select ON "LedgerAccounts"
-          FOR SELECT USING (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_insert ON "LedgerAccounts"
-          FOR INSERT WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_update ON "LedgerAccounts"
-          FOR UPDATE USING (rc_api_scope_allows("PortfolioId"))
+        DROP POLICY IF EXISTS tenant_isolation ON "LedgerAccounts";
+        CREATE POLICY tenant_isolation ON "LedgerAccounts"
+          USING (rc_api_scope_allows("PortfolioId"))
           WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_delete ON "LedgerAccounts"
-          FOR DELETE USING (rc_api_scope_allows("PortfolioId"));
 
         ALTER TABLE "JournalEntries" ENABLE ROW LEVEL SECURITY;
         ALTER TABLE "JournalEntries" FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_select ON "JournalEntries"
-          FOR SELECT USING (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_insert ON "JournalEntries"
-          FOR INSERT WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_update ON "JournalEntries"
-          FOR UPDATE USING (rc_api_scope_allows("PortfolioId"))
+        DROP POLICY IF EXISTS tenant_isolation ON "JournalEntries";
+        CREATE POLICY tenant_isolation ON "JournalEntries"
+          USING (rc_api_scope_allows("PortfolioId"))
           WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_delete ON "JournalEntries"
-          FOR DELETE USING (rc_api_scope_allows("PortfolioId"));
 
         ALTER TABLE "JournalLines" ENABLE ROW LEVEL SECURITY;
         ALTER TABLE "JournalLines" FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_select ON "JournalLines"
-          FOR SELECT USING (EXISTS (
-            SELECT 1 FROM "JournalEntries" entry
-            WHERE entry."Id" = "JournalEntryId"
-              AND rc_api_scope_allows(entry."PortfolioId")));
-        CREATE POLICY tenant_insert ON "JournalLines"
-          FOR INSERT WITH CHECK (EXISTS (
-            SELECT 1 FROM "JournalEntries" entry
-            WHERE entry."Id" = "JournalEntryId"
-              AND rc_api_scope_allows(entry."PortfolioId")));
-        CREATE POLICY tenant_update ON "JournalLines"
-          FOR UPDATE USING (EXISTS (
+        DROP POLICY IF EXISTS tenant_isolation ON "JournalLines";
+        CREATE POLICY tenant_isolation ON "JournalLines"
+          USING (EXISTS (
             SELECT 1 FROM "JournalEntries" entry
             WHERE entry."Id" = "JournalEntryId"
               AND rc_api_scope_allows(entry."PortfolioId")))
@@ -49,35 +30,20 @@ internal static class AccountingLedgerPostgreSql
             SELECT 1 FROM "JournalEntries" entry
             WHERE entry."Id" = "JournalEntryId"
               AND rc_api_scope_allows(entry."PortfolioId")));
-        CREATE POLICY tenant_delete ON "JournalLines"
-          FOR DELETE USING (EXISTS (
-            SELECT 1 FROM "JournalEntries" entry
-            WHERE entry."Id" = "JournalEntryId"
-              AND rc_api_scope_allows(entry."PortfolioId")));
 
         ALTER TABLE "RecurringTenantCharges" ENABLE ROW LEVEL SECURITY;
         ALTER TABLE "RecurringTenantCharges" FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_select ON "RecurringTenantCharges"
-          FOR SELECT USING (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_insert ON "RecurringTenantCharges"
-          FOR INSERT WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_update ON "RecurringTenantCharges"
-          FOR UPDATE USING (rc_api_scope_allows("PortfolioId"))
+        DROP POLICY IF EXISTS tenant_isolation ON "RecurringTenantCharges";
+        CREATE POLICY tenant_isolation ON "RecurringTenantCharges"
+          USING (rc_api_scope_allows("PortfolioId"))
           WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_delete ON "RecurringTenantCharges"
-          FOR DELETE USING (rc_api_scope_allows("PortfolioId"));
 
         ALTER TABLE "AccountingConversionReconciliations" ENABLE ROW LEVEL SECURITY;
         ALTER TABLE "AccountingConversionReconciliations" FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_select ON "AccountingConversionReconciliations"
-          FOR SELECT USING (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_insert ON "AccountingConversionReconciliations"
-          FOR INSERT WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_update ON "AccountingConversionReconciliations"
-          FOR UPDATE USING (rc_api_scope_allows("PortfolioId"))
+        DROP POLICY IF EXISTS tenant_isolation ON "AccountingConversionReconciliations";
+        CREATE POLICY tenant_isolation ON "AccountingConversionReconciliations"
+          USING (rc_api_scope_allows("PortfolioId"))
           WITH CHECK (rc_api_scope_allows("PortfolioId"));
-        CREATE POLICY tenant_delete ON "AccountingConversionReconciliations"
-          FOR DELETE USING (rc_api_scope_allows("PortfolioId"));
 
         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "LedgerAccounts" TO rentalcommand_api;
         GRANT SELECT ON TABLE "LedgerAccounts" TO rentalcommand_engine;
@@ -239,26 +205,11 @@ internal static class AccountingLedgerPostgreSql
         DROP FUNCTION IF EXISTS rc_accounting_reject_journal_mutation();
         DROP FUNCTION IF EXISTS rc_accounting_validate_journal_balance();
         DROP FUNCTION IF EXISTS rc_accounting_validate_journal_line_scope();
-        DROP POLICY IF EXISTS tenant_select ON "LedgerAccounts";
-        DROP POLICY IF EXISTS tenant_insert ON "LedgerAccounts";
-        DROP POLICY IF EXISTS tenant_update ON "LedgerAccounts";
-        DROP POLICY IF EXISTS tenant_delete ON "LedgerAccounts";
-        DROP POLICY IF EXISTS tenant_select ON "JournalEntries";
-        DROP POLICY IF EXISTS tenant_insert ON "JournalEntries";
-        DROP POLICY IF EXISTS tenant_update ON "JournalEntries";
-        DROP POLICY IF EXISTS tenant_delete ON "JournalEntries";
-        DROP POLICY IF EXISTS tenant_select ON "JournalLines";
-        DROP POLICY IF EXISTS tenant_insert ON "JournalLines";
-        DROP POLICY IF EXISTS tenant_update ON "JournalLines";
-        DROP POLICY IF EXISTS tenant_delete ON "JournalLines";
-        DROP POLICY IF EXISTS tenant_select ON "RecurringTenantCharges";
-        DROP POLICY IF EXISTS tenant_insert ON "RecurringTenantCharges";
-        DROP POLICY IF EXISTS tenant_update ON "RecurringTenantCharges";
-        DROP POLICY IF EXISTS tenant_delete ON "RecurringTenantCharges";
-        DROP POLICY IF EXISTS tenant_select ON "AccountingConversionReconciliations";
-        DROP POLICY IF EXISTS tenant_insert ON "AccountingConversionReconciliations";
-        DROP POLICY IF EXISTS tenant_update ON "AccountingConversionReconciliations";
-        DROP POLICY IF EXISTS tenant_delete ON "AccountingConversionReconciliations";
+        DROP POLICY IF EXISTS tenant_isolation ON "LedgerAccounts";
+        DROP POLICY IF EXISTS tenant_isolation ON "JournalEntries";
+        DROP POLICY IF EXISTS tenant_isolation ON "JournalLines";
+        DROP POLICY IF EXISTS tenant_isolation ON "RecurringTenantCharges";
+        DROP POLICY IF EXISTS tenant_isolation ON "AccountingConversionReconciliations";
         REVOKE ALL PRIVILEGES ON TABLE "LedgerAccounts", "JournalEntries", "JournalLines",
             "RecurringTenantCharges", "AccountingConversionReconciliations"
             FROM rentalcommand_api, rentalcommand_engine;
