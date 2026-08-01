@@ -110,10 +110,13 @@ public sealed class TenantAccountMoneyRouteContractTests
     [Fact]
     public void Canonical_credit_adjustment_and_reversal_contracts_are_typed()
     {
-        typeof(RecordTenantReceiptCommand).GetProperty("AllocateOldestCharges").Should().BeNull();
+        // The accounting contract keeps oldest-open-charge-first as the receipt allocation default.
+        typeof(RecordTenantReceiptCommand).GetProperty(nameof(RecordTenantReceiptCommand.AllocateOldestCharges))
+            .Should().NotBeNull().And.Subject!.PropertyType.Should().Be(typeof(bool));
         typeof(RecordTenantReceiptCommand).GetProperty(nameof(RecordTenantReceiptCommand.TargetChargeEntryId))
             .Should().NotBeNull();
-        typeof(RecordTenantReceiptRequest).GetProperty("AllocateOldestCharges").Should().BeNull();
+        typeof(RecordTenantReceiptRequest).GetProperty(nameof(RecordTenantReceiptRequest.AllocateOldestCharges))
+            .Should().NotBeNull().And.Subject!.PropertyType.Should().Be(typeof(bool));
         typeof(RecordTenantReceiptRequest).GetProperty(nameof(RecordTenantReceiptRequest.TargetChargeEntryId))
             .Should().NotBeNull();
         typeof(PostTenantCreditCommand).GetProperty(nameof(PostTenantCreditCommand.AllocateOldestCharges))
