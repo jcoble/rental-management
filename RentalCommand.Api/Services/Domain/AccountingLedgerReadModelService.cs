@@ -321,18 +321,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 sections.Add(section);
         }
 
-        var assets = sections.Where(section => section.Label == AccountType.Asset.ToString()).Sum(section => section.Subtotal);
-        var liabilitiesAndEquity = sections
-            .Where(section => section.Label is nameof(AccountType.Liability) or nameof(AccountType.Equity))
-            .Sum(section => section.Subtotal);
+        var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
         return new FinancialStatementResponse
         {
             Sections = sections,
             Totals = new StatementTotals
             {
-                Total = assets,
-                Assets = assets,
-                LiabilitiesAndEquity = liabilitiesAndEquity,
+                Total = totals.Assets,
+                Assets = totals.Assets,
+                LiabilitiesAndEquity = totals.LiabilitiesAndEquity,
             },
         };
     }
@@ -348,9 +345,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 sections.Add(section);
         }
 
-        var income = sections.Where(section => section.Label == nameof(AccountType.Income)).Sum(section => section.Subtotal);
-        var expenses = sections.Where(section => section.Label == nameof(AccountType.Expense)).Sum(section => section.Subtotal);
-        var netIncome = income - expenses;
+        var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
+        var netIncome = totals.Income - totals.Expenses;
         return new FinancialStatementResponse
         {
             Sections = sections,
@@ -703,36 +699,118 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     private async Task<StatementSection> LoadStatementSectionAsync(
         int portfolioId, StatementQuery query, AccountType accountType, CancellationToken ct)
     {
-        var lines = FilterStatementLines(portfolioId, query, query.From, query.To)
-            .Where(line => line.LedgerAccount!.AccountType == accountType);
-        var rows = await lines
-            .GroupBy(line => new
-            {
-                line.LedgerAccountId,
-                line.LedgerAccount!.Code,
-                line.LedgerAccount.Name,
-                line.JournalEntry!.Currency,
-                line.LedgerAccount.NormalBalance,
-            })
-            .Select(group => new FinancialStatementRow
-            {
-                AccountId = group.Key.LedgerAccountId,
-                AccountCode = group.Key.Code,
-                AccountName = group.Key.Name,
-                Amount = group.Key.NormalBalance == NormalBalance.Debit
-                    ? group.Sum(line => line.DebitAmount - line.CreditAmount)
-                    : group.Sum(line => line.CreditAmount - line.DebitAmount),
-                Currency = group.Key.Currency,
-            })
-            .OrderBy(row => row.AccountCode)
-            .ThenBy(row => row.Currency)
-            .ToListAsync(ct);
+        // Grouping, account-balance arithmetic, and the section subtotal all stay in one SQL
+        // statement. The window aggregate repeats the SQL subtotal on each bounded result row so
+        // the response can expose it without summing materialized rows in application code.
+        var rows = await _db.Database.SqlQuery<StatementSqlRow>($$"""
+            WITH grouped AS (
+                SELECT account."Id" AS "AccountId",
+                       account."Code" AS "AccountCode",
+                       account."Name" AS "AccountName",
+                       entry."Currency" AS "Currency",
+                       SUM(CASE WHEN account."NormalBalance" = 'Debit'
+                                THEN line."DebitAmount" - line."CreditAmount"
+                                ELSE line."CreditAmount" - line."DebitAmount" END) AS "Amount"
+                FROM "JournalLines" AS line
+                JOIN "JournalEntries" AS entry
+                  ON entry."Id" = line."JournalEntryId"
+                JOIN "LedgerAccounts" AS account
+                  ON account."Id" = line."LedgerAccountId"
+                JOIN "Portfolios" AS portfolio
+                  ON portfolio."Id" = entry."PortfolioId"
+                 AND portfolio."DeletedAt" IS NULL
+                WHERE entry."PortfolioId" = {{portfolioId}}
+                  AND account."AccountType" = {{accountType.ToString()}}
+                  AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
+                  AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
+                  AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
+                  AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
+                  AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
+                GROUP BY account."Id", account."Code", account."Name",
+                         account."NormalBalance", entry."Currency"
+            ), with_subtotal AS (
+                SELECT grouped.*,
+                       SUM(grouped."Amount") OVER () AS "SectionSubtotal"
+                FROM grouped
+            )
+            SELECT "AccountId", "AccountCode", "AccountName", "Currency", "Amount", "SectionSubtotal"
+            FROM with_subtotal
+            ORDER BY "AccountCode", "Currency"
+            """).ToListAsync(ct);
         return new StatementSection
         {
             Label = accountType.ToString(),
-            Rows = rows,
-            Subtotal = rows.Sum(row => row.Amount),
+            Rows = rows.Select(row => new FinancialStatementRow
+            {
+                AccountId = row.AccountId,
+                AccountCode = row.AccountCode,
+                AccountName = row.AccountName,
+                Amount = row.Amount,
+                Currency = row.Currency,
+            }).ToArray(),
+            Subtotal = rows.FirstOrDefault()?.SectionSubtotal ?? 0m,
         };
+    }
+
+    private sealed class StatementSqlRow
+    {
+        public int AccountId { get; init; }
+        public string AccountCode { get; init; } = string.Empty;
+        public string AccountName { get; init; } = string.Empty;
+        public string Currency { get; init; } = string.Empty;
+        public decimal Amount { get; init; }
+        public decimal SectionSubtotal { get; init; }
+    }
+
+    private async Task<StatementTotalsSqlRow> LoadStatementTotalsAsync(
+        int portfolioId, StatementQuery query, CancellationToken ct)
+    {
+        var totals = await _db.Database.SqlQuery<StatementTotalsSqlRow>($$"""
+            SELECT
+                COALESCE(SUM(CASE WHEN account."AccountType" = 'Asset'
+                    THEN CASE WHEN account."NormalBalance" = 'Debit'
+                              THEN line."DebitAmount" - line."CreditAmount"
+                              ELSE line."CreditAmount" - line."DebitAmount" END
+                    ELSE 0 END), 0) AS "Assets",
+                COALESCE(SUM(CASE WHEN account."AccountType" IN ('Liability', 'Equity')
+                    THEN CASE WHEN account."NormalBalance" = 'Debit'
+                              THEN line."DebitAmount" - line."CreditAmount"
+                              ELSE line."CreditAmount" - line."DebitAmount" END
+                    ELSE 0 END), 0) AS "LiabilitiesAndEquity",
+                COALESCE(SUM(CASE WHEN account."AccountType" = 'Income'
+                    THEN CASE WHEN account."NormalBalance" = 'Debit'
+                              THEN line."DebitAmount" - line."CreditAmount"
+                              ELSE line."CreditAmount" - line."DebitAmount" END
+                    ELSE 0 END), 0) AS "Income",
+                COALESCE(SUM(CASE WHEN account."AccountType" = 'Expense'
+                    THEN CASE WHEN account."NormalBalance" = 'Debit'
+                              THEN line."DebitAmount" - line."CreditAmount"
+                              ELSE line."CreditAmount" - line."DebitAmount" END
+                    ELSE 0 END), 0) AS "Expenses"
+            FROM "JournalLines" AS line
+            JOIN "JournalEntries" AS entry
+              ON entry."Id" = line."JournalEntryId"
+            JOIN "LedgerAccounts" AS account
+              ON account."Id" = line."LedgerAccountId"
+            JOIN "Portfolios" AS portfolio
+              ON portfolio."Id" = entry."PortfolioId"
+             AND portfolio."DeletedAt" IS NULL
+            WHERE entry."PortfolioId" = {{portfolioId}}
+              AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
+              AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
+              AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
+              AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
+              AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
+            """).SingleAsync(ct);
+        return totals;
+    }
+
+    private sealed class StatementTotalsSqlRow
+    {
+        public decimal Assets { get; init; }
+        public decimal LiabilitiesAndEquity { get; init; }
+        public decimal Income { get; init; }
+        public decimal Expenses { get; init; }
     }
 
     private async Task<BankReconciliationEvidence?> GetBankEvidenceAsync(
