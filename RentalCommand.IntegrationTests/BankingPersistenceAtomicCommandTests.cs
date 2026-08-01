@@ -1412,6 +1412,170 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Reconciliation_MatchingAlreadyPostedOwnerDistributionDoesNotReverseItOnClear()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int distributionId;
+        await using (var db = NewContext())
+        {
+            var owner = new OwnerEntity
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntityType = OwnerEntityType.LLC,
+                Name = "Already-posted owner",
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var distribution = new OwnerDistribution
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntity = owner,
+                Date = _now,
+                Amount = 900m,
+                Method = DistributionMethod.Ach,
+                Status = OwnerDistributionStatus.Approved,
+                ApprovedAt = _now,
+                ApprovedBusinessDate = _now,
+                ApprovedByUserId = auth.UserId,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Owner already-posted bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "owner-already-posted", -900m, null);
+            db.OwnerDistributions.Add(distribution);
+            await db.SaveChangesAsync();
+
+            await using var postingTransaction = await db.Database.BeginTransactionAsync();
+            var auditScope = new AtomicAuditScope(TimeProvider.System);
+            var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+            var attemptId = Guid.NewGuid();
+            commandContext.BeginAttempt(attemptId);
+            commandContext.BindReceipt(Guid.NewGuid());
+            using var attempt = auditScope.BeginAttempt(
+                new AtomicCommandIdentity("test.owner-distribution.post", $"{_portfolioId}:{distribution.Id}"),
+                attemptId,
+                db);
+            await MoneyAccountingPosting.PostOwnerDistributionAsync(
+                db, commandContext, distribution, auth.UserId);
+            await commandContext.FlushBusinessAsync();
+            await postingTransaction.CommitAsync();
+            commandContext.EndAttempt();
+
+            transactionId = transaction.Id;
+            distributionId = distribution.Id;
+        }
+
+        var result = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:owner-already-posted"),
+            ReconcileOwnerDistribution(
+                transactionId, distributionId, auth, "owner-already-posted"),
+            ReconcileCodec);
+        result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+        var clear = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:owner-already-posted-clear"),
+            ReconcileClear(
+                transactionId,
+                auth,
+                "owner-already-posted-clear",
+                result.Value.Transaction!.UpdatedAt,
+                _now.AddSeconds(2)),
+            ReconcileCodec);
+        clear.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+
+        await using var verify = NewContext();
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution)).Should().Be(1);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution
+            && entry.ReversesJournalEntryId != null)).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Reconciliation_MatchingUnpostedOwnerDistributionReversesOnlyMatchJournalOnClear()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int transactionId;
+        int distributionId;
+        await using (var db = NewContext())
+        {
+            var owner = new OwnerEntity
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntityType = OwnerEntityType.LLC,
+                Name = "Match-created owner",
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var distribution = new OwnerDistribution
+            {
+                PortfolioId = _portfolioId,
+                OwnerEntity = owner,
+                Date = _now,
+                Amount = 700m,
+                Method = DistributionMethod.Ach,
+                Status = OwnerDistributionStatus.Approved,
+                ApprovedAt = _now,
+                ApprovedBusinessDate = _now,
+                ApprovedByUserId = auth.UserId,
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            var connection = SeedBankConnection(db, "Match-created owner bank");
+            var transaction = SeedBankTransaction(
+                db, connection.Id, "owner-match-created", -700m, null);
+            db.OwnerDistributions.Add(distribution);
+            await db.SaveChangesAsync();
+            transactionId = transaction.Id;
+            distributionId = distribution.Id;
+        }
+
+        var result = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:owner-match-created"),
+            ReconcileOwnerDistribution(
+                transactionId, distributionId, auth, "owner-match-created"),
+            ReconcileCodec);
+        result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+        var clear = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "banking.transaction.reconcile",
+                $"{_portfolioId}:{transactionId}:owner-match-created-clear"),
+            ReconcileClear(
+                transactionId,
+                auth,
+                "owner-match-created-clear",
+                result.Value.Transaction!.UpdatedAt,
+                _now.AddSeconds(2)),
+            ReconcileCodec);
+        clear.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+
+        await using var verify = NewContext();
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution)).Should().Be(2);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution
+            && entry.ReversesJournalEntryId != null)).Should().Be(1);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution
+            && entry.SourceBusinessKey == $"bank-owner-distribution:{transactionId}"))
+            .Should().Be(1);
+    }
+
+    [SkippableFact]
     public async Task Reconciliation_ConcurrentDifferentBankLines_CannotClaimSameOwnerDistribution()
     {
         SkipIfNoDocker();

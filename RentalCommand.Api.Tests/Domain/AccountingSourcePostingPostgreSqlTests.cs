@@ -371,6 +371,151 @@ public sealed class AccountingSourcePostingPostgreSqlTests
     }
 
     [Fact]
+    public async Task CapitalizingPaidExpenseReversesExpenseAndLeavesOneCapitalCashCredit()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var property = NewProperty("Paid capitalized expense property");
+        var expense = new Expense
+        {
+            PortfolioId = 1,
+            OperationalScope = ExpenseOperationalScope.Property,
+            Property = property,
+            Category = ScheduleECategory.Repairs,
+            Description = "Replace roof",
+            Status = ExpenseStatus.Paid,
+            Amount = 8_500m,
+            IncurredAt = new DateTime(2027, 1, 19, 0, 0, 0, DateTimeKind.Utc),
+            PaidAt = new DateTime(2027, 1, 19, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Expenses.Add(expense);
+        await setup.Db.SaveChangesAsync();
+        await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+            setup.Db, AtomicContext(), expense, 1);
+        await setup.Db.SaveChangesAsync();
+
+        var asset = new CapitalAsset
+        {
+            PortfolioId = 1,
+            PropertyId = property.Id,
+            SourceExpenseId = expense.Id,
+            Description = expense.Description,
+            CostBasis = expense.Amount,
+            InServiceDate = expense.IncurredAt,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.CapitalAssets.Add(asset);
+        await setup.Db.SaveChangesAsync();
+        await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+            setup.Db, AtomicContext(), asset, 1);
+        await setup.Db.SaveChangesAsync();
+
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == 1
+            && entry.SourceType == JournalSourceType.ExpensePayment
+            && entry.ReversesJournalEntryId != null)).Should().Be(1);
+        (await setup.Db.JournalLines.Where(line =>
+                line.JournalEntry!.PortfolioId == 1
+                && line.JournalEntry.SourceType == JournalSourceType.CapitalPurchase
+                && line.CreditAmount > 0m)
+            .SumAsync(line => line.CreditAmount)).Should().Be(8_500m);
+        (await setup.Db.JournalLines.Where(line =>
+                line.JournalEntry!.PortfolioId == 1
+                && line.JournalEntry.SourceType == JournalSourceType.ExpensePayment
+                && line.LedgerAccount!.SystemKey == "repairs-and-maintenance")
+            .SumAsync(line => line.DebitAmount - line.CreditAmount)).Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task CapitalizingUnpaidExpenseUsesAccountsPayableFunding()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var property = NewProperty("Unpaid capitalized expense property");
+        var expense = new Expense
+        {
+            PortfolioId = 1,
+            OperationalScope = ExpenseOperationalScope.Property,
+            Property = property,
+            Category = ScheduleECategory.Repairs,
+            Description = "Roof invoice",
+            Status = ExpenseStatus.Pending,
+            Amount = 9_250m,
+            IncurredAt = new DateTime(2027, 1, 20, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Expenses.Add(expense);
+        await setup.Db.SaveChangesAsync();
+        await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+            setup.Db, AtomicContext(), expense, 1);
+        await setup.Db.SaveChangesAsync();
+
+        var asset = new CapitalAsset
+        {
+            PortfolioId = 1,
+            PropertyId = property.Id,
+            SourceExpenseId = expense.Id,
+            Description = expense.Description,
+            CostBasis = expense.Amount,
+            InServiceDate = expense.IncurredAt,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.CapitalAssets.Add(asset);
+        await setup.Db.SaveChangesAsync();
+        await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+            setup.Db, AtomicContext(), asset, 1);
+        await setup.Db.SaveChangesAsync();
+
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == 1
+            && entry.SourceType == JournalSourceType.BillIncurred
+            && entry.ReversesJournalEntryId != null)).Should().Be(1);
+        (await LinesAsync(setup.Db, JournalSourceType.CapitalPurchase, asset.Id))
+            .Should().Equal(
+                ("buildings-and-improvements", 9_250m, 0m),
+                ("accounts-payable", 0m, 9_250m));
+    }
+
+    [Fact]
+    public async Task CapitalPurchaseCanUseLandAndAccountsPayableMappings()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var property = NewProperty("Land purchase property");
+        var asset = new CapitalAsset
+        {
+            PortfolioId = 1,
+            Property = property,
+            Description = "Land purchase",
+            CostBasis = 12_000m,
+            InServiceDate = new DateTime(2027, 1, 25, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.CapitalAssets.Add(asset);
+        await setup.Db.SaveChangesAsync();
+
+        await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+            setup.Db,
+            AtomicContext(),
+            asset,
+            1,
+            assetSystemKey: "land",
+            fundingSystemKey: "accounts-payable");
+        await setup.Db.SaveChangesAsync();
+
+        var lines = await LinesAsync(setup.Db, JournalSourceType.CapitalPurchase, asset.Id);
+        lines.Should().Equal(
+            ("land", 12_000m, 0m),
+            ("accounts-payable", 0m, 12_000m));
+    }
+
+    [Fact]
     public async Task OwnerDistributionPostsOwnerDimensionAndCash()
     {
         await using var setup = await _fixture.CreateContextAsync();
@@ -418,6 +563,51 @@ public sealed class AccountingSourcePostingPostgreSqlTests
         lines.Should().Equal(
             new { SystemKey = "owner-distributions", DebitAmount = 2_000m, CreditAmount = 0m, OwnerEntityId = (int?)owner.Id },
             new { SystemKey = "operating-cash", DebitAmount = 0m, CreditAmount = 2_000m, OwnerEntityId = (int?)owner.Id });
+    }
+
+    [Fact]
+    public async Task BankClearDoesNotReverseOwnerDistributionApprovalJournal()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var owner = new OwnerEntity
+        {
+            PortfolioId = 1,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Bank-clear owner",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var distribution = new OwnerDistribution
+        {
+            PortfolioId = 1,
+            OwnerEntity = owner,
+            Date = new DateTime(2027, 1, 22, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 1_100m,
+            Status = OwnerDistributionStatus.Approved,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(distribution);
+        await setup.Db.SaveChangesAsync();
+        await MoneyAccountingPosting.PostOwnerDistributionAsync(
+            setup.Db, AtomicContext(), distribution, 1);
+        await setup.Db.SaveChangesAsync();
+
+        var reversal = await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
+            setup.Db,
+            AtomicContext(),
+            1,
+            JournalSourceType.OwnerDistribution,
+            distribution.Id,
+            1);
+
+        reversal.Should().BeNull();
+        await setup.Db.SaveChangesAsync();
+        (await setup.Db.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == 1
+            && entry.SourceType == JournalSourceType.OwnerDistribution
+            && entry.ReversesJournalEntryId != null)).Should().Be(0);
     }
 
     [Fact]

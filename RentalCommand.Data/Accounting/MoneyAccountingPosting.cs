@@ -308,12 +308,19 @@ public static class MoneyAccountingPosting
         int actorUserId,
         CancellationToken ct = default)
     {
-        var original = await db.JournalEntries
+        var query = db.JournalEntries
             .Include(entry => entry.Lines)
-            .SingleOrDefaultAsync(entry =>
+            .Where(entry =>
                 entry.PortfolioId == portfolioId
                 && entry.SourceType == sourceType
-                && entry.SourceId == sourceId, ct);
+                && entry.SourceId == sourceId);
+        if (sourceType == JournalSourceType.OwnerDistribution)
+        {
+            query = query.Where(entry =>
+                entry.SourceBusinessKey == $"bank-owner-distribution:{sourceId}");
+        }
+
+        var original = await query.SingleOrDefaultAsync(ct);
         if (original is null)
             return null;
         return await ReverseBankMatchedSourceAsync(
@@ -364,6 +371,71 @@ public static class MoneyAccountingPosting
             ct,
             sourceId: transaction.Id,
             sourceBusinessKey: $"bank-loan-payment:{transaction.Id}");
+    }
+
+    /// <summary>
+    /// Uses an approved owner distribution journal as evidence when it already exists. A bank
+    /// match creates a journal only for an approved distribution that has no journal yet.
+    /// </summary>
+    public static async Task<JournalEntry?> PostBankMatchedOwnerDistributionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        OwnerDistribution distribution,
+        BankTransaction transaction,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var existingDistribution = await db.JournalEntries.SingleOrDefaultAsync(entry =>
+            entry.PortfolioId == distribution.PortfolioId
+            && entry.SourceType == JournalSourceType.OwnerDistribution
+            && entry.ReversesJournalEntryId == null
+            && entry.Lines.Any(line => line.SourceLineId == distribution.Id)
+            && !db.JournalEntries.Any(reversal =>
+                reversal.PortfolioId == entry.PortfolioId
+                && reversal.ReversesJournalEntryId == entry.Id), ct);
+        if (existingDistribution is not null)
+            return null;
+
+        return await PostOwnerDistributionAsync(
+            db,
+            context,
+            distribution,
+            actorUserId,
+            ct,
+            sourceId: transaction.Id,
+            sourceBusinessKey: $"bank-owner-distribution:{transaction.Id}");
+    }
+
+    /// <summary>
+    /// Reverses only an owner-distribution journal created by this bank match. Clearing a bank
+    /// match must not reverse the journal created when the distribution was approved.
+    /// </summary>
+    public static async Task<JournalEntry?> ReverseBankMatchedOwnerDistributionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        int portfolioId,
+        int bankTransactionId,
+        int ownerDistributionId,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var original = await db.JournalEntries
+            .Include(entry => entry.Lines)
+            .SingleOrDefaultAsync(entry =>
+                entry.PortfolioId == portfolioId
+                && entry.SourceType == JournalSourceType.OwnerDistribution
+                && entry.SourceId == bankTransactionId
+                && entry.SourceBusinessKey == $"bank-owner-distribution:{bankTransactionId}"
+                && entry.ReversesJournalEntryId == null
+                && entry.Lines.Any(line => line.SourceLineId == ownerDistributionId)
+                && !db.JournalEntries.Any(reversal =>
+                    reversal.PortfolioId == entry.PortfolioId
+                    && reversal.ReversesJournalEntryId == entry.Id), ct);
+        if (original is null)
+            return null;
+
+        return await ReverseBankMatchedSourceAsync(
+            db, context, original, bankTransactionId, actorUserId, ct);
     }
 
     /// <summary>
@@ -504,7 +576,9 @@ public static class MoneyAccountingPosting
         IAtomicCommandContext context,
         OwnerDistribution distribution,
         int actorUserId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        long? sourceId = null,
+        string? sourceBusinessKey = null)
     {
         var currency = await PortfolioCurrencyAsync(db, distribution.PortfolioId, ct);
         var equity = await AccountAsync(db, distribution.PortfolioId, OwnerDistributions, ct);
@@ -513,8 +587,8 @@ public static class MoneyAccountingPosting
             context,
             distribution.PortfolioId,
             JournalSourceType.OwnerDistribution,
-            distribution.Id,
-            $"owner-distribution:{distribution.Id}",
+            sourceId ?? distribution.Id,
+            sourceBusinessKey ?? $"owner-distribution:{distribution.Id}",
             DateOnly.FromDateTime(distribution.Date),
             currency,
             "Owner distribution paid",
@@ -535,17 +609,49 @@ public static class MoneyAccountingPosting
         IAtomicCommandContext context,
         CapitalAsset asset,
         int actorUserId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? assetSystemKey = null,
+        string? fundingSystemKey = null,
+        long? sourceId = null,
+        string? sourceBusinessKey = null)
     {
+        if (asset.SourceExpenseId is { } sourceExpenseId)
+        {
+            var sourceExpense = await db.Expenses.SingleOrDefaultAsync(expense =>
+                expense.Id == sourceExpenseId && expense.PortfolioId == asset.PortfolioId, ct);
+            if (sourceExpense is not null)
+            {
+                var currentExpenseJournals = await CurrentExpenseJournalsAsync(db, sourceExpense, ct);
+                foreach (var original in currentExpenseJournals)
+                {
+                    await ReverseAsync(
+                        db,
+                        context,
+                        original,
+                        ReversalSourceId(original.Id),
+                        $"capitalization-expense-reversal:{sourceExpense.Id}:{original.Id}",
+                        actorUserId,
+                        ct);
+                }
+            }
+        }
+
         var currency = await PortfolioCurrencyAsync(db, asset.PortfolioId, ct);
-        var basis = await AccountAsync(db, asset.PortfolioId, Buildings, ct);
-        var cash = await AccountAsync(db, asset.PortfolioId, OperatingCash, ct);
+        var selectedFundingSystemKey = fundingSystemKey
+            ?? await CapitalFundingSystemKeyAsync(db, asset, ct);
+        var basis = await AccountAsync(
+            db, asset.PortfolioId, assetSystemKey ?? Buildings, ct);
+        var funding = await AccountAsync(
+            db,
+            asset.PortfolioId,
+            selectedFundingSystemKey,
+            ct);
         var proposal = Proposal(
             context,
             asset.PortfolioId,
             JournalSourceType.CapitalPurchase,
-            asset.Id,
-            $"capital-purchase:{asset.Id}",
+            sourceId ?? asset.Id,
+            sourceBusinessKey ?? $"capital-purchase:{asset.Id}",
             DateOnly.FromDateTime(asset.InServiceDate),
             currency,
             $"Capital purchase: {asset.Description}",
@@ -553,10 +659,61 @@ public static class MoneyAccountingPosting
             [
                 Debit(basis, asset.CostBasis, "debit:asset", asset.PropertyId, asset.UnitId,
                     memo: asset.Description, sourceLineId: asset.Id),
-                Credit(cash, asset.CostBasis, "credit:operating-cash", asset.PropertyId, asset.UnitId,
+                Credit(funding, asset.CostBasis, $"credit:{selectedFundingSystemKey}", asset.PropertyId, asset.UnitId,
                     memo: asset.Description, sourceLineId: asset.Id),
             ]);
         return await new AccountingPostingService(db).PostAsync(proposal, ct);
+    }
+
+    public static async Task<bool> CorrectCapitalPurchaseAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        CapitalAsset asset,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var original = await CurrentCapitalPurchaseAsync(db, asset, ct);
+        if (original is null)
+            return false;
+
+        await ReverseAsync(
+            db,
+            context,
+            original,
+            ReversalSourceId(original.Id),
+            $"capital-asset-correction-reversal:{asset.Id}:{original.Id}",
+            actorUserId,
+            ct);
+        await PostCapitalPurchaseAsync(
+            db,
+            context,
+            asset,
+            actorUserId,
+            ct,
+            sourceId: checked((long)original.Id * 10_000L + 2L),
+            sourceBusinessKey: $"capital-asset-correction:{asset.Id}:{original.Id}");
+        return true;
+    }
+
+    public static async Task<JournalEntry?> ReverseCapitalPurchaseAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        CapitalAsset asset,
+        int actorUserId,
+        CancellationToken ct = default)
+    {
+        var original = await CurrentCapitalPurchaseAsync(db, asset, ct);
+        if (original is null)
+            return null;
+
+        return await ReverseAsync(
+            db,
+            context,
+            original,
+            ReversalSourceId(original.Id),
+            $"capital-asset-delete-reversal:{asset.Id}:{original.Id}",
+            actorUserId,
+            ct);
     }
 
     public static async Task<JournalEntry?> PostDepreciationAsync(
@@ -794,9 +951,38 @@ public static class MoneyAccountingPosting
             .OrderBy(entry => entry.Id)
             .ToListAsync(ct);
 
+    private static Task<JournalEntry?> CurrentCapitalPurchaseAsync(
+        RentalCommandDbContext db,
+        CapitalAsset asset,
+        CancellationToken ct) =>
+        db.JournalEntries
+            .Include(entry => entry.Lines)
+            .Where(entry => entry.PortfolioId == asset.PortfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.ReversesJournalEntryId == null
+                && entry.Lines.Any(line => line.SourceLineId == asset.Id)
+                && !db.JournalEntries.Any(reversal =>
+                    reversal.PortfolioId == entry.PortfolioId
+                    && reversal.ReversesJournalEntryId == entry.Id))
+            .OrderByDescending(entry => entry.Id)
+            .FirstOrDefaultAsync(ct);
+
     private static async Task<int> AccountAsync(
         RentalCommandDbContext db, int portfolioId, string systemKey, CancellationToken ct) =>
         await AccountingPostingSupport.RequireSystemAccountIdAsync(db, portfolioId, systemKey, ct);
+
+    private static async Task<string> CapitalFundingSystemKeyAsync(
+        RentalCommandDbContext db, CapitalAsset asset, CancellationToken ct)
+    {
+        if (asset.SourceExpenseId is not { } sourceExpenseId)
+            return OperatingCash;
+
+        var paid = await db.Expenses
+            .Where(expense => expense.Id == sourceExpenseId && expense.PortfolioId == asset.PortfolioId)
+            .Select(expense => expense.Status == ExpenseStatus.Paid || expense.PaidAt != null)
+            .SingleOrDefaultAsync(ct);
+        return paid ? OperatingCash : AccountsPayable;
+    }
 
     private static async Task<string> PortfolioCurrencyAsync(
         RentalCommandDbContext db, int portfolioId, CancellationToken ct) =>

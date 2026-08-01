@@ -18,6 +18,7 @@ using RentalCommand.Core.Money;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Authorization;
 using Testcontainers.PostgreSql;
@@ -799,7 +800,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
                 receipt.CommandType == identity.CommandType &&
                 receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
             (await verify.AtomicAuditLogs.CountAsync(audit =>
-                audit.AttemptId == firstOutcome.AttemptId)).Should().Be(2);
+                audit.AttemptId == firstOutcome.AttemptId)).Should().Be(3);
             (await verify.OutboxMessages.CountAsync(message =>
                 message.IdempotencyKey.EndsWith(
                     $":{command.IdempotencyKey}:data-update"))).Should().Be(2);
@@ -870,6 +871,405 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             (await verify.OutboxMessages.CountAsync(message =>
                 message.IdempotencyKey.EndsWith(
                     $":{failedCommand.IdempotencyKey}:data-update"))).Should().Be(0);
+        }
+    }
+
+    [SkippableFact]
+    public async Task CapitalizePaidExpenseReversesExpenseAndPostsOneCapitalPurchase()
+    {
+        SkipIfNoDocker();
+        int expenseId;
+        await using (var seed = NewContext())
+        {
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = _managerPropertyId,
+                Category = ScheduleECategory.Repairs,
+                Description = "Replace roof with capital improvement",
+                Status = ExpenseStatus.Paid,
+                Amount = 8_500m,
+                IncurredAt = new DateTime(2027, 1, 10, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2027, 1, 11, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Expenses.Add(expense);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+                    seed, context, expense, _userId, ct),
+                "capitalize-paid-expense-seed");
+            expenseId = expense.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.CapitalizeExpense,
+            expenseId,
+            "capitalize-paid-expense",
+            new CapitalizeExpenseRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc),
+                Description = "Roof replacement",
+            },
+            _now.AddHours(1));
+        var result = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+        var replay = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(result.Value);
+        await using var verify = NewContext();
+        var asset = await verify.CapitalAssets.AsNoTracking()
+            .SingleAsync(row => row.SourceExpenseId == expenseId);
+        asset.CostBasis.Should().Be(8_500m);
+        (await verify.JournalEntries.CountAsync(entry =>
+            entry.PortfolioId == _portfolioId
+            && entry.SourceType == JournalSourceType.CapitalPurchase
+            && entry.SourceId == asset.Id)).Should().Be(1);
+        var expenseLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.LedgerAccount!.SystemKey == "repairs-and-maintenance"
+                && line.SourceLineId == expenseId)
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        expenseLines.Debit.Should().Be(expenseLines.Credit);
+        var cashLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.LedgerAccount!.SystemKey == "operating-cash"
+                && (line.JournalEntry.SourceType == JournalSourceType.ExpensePayment
+                    || line.JournalEntry.SourceType == JournalSourceType.CapitalPurchase)
+                && (line.SourceLineId == expenseId || line.SourceLineId == asset.Id))
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        (cashLines.Credit - cashLines.Debit).Should().Be(8_500m);
+    }
+
+    [SkippableFact]
+    public async Task CapitalizeExpenseJournalFailureRollsBackAssetLinkJournalAndCompanions()
+    {
+        SkipIfNoDocker();
+        int expenseId;
+        await using (var seed = NewContext())
+        {
+            var expense = new Expense
+            {
+                PortfolioId = _portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = _managerPropertyId,
+                Category = ScheduleECategory.Repairs,
+                Description = "Capitalization failure expense",
+                Status = ExpenseStatus.Paid,
+                Amount = 6_400m,
+                IncurredAt = new DateTime(2027, 1, 16, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2027, 1, 16, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.Expenses.Add(expense);
+            await seed.SaveChangesAsync();
+            expenseId = expense.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.CapitalizeExpense,
+            expenseId,
+            "capitalize-expense-journal-failure",
+            new CapitalizeExpenseRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 17, 0, 0, 0, DateTimeKind.Utc),
+                Description = "Failed roof capitalization",
+            },
+            _now.AddHours(1));
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        await using (var inject = NewContext())
+        {
+            await inject.Database.ExecuteSqlRawAsync($"""
+                CREATE OR REPLACE FUNCTION fail_capital_purchase_insert() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW."SourceType" = {(int)JournalSourceType.CapitalPurchase} THEN
+                        RAISE EXCEPTION 'injected capital purchase failure';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                CREATE TRIGGER fail_capital_purchase_insert
+                BEFORE INSERT ON "JournalEntries"
+                FOR EACH ROW EXECUTE FUNCTION fail_capital_purchase_insert();
+                """);
+        }
+
+        try
+        {
+            await FluentActions.Invoking(() =>
+                    ExecuteAtomicAsync(identity, command, AtomicMoneyMutation.Codec))
+                .Should().ThrowAsync<Exception>();
+        }
+        finally
+        {
+            await using var cleanup = NewContext();
+            await cleanup.Database.ExecuteSqlRawAsync("""
+                DROP TRIGGER IF EXISTS fail_capital_purchase_insert ON "JournalEntries";
+                DROP FUNCTION IF EXISTS fail_capital_purchase_insert();
+                """);
+        }
+
+        await using var verify = NewContext();
+        (await verify.Expenses.CountAsync(row => row.Id == expenseId
+            && row.CapitalizedAssetId == null)).Should().Be(1);
+        (await verify.CapitalAssets.CountAsync(row => row.SourceExpenseId == expenseId)).Should().Be(0);
+        (await verify.JournalEntries.CountAsync(row => row.PortfolioId == _portfolioId
+            && row.SourceType == JournalSourceType.CapitalPurchase)).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.IdempotencyKey.EndsWith($":{command.IdempotencyKey}:data-update"))).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetFactUpdateReversesAndRepostsWhileDescriptionOnlyUpdateDoesNotPost()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Description = "Original asset",
+                CostBasis = 700m,
+                InServiceDate = new DateTime(2027, 1, 13, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-update-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var dimensionOnly = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-dimension-only",
+            new UpdateCapitalAssetRequest { ClearUnit = true },
+            _now.AddMinutes(30));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(dimensionOnly), dimensionOnly, AtomicMoneyMutation.Codec);
+        await using (var afterDimension = NewContext())
+        {
+            (await afterDimension.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(1);
+        }
+
+        var descriptionOnly = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-description-only",
+            new UpdateCapitalAssetRequest { Description = "Descriptive edit" },
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(descriptionOnly), descriptionOnly, AtomicMoneyMutation.Codec);
+        await using (var afterDescription = NewContext())
+        {
+            (await afterDescription.JournalEntries.CountAsync(entry =>
+                entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))).Should().Be(1);
+        }
+
+        var factUpdate = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-cost-correction",
+            new UpdateCapitalAssetRequest { CostBasis = 850m },
+            _now.AddHours(2));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(factUpdate), factUpdate, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        entries.Should().Contain(entry => entry.ReversesJournalEntryId == original.Id);
+        entries.Should().Contain(entry => entry.SourceId != assetId
+            && entry.ReversesJournalEntryId == null);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetDateUpdateReversesAndRepostsCapitalPurchase()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Description = "Date-corrected asset",
+                CostBasis = 725m,
+                InServiceDate = new DateTime(2027, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-date-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Update,
+            assetId,
+            "capital-asset-date-correction",
+            new UpdateCapitalAssetRequest
+            {
+                InServiceDate = new DateTime(2027, 1, 18, 0, 0, 0, DateTimeKind.Utc),
+            },
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        entries.Should().Contain(entry => entry.ReversesJournalEntryId == original.Id);
+        entries.Should().Contain(entry => entry.SourceId != assetId
+            && entry.ReversesJournalEntryId == null);
+    }
+
+    [SkippableFact]
+    public async Task CapitalAssetDeleteReversesPostedCapitalPurchaseBeforeSoftDelete()
+    {
+        SkipIfNoDocker();
+        int assetId;
+        await using (var seed = NewContext())
+        {
+            var asset = new CapitalAsset
+            {
+                PortfolioId = _portfolioId,
+                PropertyId = _managerPropertyId,
+                Description = "Asset to delete",
+                CostBasis = 900m,
+                InServiceDate = new DateTime(2027, 1, 14, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = _now,
+                UpdatedAt = _now,
+            };
+            seed.CapitalAssets.Add(asset);
+            await seed.SaveChangesAsync();
+            await CommitDirectPostingAsync(seed, (context, ct) =>
+                MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                    seed, context, asset, _userId, ct),
+                "capital-asset-delete-seed");
+            assetId = asset.Id;
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var command = AtomicMoneyMutation.Command(
+            scope,
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset,
+            AtomicMoneyOperation.Delete,
+            assetId,
+            "capital-asset-delete",
+            new object(),
+            _now.AddHours(1));
+        await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        await using var verify = NewContext();
+        (await verify.CapitalAssets.CountAsync(asset => asset.Id == assetId)).Should().Be(0);
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.CapitalPurchase
+                && entry.Lines.Any(line => line.SourceLineId == assetId))
+            .ToListAsync();
+        entries.Should().HaveCount(2);
+        var original = entries.Single(entry => entry.SourceId == assetId
+            && entry.ReversesJournalEntryId is null);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        var originalLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == original.Id)
+            .Select(line => new { line.LedgerAccountId, line.DebitAmount, line.CreditAmount })
+            .ToListAsync();
+        var reversalLines = await verify.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == reversal.Id)
+            .Select(line => new { line.LedgerAccountId, line.DebitAmount, line.CreditAmount })
+            .ToListAsync();
+        reversalLines.Should().HaveSameCount(originalLines);
+        foreach (var originalLine in originalLines)
+        {
+            reversalLines.Should().Contain(reversalLine =>
+                reversalLine.LedgerAccountId == originalLine.LedgerAccountId
+                && reversalLine.DebitAmount == originalLine.CreditAmount
+                && reversalLine.CreditAmount == originalLine.DebitAmount);
         }
     }
 
@@ -1916,6 +2316,8 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _managerUnitId = managerUnit.Id;
         _leasingApplicationId = leasingApplication.Id;
         _managerApplicationId = managerApplication.Id;
+        await new ChartOfAccountsSeedService(db).SeedAsync(_portfolioId);
+        await db.SaveChangesAsync();
     }
 
     private async Task<TeamAuthorityPair> SeedTeamAuthorityPairAsync(string suffix)
@@ -2306,6 +2708,25 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         long presentedRevision) =>
         await new ActiveAccessContextResolver(db).ResolveAsync(
             _sessionId, _userId, _accessContextId, presentedRevision, _now);
+
+    private static async Task CommitDirectPostingAsync<T>(
+        RentalCommandDbContext db,
+        Func<IAtomicCommandContext, CancellationToken, Task<T>> post,
+        string operationKey)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync();
+        var auditScope = new AtomicAuditScope(TimeProvider.System);
+        var commandContext = new AtomicCommandContext(db, auditScope, TimeProvider.System);
+        var attemptId = Guid.NewGuid();
+        commandContext.BeginAttempt(attemptId);
+        commandContext.BindReceipt(Guid.NewGuid());
+        using var attempt = auditScope.BeginAttempt(
+            new AtomicCommandIdentity("test.accounting.post", operationKey), attemptId, db);
+        await post(commandContext, CancellationToken.None);
+        await commandContext.FlushBusinessAsync();
+        await transaction.CommitAsync();
+        commandContext.EndAttempt();
+    }
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()

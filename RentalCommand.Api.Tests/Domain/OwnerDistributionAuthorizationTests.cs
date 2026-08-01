@@ -14,6 +14,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -42,6 +43,8 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             TimeProvider.System,
             _atomicServices.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
         SeedPortfolio();
+        await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(_portfolioId);
+        await _ctx.Db.SaveChangesAsync();
     }
 
     public async Task DisposeAsync()
