@@ -1,0 +1,99 @@
+<script lang="ts">
+	import { createQuery } from '@tanstack/svelte-query';
+	import { ArrowRight } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import {
+		formatAccountingCurrency,
+		formatAccountingDate,
+		formatJournalPostingLabel,
+		formatSourceTypeLabel
+	} from '$lib/accounting/accounting-display';
+	import {
+		accountingBooks,
+		type JournalSourceType
+	} from '$lib/api/endpoints/accounting-books';
+	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
+	import JournalDetailDrawer from './JournalDetailDrawer.svelte';
+
+	let {
+		sourceType,
+		sourceId,
+		title = 'Accounting impact'
+	}: {
+		sourceType: JournalSourceType;
+		sourceId: number;
+		title?: string;
+	} = $props();
+
+	const authState = getAuthState();
+	const detailMode = getAccountingDetailMode();
+	const mode = $derived(detailMode?.mode ?? 'simple');
+	const advanced = $derived(mode === 'advanced');
+	let selectedJournalPublicId = $state<string | null>(null);
+
+	const sourceJournalsQuery = createQuery(() => ({
+		queryKey: ['accounting-source-journals', sourceType, sourceId],
+		enabled: authState.isAuthenticated && sourceId > 0,
+		queryFn: () => accountingBooks.sourceJournals({ sourceType, sourceId })
+	}));
+
+	function errorStatus(error: unknown): number | undefined {
+		if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
+		const status = (error as { status?: unknown }).status;
+		return typeof status === 'number' ? status : undefined;
+	}
+
+	const unauthorized = $derived(
+		!authState.isAuthenticated || [401, 403, 404].includes(errorStatus(sourceJournalsQuery.error) ?? 0)
+	);
+	const journals = $derived(sourceJournalsQuery.data ?? []);
+
+	function openJournal(publicId: string): void {
+		selectedJournalPublicId = publicId;
+	}
+</script>
+
+{#if !unauthorized && sourceId > 0}
+	{#if sourceJournalsQuery.isLoading}
+		<section class="rounded-xl border border-border bg-card p-4" data-testid="accounting-impact-loading" aria-label="Loading accounting impact">
+			<div class="h-5 w-40 animate-pulse rounded bg-muted"></div>
+			<div class="mt-4 space-y-3">
+				<div class="h-5 w-full animate-pulse rounded bg-muted"></div>
+				<div class="h-5 w-5/6 animate-pulse rounded bg-muted"></div>
+			</div>
+		</section>
+	{:else if !sourceJournalsQuery.isError && journals.length > 0}
+		<section class="rounded-xl border border-border bg-card p-4" data-testid="accounting-impact-card">
+			<h2 class="text-sm font-semibold">{title}</h2>
+			<div class="mt-3 divide-y divide-border">
+				{#each journals as journal (journal.publicId)}
+					<div class="py-3 first:pt-0 last:pb-0">
+						<div class="flex items-start justify-between gap-4">
+							<div class="min-w-0">
+								<p class="truncate font-medium">
+									{advanced ? formatSourceTypeLabel(journal.sourceType) : journal.description}
+								</p>
+								<p class="mt-1 text-xs text-muted-foreground">
+									{formatAccountingDate(journal.effectiveOn)} · {formatJournalPostingLabel(journal.isReversal)}
+								</p>
+							</div>
+							<p class="shrink-0 font-medium tabular-nums">{formatAccountingCurrency(journal.totalDebits)}</p>
+						</div>
+						<Button
+							variant="link"
+							size="sm"
+							class="mt-2 h-auto px-0 py-0"
+							onclick={() => openJournal(journal.publicId)}
+							data-testid={`accounting-impact-open-${journal.publicId}`}
+						>
+							View accounting record <ArrowRight class="size-3.5" />
+						</Button>
+					</div>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
+	<JournalDetailDrawer bind:journalPublicId={selectedJournalPublicId} />
+{/if}
