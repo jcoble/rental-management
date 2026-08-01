@@ -666,6 +666,7 @@ public sealed class AtomicMoneyMutationHandler
         }
 
         CapitalAsset? entity = null;
+        var capitalPurchaseFactsChanged = false;
         if (command.Operation != AtomicMoneyOperation.Create)
         {
             entity = await db.Set<CapitalAsset>().SingleOrDefaultAsync(row =>
@@ -695,6 +696,9 @@ public sealed class AtomicMoneyMutationHandler
                         AuditLogOperation.Updated, $"Capital asset {entity.Id} unlinked", sourceExpense.Id));
                 }
             }
+
+            await MoneyAccountingPosting.ReverseCapitalPurchaseAsync(
+                db, attempt, entity, command.ActorUserId, ct);
 
             entity.DeletedAt = businessNowUtc;
             entity.UpdatedAt = businessNowUtc;
@@ -747,6 +751,9 @@ public sealed class AtomicMoneyMutationHandler
             var request = Read<UpdateCapitalAssetRequest>(command);
             var propertyId = request.PropertyId ?? entity!.PropertyId;
             var unitId = request.ClearUnit == true ? null : request.UnitId ?? entity.UnitId;
+            var inServiceDate = request.InServiceDate.HasValue
+                ? Utc(request.InServiceDate.Value)
+                : entity.InServiceDate;
             if (!await PropertyUnitReferencesExistAsync(
                     command.PortfolioId, propertyId, unitId, db, ct, propertyId))
                 return Missing();
@@ -754,11 +761,14 @@ public sealed class AtomicMoneyMutationHandler
                     propertyId, unitId, null, ct))
                 return Missing();
 
+            capitalPurchaseFactsChanged = inServiceDate != entity.InServiceDate
+                || (request.CostBasis.HasValue && request.CostBasis.Value != entity.CostBasis);
+
             entity.PropertyId = propertyId;
             entity.UnitId = unitId;
             if (request.Description is not null) entity.Description = request.Description.Trim();
             if (request.CostBasis.HasValue) entity.CostBasis = request.CostBasis.Value;
-            if (request.InServiceDate.HasValue) entity.InServiceDate = Utc(request.InServiceDate.Value);
+            entity.InServiceDate = inServiceDate;
             if (request.Method.HasValue) entity.Method = request.Method.Value;
             if (request.RecoveryYears.HasValue) entity.RecoveryYears = request.RecoveryYears.Value;
             if (request.Convention.HasValue) entity.Convention = request.Convention.Value;
@@ -780,6 +790,11 @@ public sealed class AtomicMoneyMutationHandler
         if (command.Operation == AtomicMoneyOperation.Create)
         {
             await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                db, attempt, entity!, command.ActorUserId, ct);
+        }
+        else if (capitalPurchaseFactsChanged)
+        {
+            await MoneyAccountingPosting.CorrectCapitalPurchaseAsync(
                 db, attempt, entity!, command.ActorUserId, ct);
         }
         StageDataUpdate(attempt, command, nameof(CapitalAsset), entity!.Id, businessNowUtc);
