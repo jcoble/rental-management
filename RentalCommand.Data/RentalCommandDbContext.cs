@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data;
@@ -216,6 +217,14 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<AccountingSyncMap> AccountingSyncMaps => Set<AccountingSyncMap>();
     public DbSet<AccountingParkedTransaction> AccountingParkedTransactions => Set<AccountingParkedTransaction>();
 
+    // Double-entry general-ledger foundation.
+    public DbSet<LedgerAccount> LedgerAccounts => Set<LedgerAccount>();
+    public DbSet<JournalEntry> JournalEntries => Set<JournalEntry>();
+    public DbSet<JournalLine> JournalLines => Set<JournalLine>();
+    public DbSet<RecurringTenantCharge> RecurringTenantCharges => Set<RecurringTenantCharge>();
+    public DbSet<AccountingConversionReconciliation> AccountingConversionReconciliations =>
+        Set<AccountingConversionReconciliation>();
+
     /// <summary>Single-row (Id = 1) controllable simulation clock — non-prod only. Global (no RLS policy).</summary>
     public DbSet<SimulationClock> SimulationClocks => Set<SimulationClock>();
 
@@ -240,6 +249,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         ScheduleEDepreciationDbFunction.Configure(modelBuilder);
         SqlNumericFunctions.Configure(modelBuilder);
         modelBuilder.ConfigureApplicationFinance();
+        modelBuilder.ConfigureAccountingFoundation();
 
         // Npgsql's inet type is represented by IPAddress. Keep the HTTP/domain boundary as a
         // normalized string while making the provider mapping explicit; EF handles nulls before
@@ -2617,6 +2627,14 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         // principal's `DeletedAt` so the whole sub-tree disappears when an ancestor is soft-deleted.
         modelBuilder.Entity<ConversationMessage>().HasQueryFilter(e => e.Conversation!.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<InspectionItem>().HasQueryFilter(e => e.Inspection!.Portfolio!.DeletedAt == null);
+
+        modelBuilder.Entity<LedgerAccount>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<JournalEntry>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<RecurringTenantCharge>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<AccountingConversionReconciliation>()
+            .HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<JournalLine>()
+            .HasQueryFilter(e => e.JournalEntry!.Portfolio!.DeletedAt == null);
 
         // Close the required-relationship filter graph for the canonical lease/account/access,
         // listing, notification, signature, eviction, and application-finance aggregates. Keep
