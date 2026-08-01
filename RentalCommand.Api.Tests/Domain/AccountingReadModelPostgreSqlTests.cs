@@ -8,6 +8,8 @@ using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -26,6 +28,8 @@ public sealed class AccountingReadModelPostgreSqlTests
         await seed.SeedAsync(1);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(GeneralLedger_UsesServerSideRunningBalanceAndKeepsMixedAccountBalanceNull));
 
         var accounts = await setup.Db.LedgerAccounts
             .Where(account => account.PortfolioId == 1)
@@ -56,7 +60,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         setup.Db.ChangeTracker.Clear();
 
         var service = new AccountingLedgerReadModelService(setup.Db);
-        var accountPage = await service.GetGeneralLedgerAsync(1, new GeneralLedgerQuery
+        var accountPage = await service.GetGeneralLedgerAsync(scope, new GeneralLedgerQuery
         {
             AccountId = accounts[0].Id,
             Take = 20,
@@ -65,7 +69,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         accountPage.TotalCount.Should().Be(1);
         accountPage.Items.Should().ContainSingle().Which.RunningBalance.Should().Be(100m);
 
-        var mixedPage = await service.GetGeneralLedgerAsync(1, new GeneralLedgerQuery
+        var mixedPage = await service.GetGeneralLedgerAsync(scope, new GeneralLedgerQuery
         {
             Take = 20,
         }, CancellationToken.None);
@@ -83,16 +87,22 @@ public sealed class AccountingReadModelPostgreSqlTests
         await seed.SeedAsync(1);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
-        var accountId = await setup.Db.LedgerAccounts
-            .Where(account => account.PortfolioId == 1)
-            .OrderBy(account => account.Code)
-            .Select(account => account.Id)
-            .FirstAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(GeneralLedger_UsesAtMostThreeSqlStatementsAndDoesNotAggregateInMemory));
+        var cash = await AccountAsync(setup, "operating-cash");
+        var income = await AccountAsync(setup, "rental-income");
+        for (var index = 0; index < 20; index++)
+        {
+            await PostAsync(setup, 8_100 + index, new DateOnly(2026, 8, 1).AddDays(index),
+                new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 1m },
+                new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 1m });
+        }
         commands.Reset();
 
         var service = new AccountingLedgerReadModelService(setup.Db);
-        await service.GetGeneralLedgerAsync(1, new GeneralLedgerQuery { AccountId = accountId, Take = 20 }, CancellationToken.None);
+        var page = await service.GetGeneralLedgerAsync(
+            scope, new GeneralLedgerQuery { AccountId = cash.Id, Take = 20 }, CancellationToken.None);
 
+        page.Items.Should().HaveCount(20);
         commands.Count.Should().BeLessThanOrEqualTo(3);
         commands.Sql.Should().Contain(sql => sql.Contains("JournalLines", StringComparison.Ordinal));
         commands.Sql.Should().Contain(sql => sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
@@ -106,6 +116,8 @@ public sealed class AccountingReadModelPostgreSqlTests
         await seed.SeedAsync(1);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
+
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(ChartJournalAndFinancialStatements_StayPortfolioScopedAndBalanced));
         var accounts = await setup.Db.LedgerAccounts
             .Where(account => account.PortfolioId == 1 && (account.Code == "1000" || account.Code == "4000"))
             .OrderBy(account => account.Code)
@@ -134,20 +146,20 @@ public sealed class AccountingReadModelPostgreSqlTests
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var chart = await service.GetChartOfAccountsAsync(1, new ChartOfAccountsQuery { Take = 200 });
-        var detail = await service.GetJournalDetailAsync(1, entry.PublicId);
-        var trialBalance = await service.GetTrialBalanceAsync(1, new StatementQuery
+        var detail = await service.GetJournalDetailAsync(scope, entry.PublicId);
+        var trialBalance = await service.GetTrialBalanceAsync(scope, new StatementQuery
         {
             From = new DateOnly(2026, 8, 1),
             To = new DateOnly(2026, 8, 31),
             Currency = "USD",
         });
-        var balanceSheet = await service.GetBalanceSheetAsync(1, new StatementQuery
+        var balanceSheet = await service.GetBalanceSheetAsync(scope, new StatementQuery
         {
             From = new DateOnly(2026, 8, 1),
             To = new DateOnly(2026, 8, 31),
             Currency = "USD",
         });
-        var incomeStatement = await service.GetIncomeStatementAsync(1, new StatementQuery
+        var incomeStatement = await service.GetIncomeStatementAsync(scope, new StatementQuery
         {
             From = new DateOnly(2026, 8, 1),
             To = new DateOnly(2026, 8, 31),
@@ -165,6 +177,205 @@ public sealed class AccountingReadModelPostgreSqlTests
         trialBalance.TotalCredits.Should().Be(250m);
         balanceSheet.Sections.Should().ContainSingle(section => section.Label == nameof(AccountType.Asset));
         incomeStatement.Totals.NetIncome.Should().Be(250m);
+    }
+
+    [Fact]
+    public async Task GeneralLedger_CreditNormalRunningBalanceIsChronologicalBeforeNewestFirstPaging()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(GeneralLedger_CreditNormalRunningBalanceIsChronologicalBeforeNewestFirstPaging));
+        var cash = await AccountAsync(setup, "operating-cash");
+        var income = await AccountAsync(setup, "rental-income");
+
+        await PostAsync(setup, 8201, new DateOnly(2026, 8, 1),
+            new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 100m },
+            new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 100m });
+        await PostAsync(setup, 8202, new DateOnly(2026, 8, 2),
+            new AccountingProposedLine { LedgerAccountId = income.Id, DebitAmount = 25m },
+            new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 25m });
+
+        var page = await new AccountingLedgerReadModelService(setup.Db).GetGeneralLedgerAsync(
+            scope,
+            new GeneralLedgerQuery { AccountId = income.Id, Sort = "-effectiveOn", Take = 20 });
+
+        page.Items.Select(row => row.EffectiveOn).Should().BeInDescendingOrder();
+        page.Items.Select(row => row.RunningBalance).Should().Equal(75m, 100m);
+        page.Items.Should().OnlyContain(row =>
+            row.AccountType == AccountType.Income && row.NormalBalance == NormalBalance.Credit);
+    }
+
+    [Fact]
+    public async Task TrialBalance_NetsEndingBalancesAndBalanceSheetIncludesCurrentEarnings()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(TrialBalance_NetsEndingBalancesAndBalanceSheetIncludesCurrentEarnings));
+        var cash = await AccountAsync(setup, "operating-cash");
+        var income = await AccountAsync(setup, "rental-income");
+        var expense = await AccountAsync(setup, "repairs-and-maintenance");
+
+        await PostAsync(setup, 8211, new DateOnly(2026, 8, 1),
+            new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 100m },
+            new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 100m });
+        await PostAsync(setup, 8212, new DateOnly(2026, 8, 2),
+            new AccountingProposedLine { LedgerAccountId = expense.Id, DebitAmount = 40m },
+            new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 40m });
+
+        var service = new AccountingLedgerReadModelService(setup.Db);
+        var query = new StatementQuery { To = new DateOnly(2026, 8, 31), Currency = "USD" };
+        var trial = await service.GetTrialBalanceAsync(scope, query);
+        var balanceSheet = await service.GetBalanceSheetAsync(scope, query);
+
+        trial.Rows.Single(row => row.AccountId == cash.Id).Should().BeEquivalentTo(
+            new { DebitBalance = 60m, CreditBalance = 0m });
+        trial.TotalDebits.Should().Be(100m);
+        trial.TotalCredits.Should().Be(100m);
+        trial.IsBalanced.Should().BeTrue();
+        balanceSheet.Totals.Assets.Should().Be(60m);
+        balanceSheet.Totals.CurrentEarnings.Should().Be(60m);
+        balanceSheet.Totals.LiabilitiesAndEquity.Should().Be(60m);
+        balanceSheet.Totals.IsBalanced.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MoneyPosition_ReconcilesProtectedAccountsAndNetsCashTransfersPerJournal()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(MoneyPosition_ReconcilesProtectedAccountsAndNetsCashTransfersPerJournal));
+        var cash = await AccountAsync(setup, "operating-cash");
+        var trustCash = await AccountAsync(setup, "security-deposit-trust-cash");
+        var receivable = await AccountAsync(setup, "tenant-accounts-receivable");
+        var deposits = await AccountAsync(setup, "tenant-security-deposits-payable");
+        var income = await AccountAsync(setup, "rental-income");
+        var expense = await AccountAsync(setup, "repairs-and-maintenance");
+
+        await PostAsync(setup, 8221, new DateOnly(2026, 8, 1),
+            new AccountingProposedLine { LedgerAccountId = receivable.Id, DebitAmount = 100m },
+            new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 100m });
+        await PostAsync(setup, 8222, new DateOnly(2026, 8, 2),
+            new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 100m },
+            new AccountingProposedLine { LedgerAccountId = receivable.Id, CreditAmount = 100m });
+        await PostAsync(setup, 8223, new DateOnly(2026, 8, 3),
+            new AccountingProposedLine { LedgerAccountId = trustCash.Id, DebitAmount = 30m },
+            new AccountingProposedLine { LedgerAccountId = deposits.Id, CreditAmount = 30m });
+        await PostAsync(setup, 8224, new DateOnly(2026, 8, 4),
+            new AccountingProposedLine { LedgerAccountId = expense.Id, DebitAmount = 20m },
+            new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 20m });
+        await PostAsync(setup, 8225, new DateOnly(2026, 8, 5),
+            new AccountingProposedLine { LedgerAccountId = trustCash.Id, DebitAmount = 10m },
+            new AccountingProposedLine { LedgerAccountId = cash.Id, CreditAmount = 10m });
+
+        var result = await new AccountingLedgerReadModelService(setup.Db).GetMoneyPositionAsync(
+            scope,
+            new MoneyPositionQuery { From = new DateOnly(2026, 8, 1), To = new DateOnly(2026, 8, 31) });
+
+        result.TotalCashOnHand.Should().Be(110m);
+        result.TenantDepositsHeld.Should().Be(30m);
+        result.CashAfterTenantDeposits.Should().Be(80m);
+        result.RentStillOwed.Should().Be(0m);
+        result.BookEquity.Should().Be(80m);
+        result.CashReceived.Should().Be(130m);
+        result.CashPaid.Should().Be(20m);
+        result.NetCashMovement.Should().Be(110m);
+        result.ProfitOrLoss.Should().Be(80m);
+    }
+
+    [Fact]
+    public async Task SourceJournalsAndJournalDetail_ReturnAuthorizedSourceDocumentLinks()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(1, nameof(SourceJournalsAndJournalDetail_ReturnAuthorizedSourceDocumentLinks));
+        var cash = await AccountAsync(setup, "operating-cash");
+        var income = await AccountAsync(setup, "rental-income");
+        var sourceId = 8_401L;
+        var journal = await new AccountingPostingService(setup.Db).PostAsync(new AccountingProposedEntry
+        {
+            PortfolioId = 1,
+            EffectiveOn = new DateOnly(2026, 8, 10),
+            Currency = "USD",
+            Description = "Source document journal",
+            SourceType = JournalSourceType.TenantCharge,
+            SourceId = sourceId,
+            SourceBusinessKey = $"tenant-charge:{sourceId}",
+            PostingRuleVersion = 1,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = 1,
+            Lines =
+            [
+                new AccountingProposedLine { LedgerAccountId = cash.Id, DebitAmount = 45m },
+                new AccountingProposedLine { LedgerAccountId = income.Id, CreditAmount = 45m },
+            ],
+        });
+        var file = new StoredFile
+        {
+            PortfolioId = 1,
+            FileName = "charge.pdf",
+            FilePath = "test/charge.pdf",
+            ContentType = "application/pdf",
+            FileSize = 100,
+            EntityType = nameof(TenantLedgerEntry),
+            EntityId = sourceId,
+            UploadedAt = DateTime.UtcNow,
+        };
+        setup.Db.StoredFiles.Add(file);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+
+        var service = new AccountingLedgerReadModelService(setup.Db);
+        var sources = await service.GetSourceJournalsAsync(scope, new SourceJournalQuery
+        {
+            SourceType = JournalSourceType.TenantCharge,
+            SourceId = sourceId,
+        });
+        var detail = await service.GetJournalDetailAsync(scope, journal.PublicId);
+
+        sources.Should().ContainSingle().Which.Should().BeEquivalentTo(new
+        {
+            journal.PublicId,
+            TotalDebits = 45m,
+            TotalCredits = 45m,
+            IsReversal = false,
+        });
+        detail.Should().NotBeNull();
+        detail!.DocumentIds.Should().Equal(file.Id);
+    }
+
+    private static async Task<LedgerAccount> AccountAsync(
+        MigratedPostgreSqlTestContext setup,
+        string systemKey) => await setup.Db.LedgerAccounts.SingleAsync(account =>
+            account.PortfolioId == 1 && account.SystemKey == systemKey);
+
+    private static async Task PostAsync(
+        MigratedPostgreSqlTestContext setup,
+        long sourceId,
+        DateOnly effectiveOn,
+        params AccountingProposedLine[] lines)
+    {
+        await new AccountingPostingService(setup.Db).PostAsync(new AccountingProposedEntry
+        {
+            PortfolioId = 1,
+            EffectiveOn = effectiveOn,
+            Currency = "USD",
+            Description = $"Read model {sourceId}",
+            SourceType = JournalSourceType.OpeningBalance,
+            SourceId = sourceId,
+            SourceBusinessKey = $"read-model:{sourceId}",
+            PostingRuleVersion = 1,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = 1,
+            Lines = lines,
+        });
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
     }
 
     private sealed class SqlCommandCounter : DbCommandInterceptor
