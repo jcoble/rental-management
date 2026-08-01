@@ -12,6 +12,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
@@ -107,6 +108,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         await db.SaveChangesAsync();
         _portfolioId = property.PortfolioId;
         _propertyId = property.Id;
+        await new ChartOfAccountsSeedService(db).SeedAsync(_portfolioId);
+        await db.SaveChangesAsync();
     }
 
     public async Task DisposeAsync()

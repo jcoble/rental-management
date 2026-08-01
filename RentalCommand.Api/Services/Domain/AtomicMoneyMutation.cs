@@ -9,6 +9,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Money;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -203,6 +204,7 @@ public sealed class AtomicMoneyMutationHandler
                     entity.PropertyId, entity.UnitId, entity.WorkOrderId, ct))
                 return Missing();
         }
+        var previousStatus = entity?.Status;
 
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
@@ -211,6 +213,8 @@ public sealed class AtomicMoneyMutationHandler
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Deleted,
                 $"Expense {entity.Id} deleted"));
             await attempt.FlushBusinessAsync(ct);
+            await MoneyAccountingPosting.ReverseExpenseJournalsAsync(
+                db, attempt, entity, command.ActorUserId, ct);
             StageDataUpdate(attempt, command, nameof(Expense), entity.Id, businessNowUtc, deleted: true);
             return Applied(entity.Id);
         }
@@ -316,6 +320,20 @@ public sealed class AtomicMoneyMutationHandler
         }
 
         await attempt.FlushBusinessAsync(ct);
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+                db, attempt, entity!, command.ActorUserId, ct);
+        }
+        else if (!await MoneyAccountingPosting.CorrectExpenseAsync(
+                     db, attempt, entity!, command.ActorUserId, ct)
+                 && previousStatus is ExpenseStatus.Pending or ExpenseStatus.Approved
+                 && entity!.Status == ExpenseStatus.Paid)
+        {
+            await MoneyAccountingPosting.PostBillPaymentAsync(
+                db, attempt, entity, entity.Id, $"bill-payment:expense:{entity.Id}",
+                command.ActorUserId, ct);
+        }
         var responseJson = await SnapshotExpenseAsync(entity!.Id, command.PortfolioId, db, ct);
         StageDataUpdate(
             attempt, command, nameof(Expense), entity.Id, businessNowUtc, responseJson: responseJson);
@@ -482,6 +500,27 @@ public sealed class AtomicMoneyMutationHandler
                 await attempt.FlushBusinessAsync(ct);
             }
 
+            // The effective row includes the latest correction.  Build a detached posting
+            // snapshot so a corrected payment uses its corrected principal, interest, escrow,
+            // and total rather than the original scheduled split.
+            var postingPayment = new LoanPayment
+            {
+                Id = payment.Id,
+                PortfolioId = payment.PortfolioId,
+                LoanId = payment.LoanId,
+                DueDate = effective.DueDate,
+                PaidDate = effective.PaidDate,
+                InterestAmount = effective.InterestAmount,
+                PrincipalAmount = effective.PrincipalAmount,
+                EscrowAmount = effective.EscrowAmount,
+                TotalAmount = effective.TotalAmount,
+                BalanceAfter = effective.BalanceAfter,
+                Status = effective.Status,
+                Loan = payment.Loan,
+            };
+            await MoneyAccountingPosting.PostLoanPaymentAsync(
+                db, attempt, postingPayment, command.ActorUserId, ct);
+
             var paymentResponseJson = await SnapshotLoanPaymentAsync(
                 payment.Id, command.PortfolioId, db, ct);
             StageDataUpdate(attempt, command, nameof(LoanPayment), payment.Id, businessNowUtc,
@@ -607,6 +646,8 @@ public sealed class AtomicMoneyMutationHandler
             attempt.BindSemanticAudit(expense, Audit(command, nameof(Expense),
                 AuditLogOperation.Updated, $"Expense {expense.Id} linked to capital asset {asset.Id}", expense.Id));
             await attempt.FlushBusinessAsync(ct);
+            await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                db, attempt, asset, command.ActorUserId, ct);
 
             StageDataUpdate(attempt, command, nameof(CapitalAsset), asset.Id, businessNowUtc);
             var expenseJson = await SnapshotExpenseAsync(expense.Id, command.PortfolioId, db, ct);
@@ -728,6 +769,11 @@ public sealed class AtomicMoneyMutationHandler
         }
 
         await attempt.FlushBusinessAsync(ct);
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            await MoneyAccountingPosting.PostCapitalPurchaseAsync(
+                db, attempt, entity!, command.ActorUserId, ct);
+        }
         StageDataUpdate(attempt, command, nameof(CapitalAsset), entity!.Id, businessNowUtc);
         return Applied(entity.Id);
     }
@@ -889,6 +935,11 @@ public sealed class AtomicMoneyMutationHandler
                 AuditLogOperation.Updated, $"Owner distribution {current.Id} updated"));
         }
         await attempt.FlushBusinessAsync(ct);
+        if (command.Operation == AtomicMoneyOperation.Approve)
+        {
+            await MoneyAccountingPosting.PostOwnerDistributionAsync(
+                db, attempt, entity!, command.ActorUserId, ct);
+        }
         var snapshot = await SnapshotOwnerDistributionAsync(
             entity!.Id, command.PortfolioId, db, ct);
         StageDataUpdate(
