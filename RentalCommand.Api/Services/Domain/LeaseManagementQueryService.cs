@@ -782,9 +782,19 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         join sourceVersion in _db.LegalDocumentSourceVersions.AsNoTracking()
             on new { agreement.PortfolioId, SourceVersionId = agreement.DocumentSourceVersionId }
             equals new { sourceVersion.PortfolioId, SourceVersionId = sourceVersion.Id }
+        from sourceScan in _db.ScanDrafts.AsNoTracking()
+            .Where(draft => draft.PortfolioId == agreement.PortfolioId
+                && draft.TargetEntityType == nameof(LeaseAgreement)
+                && draft.Status == "Confirmed"
+                && draft.ConfirmedEntityId == agreement.Id
+                && draft.SourceStoredFileId != null)
+            .DefaultIfEmpty()
         from sourceFile in _db.StoredFiles.AsNoTracking()
-            .Where(file => file.PortfolioId == sourceVersion.PortfolioId
-                && file.Id == sourceVersion.SourceStoredFileId
+            .Where(file => sourceScan != null
+                && file.PortfolioId == agreement.PortfolioId
+                && file.Id == sourceScan.SourceStoredFileId
+                && file.EntityType == nameof(LeaseAgreement)
+                && file.EntityId == agreement.Id
                 && file.DeletedAt == null)
             .DefaultIfEmpty()
         let sourceAgreementId = agreement.ReplacesAgreementId
@@ -1259,11 +1269,18 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 SignerCount = _db.LeaseAgreementSigners.Count(signer =>
                     signer.PortfolioId == access.PortfolioId
                     && signer.LeaseAgreementId == agreement.Id),
-                HasSourceScan = _db.StoredFiles.Any(file =>
-                    file.PortfolioId == access.PortfolioId
-                    && file.EntityType == nameof(LeaseAgreement)
-                    && file.EntityId == agreement.Id
-                    && file.DeletedAt == null),
+                HasSourceScan = _db.ScanDrafts.Any(draft =>
+                    draft.PortfolioId == access.PortfolioId
+                    && draft.TargetEntityType == nameof(LeaseAgreement)
+                    && draft.Status == "Confirmed"
+                    && draft.ConfirmedEntityId == agreement.Id
+                    && draft.SourceStoredFileId != null
+                    && _db.StoredFiles.Any(file =>
+                        file.PortfolioId == draft.PortfolioId
+                        && file.Id == draft.SourceStoredFileId
+                        && file.EntityType == nameof(LeaseAgreement)
+                        && file.EntityId == agreement.Id
+                        && file.DeletedAt == null)),
                 IssuedArtifact = agreement.IssuedArtifact == null ? null : new LegalArtifactSummaryResponse
                 {
                     LegalDocumentArtifactId = agreement.IssuedArtifact.Id,
