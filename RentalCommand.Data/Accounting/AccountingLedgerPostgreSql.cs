@@ -84,6 +84,30 @@ internal static class AccountingLedgerPostgreSql
                    AND account."PortfolioId" = entry_portfolio_id) THEN
                 RAISE EXCEPTION 'Journal account is outside the journal portfolio.' USING ERRCODE = '23514';
             END IF;
+            IF NEW."PropertyId" IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public."Properties" property
+                 WHERE property."Id" = NEW."PropertyId"
+                   AND property."PortfolioId" = entry_portfolio_id) THEN
+                RAISE EXCEPTION 'Journal property is outside the journal portfolio.' USING ERRCODE = '23514';
+            END IF;
+            IF NEW."UnitId" IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public."Units" unit
+                 WHERE unit."Id" = NEW."UnitId"
+                   AND unit."PortfolioId" = entry_portfolio_id) THEN
+                RAISE EXCEPTION 'Journal unit is outside the journal portfolio.' USING ERRCODE = '23514';
+            END IF;
+            IF NEW."TenantAccountId" IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public."TenantAccounts" tenant_account
+                 WHERE tenant_account."Id" = NEW."TenantAccountId"
+                   AND tenant_account."PortfolioId" = entry_portfolio_id) THEN
+                RAISE EXCEPTION 'Journal tenant account is outside the journal portfolio.' USING ERRCODE = '23514';
+            END IF;
+            IF NEW."OwnerEntityId" IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM public."OwnerEntities" owner_entity
+                 WHERE owner_entity."Id" = NEW."OwnerEntityId"
+                   AND owner_entity."PortfolioId" = entry_portfolio_id) THEN
+                RAISE EXCEPTION 'Journal owner entity is outside the journal portfolio.' USING ERRCODE = '23514';
+            END IF;
             RETURN NEW;
         END;
         $function$;
@@ -178,10 +202,12 @@ internal static class AccountingLedgerPostgreSql
             END IF;
             IF OLD."IsSystem" AND (
                 NEW."AccountType" IS DISTINCT FROM OLD."AccountType" OR
+                NEW."NormalBalance" IS DISTINCT FROM OLD."NormalBalance" OR
                 NEW."SystemKey" IS DISTINCT FROM OLD."SystemKey") THEN
                 RAISE EXCEPTION 'A required system account cannot be retyped or reassigned.' USING ERRCODE = '55000';
             END IF;
-            IF NEW."AccountType" IS DISTINCT FROM OLD."AccountType" AND EXISTS (
+            IF (NEW."AccountType" IS DISTINCT FROM OLD."AccountType" OR
+                NEW."NormalBalance" IS DISTINCT FROM OLD."NormalBalance") AND EXISTS (
                 SELECT 1 FROM public."JournalLines" line
                  WHERE line."LedgerAccountId" = OLD."Id") THEN
                 RAISE EXCEPTION 'An account with posted history cannot be retyped.' USING ERRCODE = '55000';

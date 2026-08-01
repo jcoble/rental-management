@@ -49,10 +49,10 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_JournalEntries_SourceBusinessKey", "length(btrim(\"SourceBusinessKey\")) > 0");
                     table.CheckConstraint("CK_JournalEntries_SourceId", "\"SourceId\" > 0");
                     table.ForeignKey(
-                        name: "FK_JournalEntries_JournalEntries_ReversesJournalEntryId",
-                        column: x => x.ReversesJournalEntryId,
+                        name: "FK_JournalEntries_JournalEntries_ReversesJournalEntryId_Portfo~",
+                        columns: x => new { x.ReversesJournalEntryId, x.PortfolioId },
                         principalTable: "JournalEntries",
-                        principalColumn: "Id",
+                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_JournalEntries_Portfolios_PortfolioId",
@@ -91,10 +91,10 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_LedgerAccounts_Name", "length(btrim(\"Name\")) > 0");
                     table.CheckConstraint("CK_LedgerAccounts_NormalBalance", "\"NormalBalance\" IN ('Debit', 'Credit')");
                     table.ForeignKey(
-                        name: "FK_LedgerAccounts_LedgerAccounts_ParentAccountId",
-                        column: x => x.ParentAccountId,
+                        name: "FK_LedgerAccounts_LedgerAccounts_ParentAccountId_PortfolioId",
+                        columns: x => new { x.ParentAccountId, x.PortfolioId },
                         principalTable: "LedgerAccounts",
-                        principalColumn: "Id",
+                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_LedgerAccounts_Portfolios_PortfolioId",
@@ -133,9 +133,9 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_AccountingConversionReconciliations_PostingRuleVersion", "\"PostingRuleVersion\" > 0");
                     table.ForeignKey(
                         name: "FK_AccountingConversionReconciliations_JournalEntries_Approved~",
-                        column: x => x.ApprovedOpeningBalanceJournalEntryId,
+                        columns: x => new { x.ApprovedOpeningBalanceJournalEntryId, x.PortfolioId },
                         principalTable: "JournalEntries",
-                        principalColumn: "Id",
+                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_AccountingConversionReconciliations_Portfolios_PortfolioId",
@@ -278,7 +278,7 @@ namespace RentalCommand.Data.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_AccountingConversionReconciliations_ApprovedOpeningBalanceJ~",
                 table: "AccountingConversionReconciliations",
-                column: "ApprovedOpeningBalanceJournalEntryId");
+                columns: new[] { "ApprovedOpeningBalanceJournalEntryId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_AccountingConversionReconciliations_PortfolioId_IsApproved",
@@ -324,9 +324,9 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
-                name: "IX_JournalEntries_ReversesJournalEntryId",
+                name: "IX_JournalEntries_ReversesJournalEntryId_PortfolioId",
                 table: "JournalEntries",
-                column: "ReversesJournalEntryId");
+                columns: new[] { "ReversesJournalEntryId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_JournalLines_JournalEntryId_Id",
@@ -359,9 +359,9 @@ namespace RentalCommand.Data.Migrations
                 column: "UnitId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_LedgerAccounts_ParentAccountId",
+                name: "IX_LedgerAccounts_ParentAccountId_PortfolioId",
                 table: "LedgerAccounts",
-                column: "ParentAccountId");
+                columns: new[] { "ParentAccountId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LedgerAccounts_PortfolioId_Code",
