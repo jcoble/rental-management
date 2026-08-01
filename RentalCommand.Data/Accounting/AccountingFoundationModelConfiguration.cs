@@ -31,7 +31,9 @@ internal static class AccountingFoundationModelConfiguration
             entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.ParentAccount).WithMany(e => e.ChildAccounts)
-                .HasForeignKey(e => e.ParentAccountId).OnDelete(DeleteBehavior.Restrict);
+                .HasForeignKey(e => new { e.ParentAccountId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.ToTable(table =>
             {
                 table.HasCheckConstraint("CK_LedgerAccounts_Code", "length(btrim(\"Code\")) > 0");
@@ -65,7 +67,9 @@ internal static class AccountingFoundationModelConfiguration
             entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.ReversedJournalEntry).WithMany(e => e.ReversalEntries)
-                .HasForeignKey(e => e.ReversesJournalEntryId).OnDelete(DeleteBehavior.Restrict);
+                .HasForeignKey(e => new { e.ReversesJournalEntryId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.ToTable(table =>
             {
                 table.HasCheckConstraint("CK_JournalEntries_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
@@ -162,7 +166,9 @@ internal static class AccountingFoundationModelConfiguration
             entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.ApprovedOpeningBalanceJournalEntry).WithMany()
-                .HasForeignKey(e => e.ApprovedOpeningBalanceJournalEntryId).OnDelete(DeleteBehavior.Restrict);
+                .HasForeignKey(e => new { e.ApprovedOpeningBalanceJournalEntryId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.ToTable(table =>
             {
                 table.HasCheckConstraint("CK_AccountingConversionReconciliations_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");

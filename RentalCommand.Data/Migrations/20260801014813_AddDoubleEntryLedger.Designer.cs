@@ -13,7 +13,7 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    [Migration("20260801012310_AddDoubleEntryLedger")]
+    [Migration("20260801014813_AddDoubleEntryLedger")]
     partial class AddDoubleEntryLedger
     {
         /// <inheritdoc />
@@ -285,7 +285,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ApprovedOpeningBalanceJournalEntryId");
+                    b.HasIndex("ApprovedOpeningBalanceJournalEntryId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "IsApproved");
 
@@ -3221,12 +3221,10 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("Id", "PortfolioId");
-
                     b.HasIndex("PublicId")
                         .IsUnique();
 
-                    b.HasIndex("ReversesJournalEntryId");
+                    b.HasIndex("ReversesJournalEntryId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "EffectiveOn", "Id");
 
@@ -4304,10 +4302,10 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ParentAccountId");
-
                     b.HasIndex("PublicId")
                         .IsUnique();
+
+                    b.HasIndex("ParentAccountId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "Code")
                         .IsUnique();
@@ -11061,16 +11059,17 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.AccountingConversionReconciliation", b =>
                 {
-                    b.HasOne("RentalCommand.Core.Entities.JournalEntry", "ApprovedOpeningBalanceJournalEntry")
-                        .WithMany()
-                        .HasForeignKey("ApprovedOpeningBalanceJournalEntryId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
                         .HasForeignKey("PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.JournalEntry", "ApprovedOpeningBalanceJournalEntry")
+                        .WithMany()
+                        .HasForeignKey("ApprovedOpeningBalanceJournalEntryId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("ApprovedOpeningBalanceJournalEntry");
 
@@ -11938,7 +11937,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasOne("RentalCommand.Core.Entities.JournalEntry", "ReversedJournalEntry")
                         .WithMany("ReversalEntries")
-                        .HasForeignKey("ReversesJournalEntryId")
+                        .HasForeignKey("ReversesJournalEntryId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Portfolio");
@@ -12406,16 +12406,17 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.LedgerAccount", b =>
                 {
-                    b.HasOne("RentalCommand.Core.Entities.LedgerAccount", "ParentAccount")
-                        .WithMany("ChildAccounts")
-                        .HasForeignKey("ParentAccountId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany()
                         .HasForeignKey("PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.LedgerAccount", "ParentAccount")
+                        .WithMany("ChildAccounts")
+                        .HasForeignKey("ParentAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("ParentAccount");
 
