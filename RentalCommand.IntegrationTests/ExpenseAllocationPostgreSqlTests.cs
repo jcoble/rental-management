@@ -502,6 +502,52 @@ public sealed class ExpenseAllocationPostgreSqlTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task EditingOnlyExpenseDescriptionAndNotesDoesNotRepostItsJournal()
+    {
+        SkipIfNoDocker();
+        var expenseId = await CreateAsync("posted-expense-description-edit-create", new CreateExpenseRequest
+        {
+            OperationalScope = ExpenseOperationalScope.Unit,
+            UnitId = _unitId,
+            Description = "Posted expense description",
+            Notes = "Original expense notes",
+            Amount = 100m,
+            Status = ExpenseStatus.Paid,
+            PaidAt = _now,
+            IncurredAt = _now,
+        });
+
+        var command = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 1),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Expense,
+            AtomicMoneyOperation.Update,
+            expenseId,
+            "posted-expense-description-edit",
+            new UpdateExpenseRequest
+            {
+                Description = "Updated expense description",
+                Notes = "Updated expense notes",
+            },
+            _now.AddMinutes(1));
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec);
+
+        outcome.Value.Found.Should().BeTrue();
+        await using var verify = NewContext();
+        var entries = await verify.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.ExpensePayment
+                && entry.Lines.Any(line => line.SourceLineId == expenseId))
+            .Include(entry => entry.Lines)
+            .ToListAsync();
+        entries.Should().ContainSingle();
+        entries[0].ReversesJournalEntryId.Should().BeNull();
+        entries[0].Lines.Should().Contain(line => line.CreditAmount == 100m);
+    }
+
+    [SkippableFact]
     public async Task EditingAPaidExpenseReversesItsJournalAndPostsTheReplacementInsideTheSameCommand()
     {
         SkipIfNoDocker();
