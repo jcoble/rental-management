@@ -136,6 +136,59 @@ public sealed class AccountingFoundationPostgreSqlTests
     }
 
     [Fact]
+    public async Task PropertyWithJournalHistory_CannotBeDeletedAndReportsRestrictReason()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Journal history property",
+            AddressLine1 = "100 Ledger Lane",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Properties.Add(property);
+        await setup.Db.SaveChangesAsync();
+
+        var seed = new ChartOfAccountsSeedService(setup.Db);
+        await seed.SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+        var accountIds = await setup.Db.LedgerAccounts
+            .Where(account => account.PortfolioId == 1)
+            .OrderBy(account => account.Code)
+            .Select(account => account.Id)
+            .Take(2)
+            .ToArrayAsync();
+        var proposal = Proposal(accountIds[0], accountIds[1], sourceId: 7010);
+        proposal.Lines =
+        [
+            new AccountingProposedLine
+            {
+                LedgerAccountId = accountIds[0],
+                DebitAmount = 100m,
+                PropertyId = property.Id,
+            },
+            new AccountingProposedLine
+            {
+                LedgerAccountId = accountIds[1],
+                CreditAmount = 100m,
+                PropertyId = property.Id,
+            },
+        ];
+        await new AccountingPostingService(setup.Db).PostAsync(proposal);
+        await setup.Db.SaveChangesAsync();
+
+        await FluentActions.Invoking(() => setup.Db.Database.ExecuteSqlInterpolatedAsync(
+                $"DELETE FROM \"Properties\" WHERE \"Id\" = {property.Id}"))
+            .Should().ThrowAsync<PostgresException>()
+            .WithMessage("*FK_JournalLines_Properties_RestrictHistory*");
+    }
+
+    [Fact]
     public async Task CrossPortfolioAccount_IsDeniedWithoutExistenceLeakage()
     {
         await using var setup = await _fixture.CreateContextAsync();
