@@ -16,6 +16,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
@@ -97,6 +98,10 @@ builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimS
     RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
 builder.Services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
     RentalCommand.Data.Accounting.AccountingConnectionClaimStore>();
+builder.Services.AddScoped<AccountingPostingService>();
+builder.Services.AddScoped<ChartOfAccountsSeedService>();
+builder.Services.AddScoped<AccountingConversionFramework>();
+builder.Services.AddScoped<AccountingConversionReconciliationService>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the

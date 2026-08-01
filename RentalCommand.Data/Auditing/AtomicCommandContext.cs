@@ -30,6 +30,7 @@ internal sealed class AtomicCommandContext : IAtomicCommandContext
 
     public bool IsActive => _auditScope.IsActive;
     public Guid AttemptId { get; private set; }
+    public Guid AtomicReceiptId { get; private set; }
     public DateTime BusinessNowUtc => _timeProvider.GetUtcNow().UtcDateTime;
     internal AtomicAuditScope AuditScope => _auditScope;
     internal bool Owns(RentalCommandDbContext db) => ReferenceEquals(_db, db);
@@ -42,11 +43,28 @@ internal sealed class AtomicCommandContext : IAtomicCommandContext
         }
 
         AttemptId = attemptId;
+        AtomicReceiptId = Guid.Empty;
+    }
+
+    internal void BindReceipt(Guid receiptId)
+    {
+        if (AttemptId == Guid.Empty)
+        {
+            throw new AtomicArchitectureException("The atomic receipt cannot be bound outside an active attempt.");
+        }
+
+        if (receiptId == Guid.Empty)
+        {
+            throw new ArgumentException("The atomic receipt identifier is required.", nameof(receiptId));
+        }
+
+        AtomicReceiptId = receiptId;
     }
 
     internal void EndAttempt()
     {
         AttemptId = Guid.Empty;
+        AtomicReceiptId = Guid.Empty;
         _outbox.Clear();
         _outboxMaterialized = false;
     }

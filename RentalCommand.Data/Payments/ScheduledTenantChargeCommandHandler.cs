@@ -37,6 +37,7 @@ public sealed class ApplyScheduledRentChargeBatchHandler
                 command.BatchSize,
                 command.BusinessNowUtc,
                 ct);
+        await ScheduledTenantChargeCompanionStaging.PostScheduledChargesAsync(_db, context, rent, ct);
 
         await ScheduledTenantChargeCompanionStaging.StageChargeCompanionsAsync(
             context,
@@ -97,6 +98,7 @@ public sealed class ApplyScheduledLateFeeChargeBatchHandler
                 command.StateLateFeeCapsJson,
                 command.BusinessNowUtc,
                 ct);
+        await ScheduledTenantChargeCompanionStaging.PostScheduledChargesAsync(_db, context, lateFees, ct);
 
         await ScheduledTenantChargeCompanionStaging.StageChargeCompanionsAsync(
             context,
@@ -127,10 +129,45 @@ public sealed class ApplyScheduledLateFeeChargeBatchHandler
             .Take(1)
             .ToListAsync(ct);
     }
+
 }
 
 internal static class ScheduledTenantChargeCompanionStaging
 {
+    public static async Task PostScheduledChargesAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        IReadOnlyCollection<TenantMoneyScheduledCharge> scheduledCharges,
+        CancellationToken ct)
+    {
+        if (scheduledCharges.Count == 0)
+            return;
+
+        var portfolioId = scheduledCharges.First().PortfolioId;
+        if (scheduledCharges.Any(charge => charge.PortfolioId != portfolioId))
+            throw new InvalidOperationException("Scheduled tenant charges must belong to one portfolio.");
+        var ids = scheduledCharges.Select(charge => charge.LedgerEntryId).ToArray();
+        var entries = await db.Set<TenantLedgerEntry>()
+            .Where(entry => entry.PortfolioId == portfolioId && ids.Contains(entry.Id))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync(ct);
+        foreach (var entry in entries)
+        {
+            await TenantAccountingPosting.PostTenantChargeAsync(
+                db,
+                context,
+                entry,
+                entry.CreatedByUserId,
+                entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                    ? "late-fee-income"
+                    : "rental-income",
+                ct,
+                actorLabel: entry.CreatedByUserId > 0
+                    ? null
+                    : "system:scheduled-tenant-billing");
+        }
+    }
+
     public static async Task StageChargeCompanionsAsync(
         IAtomicCommandContext context,
         IReadOnlyCollection<TenantMoneyScheduledCharge> charges,

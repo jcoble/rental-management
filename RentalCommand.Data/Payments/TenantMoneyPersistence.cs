@@ -1226,7 +1226,8 @@ internal static class TenantMoneyPersistence
         string businessKeyPrefix,
         int createdByUserId,
         DateTime allocatedAtUtc,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool spillToOtherCharges = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tenantAccountId);
@@ -1261,6 +1262,7 @@ internal static class TenantMoneyPersistence
             ), eligible AS (
                 SELECT candidates."TenantLedgerEntryId",
                        candidates."OpenAmount",
+                       candidates.allocation_rank,
                        COALESCE(
                            SUM(candidates."OpenAmount") OVER (
                                ORDER BY candidates.allocation_rank,
@@ -1280,6 +1282,7 @@ internal static class TenantMoneyPersistence
                        {createdByUserId}
                 FROM eligible
                 WHERE eligible.consumed_before < {availableAmount}
+                  AND ({spillToOtherCharges} OR eligible.allocation_rank = 0)
                 ORDER BY eligible.consumed_before, eligible."TenantLedgerEntryId"
                 ON CONFLICT ("TenantAccountId", "BusinessKey") DO NOTHING
                 RETURNING "Amount"

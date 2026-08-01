@@ -11,6 +11,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Payments;
 using RentalCommand.TestCommon;
@@ -36,6 +37,8 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
         var failure = new OutboxFailureInterceptor();
         var commands = new CommandCaptureInterceptor();
         await using var setup = await _fixture.CreateContextAsync([failure, commands]);
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
         var scope = setup.Db.SeedAdministratorScope(
             1,
             nameof(Recovery_ValidatesControl_Authorizes_RollsBack_Replays_AndNeverInventsTenantPayments));
@@ -124,6 +127,21 @@ public sealed class OpeningSecurityDepositRecoveryPostgreSqlTests
             && row.EffectiveOn == OpeningDate
             && row.TenantLedgerEntryId == null);
         exactRows.Select(row => row.Amount).Should().BeEquivalentTo([1_000m, 1_500m]);
+
+        var openingJournals = await setup.Db.JournalEntries.AsNoTracking()
+            .Include(entry => entry.Lines)
+            .ThenInclude(line => line.LedgerAccount)
+            .Where(entry => entry.PortfolioId == 1
+                && entry.SourceType == JournalSourceType.SecurityDepositReceipt)
+            .OrderBy(entry => entry.SourceId)
+            .ToListAsync();
+        openingJournals.Should().HaveCount(2);
+        openingJournals.Should().OnlyContain(entry => entry.Lines.Count == 2);
+        openingJournals.SelectMany(entry => entry.Lines).Should().OnlyContain(line =>
+            line.LedgerAccount!.SystemKey == "security-deposit-trust-cash"
+                || line.LedgerAccount.SystemKey == "tenant-security-deposits-payable");
+        openingJournals.SelectMany(entry => entry.Lines)
+            .Should().NotContain(line => line.LedgerAccount!.AccountType == AccountType.Income);
 
         var projected = await setup.Db.SecurityDepositBalanceProjections.AsNoTracking()
             .Where(row => row.PortfolioId == 1)

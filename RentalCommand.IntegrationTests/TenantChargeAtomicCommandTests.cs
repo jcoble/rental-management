@@ -12,7 +12,9 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -126,6 +128,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantAccountBalanceViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(SecurityDepositBalanceViewSql.Create);
@@ -165,7 +168,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         charge.Currency.Should().Be("USD");
         (await db.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType
-            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2,
+            "the business mutation and its journal entry are audited together");
         var outboxKey = OutboxIdempotency.Create("tenant-money", command.DeliveryIdempotencyKey);
         (await db.OutboxMessages.CountAsync(row =>
             row.PortfolioId == scenario.PortfolioId
@@ -1208,7 +1212,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             .HeldBalance.Should().Be(0m);
         (await db.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType
-            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2,
+            "the business mutation and its journal entry are audited together");
         (await db.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType
             && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
@@ -1239,6 +1244,8 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             UpdatedAt = now,
         };
         db.AddRange(user, portfolio);
+        await db.SaveChangesAsync();
+        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
         await db.SaveChangesAsync();
 
         var property = new Property

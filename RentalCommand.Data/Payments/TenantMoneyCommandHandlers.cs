@@ -9,6 +9,7 @@ using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Payments;
 
@@ -44,6 +45,14 @@ public sealed class RecordTenantReceiptHandler
                             && balance.TenantLedgerEntryId == command.TargetChargeEntryId.Value
                             && balance.OpenAmount > 0)
                         .Select(balance => (decimal?)balance.OpenAmount)
+                        .SingleOrDefault(),
+                TargetEntryType = command.TargetChargeEntryId == null
+                    ? (TenantLedgerEntryType?)null
+                    : _db.Set<TenantLedgerEntry>()
+                        .Where(entry => entry.PortfolioId == command.PortfolioId
+                            && entry.TenantAccountId == row.Id
+                            && entry.Id == command.TargetChargeEntryId.Value)
+                        .Select(entry => (TenantLedgerEntryType?)entry.EntryType)
                         .SingleOrDefault(),
                 ManualProviderObjectWasFullyRefunded =
                     !string.IsNullOrWhiteSpace(command.ExternalReference)
@@ -106,6 +115,12 @@ public sealed class RecordTenantReceiptHandler
         };
         _db.Add(receipt);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantReceiptAsync(
+            _db, context, receipt, command.ActorUserId,
+            account.TargetEntryType == TenantLedgerEntryType.DepositCharge
+                ? "security-deposit-trust-cash"
+                : "operating-cash",
+            ct);
 
         var allocations = command.AllocateOldestCharges
             ? await TenantMoneyCommandSupport.AllocateOldestAsync(
@@ -569,6 +584,8 @@ public sealed class PostTenantChargeHandler
             command.BusinessKey, times.WallClockUtc, sourceStoredFileId: command.SourceStoredFileId);
         _db.Add(charge);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantChargeAsync(
+            _db, context, charge, command.ActorUserId, ct: ct);
 
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(TenantLedgerEntry), charge.Id,
@@ -618,6 +635,7 @@ public sealed class ReverseTenantChargeHandler
             {
                 account.Id,
                 EntryId = entry.Id,
+                entry.EntryType,
                 entry.Amount,
                 entry.Currency,
                 ReversedAmount = _db.Set<TenantLedgerEntry>()
@@ -647,6 +665,16 @@ public sealed class ReverseTenantChargeHandler
         reversal.ReversesEntryId = target.EntryId;
         _db.Add(reversal);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantReversalAsync(
+            _db, context, reversal, new TenantLedgerEntry
+            {
+                Id = target.EntryId,
+                PortfolioId = command.PortfolioId,
+                TenantAccountId = command.TenantAccountId,
+                EntryType = target.EntryType,
+                Currency = target.Currency,
+                Amount = target.Amount,
+            }, command.ActorUserId, ct);
 
         var reversedAllocations = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
@@ -709,6 +737,8 @@ public sealed class PostTenantCreditHandler
             sourceStoredFileId: command.SourceStoredFileId);
         _db.Add(credit);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantConcessionAsync(
+            _db, context, credit, command.ActorUserId, ct);
 
         var allocations = command.AllocateOldestCharges
             ? await TenantMoneyCommandSupport.AllocateOldestAsync(
@@ -772,6 +802,8 @@ public sealed class PostTenantAdjustmentHandler
             sourceStoredFileId: command.SourceStoredFileId);
         _db.Add(adjustment);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantConcessionAsync(
+            _db, context, adjustment, command.ActorUserId, ct);
 
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(TenantLedgerEntry), adjustment.Id,
@@ -891,6 +923,16 @@ public sealed class ReverseTenantLedgerEntryHandler
         reversal.ReversesEntryId = target.EntryId;
         _db.Add(reversal);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantReversalAsync(
+            _db, context, reversal, new TenantLedgerEntry
+            {
+                Id = target.EntryId,
+                PortfolioId = command.PortfolioId,
+                TenantAccountId = command.TenantAccountId,
+                EntryType = target.EntryType,
+                Currency = target.Currency,
+                Amount = target.Amount,
+            }, command.ActorUserId, ct);
 
         var reversedAllocations = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
@@ -1077,6 +1119,8 @@ public sealed class RefundTenantPaymentHandler
             sourceStoredFileId: command.SourceStoredFileId);
         _db.Add(refund);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantRefundAsync(
+            _db, context, refund, target.EntryId, command.ActorUserId, ct);
         var compensation = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
             command.PortfolioId, command.TenantAccountId, target.EntryId,
@@ -1151,6 +1195,43 @@ public sealed class RecoverHistoricalRentChargeHandler
             ct);
         if (!recovery.IsValid)
             throw new InvalidOperationException(recovery.ValidationError);
+
+        var recoveryEntries = await _db.Set<TenantLedgerEntry>()
+            .Where(entry => entry.PortfolioId == command.PortfolioId
+                && (entry.Id == recovery.ReversalEntryId
+                    || entry.Id == recovery.ReplacementRentChargeEntryId))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync(ct);
+        var hasOriginalRentJournal = await _db.JournalEntries.AnyAsync(entry =>
+            entry.PortfolioId == command.PortfolioId
+            && entry.SourceType == JournalSourceType.TenantCharge
+            && entry.SourceId == recovery.ReversedRentChargeEntryId, ct);
+        if (hasOriginalRentJournal)
+        {
+            var reversal = recoveryEntries.Single(entry => entry.Id == recovery.ReversalEntryId);
+            var replacement = recoveryEntries.Single(entry =>
+                entry.Id == recovery.ReplacementRentChargeEntryId);
+            await TenantAccountingPosting.PostTenantReversalAsync(
+                _db,
+                context,
+                reversal,
+                new TenantLedgerEntry
+                {
+                    Id = recovery.ReversedRentChargeEntryId,
+                    PortfolioId = command.PortfolioId,
+                    TenantAccountId = command.TenantAccountId,
+                    EntryType = TenantLedgerEntryType.RentCharge,
+                },
+                command.ActorUserId,
+                ct);
+            await TenantAccountingPosting.PostTenantChargeAsync(
+                _db,
+                context,
+                replacement,
+                command.ActorUserId,
+                incomeSystemKey: "rental-income",
+                ct);
+        }
 
         var reference = command.FinancialReference.Trim();
         context.UseDatabaseWallClockForAudit(times.EffectiveNowUtc);
@@ -1278,6 +1359,62 @@ public sealed class RecoverLateFeeChargesHandler
             ct);
         if (!recovery.IsValid)
             throw new InvalidOperationException(recovery.ValidationError);
+
+        var referencePrefix = $"late-fee-recovery:{reference}:";
+        var recoveryEntries = await _db.Set<TenantLedgerEntry>()
+            .Where(entry => entry.PortfolioId == command.PortfolioId
+                && entry.BusinessKey.StartsWith(referencePrefix)
+                && (entry.EntryType == TenantLedgerEntryType.Reversal
+                    || entry.EntryType == TenantLedgerEntryType.LateFeeCharge))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync(ct);
+        var sourceIds = recoveryEntries
+            .Where(entry => entry.EntryType == TenantLedgerEntryType.Reversal)
+            .Select(entry => entry.ReversesEntryId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+        var sourceEntries = await _db.Set<TenantLedgerEntry>()
+            .Where(entry => entry.PortfolioId == command.PortfolioId && sourceIds.Contains(entry.Id))
+            .ToDictionaryAsync(entry => entry.Id, ct);
+        var sourceJournalIds = await _db.JournalEntries
+            .Where(entry => entry.PortfolioId == command.PortfolioId
+                && entry.SourceType == JournalSourceType.TenantCharge
+                && sourceIds.Contains(entry.SourceId))
+            .Select(entry => entry.SourceId)
+            .ToHashSetAsync(ct);
+        foreach (var entry in recoveryEntries.Where(entry => entry.EntryType == TenantLedgerEntryType.Reversal))
+        {
+            if (entry.ReversesEntryId is not { } sourceId
+                || !sourceEntries.TryGetValue(sourceId, out var sourceEntry))
+            {
+                continue;
+            }
+
+            if (!sourceJournalIds.Contains(sourceId))
+                continue;
+
+            await TenantAccountingPosting.PostTenantReversalAsync(
+                _db, context, entry, sourceEntry, command.ActorUserId, ct);
+        }
+
+        foreach (var entry in recoveryEntries.Where(entry => entry.EntryType == TenantLedgerEntryType.LateFeeCharge))
+        {
+            var suffixIndex = entry.BusinessKey.LastIndexOf(':');
+            if (suffixIndex < 0
+                || !long.TryParse(entry.BusinessKey[(suffixIndex + 1)..], out var sourceId)
+                || !sourceJournalIds.Contains(sourceId))
+                continue;
+
+            await TenantAccountingPosting.PostTenantChargeAsync(
+                _db,
+                context,
+                entry,
+                command.ActorUserId,
+                incomeSystemKey: "late-fee-income",
+                ct);
+        }
 
         if (recovery.ReversedChargeCount > 0 || recovery.ReplacementChargeCount > 0)
         {
@@ -1501,6 +1638,9 @@ public sealed class FundSecurityDepositHandler
             command.BusinessKey, businessNowUtc, receipt.Id, command.SourceStoredFileId);
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantReceiptAsync(
+            _db, context, receipt, command.ActorUserId,
+            "security-deposit-trust-cash", ct);
         TenantMoneyCommandSupport.StageMutation(context, command, businessNowUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit funded",
             new
@@ -1580,6 +1720,8 @@ public sealed class DeductSecurityDepositHandler
             command.BusinessKey, times.WallClockUtc, credit.Id, command.SourceStoredFileId);
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostSecurityDepositApplicationAsync(
+            _db, context, deposit, command.ActorUserId, ct);
         TenantMoneyCommandSupport.StageMutation(context, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit deduction posted",
             new { deposit.Amount, command.Reason, ChargeEntryId = charge.Id, CreditEntryId = credit.Id });
@@ -1629,6 +1771,8 @@ public sealed class RefundSecurityDepositHandler
             payoutExternalReference: TenantMoneyCommandSupport.Clean(command.ExternalReference));
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostSecurityDepositRefundAsync(
+            _db, context, deposit, command.ActorUserId, ct);
         TenantMoneyCommandSupport.StageMutation(context, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit refund posted",
             new { deposit.Amount, deposit.EffectiveOn, deposit.PayoutExternalReference });
@@ -1776,6 +1920,18 @@ public sealed class ReverseSecurityDepositEntryHandler
         depositReversal.ReversesEntryId = target.EntryId;
         _db.Add(depositReversal);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostSecurityDepositReversalAsync(
+            _db, context, depositReversal, new SecurityDepositEntry
+            {
+                Id = target.EntryId,
+                PortfolioId = command.PortfolioId,
+                SecurityDepositAccountId = command.SecurityDepositAccountId,
+                EntryType = target.EntryType,
+                Direction = target.Direction,
+                Amount = target.Amount,
+                Currency = target.Currency,
+                TenantLedgerEntryId = target.TenantLedgerEntryId,
+            }, command.ActorUserId, ct);
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(SecurityDepositEntry),
             depositReversal.Id, "Security deposit entry reversed", new

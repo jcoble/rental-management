@@ -773,11 +773,18 @@ internal static class ProviderPaymentHandlerSupport
         };
         db.Add(receipt);
         await context.FlushBusinessAsync(ct);
+        await TenantAccountingPosting.PostTenantReceiptAsync(
+            db,
+            context,
+            receipt,
+            paymentAttempt.CreatedByUserId,
+            cashSystemKey: "undeposited-funds",
+            ct);
         var allocation = await TenantMoneyPersistence.AllocateTargetChargeAsync(db, context,
             paymentAttempt.PortfolioId,
             paymentAttempt.TenantAccountId, receipt.Id, target.ChargeLedgerEntryId, receipt.Amount,
             $"provider-receipt:{paymentAttempt.Id}:allocation", paymentAttempt.CreatedByUserId,
-            times.WallClockUtc, ct);
+            times.WallClockUtc, ct, spillToOtherCharges: false);
         var expectedAllocation = Math.Min(target.OpenAmount, receipt.Amount);
         if (allocation.AllocatedAmount != expectedAllocation
             || allocation.AllocationCount != (expectedAllocation > 0m ? 1 : 0))

@@ -24,6 +24,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Leasing;
 
 // QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
@@ -383,6 +384,10 @@ builder.Services.AddHostedService<EntityChangeListener>();
 
 // --- Domain feature services (per-entity scoped CRUD) ---
 builder.Services.AddDomainServices();
+builder.Services.AddScoped<AccountingPostingService>();
+builder.Services.AddScoped<ChartOfAccountsSeedService>();
+builder.Services.AddScoped<AccountingConversionFramework>();
+builder.Services.AddScoped<AccountingConversionReconciliationService>();
 
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();

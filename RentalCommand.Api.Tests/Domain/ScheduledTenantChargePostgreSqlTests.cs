@@ -11,6 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data.Security;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.TestCommon;
 
@@ -41,6 +42,8 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(PortfolioId);
+        await _ctx.Db.SaveChangesAsync();
         _services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
             _ctx.ConnectionString);
         _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
