@@ -282,6 +282,37 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RentBatch_PostsTwentyOccurrencesWithBoundedJournalPostingReads()
+    {
+        for (var index = 0; index < 20; index++)
+        {
+            SeedInitialAgreementReadyForJanuaryRent();
+        }
+
+        var counter = new ScheduledJournalPostingReadCounter();
+        await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
+            _ctx.ConnectionString,
+            [counter]);
+        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
+        counter.Reset();
+
+        var result = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "twenty-occurrence-journal-read-bound"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("b20da7dc-5023-4dc2-a667-d1d1a82c41bf"),
+                SeededAtUtc,
+                20),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(20);
+        counter.ReadCount.Should().BeLessThanOrEqualTo(3,
+            "system accounts, existing posting identities, and account/currency validation must be prefetched once per batch");
+        Console.WriteLine($"scheduled_journal_posting_reads={counter.ReadCount}");
+    }
+
+    [Fact]
     public async Task LateFeeRecovery_ReversesAllocatedWrongFee_ReplacesAndReplaysExactResult()
     {
         var scope = _ctx.Db.SeedAdministratorScope(
@@ -613,7 +644,7 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             PortfolioId = PortfolioId,
             SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
             BusinessKey = $"scheduled-rent-engine-source:{Guid.NewGuid():N}",
-            RendererKey = "test-lease",
+            RendererKey = $"test-lease-{Guid.NewGuid():N}",
             RendererVersion = 1,
             SnapshotPayload = "{}",
             CreatedAtUtc = SeededAtUtc,
@@ -1096,6 +1127,41 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
                     StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Injected late-fee audit failure.");
+            }
+        }
+    }
+
+    private sealed class ScheduledJournalPostingReadCounter : DbCommandInterceptor
+    {
+        public int ReadCount { get; private set; }
+
+        public void Reset() => ReadCount = 0;
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            Count(command);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Count(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private void Count(DbCommand command)
+        {
+            if (command.CommandText.Contains("FROM \"LedgerAccounts\"", StringComparison.Ordinal)
+                || command.CommandText.Contains("FROM \"JournalEntries\"", StringComparison.Ordinal))
+            {
+                ReadCount++;
             }
         }
     }
