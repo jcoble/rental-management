@@ -2271,7 +2271,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ReviewDisposition = LeaseScanReviewDisposition.NeedsSignatures,
         };
 
-        var outcome = await UnitOfWork.ExecuteAsync(
+        var outcome = await ExecuteAtomicAsync(
             ScanConfirmationCommandIdentity.Create(
                 _portfolioId, source.DraftId, "lease-needs-signatures"),
             LeaseCommand(source, target),
