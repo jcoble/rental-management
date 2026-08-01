@@ -13,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Payments;
 using RentalCommand.Engine.Services;
@@ -710,6 +711,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(user, portfolio);
         await db.SaveChangesAsync();
+        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
+        await db.SaveChangesAsync();
         var accessContext = new WorkspaceAccessContext
         {
             UserId = user.Id, PortfolioId = portfolio.Id,
@@ -831,23 +834,27 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     }
 
     private static TenantPaymentAttempt Attempt(
-        Scenario scenario, string key, string providerObjectId, TenantPaymentAttemptState state) => new()
+        Scenario scenario, string key, string providerObjectId, TenantPaymentAttemptState state)
     {
-        PortfolioId = scenario.PortfolioId,
-        TenantAccountId = scenario.AccountId,
-        Provider = "stripe",
-        ProviderObjectId = providerObjectId,
-        IdempotencyKey = key,
-        AttemptType = TenantPaymentAttemptType.Charge,
-        State = state,
-        Amount = 100m,
-        Currency = "USD",
-        ChargeLedgerEntryId = scenario.ChargeId,
-        PreparedAtUtc = DateTime.UtcNow,
-        SubmittedAtUtc = DateTime.UtcNow,
-        UpdatedAtUtc = DateTime.UtcNow,
-        CreatedByUserId = scenario.UserId,
-    };
+        var preparedAtUtc = DateTime.UtcNow.AddMinutes(-1);
+        return new()
+        {
+            PortfolioId = scenario.PortfolioId,
+            TenantAccountId = scenario.AccountId,
+            Provider = "stripe",
+            ProviderObjectId = providerObjectId,
+            IdempotencyKey = key,
+            AttemptType = TenantPaymentAttemptType.Charge,
+            State = state,
+            Amount = 100m,
+            Currency = "USD",
+            ChargeLedgerEntryId = scenario.ChargeId,
+            PreparedAtUtc = preparedAtUtc,
+            SubmittedAtUtc = preparedAtUtc,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = scenario.UserId,
+        };
+    }
 
     private static ProviderInboxEvent ProviderEvent(
         string eventId,

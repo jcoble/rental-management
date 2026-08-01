@@ -16,6 +16,7 @@ using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
@@ -53,6 +54,8 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(PortfolioId);
+        await _ctx.Db.SaveChangesAsync();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantReceiptSimulationClockTests));
         await FreezeSimulationClockAsync();
         _services = BuildServices(_ctx.ConnectionString, SimulatedEntryAtUtc);
@@ -538,6 +541,24 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         row.SubmittedAtUtc.Should().Be(row.PreparedAtUtc);
         row.SettledAtUtc.Should().Be(row.PreparedAtUtc);
         row.UpdatedAtUtc.Should().Be(row.PreparedAtUtc);
+
+        var depositJournals = await _ctx.Db.JournalEntries.AsNoTracking()
+            .Include(entry => entry.Lines)
+            .ThenInclude(line => line.LedgerAccount)
+            .Where(entry => entry.PortfolioId == PortfolioId
+                && entry.SourceType == JournalSourceType.TenantReceipt
+                && entry.SourceId == outcome.Value.TenantLedgerEntryId)
+            .ToListAsync();
+        depositJournals.Should().ContainSingle();
+        depositJournals[0].Lines.Should().HaveCount(2);
+        depositJournals[0].Lines.Should().ContainSingle(line =>
+            line.DebitAmount == 1_675m
+            && line.LedgerAccount!.SystemKey == "security-deposit-trust-cash");
+        depositJournals[0].Lines.Should().ContainSingle(line =>
+            line.CreditAmount == 1_675m
+            && line.LedgerAccount!.SystemKey == "tenant-accounts-receivable");
+        depositJournals[0].Lines.Should().NotContain(line =>
+            line.LedgerAccount!.AccountType == AccountType.Income);
     }
 
     private static ServiceProvider BuildServices(string connectionString, DateTime utcNow)

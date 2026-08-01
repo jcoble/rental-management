@@ -11,6 +11,7 @@ public interface IAtomicCommandContext
 {
     bool IsActive { get; }
     Guid AttemptId { get; }
+    Guid AtomicReceiptId { get; }
     DateTime BusinessNowUtc { get; }
     Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default);
     Task AcquireLockAsync(string lockNamespace, int aggregateId, CancellationToken ct = default);

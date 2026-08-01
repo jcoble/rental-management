@@ -25,6 +25,7 @@ public sealed class AccountingPostingService
         AccountingProposedEntry proposal,
         CancellationToken ct = default)
     {
+        proposal.Lines = AccountingPostingLineOrdering.Order(proposal.Lines);
         ValidateProposalShape(proposal);
         var digest = ComputeIdempotencyDigest(proposal);
 

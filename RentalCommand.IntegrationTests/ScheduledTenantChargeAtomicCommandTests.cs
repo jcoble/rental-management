@@ -14,6 +14,7 @@ using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Payments;
@@ -1183,6 +1184,9 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         {
             await FreezeAtAsync(frozenAtUtc);
         }
+
+        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
+        await db.SaveChangesAsync();
 
         var user = new ApplicationUser
         {

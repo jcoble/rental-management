@@ -119,6 +119,7 @@ internal sealed class AtomicTransactionRunner
                 row => row.CommandType == identity.CommandType
                     && row.IdempotencyKey == identity.IdempotencyKey,
                 ct);
+            _context.BindReceipt(receipt.Id);
             if (claimed == 0)
             {
                 await handler.AuthorizeReplayAsync(command, _context, ct);

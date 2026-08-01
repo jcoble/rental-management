@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -537,6 +538,8 @@ public sealed class PrepareMoveInHandler
             };
             _db.Add(openingBalance);
             await context.FlushBusinessAsync(ct);
+            await MoneyAccountingPosting.PostTenantOpeningBalanceAsync(
+                _db, context, openingBalance, command.CreatedByUserId, ct);
             context.StageSemanticEvent(new AtomicSemanticAudit(
                 command.PortfolioId,
                 nameof(TenantAccount),

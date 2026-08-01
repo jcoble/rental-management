@@ -11,6 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -204,6 +205,8 @@ public sealed class AtomicPaymentCsvImportPostgreSqlTests : IAsyncLifetime
             UpdatedAt = now,
         };
         db.AddRange(user, portfolio);
+        await db.SaveChangesAsync();
+        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
         await db.SaveChangesAsync();
 
         var property = new Property

@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Auth;
@@ -54,6 +55,9 @@ public sealed class BootstrapAccountHandler
             command.Email,
             now,
             ct);
+
+        // New portfolios receive the locked chart in this same atomic registration transaction.
+        await new ChartOfAccountsSeedService(_db).SeedAsync(workspace.PortfolioId, ct);
 
         var legalReplacementQuery =
                 from latest in _db.Set<SystemNoticeTemplateVersion>()

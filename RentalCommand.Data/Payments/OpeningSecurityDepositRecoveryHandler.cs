@@ -6,6 +6,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Payments;
 
@@ -41,6 +42,19 @@ public sealed class RecoverOpeningSecurityDepositsHandler
             throw new InvalidOperationException(recovery.ValidationError);
 
         var reference = command.FinancialReference.Trim();
+        var openingEntries = await _db.SecurityDepositEntries
+            .Include(entry => entry.SecurityDepositAccount)
+            .Where(entry => entry.PortfolioId == command.PortfolioId
+                && entry.EntryType == SecurityDepositEntryType.Receipt
+                && entry.Direction == SecurityDepositDirection.Increase
+                && entry.BusinessKey.StartsWith($"opening-deposit:{reference}:account:"))
+            .OrderBy(entry => entry.Id)
+            .ToListAsync(ct);
+        foreach (var openingEntry in openingEntries)
+        {
+            await MoneyAccountingPosting.PostOpeningSecurityDepositAsync(
+                _db, context, openingEntry, command.ActorUserId, ct);
+        }
         if (recovery.CreatedAccountCount > 0 || recovery.CreatedEntryCount > 0)
         {
             context.UseDatabaseWallClockForAudit(times.EffectiveNowUtc);
