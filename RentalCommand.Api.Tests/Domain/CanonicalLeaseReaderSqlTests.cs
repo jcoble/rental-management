@@ -761,7 +761,11 @@ public sealed class CanonicalLeaseReaderSqlTests
         }
 
         dashboardSql.Should().Contain("AtomicAuditLogs");
-        AssertCanonicalPropertyAuthorization(dashboardSql, expectedCallCount: null);
+        // This reader also carries the all-property assignment guard for unsupported/global audit rows.
+        AssertCanonicalPropertyAuthorization(
+            dashboardSql,
+            expectedCallCount: null,
+            expectMembershipRoleAssignments: true);
         dashboardSql.Should().Contain("reports.read");
         dashboardSql.Should().Contain("AccountNumber");
         auditSql.Should().Contain("AtomicAuditLogs");
@@ -779,7 +783,8 @@ public sealed class CanonicalLeaseReaderSqlTests
 
     private static void AssertCanonicalPropertyAuthorization(
         string sql,
-        int? expectedCallCount = 1)
+        int? expectedCallCount = 1,
+        bool expectMembershipRoleAssignments = false)
     {
         var calls = Regex.Matches(
             sql,
@@ -822,7 +827,14 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("'SelectedProperties'");
         sql.Should().NotContain("AuthSessions");
         sql.Should().NotContain("RoleProfileCapabilities");
-        sql.Should().NotContain("MembershipRoleAssignments");
+        if (expectMembershipRoleAssignments)
+        {
+            sql.Should().Contain("MembershipRoleAssignments");
+        }
+        else
+        {
+            sql.Should().NotContain("MembershipRoleAssignments");
+        }
         sql.Should().NotContain("MembershipRoleAssignmentProperties");
         sql.Should().NotContain("ClientEvaluation");
         SqlWithoutParameterDeclarations(sql).TrimStart().Should()
