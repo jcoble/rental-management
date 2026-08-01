@@ -226,7 +226,10 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
             CapabilityKeys.MoneyPaymentsManage, $"manual-receipt:{envelope.KeyDigest}",
             $"tenant-receipt:{envelope.PortfolioId}:{tenantAccountId}:{envelope.KeyDigest}",
-            _timeProvider.GetUtcNow().UtcDateTime);
+            _timeProvider.GetUtcNow().UtcDateTime)
+        {
+            AllocateOldestCharges = request.AllocateOldestCharges,
+        };
         return await Execute("tenant-account.receipt.record", command.DeliveryIdempotencyKey,
             command, ReceiptCodec, ct);
     }
