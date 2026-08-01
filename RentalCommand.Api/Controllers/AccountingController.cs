@@ -4,6 +4,8 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -29,6 +31,7 @@ public class AccountingController : ManagementControllerBase
     private readonly IReportsService _reports;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
 
     public AccountingController(
@@ -38,6 +41,7 @@ public class AccountingController : ManagementControllerBase
         IOwnerStatementEmailService ownerStatementEmail,
         IReportsService reports,
         IAccountingLedgerReadModelService ledgerReadModels,
+        IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
         TimeProvider timeProvider)
     {
@@ -47,6 +51,7 @@ public class AccountingController : ManagementControllerBase
         _ownerStatementEmail = ownerStatementEmail;
         _reports = reports;
         _ledgerReadModels = ledgerReadModels;
+        _atomic = atomic;
         _db = db;
         _timeProvider = timeProvider;
     }
@@ -58,133 +63,145 @@ public class AccountingController : ManagementControllerBase
         _ledgerReadModels.GetChartOfAccountsAsync(GetPortfolioId(), query, ct);
 
     [HttpPost("chart-of-accounts")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(ChartOfAccountsRow), StatusCodes.Status201Created)]
     public async Task<ActionResult<ChartOfAccountsRow>> CreateChartOfAccounts(
-        [FromBody] CreateChartOfAccountsRequest request, CancellationToken ct)
+        [FromBody] CreateChartOfAccountsRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var code = request.Code.Trim();
-        var name = request.Name.Trim();
-        if (code.Length == 0 || code.Length > 32 || name.Length == 0 || name.Length > 200)
-            return BadRequest(new { error = "Account code and name are required." });
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        if (!TryGetActiveAccessContext(out var active))
+            return Forbid();
 
-        var portfolioId = GetPortfolioId();
-        if (await _db.LedgerAccounts.AnyAsync(account => account.PortfolioId == portfolioId && account.Code == code, ct))
-            return Conflict(new { error = "An account with this code already exists." });
-        if (request.ParentAccountId is int parentId && !await _db.LedgerAccounts.AnyAsync(
-                account => account.PortfolioId == portfolioId && account.Id == parentId, ct))
-            return BadRequest(new { error = "The parent account is not in this portfolio." });
-
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var account = new LedgerAccount
+        var command = new CreateLedgerAccountCommand(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
+            request.Code, request.Name, request.AccountType, request.NormalBalance,
+            request.ParentAccountId, request.SystemKey, request.ScheduleECategory,
+            request.IsActive, operationKey);
+        try
         {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = portfolioId,
-            Code = code,
-            Name = name,
-            AccountType = request.AccountType,
-            NormalBalance = request.NormalBalance,
-            ParentAccountId = request.ParentAccountId,
-            SystemKey = request.SystemKey?.Trim(),
-            ScheduleECategory = request.ScheduleECategory,
-            IsSystem = false,
-            IsActive = request.IsActive,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        _db.LedgerAccounts.Add(account);
-        await _db.SaveChangesAsync(ct);
-        return CreatedAtAction(nameof(ChartOfAccounts), new { id = account.Id }, new ChartOfAccountsRow
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "accounting.ledger-account.create",
+                    $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}"),
+                command,
+                new AtomicJsonResultCodec<LedgerAccountMutationResult>(
+                    "accounting.ledger-account.mutation.v1"),
+                ct);
+            var account = outcome.Value.Account;
+            if (account is null)
+                return NotFound();
+            return CreatedAtAction(
+                nameof(ChartOfAccounts),
+                new { id = account.Id },
+                ToChartOfAccountsRow(account));
+        }
+        catch (UnauthorizedAccessException)
         {
-            Id = account.Id,
-            PublicId = account.PublicId,
-            Code = account.Code,
-            Name = account.Name,
-            AccountType = account.AccountType,
-            NormalBalance = account.NormalBalance,
-            ParentAccountId = account.ParentAccountId,
-            SystemKey = account.SystemKey,
-            ScheduleECategory = account.ScheduleECategory,
-            IsSystem = account.IsSystem,
-            IsActive = account.IsActive,
-            HasPostedLines = false,
-        });
+            return Forbid();
+        }
     }
 
     [HttpPatch("chart-of-accounts/{id:int}")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(ChartOfAccountsRow), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ChartOfAccountsRow>> PatchChartOfAccounts(
-        int id, [FromBody] PatchChartOfAccountsRequest request, CancellationToken ct)
+        int id,
+        [FromBody] PatchChartOfAccountsRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        var account = await _db.LedgerAccounts.SingleOrDefaultAsync(
-            value => value.PortfolioId == portfolioId && value.Id == id, ct);
-        if (account is null)
-            return NotFound();
-        if (request.ParentAccountId is int parentId &&
-            (!await _db.LedgerAccounts.AnyAsync(value => value.PortfolioId == portfolioId && value.Id == parentId, ct)
-                || parentId == id))
-            return BadRequest(new { error = "The parent account is not valid for this portfolio." });
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        if (!TryGetActiveAccessContext(out var active))
+            return Forbid();
 
-        if (request.Name is not null)
+        var command = new UpdateLedgerAccountCommand(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
+            id, request.Name, null, request.ParentAccountId,
+            request.ParentAccountId.HasValue, request.ScheduleECategory,
+            request.IsActive, false, operationKey);
+        try
         {
-            var name = request.Name.Trim();
-            if (name.Length == 0 || name.Length > 200)
-                return BadRequest(new { error = "Account name is required." });
-            account.Name = name;
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "accounting.ledger-account.update",
+                    $"{active.PortfolioId}:{active.AccessContextId}:{operationKey}"),
+                command,
+                new AtomicJsonResultCodec<LedgerAccountMutationResult>(
+                    "accounting.ledger-account.mutation.v1"),
+                ct);
+            var account = outcome.Value.Account;
+            return account is null ? NotFound() : Ok(ToChartOfAccountsRow(account));
         }
-        if (request.IsActive is bool isActive) account.IsActive = isActive;
-        if (request.ScheduleECategory is ScheduleECategory category) account.ScheduleECategory = category;
-        if (request.ParentAccountId.HasValue) account.ParentAccountId = request.ParentAccountId;
-        account.UpdatedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
-
-        return Ok(new ChartOfAccountsRow
+        catch (UnauthorizedAccessException)
         {
-            Id = account.Id,
-            PublicId = account.PublicId,
-            Code = account.Code,
-            Name = account.Name,
-            AccountType = account.AccountType,
-            NormalBalance = account.NormalBalance,
-            ParentAccountId = account.ParentAccountId,
-            SystemKey = account.SystemKey,
-            ScheduleECategory = account.ScheduleECategory,
-            IsSystem = account.IsSystem,
-            IsActive = account.IsActive,
-            HasPostedLines = await _db.JournalLines.AnyAsync(line => line.LedgerAccountId == account.Id, ct),
-        });
+            return Forbid();
+        }
     }
+
+    private static ChartOfAccountsRow ToChartOfAccountsRow(LedgerAccountSnapshot account) => new()
+    {
+        Id = account.Id,
+        PublicId = account.PublicId,
+        Code = account.Code,
+        Name = account.Name,
+        AccountType = account.AccountType,
+        NormalBalance = account.NormalBalance,
+        ParentAccountId = account.ParentAccountId,
+        SystemKey = account.SystemKey,
+        ScheduleECategory = account.ScheduleECategory,
+        IsSystem = account.IsSystem,
+        IsActive = account.IsActive,
+        HasPostedLines = account.HasPostedLines,
+    };
 
     [HttpGet("general-ledger")]
     [ProducesResponseType(typeof(AccountingPage<GeneralLedgerRow>), StatusCodes.Status200OK)]
     public Task<AccountingPage<GeneralLedgerRow>> GeneralLedger(
         [FromQuery] GeneralLedgerQuery query, CancellationToken ct) =>
-        _ledgerReadModels.GetGeneralLedgerAsync(GetPortfolioId(), query, ct);
+        _ledgerReadModels.GetGeneralLedgerAsync(GetWorkspaceReadScope(), query, ct);
 
     [HttpGet("journal-entries/{publicId:guid}")]
     [ProducesResponseType(typeof(JournalDetail), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<JournalDetail>> JournalEntry(Guid publicId, CancellationToken ct)
     {
-        var detail = await _ledgerReadModels.GetJournalDetailAsync(GetPortfolioId(), publicId, ct);
+        var detail = await _ledgerReadModels.GetJournalDetailAsync(GetWorkspaceReadScope(), publicId, ct);
         return detail is null ? NotFound() : Ok(detail);
     }
+
+    [HttpGet("source-journals")]
+    [ProducesResponseType(typeof(IReadOnlyList<SourceJournalSummary>), StatusCodes.Status200OK)]
+    public Task<IReadOnlyList<SourceJournalSummary>> SourceJournals(
+        [FromQuery] SourceJournalQuery query, CancellationToken ct) =>
+        _ledgerReadModels.GetSourceJournalsAsync(GetWorkspaceReadScope(), query, ct);
+
+    [HttpGet("money-position")]
+    [ProducesResponseType(typeof(MoneyPositionResponse), StatusCodes.Status200OK)]
+    public Task<MoneyPositionResponse> MoneyPosition(
+        [FromQuery] MoneyPositionQuery query, CancellationToken ct) =>
+        _ledgerReadModels.GetMoneyPositionAsync(GetWorkspaceReadScope(), query, ct);
 
     [HttpGet("trial-balance")]
     [ProducesResponseType(typeof(TrialBalanceResponse), StatusCodes.Status200OK)]
     public Task<TrialBalanceResponse> TrialBalance([FromQuery] StatementQuery query, CancellationToken ct) =>
-        _ledgerReadModels.GetTrialBalanceAsync(GetPortfolioId(), query, ct);
+        _ledgerReadModels.GetTrialBalanceAsync(GetWorkspaceReadScope(), query, ct);
 
     [HttpGet("balance-sheet")]
     [ProducesResponseType(typeof(FinancialStatementResponse), StatusCodes.Status200OK)]
     public Task<FinancialStatementResponse> BalanceSheet([FromQuery] StatementQuery query, CancellationToken ct) =>
-        _ledgerReadModels.GetBalanceSheetAsync(GetPortfolioId(), query, ct);
+        _ledgerReadModels.GetBalanceSheetAsync(GetWorkspaceReadScope(), query, ct);
 
     [HttpGet("income-statement")]
     [ProducesResponseType(typeof(FinancialStatementResponse), StatusCodes.Status200OK)]
     public Task<FinancialStatementResponse> IncomeStatement([FromQuery] StatementQuery query, CancellationToken ct) =>
-        _ledgerReadModels.GetIncomeStatementAsync(GetPortfolioId(), query, ct);
+        _ledgerReadModels.GetIncomeStatementAsync(GetWorkspaceReadScope(), query, ct);
 
     /// <summary>
     /// True cash flow per property + portfolio for the range (spec §9/§18): rent in − operating

@@ -201,6 +201,11 @@ public sealed class TenantLedgerRow
     public string? AccountLabel { get; init; }
     public string? RecurringScheduleContext { get; init; }
     public string? SourceDocumentContext { get; init; }
+    public long? RelatedTenantLedgerEntryId { get; init; }
+    public string? RelatedEntryDescription { get; init; }
+    public string? CategoryName { get; init; }
+    public DateOnly? ServicePeriodStartOn { get; init; }
+    public DateOnly? ServicePeriodEndOn { get; init; }
     public IReadOnlyList<AllocationRef> Allocations { get; set; } = [];
     public long? ReversesEntryId { get; init; }
     public long? ReplacedByEntryId { get; init; }

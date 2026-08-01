@@ -4,11 +4,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Payments;
+using RentalCommand.Core.Operations;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -27,6 +30,8 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         new("tenant-account.payment.refund.v1");
     private static readonly AtomicJsonResultCodec<SecurityDepositMutationResult> DepositCodec =
         new("tenant-account.deposit.mutation.v1");
+    private static readonly AtomicJsonResultCodec<RecurringTenantChargeMutationResult> RecurringChargeCodec =
+        new("tenant-account.recurring-charge.configuration.v1");
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IAccountingLedgerReadModelService _ledgerReadModels;
     private readonly RentalCommandDbContext _db;
@@ -50,7 +55,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     public async Task<ActionResult<AccountingPage<TenantLedgerRow>>> Ledger(
         int tenantAccountId, [FromQuery] TenantLedgerQuery query, CancellationToken ct)
     {
-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
         var page = await _ledgerReadModels.GetTenantLedgerAsync(GetPortfolioId(), tenantAccountId, query, ct);
         return page is null ? NotFound() : Ok(page);
     }
@@ -61,7 +68,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     public async Task<ActionResult<IReadOnlyList<TenantMonthSummary>>> MonthSummary(
         int tenantAccountId, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
     {
-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
         var summary = await _ledgerReadModels.GetTenantMonthSummaryAsync(
             GetPortfolioId(), tenantAccountId, query, ct);
         return summary is null ? NotFound() : Ok(summary);
@@ -73,7 +82,9 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     public async Task<ActionResult<TenantLedgerPeriodSummary>> LedgerSummary(
         int tenantAccountId, [FromQuery] TenantLedgerPeriodSummaryQuery query, CancellationToken ct)
     {
-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
         try
         {
             var summary = await _ledgerReadModels.GetTenantLedgerPeriodSummaryAsync(
@@ -92,124 +103,99 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
     public async Task<ActionResult<AccountingPage<RecurringTenantChargeRow>>> RecurringCharges(
         int tenantAccountId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
         return Ok(await _ledgerReadModels.GetRecurringTenantChargesAsync(
             GetPortfolioId(), tenantAccountId, query, ct));
     }
 
     [HttpPost("recurring-charges")]
     [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status201Created)]
-    public async Task<ActionResult<RecurringTenantChargeRow>> CreateRecurringCharge(
+    public async Task<IActionResult> CreateRecurringCharge(
         int tenantAccountId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] CreateRecurringTenantChargeRequest request, CancellationToken ct)
     {
-        if (!TryValidateIdempotencyKey(idempotencyKey, out _))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
-        var portfolioId = GetPortfolioId();
-        var tenant = await _db.TenantAccounts.AsNoTracking().SingleOrDefaultAsync(
-            account => account.PortfolioId == portfolioId && account.Id == tenantAccountId, ct);
-        if (tenant is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(request.DisplayName) || request.Amount <= 0m
-            || request.LedgerAccountId <= 0 || request.LeaseAgreementId is not int leaseAgreementId
-            || request.EffectiveStartOn == default || request.MonthlyDueDay is < 1 or > 31)
-            return BadRequest(new { error = "Display name, amount, lease, account, start date, and due day are required." });
-        if (request.EffectiveEndOn is DateOnly end && end < request.EffectiveStartOn)
-            return BadRequest(new { error = "The end date cannot be before the start date." });
-        if (!await _db.LedgerAccounts.AnyAsync(account => account.PortfolioId == portfolioId
-                && account.Id == request.LedgerAccountId && account.IsActive, ct))
-            return BadRequest(new { error = "The recurring charge account is not active in this portfolio." });
-        if (!await _db.LeaseAgreements.AnyAsync(agreement => agreement.PortfolioId == portfolioId
-                && agreement.Id == leaseAgreementId, ct))
-            return BadRequest(new { error = "The lease agreement is not in this portfolio." });
-
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var schedule = new RecurringTenantCharge
-        {
-            PublicId = Guid.NewGuid(),
-            PortfolioId = portfolioId,
-            TenantAccountId = tenantAccountId,
-            LeaseAgreementId = leaseAgreementId,
-            DisplayName = request.DisplayName.Trim(),
-            Amount = request.Amount,
-            Currency = tenant.Currency,
-            LedgerAccountId = request.LedgerAccountId,
-            EffectiveStartOn = request.EffectiveStartOn,
-            EffectiveEndOn = request.EffectiveEndOn,
-            MonthlyDueDay = (short)request.MonthlyDueDay,
-            NextRunDate = request.NextRunDate ?? request.EffectiveStartOn,
-            IsActive = true,
-            PropertyId = request.PropertyId,
-            UnitId = request.UnitId,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        _db.RecurringTenantCharges.Add(schedule);
-        await _db.SaveChangesAsync(ct);
-        return CreatedAtAction(nameof(RecurringCharges), new { tenantAccountId }, ToRecurringRow(schedule));
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new CreateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            request.LeaseAgreementId ?? 0,
+            request.DisplayName,
+            request.Amount,
+            request.LedgerAccountId,
+            request.EffectiveStartOn,
+            request.EffectiveEndOn,
+            request.MonthlyDueDay,
+            request.NextRunDate,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-create:{envelope.KeyDigest}");
+        return await ExecuteRecurringCharge(
+            "tenant-account.recurring-charge.create.v1",
+            command.DeliveryIdempotencyKey,
+            command,
+            tenantAccountId,
+            created: true,
+            ct: ct);
     }
 
     [HttpPatch("recurring-charges/{id:int}")]
     [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringTenantChargeRow>> PatchRecurringCharge(
+    public async Task<IActionResult> PatchRecurringCharge(
         int tenantAccountId, int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] PatchRecurringTenantChargeRequest request, CancellationToken ct)
     {
-        if (!TryValidateIdempotencyKey(idempotencyKey, out _))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
-        var portfolioId = GetPortfolioId();
-        var schedule = await _db.RecurringTenantCharges.SingleOrDefaultAsync(value =>
-            value.PortfolioId == portfolioId && value.TenantAccountId == tenantAccountId && value.Id == id, ct);
-        if (schedule is null) return NotFound();
-        if (request.Amount is decimal amount && amount <= 0m)
-            return BadRequest(new { error = "Amount must be positive." });
-        if (request.MonthlyDueDay is int dueDay && dueDay is < 1 or > 31)
-            return BadRequest(new { error = "Monthly due day must be between 1 and 31." });
-        if (request.DisplayName is string displayName)
-        {
-            if (string.IsNullOrWhiteSpace(displayName))
-                return BadRequest(new { error = "Display name is required." });
-            schedule.DisplayName = displayName.Trim();
-        }
-        if (request.Amount is decimal nextAmount) schedule.Amount = nextAmount;
-        if (request.LedgerAccountId is int accountId)
-        {
-            if (!await _db.LedgerAccounts.AnyAsync(account => account.PortfolioId == portfolioId
-                    && account.Id == accountId && account.IsActive, ct))
-                return BadRequest(new { error = "The recurring charge account is not active in this portfolio." });
-            schedule.LedgerAccountId = accountId;
-        }
-        if (request.EffectiveStartOn is DateOnly start) schedule.EffectiveStartOn = start;
-        if (request.EffectiveEndOn is DateOnly end) schedule.EffectiveEndOn = end;
-        if (schedule.EffectiveEndOn is DateOnly finalEnd && finalEnd < schedule.EffectiveStartOn)
-            return BadRequest(new { error = "The end date cannot be before the start date." });
-        if (request.MonthlyDueDay is int nextDueDay) schedule.MonthlyDueDay = (short)nextDueDay;
-        if (request.NextRunDate is DateOnly nextRunDate) schedule.NextRunDate = nextRunDate;
-        if (request.IsActive is bool active) schedule.IsActive = active;
-        if (request.PropertyId is int propertyId) schedule.PropertyId = propertyId;
-        if (request.UnitId is int unitId) schedule.UnitId = unitId;
-        schedule.UpdatedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
-        return Ok(ToRecurringRow(schedule));
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new UpdateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            id,
+            request.DisplayName,
+            request.Amount,
+            request.LedgerAccountId,
+            request.EffectiveStartOn,
+            request.EffectiveEndOn,
+            request.MonthlyDueDay,
+            request.NextRunDate,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-update:{envelope.KeyDigest}");
+        return await ExecuteRecurringCharge(
+            "tenant-account.recurring-charge.update.v1",
+            command.DeliveryIdempotencyKey,
+            command,
+            tenantAccountId,
+            created: false,
+            ct: ct);
     }
 
     [HttpPost("recurring-charges/{id:int}/deactivate")]
     [ProducesResponseType(typeof(RecurringTenantChargeRow), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringTenantChargeRow>> DeactivateRecurringCharge(
+    public async Task<IActionResult> DeactivateRecurringCharge(
         int tenantAccountId, int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        if (!TryValidateIdempotencyKey(idempotencyKey, out _))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
-        var portfolioId = GetPortfolioId();
-        var schedule = await _db.RecurringTenantCharges.SingleOrDefaultAsync(value =>
-            value.PortfolioId == portfolioId && value.TenantAccountId == tenantAccountId && value.Id == id, ct);
-        if (schedule is null) return NotFound();
-        schedule.IsActive = false;
-        schedule.UpdatedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
-        return Ok(ToRecurringRow(schedule));
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var failure)) return failure!;
+        var command = new DeactivateRecurringTenantChargeCommand(
+            envelope.PortfolioId,
+            new StaffOperationActor(
+                envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision),
+            tenantAccountId,
+            id,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            $"recurring-charge-deactivate:{envelope.KeyDigest}");
+        return await ExecuteRecurringCharge(
+            "tenant-account.recurring-charge.deactivate.v1",
+            command.DeliveryIdempotencyKey,
+            command,
+            tenantAccountId,
+            created: false,
+            ct: ct);
     }
 
     [HttpPost("receipts")]
@@ -424,29 +410,72 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         return await ExecuteDeposit("tenant-account.deposit.reverse", command, ct);
     }
 
+    private WorkspaceReadScope GetWorkspaceReadScope()
+    {
+        var active = GetActiveAccessContext();
+        return new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+    }
+
     private Task<bool> TenantAccountExistsAsync(int tenantAccountId, CancellationToken ct) =>
         _db.TenantAccounts.AnyAsync(account => account.PortfolioId == GetPortfolioId()
             && account.Id == tenantAccountId, ct);
 
-    private static RecurringTenantChargeRow ToRecurringRow(RecurringTenantCharge schedule) =>
+    private static RecurringTenantChargeRow ToRecurringRow(
+        RecurringTenantChargeMutationSnapshot snapshot) =>
         new()
         {
-            Id = schedule.Id,
-            PublicId = schedule.PublicId,
-            TenantAccountId = schedule.TenantAccountId,
-            LeaseAgreementId = schedule.LeaseAgreementId,
-            DisplayName = schedule.DisplayName,
-            Amount = schedule.Amount,
-            Currency = schedule.Currency,
-            LedgerAccountId = schedule.LedgerAccountId,
-            EffectiveStartOn = schedule.EffectiveStartOn,
-            EffectiveEndOn = schedule.EffectiveEndOn,
-            MonthlyDueDay = schedule.MonthlyDueDay,
-            NextRunDate = schedule.NextRunDate,
-            IsActive = schedule.IsActive,
-            PropertyId = schedule.PropertyId,
-            UnitId = schedule.UnitId,
+            Id = snapshot.Id,
+            PublicId = snapshot.PublicId,
+            TenantAccountId = snapshot.TenantAccountId,
+            LeaseAgreementId = snapshot.LeaseAgreementId,
+            DisplayName = snapshot.DisplayName,
+            Amount = snapshot.Amount,
+            Currency = snapshot.Currency,
+            LedgerAccountId = snapshot.LedgerAccountId,
+            EffectiveStartOn = snapshot.EffectiveStartOn,
+            EffectiveEndOn = snapshot.EffectiveEndOn,
+            MonthlyDueDay = snapshot.MonthlyDueDay,
+            NextRunDate = snapshot.NextRunDate,
+            IsActive = snapshot.IsActive,
+            PropertyId = snapshot.PropertyId,
+            UnitId = snapshot.UnitId,
         };
+
+    private async Task<IActionResult> ExecuteRecurringCharge<TCommand>(
+        string commandType,
+        string idempotencyKey,
+        TCommand command,
+        int tenantAccountId,
+        bool created,
+        CancellationToken ct)
+        where TCommand : notnull, IAtomicCommandData
+    {
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(commandType, idempotencyKey),
+                command,
+                RecurringChargeCodec,
+                ct);
+            if (outcome.Value.Outcome == RecurringTenantChargeMutationOutcome.NotFound
+                || outcome.Value.Snapshot is null)
+                return NotFound();
+            var row = ToRecurringRow(outcome.Value.Snapshot);
+            return created
+                ? CreatedAtAction(nameof(RecurringCharges), new { tenantAccountId }, row)
+                : Ok(row);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 
     private async Task<IActionResult> ExecuteDeposit<TCommand>(string commandType,
         TCommand command, CancellationToken ct) where TCommand : notnull, ISecurityDepositMoneyCommand
