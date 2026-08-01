@@ -386,7 +386,23 @@ builder.Services.AddHostedService<EntityChangeListener>();
 builder.Services.AddDomainServices();
 builder.Services.AddScoped<AccountingPostingService>();
 builder.Services.AddScoped<ChartOfAccountsSeedService>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, TenantChargeSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, TenantReceiptSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, TenantConcessionSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, OpeningBalanceSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, SecurityDepositReceiptSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, SecurityDepositRefundSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, SecurityDepositApplicationSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, ExpensePaymentSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, BillIncurredSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, BillPaymentSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, ProviderSettlementSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, BankTransferSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, LoanPaymentSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, CapitalPurchaseSourceJournalGenerator>();
+builder.Services.AddScoped<IAccountingSourceJournalGenerator, OwnerDistributionSourceJournalGenerator>();
 builder.Services.AddScoped<AccountingConversionFramework>();
+builder.Services.AddScoped<AccountingConversionService>();
 builder.Services.AddScoped<AccountingConversionReconciliationService>();
 
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
