@@ -81,6 +81,17 @@ public sealed class RecordTenantReceiptHandler
         if (command.TargetChargeEntryId is not null && account.TargetOpenAmount is null)
             throw new ArgumentException(
                 "Receipt target charge must be an open debit on the selected tenant account.");
+        if (account.TargetEntryType == TenantLedgerEntryType.DepositCharge
+            && account.TargetOpenAmount is { } targetOpenAmount
+            && command.Amount > targetOpenAmount)
+        {
+            // The receipt journal has one cash leg. Allocation currently does not return a
+            // split-cash accounting result, so accepting an overage here would misclassify the
+            // non-deposit portion as trust cash. Reject before any payment, allocation, or journal
+            // row is written instead of manufacturing a mixed cash posting.
+            throw new ArgumentException(
+                "A targeted deposit receipt cannot exceed the deposit target open amount.");
+        }
 
         var recordedAtUtc = TenantMoneyCommandSupport.CommandTimestamp(command.RecordedAtUtc, times.WallClockUtc);
         var paymentAttempt = TenantMoneyCommandSupport.ManualAttempt(

@@ -561,6 +561,52 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             line.LedgerAccount!.AccountType == AccountType.Income);
     }
 
+    [Fact]
+    public async Task TargetedDepositReceipt_RejectsAmountAboveTheDepositOpenAmount()
+    {
+        var graph = SeedTenantAccountWithOpenDepositCharge("targeted-deposit-overage", 500m);
+        _ctx.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = graph.AccountId,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 700m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 01, 06),
+            DueOn = new DateOnly(2027, 01, 06),
+            PostedAtUtc = SimulatedEntryAtUtc,
+            Description = "Rent charge that must not become deposit trust cash",
+            BusinessKey = "rent-targeted-deposit-overage",
+            LeaseAgreementId = graph.LeaseAgreementId,
+            CreatedByUserId = _scope.UserId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var command = ReceiptCommand(
+                graph.AccountId,
+                graph.DepositChargeEntryId,
+                1_200m,
+                "targeted-deposit-overage",
+                SimulatedEntryAtUtc)
+            with { AllocateOldestCharges = true };
+
+        Func<Task> act = () => _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
+            command,
+            ReceiptCodec);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*deposit target open amount*");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .CountAsync(entry => entry.BusinessKey == command.BusinessKey)).Should().Be(0);
+        (await _ctx.Db.JournalEntries.AsNoTracking()
+            .CountAsync(entry => entry.SourceBusinessKey == command.BusinessKey)).Should().Be(0);
+    }
+
     private static ServiceProvider BuildServices(string connectionString, DateTime utcNow)
     {
         var services = new ServiceCollection();
@@ -949,7 +995,7 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
             depositAccount, charge);
         _ctx.Db.SaveChanges();
         _ctx.Db.ChangeTracker.Clear();
-        return new TenantDepositGraph(account.Id, depositAccount.Id);
+        return new TenantDepositGraph(account.Id, depositAccount.Id, charge.Id, agreement.Id);
     }
 
     private ScanDraft SeedPaymentScanDraft(int tenantAccountId, long tenantLedgerEntryId)
@@ -1188,5 +1234,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         string? PhoneNumber,
         string? PushToken);
 
-    private sealed record TenantDepositGraph(int AccountId, int DepositAccountId);
+    private sealed record TenantDepositGraph(
+        int AccountId,
+        int DepositAccountId,
+        long DepositChargeEntryId,
+        int LeaseAgreementId);
 }
