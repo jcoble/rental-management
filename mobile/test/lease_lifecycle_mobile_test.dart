@@ -196,6 +196,21 @@ void main() {
       'hasLiveReissue': false,
       'hasSourceScan': true,
     });
+    final templateOnlyAgreement = LeaseAgreementHistory.fromJson({
+      'leaseAgreementId': 83,
+      'versionNumber': 1,
+      'agreementNumber': 'AGR-TEMPLATE-83',
+      'changeType': 'Initial',
+      'termType': 'Fixed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'governingFromOn': '2026-01-01',
+      'baseRentAmount': 1500,
+      'agreementStatus': 'Draft',
+      'isGoverning': false,
+      'hasLiveReissue': false,
+      'hasSourceScan': false,
+    });
     final draft = LeaseAgreementDraftDetail.fromJson({
       'leaseManagementId': 44,
       'leaseAgreementId': 82,
@@ -229,6 +244,7 @@ void main() {
     ).readAsStringSync();
 
     expect(agreement.hasSourceScan, isTrue);
+    expect(templateOnlyAgreement.hasSourceScan, isFalse);
     expect(draft.sourceStoredFileId, 91);
     expect(draft.sourceFileName, 'scanned-lease.pdf');
     expect(detail, contains("'View draft'"));

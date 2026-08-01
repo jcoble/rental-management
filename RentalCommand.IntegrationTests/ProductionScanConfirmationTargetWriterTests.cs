@@ -2257,6 +2257,54 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task NeedsSignatures_PreservesUploadedScanOnConfirmedDraftAgreement()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Lease awaiting signatures");
+        var target = LeaseTarget(
+            _propertyId,
+            _unitId,
+            _tenantId,
+            leaseManagementId: _leaseManagementId,
+            tenantAccountId: _tenantAccountId) with
+        {
+            ReviewDisposition = LeaseScanReviewDisposition.NeedsSignatures,
+        };
+
+        var outcome = await UnitOfWork.ExecuteAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, source.DraftId, "lease-needs-signatures"),
+            LeaseCommand(source, target),
+            Codec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.TargetEntityId);
+        agreement.IssuedArtifactId.Should().BeNull();
+        agreement.IssuedAtUtc.Should().BeNull();
+        agreement.ExecutedArtifactId.Should().BeNull();
+
+        var sourceVersion = await verify.Db.LegalDocumentSourceVersions.AsNoTracking()
+            .SingleAsync(row => row.Id == agreement.DocumentSourceVersionId);
+        sourceVersion.SourceKind.Should().Be(LegalDocumentSourceKind.BuiltInRenderer);
+        sourceVersion.SourceStoredFileId.Should().BeNull();
+
+        var scanDraft = await verify.Db.ScanDrafts.AsNoTracking()
+            .SingleAsync(row => row.Id == source.DraftId);
+        scanDraft.Status.Should().Be("Confirmed");
+        scanDraft.TargetEntityType.Should().Be(nameof(LeaseAgreement));
+        scanDraft.ConfirmedEntityId.Should().Be(agreement.Id);
+        scanDraft.SourceStoredFileId.Should().Be(source.StoredFileId);
+
+        var storedFile = await verify.Db.StoredFiles.AsNoTracking()
+            .SingleAsync(row => row.Id == source.StoredFileId);
+        storedFile.EntityType.Should().Be(nameof(LeaseAgreement));
+        storedFile.EntityId.Should().Be(agreement.Id);
+        storedFile.DeletedAt.Should().BeNull();
+    }
+
+    [SkippableFact]
     public async Task EmptyPortfolioLeaseImport_BootstrapsOneCanonicalGraphAndReplaysReceipt()
     {
         SkipIfDockerUnavailable();
