@@ -20,6 +20,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var page = await scenario.Service.GetGeneralLedgerAsync(
             scenario.ManagerScope, new GeneralLedgerQuery { Take = 200 });
@@ -36,6 +37,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var page = await scenario.Service.GetGeneralLedgerAsync(
             scenario.ManagerScope,
@@ -50,6 +52,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var statement = await scenario.Service.GetTrialBalanceAsync(
             scenario.ManagerScope,
@@ -65,6 +68,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var detail = await scenario.Service.GetJournalDetailAsync(
             scenario.ManagerScope, scenario.MixedJournalPublicId);
@@ -81,6 +85,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.AdministratorScope);
 
         var detail = await scenario.Service.GetJournalDetailAsync(
             scenario.AdministratorScope, scenario.MixedJournalPublicId);
@@ -96,6 +101,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var allowed = await context.Db.CanReadTenantAccountAsync(
             scenario.ManagerScope,
@@ -119,6 +125,7 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var hiddenJournal = await scenario.Service.GetJournalDetailAsync(
             scenario.ManagerScope, scenario.PropertyBJournalPublicId);
@@ -142,9 +149,11 @@ public sealed class AccountingAuthorizationPostgreSqlTests(MigratedPostgreSqlFix
     {
         await using var context = await fixture.CreateContextAsync();
         var scenario = await SeedScenarioAsync(context);
+        await context.ActivateApiScopeAsync(scenario.ManagerScope);
 
         var manager = await scenario.Service.GetGeneralLedgerAsync(
             scenario.ManagerScope, new GeneralLedgerQuery { Take = 200 });
+        await context.ActivateApiScopeAsync(scenario.AdministratorScope);
         var administrator = await scenario.Service.GetGeneralLedgerAsync(
             scenario.AdministratorScope, new GeneralLedgerQuery { Take = 200 });
 
