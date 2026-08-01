@@ -209,6 +209,10 @@ internal static class AtomicDomainTestKernel
             ApplyScheduledLateFeeChargeBatchResult,
             ApplyScheduledLateFeeChargeBatchHandler>();
         services.AddAtomicCommandHandler<
+            ApplyRecurringTenantChargeBatchCommand,
+            ApplyRecurringTenantChargeBatchResult,
+            ApplyRecurringTenantChargeBatchHandler>();
+        services.AddAtomicCommandHandler<
             RecoverLateFeeChargesCommand,
             RecoverLateFeeChargesResult,
             RecoverLateFeeChargesHandler>();
