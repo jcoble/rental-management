@@ -19,6 +19,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Banking;
 using RentalCommand.TestCommon;
 
@@ -49,6 +50,9 @@ public class BankingServiceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        await new ChartOfAccountsSeedService(_ctx.Db).SeedAsync(1);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
         _scope = _ctx.Db.SeedAdministratorScope(1, nameof(BankingServiceTests));
         _sut = CreateService();
     }
@@ -422,7 +426,13 @@ public class BankingServiceTests : IAsyncLifetime
             .Should().Be(1);
         (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == "banking.transaction.reconcile" &&
-            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
+            audit.EntityType == nameof(BankTransaction)))
+            .Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == "banking.transaction.reconcile" &&
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
+            audit.EntityType == nameof(JournalEntry)))
             .Should().Be(1);
     }
 

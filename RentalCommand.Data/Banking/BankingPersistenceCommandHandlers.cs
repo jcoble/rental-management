@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Banking;
 
@@ -766,7 +767,10 @@ public sealed class ReconcileBankTransactionHandler
                 .Select(row => new
                 {
                     row.MatchedBankTransactionId,
+                    row.MatchedTenantLedgerEntryId,
                     row.MatchedExpenseId,
+                    row.MatchedLoanPaymentId,
+                    row.MatchedOwnerDistributionId,
                 })
                 .SingleOrDefaultAsync(ct)
             : null;
@@ -826,6 +830,18 @@ public sealed class ReconcileBankTransactionHandler
         {
             return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
+        var clearedExpenseId = command.Action == BankReconciliationAction.Clear
+            ? discoveredClearTargets?.MatchedExpenseId
+            : null;
+        var clearedTenantLedgerEntryId = command.Action == BankReconciliationAction.Clear
+            ? discoveredClearTargets?.MatchedTenantLedgerEntryId
+            : null;
+        var clearedLoanPaymentId = command.Action == BankReconciliationAction.Clear
+            ? discoveredClearTargets?.MatchedLoanPaymentId
+            : null;
+        var clearedOwnerDistributionId = command.Action == BankReconciliationAction.Clear
+            ? discoveredClearTargets?.MatchedOwnerDistributionId
+            : null;
         var before = ApplyPlaidSyncHandler.Snapshot(transaction);
         BankTransaction? transferTarget = null;
         string? transferBefore = null;
@@ -844,6 +860,52 @@ public sealed class ReconcileBankTransactionHandler
             }
             transferBefore = ApplyPlaidSyncHandler.Snapshot(transferTarget);
         }
+        LoanPayment? loanPaymentTarget = null;
+        if (command.Action == BankReconciliationAction.MatchLoanPayment
+            && command.LoanPaymentId is { } loanPaymentId)
+        {
+            loanPaymentTarget = await _db.Set<LoanPayment>()
+                .Include(payment => payment.Loan)
+                .SingleOrDefaultAsync(payment => payment.Id == loanPaymentId
+                    && payment.PortfolioId == command.PortfolioId
+                    && payment.Loan != null
+                    && payment.Loan.DeletedAt == null, ct);
+            if (loanPaymentTarget is null)
+                return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
+        }
+        OwnerDistribution? ownerDistributionTarget = null;
+        if (command.Action == BankReconciliationAction.MatchOwnerDistribution
+            && command.OwnerDistributionId is { } ownerDistributionId)
+        {
+            ownerDistributionTarget = await _db.Set<OwnerDistribution>()
+                .Include(distribution => distribution.OwnerEntity)
+                .SingleOrDefaultAsync(distribution => distribution.Id == ownerDistributionId
+                    && distribution.PortfolioId == command.PortfolioId, ct);
+            if (ownerDistributionTarget is null)
+                return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
+        }
+        TenantLedgerEntryType? matchedReceiptEntryType = null;
+        string? matchedReceiptCashSystemKey = null;
+        if (command.Action == BankReconciliationAction.MatchReceipt
+            && command.TenantLedgerEntryId is { } matchedLedgerEntryId)
+        {
+            matchedReceiptEntryType = await _db.Set<TenantLedgerEntry>()
+                .Where(entry => entry.PortfolioId == command.PortfolioId
+                    && entry.TenantAccountId == command.TenantAccountId
+                    && entry.Id == matchedLedgerEntryId)
+                .Select(entry => (TenantLedgerEntryType?)entry.EntryType)
+                .SingleOrDefaultAsync(ct);
+            if (matchedReceiptEntryType == TenantLedgerEntryType.PaymentReceipt)
+            {
+                matchedReceiptCashSystemKey = await _db.JournalLines
+                    .Where(line => line.JournalEntry!.PortfolioId == command.PortfolioId
+                        && line.JournalEntry.SourceType == JournalSourceType.TenantReceipt
+                        && line.JournalEntry.SourceId == matchedLedgerEntryId
+                        && line.DebitAmount > 0m)
+                    .Select(line => line.LedgerAccount!.SystemKey)
+                    .SingleOrDefaultAsync(ct);
+            }
+        }
         Apply(command, transaction, transferTarget, expenseTarget);
         if (expenseTarget is not null)
         {
@@ -858,6 +920,71 @@ public sealed class ReconcileBankTransactionHandler
                     : $"Expense {expenseTarget.Id} marked paid from bank transaction {transaction.Id}."));
         }
         await context.FlushBusinessAsync(ct);
+        if (command.Action == BankReconciliationAction.MatchReceipt
+            && matchedReceiptEntryType == TenantLedgerEntryType.PaymentReceipt
+            && string.Equals(matchedReceiptCashSystemKey, "undeposited-funds", StringComparison.Ordinal))
+        {
+            await MoneyAccountingPosting.PostProviderSettlementAsync(
+                _db, context, transaction, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.MatchExpense && expenseTarget is not null)
+        {
+            await MoneyAccountingPosting.PostBankMatchedExpenseAsync(
+                _db, context, expenseTarget, transaction, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.Clear && clearedExpenseId is not null)
+        {
+            await MoneyAccountingPosting.ReverseBankMatchedExpenseAsync(
+                _db, context, command.PortfolioId, transaction.Id, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.Clear && clearedLoanPaymentId is not null)
+        {
+            await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
+                _db, context, command.PortfolioId, JournalSourceType.LoanPayment,
+                clearedLoanPaymentId.Value, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.Clear && clearedOwnerDistributionId is not null)
+        {
+            await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
+                _db, context, command.PortfolioId, JournalSourceType.OwnerDistribution,
+                clearedOwnerDistributionId.Value, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.Clear
+                 && clearedTenantLedgerEntryId is not null)
+        {
+            await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
+                _db, context, command.PortfolioId, JournalSourceType.ProviderSettlement,
+                transaction.Id, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.Clear && transferTarget is not null)
+        {
+            await MoneyAccountingPosting.ReverseBankMatchedSourceAsync(
+                _db, context, command.PortfolioId, JournalSourceType.BankTransfer,
+                Math.Min(transaction.Id, transferTarget.Id), command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.MatchTransfer && transferTarget is not null)
+        {
+            var transferJournal = await MoneyAccountingPosting.PostBankTransferAsync(
+                _db, context, transaction, transferTarget, command.ActorUserId, ct);
+            if (transferJournal is null)
+            {
+                const string noAccountingEffectReason =
+                    "Transfer between accounts tracked under the same ledger account; no accounting effect at current granularity.";
+                transaction.Notes = noAccountingEffectReason;
+                transferTarget.Notes = noAccountingEffectReason;
+            }
+        }
+        else if (command.Action == BankReconciliationAction.MatchLoanPayment && loanPaymentTarget is not null)
+        {
+            await MoneyAccountingPosting.PostLoanPaymentAsync(
+                _db, context, loanPaymentTarget, command.ActorUserId, ct);
+        }
+        else if (command.Action == BankReconciliationAction.MatchOwnerDistribution
+                 && ownerDistributionTarget is not null)
+        {
+            await MoneyAccountingPosting.PostOwnerDistributionAsync(
+                _db, context, ownerDistributionTarget, command.ActorUserId, ct);
+        }
         context.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
             command.PortfolioId,
             transaction,

@@ -5,6 +5,7 @@ using RentalCommand.Core.Automation;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Services;
+using RentalCommand.Data.Accounting;
 
 namespace RentalCommand.Data.Automation;
 
@@ -330,6 +331,14 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
                     ClaimReleased = true,
                 }),
                 ChangeReason: "Advanced a claimed recurring-expense schedule."));
+        }
+
+        await context.FlushBusinessAsync(ct);
+        foreach (var expense in generated)
+        {
+            await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+                _db, context, expense, actorUserId: 0, ct: ct,
+                actorLabel: "system:recurring-expense");
         }
 
         return new ApplyScheduledFinanceBatchResult(

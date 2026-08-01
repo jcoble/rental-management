@@ -11,6 +11,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Banking;
 using Testcontainers.PostgreSql;
@@ -99,6 +100,8 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         db.Portfolios.Add(portfolio);
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
+        await new ChartOfAccountsSeedService(db).SeedAsync(_portfolioId);
+        await db.SaveChangesAsync();
     }
 
     public async Task DisposeAsync()
@@ -779,6 +782,68 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Reconciliation_SameLedgerTransferRecordsNoAccountingEffectReason()
+    {
+        SkipIfNoDocker();
+        var auth = await SeedAllPropertiesAuthorityAsync();
+        int sourceId;
+        int destinationId;
+        await using (var db = NewContext())
+        {
+            var sourceConnection = SeedBankConnection(db, "Same-ledger source bank");
+            var destinationConnection = SeedBankConnection(db, "Same-ledger destination bank");
+            var source = SeedBankTransaction(
+                db, sourceConnection.Id, "same-ledger-transfer-source", -300m, null);
+            var destination = SeedBankTransaction(
+                db, destinationConnection.Id, "same-ledger-transfer-destination", 300m, null);
+            await db.SaveChangesAsync();
+            sourceId = source.Id;
+            destinationId = destination.Id;
+        }
+
+        var identity = new AtomicCommandIdentity(
+            "banking.transaction.reconcile", $"{_portfolioId}:{sourceId}:same-ledger-transfer");
+        var command = new ReconcileBankTransactionCommand(
+            _portfolioId,
+            sourceId,
+            BankReconciliationAction.MatchTransfer,
+            null,
+            null,
+            null,
+            null,
+            null,
+            destinationId,
+            _now,
+            _now,
+            _now.AddSeconds(1),
+            auth.UserId,
+            auth.SessionId,
+            auth.AccessContextId,
+            auth.AccessRevision,
+            CapabilityKeys.MoneyReconciliationOperate,
+            "same-ledger-transfer");
+
+        var committed = await ExecuteAtomicAsync(identity, command, ReconcileCodec);
+        var replay = await ExecuteAtomicAsync(identity, command, ReconcileCodec);
+
+        committed.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.Applied);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        await using var verify = NewContext();
+        var notes = await verify.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == sourceId || row.Id == destinationId)
+            .OrderBy(row => row.Id)
+            .Select(row => new { row.MatchStatus, row.MatchedBankTransactionId, row.Notes })
+            .ToListAsync();
+        notes.Should().HaveCount(2);
+        notes.Should().OnlyContain(row =>
+            row.MatchStatus == "Matched"
+            && row.MatchedBankTransactionId != null
+            && row.Notes == "Transfer between accounts tracked under the same ledger account; no accounting effect at current granularity.");
+        (await verify.JournalEntries.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.SourceType == JournalSourceType.BankTransfer)).Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task Reconciliation_ExpenseMatch_CommitsPaidLifecycleAndReplaysExactResult()
     {
         SkipIfNoDocker();
@@ -845,7 +910,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.CommandType == identity.CommandType
-            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(2);
+            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(3);
     }
 
     [SkippableFact]
