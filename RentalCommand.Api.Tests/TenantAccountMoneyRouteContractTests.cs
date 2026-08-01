@@ -121,6 +121,14 @@ public sealed class TenantAccountMoneyRouteContractTests
             .Should().NotBeNull();
         typeof(PostTenantCreditCommand).GetProperty(nameof(PostTenantCreditCommand.AllocateOldestCharges))
             .Should().NotBeNull();
+        typeof(PostTenantCreditRequest).GetProperty(nameof(PostTenantCreditRequest.TargetChargeEntryId))
+            .Should().NotBeNull();
+        typeof(PostTenantCreditRequest).GetProperty(nameof(PostTenantCreditRequest.IncomeLedgerAccountId))
+            .Should().NotBeNull();
+        typeof(PostTenantCreditCommand).GetProperty(nameof(PostTenantCreditCommand.TargetChargeEntryId))
+            .Should().NotBeNull();
+        typeof(PostTenantCreditCommand).GetProperty(nameof(PostTenantCreditCommand.IncomeLedgerAccountId))
+            .Should().NotBeNull();
         typeof(PostTenantAdjustmentCommand).GetProperty(nameof(PostTenantAdjustmentCommand.Direction))
             .Should().NotBeNull();
         typeof(PostTenantAdjustmentCommand).GetProperty("DueOn").Should().BeNull();
@@ -179,6 +187,18 @@ public sealed class TenantAccountMoneyRouteContractTests
         typeof(ReverseTenantChargeCommand).GetProperty("Amount").Should().BeNull();
         typeof(ReverseTenantChargeRequest).GetProperty("Reason").Should().NotBeNull();
         typeof(ReverseTenantChargeCommand).GetProperty("Reason").Should().NotBeNull();
+        typeof(PostTenantChargeRequest).GetProperty(nameof(PostTenantChargeRequest.IncomeLedgerAccountId))
+            .Should().NotBeNull();
+        typeof(PostTenantChargeRequest).GetProperty(nameof(PostTenantChargeRequest.ServicePeriodStartOn))
+            .Should().NotBeNull();
+        typeof(PostTenantChargeRequest).GetProperty(nameof(PostTenantChargeRequest.ServicePeriodEndOn))
+            .Should().NotBeNull();
+        typeof(PostTenantChargeCommand).GetProperty(nameof(PostTenantChargeCommand.IncomeLedgerAccountId))
+            .Should().NotBeNull();
+        typeof(PostTenantChargeCommand).GetProperty(nameof(PostTenantChargeCommand.ServicePeriodStartOn))
+            .Should().NotBeNull();
+        typeof(PostTenantChargeCommand).GetProperty(nameof(PostTenantChargeCommand.ServicePeriodEndOn))
+            .Should().NotBeNull();
     }
 
     [Fact]

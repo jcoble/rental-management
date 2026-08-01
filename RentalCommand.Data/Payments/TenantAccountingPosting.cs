@@ -37,6 +37,29 @@ internal static class TenantAccountingPosting
                 actorLabel,
                 ct);
 
+    internal static Task<JournalEntry> PostTenantChargeAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        TenantLedgerEntry charge,
+        int actorUserId,
+        int? incomeLedgerAccountId,
+        CancellationToken ct = default,
+        string? actorLabel = null) =>
+        charge.EntryType == TenantLedgerEntryType.DepositCharge
+            ? PostDepositChargeAsync(db, context, charge, actorUserId, actorLabel, ct)
+            : PostIncomeEntryAsync(
+                db,
+                context,
+                charge,
+                JournalSourceType.TenantCharge,
+                IncomeSystemKey(charge.EntryType),
+                debitReceivable: true,
+                actorUserId,
+                actorLabel,
+                ct,
+                incomeLedgerAccountId,
+                requireActiveIncomeAccount: true);
+
     /// <summary>
     /// Posts scheduled rent and late-fee charges with one system-account lookup and one posting
     /// preflight, rather than repeating account and idempotency reads for every occurrence.
@@ -190,6 +213,32 @@ internal static class TenantAccountingPosting
             actorUserId,
             actorLabel: null,
             ct);
+
+    internal static async Task<JournalEntry> PostTenantConcessionAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        TenantLedgerEntry entry,
+        int actorUserId,
+        int? incomeLedgerAccountId,
+        CancellationToken ct = default)
+    {
+        var targetedIncomeAccountId = entry.RelatedTenantLedgerEntryId is long originalChargeEntryId
+            ? await FindOriginalIncomeAccountIdAsync(
+                db, entry.PortfolioId, originalChargeEntryId, ct)
+            : incomeLedgerAccountId;
+        return await PostIncomeEntryAsync(
+            db,
+            context,
+            entry,
+            JournalSourceType.TenantConcession,
+            IncomeSystemKey(entry.EntryType),
+            debitReceivable: false,
+            actorUserId,
+            actorLabel: null,
+            ct,
+            targetedIncomeAccountId,
+            requireActiveIncomeAccount: entry.RelatedTenantLedgerEntryId is null);
+    }
 
     internal static async Task<JournalEntry> PostTenantReceiptAsync(
         RentalCommandDbContext db,
@@ -480,12 +529,17 @@ internal static class TenantAccountingPosting
         bool debitReceivable,
         int actorUserId,
         string? actorLabel,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? incomeLedgerAccountId = null,
+        bool requireActiveIncomeAccount = true)
     {
         var receivable = await AccountingPostingSupport.RequireSystemAccountIdAsync(
             db, entry.PortfolioId, Receivable, ct);
-        var income = await AccountingPostingSupport.RequireSystemAccountIdAsync(
-            db, entry.PortfolioId, incomeSystemKey, ct);
+        var income = incomeLedgerAccountId is int selectedAccountId
+            ? await RequireIncomeAccountIdAsync(
+                db, entry.PortfolioId, selectedAccountId, requireActiveIncomeAccount, ct)
+            : await AccountingPostingSupport.RequireSystemAccountIdAsync(
+                db, entry.PortfolioId, incomeSystemKey, ct);
         var lines = debitReceivable
             ? new[]
             {
@@ -511,6 +565,47 @@ internal static class TenantAccountingPosting
             userId: actorUserId > 0 ? actorUserId : null,
             actorLabel: actorLabel);
         return await new AccountingPostingService(db).PostAsync(proposal, ct);
+    }
+
+    private static async Task<int> RequireIncomeAccountIdAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        int incomeLedgerAccountId,
+        bool requireActive,
+        CancellationToken ct)
+    {
+        var accountId = await db.LedgerAccounts
+            .AsNoTracking()
+            .Where(account => account.Id == incomeLedgerAccountId
+                && account.PortfolioId == portfolioId
+                && account.AccountType == AccountType.Income
+                && (!requireActive || account.IsActive))
+            .Select(account => (int?)account.Id)
+            .SingleOrDefaultAsync(ct);
+        return accountId ?? throw new AccountingPostingValidationException(
+            "The selected income ledger account is not valid for this portfolio.");
+    }
+
+    private static async Task<int> FindOriginalIncomeAccountIdAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        long originalChargeEntryId,
+        CancellationToken ct)
+    {
+        var accountId = await (
+            from journal in db.JournalEntries.AsNoTracking()
+            from line in journal.Lines
+            join account in db.LedgerAccounts.AsNoTracking()
+                on line.LedgerAccountId equals account.Id
+            where journal.PortfolioId == portfolioId
+                && journal.SourceType == JournalSourceType.TenantCharge
+                && journal.SourceId == originalChargeEntryId
+                && account.PortfolioId == portfolioId
+                && account.AccountType == AccountType.Income
+                && line.CreditAmount > 0m
+            select (int?)line.LedgerAccountId).SingleOrDefaultAsync(ct);
+        return accountId ?? throw new AccountingPostingValidationException(
+            "The original charge journal has no positive income line.");
     }
 
     private static async Task<JournalEntry> PostDepositChargeAsync(
