@@ -3,14 +3,18 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Money;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
@@ -81,6 +85,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ConfirmScanDraftResult,
             ConfirmScanDraftHandler>();
         services.AddAtomicCommandHandler<
+            AtomicMoneyMutationCommand,
+            AtomicMoneyMutationResult,
+            AtomicMoneyMutationHandler>();
+        services.AddAtomicCommandHandler<
             RefundTenantPaymentCommand,
             TenantPaymentRefundResult,
             RefundTenantPaymentHandler>();
@@ -119,6 +127,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         await scope.Db.SaveChangesAsync();
         _actorUserId = actor.Id;
         _portfolioId = portfolio.Id;
+        await new ChartOfAccountsSeedService(scope.Db).SeedAsync(_portfolioId);
+        await scope.Db.SaveChangesAsync();
 
         var property = new Property
         {
@@ -1369,6 +1379,47 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             row.IdempotencyKey == $"{command.DeliveryIdempotencyKey}:LoanPayment:{paymentId}:data-update"
             || row.IdempotencyKey == $"{command.DeliveryIdempotencyKey}:Loan:{loanId}:data-update"))
             .Should().Be(2);
+        (await verify.Db.JournalEntries.CountAsync(row =>
+            row.PortfolioId == _portfolioId
+            && row.SourceType == JournalSourceType.LoanPayment
+            && row.Lines.Any(line => line.SourceLineId == paymentId)))
+            .Should().Be(0);
+
+        var postCommand = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId,
+                _actorUserId,
+                _authSessionId,
+                _accessContextId,
+                _accessRevision),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan,
+            AtomicMoneyOperation.PostPayment,
+            paymentId,
+            "scan-corrected-loan-payment",
+            new PostLoanPaymentRequest { LoanId = loanId, PaidDate = StatementDate },
+            CommandTime.AddMinutes(1));
+        var posted = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(postCommand), postCommand, AtomicMoneyMutation.Codec);
+        posted.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+
+        var postedLines = await verify.Db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.PortfolioId == _portfolioId
+                && line.JournalEntry.SourceType == JournalSourceType.LoanPayment
+                && line.JournalEntry.SourceId == correction.Id)
+            .OrderBy(line => line.Id)
+            .Select(line => new
+            {
+                SystemKey = line.LedgerAccount!.SystemKey,
+                line.DebitAmount,
+                line.CreditAmount,
+            })
+            .ToListAsync();
+        postedLines.Should().Equal(
+            new { SystemKey = "mortgage-payable", DebitAmount = StatementPrincipal, CreditAmount = 0m },
+            new { SystemKey = "mortgage-interest", DebitAmount = StatementInterest, CreditAmount = 0m },
+            new { SystemKey = "mortgage-escrow-asset", DebitAmount = StatementEscrow, CreditAmount = 0m },
+            new { SystemKey = "operating-cash", DebitAmount = 0m, CreditAmount = StatementTotal });
     }
 
     [SkippableFact]
@@ -1786,6 +1837,26 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             await arrange.Db.SaveChangesAsync();
         }
 
+        var initialPostCommand = AtomicMoneyMutation.Command(
+            new WorkspaceReadScope(
+                _portfolioId,
+                _actorUserId,
+                _authSessionId,
+                _accessContextId,
+                _accessRevision),
+            CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan,
+            AtomicMoneyOperation.PostPayment,
+            paymentId,
+            "scan-paid-loan-payment-original",
+            new PostLoanPaymentRequest { LoanId = loanId, PaidDate = paidDate },
+            CommandTime);
+        var initialPosted = await ExecuteAtomicAsync(
+            AtomicMoneyMutation.Identity(initialPostCommand),
+            initialPostCommand,
+            AtomicMoneyMutation.Codec);
+        initialPosted.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+
         var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Loan);
         var identity = ScanConfirmationCommandIdentity.Create(
             _portfolioId, draftId, "match-existing-loan-payment-already-paid-rounded-statement");
@@ -1847,6 +1918,41 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             row.CommandType == identity.CommandType
             && row.IdempotencyKey == identity.IdempotencyKey))
             .Should().Be(1);
+
+        var entries = await verify.Db.JournalEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == _portfolioId
+                && entry.SourceType == JournalSourceType.LoanPayment
+                && entry.Lines.Any(line => line.SourceLineId == paymentId))
+            .Include(entry => entry.Lines)
+            .ThenInclude(line => line.LedgerAccount)
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(3);
+        var original = entries.Single(entry => entry.SourceId == paymentId
+            && entry.ReversesJournalEntryId is null);
+        var reversal = entries.Single(entry => entry.ReversesJournalEntryId == original.Id);
+        var replacement = entries.Single(entry => entry.SourceId == correction.Id
+            && entry.ReversesJournalEntryId is null);
+        reversal.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "operating-cash"
+            && line.DebitAmount == 1_444m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-payable"
+            && line.DebitAmount == 464m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-interest"
+            && line.DebitAmount == 662m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "mortgage-escrow-asset"
+            && line.DebitAmount == 318m
+            && line.CreditAmount == 0m);
+        replacement.Lines.Should().Contain(line =>
+            line.LedgerAccount!.SystemKey == "operating-cash"
+            && line.DebitAmount == 0m
+            && line.CreditAmount == 1_444m);
     }
 
     [SkippableFact]
