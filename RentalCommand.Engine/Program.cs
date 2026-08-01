@@ -215,6 +215,9 @@ builder.Services.AddSingleton<IRealtimeInvalidationQueue>(sp =>
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
 builder.Services.AddScoped<IDebtServiceService, DebtServiceService>();
 builder.Services.AddScoped<IRecurringExpenseGenerationService, RecurringExpenseGenerationService>();
+builder.Services.AddScoped<
+    IRecurringTenantChargeGenerationService,
+    RecurringTenantChargeGenerationService>();
 builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceService>();
 // Online-payments autopay charging (gated: no-op unless Stripe is configured).
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));

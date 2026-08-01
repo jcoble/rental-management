@@ -31,6 +31,7 @@ internal static class EngineHostedServiceRegistration
             services.AddHostedService<RentChargeWorker>();
             services.AddHostedService<DebtServiceWorker>();
             services.AddHostedService<RecurringExpenseWorker>();
+            services.AddHostedService<RecurringTenantChargeWorker>();
             services.AddHostedService<AutopayChargeWorker>();
             services.AddHostedService<RecurringMaintenanceWorker>();
             services.AddHostedService<LateFeeWorker>();
