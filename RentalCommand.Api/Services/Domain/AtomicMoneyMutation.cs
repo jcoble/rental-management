@@ -53,6 +53,8 @@ public sealed class AtomicMoneyMutationHandler
                 command, attempt, securityNowUtc, businessNowUtc, businessDateUtc, ct),
             AtomicMoneyDomain.OwnerDistribution => await MutateDistributionAsync(
                 command, attempt, securityNowUtc, businessNowUtc, businessDateUtc, ct),
+            AtomicMoneyDomain.OwnerContribution => await MutateContributionAsync(
+                command, attempt, securityNowUtc, businessNowUtc, businessDateUtc, ct),
             AtomicMoneyDomain.CapitalAsset => await MutateCapitalAssetAsync(
                 command, attempt, securityNowUtc, businessNowUtc, ct),
             AtomicMoneyDomain.PropertyDisposition => await MutatePropertyDispositionAsync(
@@ -76,7 +78,7 @@ public sealed class AtomicMoneyMutationHandler
         DateTime securityNowUtc,
         CancellationToken ct)
     {
-        if (command.Domain == AtomicMoneyDomain.OwnerDistribution)
+        if (command.Domain is AtomicMoneyDomain.OwnerDistribution or AtomicMoneyDomain.OwnerContribution)
         {
             return await HasWorkspaceAuthorityAsync(command, db, securityNowUtc, ct) &&
                 (!RequiresDestructiveDisbursementAuthority(command) ||
@@ -972,6 +974,153 @@ public sealed class AtomicMoneyMutationHandler
         return Applied(entity.Id, snapshot);
     }
 
+    private async Task<AtomicMoneyMutationResult> MutateContributionAsync(
+        AtomicMoneyMutationCommand command,
+        IAtomicCommandContext attempt,
+        DateTime securityNowUtc,
+        DateTime businessNowUtc,
+        DateTime businessDateUtc,
+        CancellationToken ct)
+    {
+        var db = _db;
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            var create = Read<CreateOwnerContributionRequest>(command);
+            await attempt.AcquireLockAsync("OwnerEntity", create.OwnerEntityId, ct);
+        }
+        else
+        {
+            await attempt.AcquireLockAsync("OwnerContribution", command.EntityId, ct);
+        }
+
+        var entity = command.Operation == AtomicMoneyOperation.Create ? null :
+            await db.Set<OwnerContribution>().SingleOrDefaultAsync(row =>
+                row.Id == command.EntityId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null,
+                ct);
+        if (command.Operation != AtomicMoneyOperation.Create && entity is null)
+            return Missing();
+        if (!await HasWorkspaceAuthorityAsync(command, db, securityNowUtc, ct))
+            throw Denied("Owner contributions require workspace funding authority.");
+
+        if (command.Operation == AtomicMoneyOperation.Delete)
+        {
+            if (entity!.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner contribution can be deleted.");
+            entity.DeletedAt = businessNowUtc;
+            entity.UpdatedAt = businessNowUtc;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerContribution),
+                AuditLogOperation.Deleted, $"Owner contribution {entity.Id} deleted"));
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(OwnerContribution), entity.Id, businessNowUtc, deleted: true);
+            return Applied(entity.Id);
+        }
+
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            var request = Read<CreateOwnerContributionRequest>(command);
+            if (!await DistributionReferencesExistAsync(
+                    command.PortfolioId, request.OwnerEntityId, request.PropertyId, db, ct))
+            {
+                return Missing();
+            }
+
+            entity = new OwnerContribution
+            {
+                PortfolioId = command.PortfolioId,
+                OwnerEntityId = request.OwnerEntityId,
+                PropertyId = request.PropertyId,
+                Date = Utc(request.Date),
+                Amount = request.Amount,
+                Method = request.Method,
+                Status = OwnerDistributionStatus.Draft,
+                Memo = Normalize(request.Memo),
+                CreatedAt = businessNowUtc,
+                UpdatedAt = businessNowUtc,
+            };
+            db.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerContribution),
+                AuditLogOperation.Created, "Owner contribution draft created", entityId: 0));
+        }
+        else if (command.Operation == AtomicMoneyOperation.Approve)
+        {
+            var request = Read<ApproveOwnerContributionRequest>(command);
+            var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner contribution can be approved.");
+            var bankReference = Normalize(request.BankReference);
+            var exportReference = Normalize(request.ExportReference);
+            if (bankReference is null || exportReference is null)
+            {
+                throw Conflict(
+                    "Bank reference and export reference are required before approving a contribution.");
+            }
+
+            current.Status = OwnerDistributionStatus.Approved;
+            current.ApprovedAt = businessNowUtc;
+            current.ApprovedBusinessDate = businessDateUtc;
+            current.ApprovedByUserId = command.ActorUserId;
+            current.BankReference = bankReference;
+            current.ExportReference = exportReference;
+            current.ExportedAt = Utc(request.ExportedAt) ?? businessNowUtc;
+            current.UpdatedAt = businessNowUtc;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerContribution),
+                AuditLogOperation.Updated, $"Owner contribution {current.Id} approved"));
+        }
+        else if (command.Operation == AtomicMoneyOperation.Reject)
+        {
+            var request = Read<RejectOwnerContributionRequest>(command);
+            var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner contribution can be rejected.");
+            current.Status = OwnerDistributionStatus.Rejected;
+            current.RejectedAt = businessNowUtc;
+            current.RejectedByUserId = command.ActorUserId;
+            current.RejectionReason = Normalize(request.Reason);
+            current.UpdatedAt = businessNowUtc;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerContribution),
+                AuditLogOperation.Updated, $"Owner contribution {current.Id} rejected"));
+        }
+        else if (command.Operation == AtomicMoneyOperation.Update)
+        {
+            var request = Read<UpdateOwnerContributionRequest>(command);
+            var current = entity!;
+            if (current.Status != OwnerDistributionStatus.Draft)
+                throw Conflict("Only a draft owner contribution can be edited.");
+            var ownerId = request.OwnerEntityId ?? current.OwnerEntityId;
+            await attempt.AcquireLockAsync("OwnerEntity", ownerId, ct);
+            var propertyId = request.ClearProperty == true ? null : request.PropertyId ?? current.PropertyId;
+            if (!await DistributionReferencesExistAsync(
+                    command.PortfolioId, ownerId, propertyId, db, ct))
+            {
+                return Missing();
+            }
+
+            current.OwnerEntityId = ownerId;
+            current.PropertyId = propertyId;
+            if (request.Date.HasValue) current.Date = Utc(request.Date.Value);
+            if (request.Amount.HasValue) current.Amount = request.Amount.Value;
+            if (request.Method.HasValue) current.Method = request.Method.Value;
+            if (request.Memo is not null) current.Memo = Normalize(request.Memo);
+            current.UpdatedAt = businessNowUtc;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerContribution),
+                AuditLogOperation.Updated, $"Owner contribution {current.Id} updated"));
+        }
+        else
+        {
+            throw new ArgumentException("Unsupported owner contribution mutation operation.");
+        }
+
+        await attempt.FlushBusinessAsync(ct);
+        if (command.Operation == AtomicMoneyOperation.Approve)
+        {
+            await MoneyAccountingPosting.PostOwnerContributionAsync(
+                db, attempt, entity!, command.ActorUserId, ct);
+        }
+        var snapshot = await SnapshotOwnerContributionAsync(entity!.Id, command.PortfolioId, db, ct);
+        StageDataUpdate(attempt, command, nameof(OwnerContribution), entity.Id, businessNowUtc, snapshot);
+        return Applied(entity.Id, snapshot);
+    }
+
     private async Task<string> SnapshotExpenseAsync(
         int entityId,
         int portfolioId,
@@ -1073,6 +1222,45 @@ public sealed class AtomicMoneyMutationHandler
                 Memo = distribution.Memo,
                 CreatedAt = distribution.CreatedAt,
                 UpdatedAt = distribution.UpdatedAt,
+            })
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private async Task<string> SnapshotOwnerContributionAsync(
+        int entityId,
+        int portfolioId,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        var response = await db.Set<OwnerContribution>()
+            .AsNoTracking()
+            .Where(contribution =>
+                contribution.Id == entityId && contribution.PortfolioId == portfolioId)
+            .Select(contribution => new OwnerContributionResponse
+            {
+                Id = contribution.Id,
+                PortfolioId = contribution.PortfolioId,
+                OwnerEntityId = contribution.OwnerEntityId,
+                OwnerName = contribution.OwnerEntity!.Name,
+                PropertyId = contribution.PropertyId,
+                PropertyName = contribution.Property == null ? null : contribution.Property.Name,
+                Date = contribution.Date,
+                Amount = contribution.Amount,
+                Method = contribution.Method,
+                Status = contribution.Status,
+                ApprovedAt = contribution.ApprovedAt,
+                ApprovedBusinessDate = contribution.ApprovedBusinessDate,
+                ApprovedByUserId = contribution.ApprovedByUserId,
+                RejectedAt = contribution.RejectedAt,
+                RejectedByUserId = contribution.RejectedByUserId,
+                RejectionReason = contribution.RejectionReason,
+                BankReference = contribution.BankReference,
+                ExportReference = contribution.ExportReference,
+                ExportedAt = contribution.ExportedAt,
+                Memo = contribution.Memo,
+                CreatedAt = contribution.CreatedAt,
+                UpdatedAt = contribution.UpdatedAt,
             })
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
@@ -1180,7 +1368,7 @@ public sealed class AtomicMoneyMutationHandler
                 capability.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Workspace), ct);
 
     private bool RequiresDestructiveDisbursementAuthority(AtomicMoneyMutationCommand command) =>
-        command.Domain == AtomicMoneyDomain.OwnerDistribution &&
+        (command.Domain is AtomicMoneyDomain.OwnerDistribution or AtomicMoneyDomain.OwnerContribution) &&
         command.Operation == AtomicMoneyOperation.Delete;
 
     private Task<bool> HasDestructiveDisbursementAuthorityAsync(
@@ -1454,7 +1642,7 @@ public sealed class AtomicMoneyMutationHandler
         new(true, true, id, responseJson);
     private DomainValidationException Conflict(string message) => new(message, 409);
     private CapabilityAuthorizationTargetKind RequiredTargetKind(AtomicMoneyMutationCommand command) =>
-        command.Domain == AtomicMoneyDomain.OwnerDistribution
+        command.Domain is AtomicMoneyDomain.OwnerDistribution or AtomicMoneyDomain.OwnerContribution
             ? CapabilityAuthorizationTargetKind.Workspace
             : CapabilityAuthorizationTargetKind.Property;
     private UnauthorizedAccessException Denied(string message) => new(message);

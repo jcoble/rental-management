@@ -10,6 +10,7 @@ public enum AtomicMoneyDomain
     OwnerDistribution = 3,
     CapitalAsset = 4,
     PropertyDisposition = 5,
+    OwnerContribution = 6,
 }
 
 public enum AtomicMoneyOperation

@@ -657,6 +657,10 @@ public sealed class AtomicCoreCrudMutationHandler
                 row.PortfolioId == command.PortfolioId && row.OwnerEntityId == owner.Id, ct);
             if (distributions > 0)
                 throw Conflict($"This owner has {distributions} recorded {(distributions == 1 ? "distribution" : "distributions")}. Delete or reassign them first.");
+            var contributions = await db.Set<OwnerContribution>().AsNoTracking().CountAsync(row =>
+                row.PortfolioId == command.PortfolioId && row.OwnerEntityId == owner.Id, ct);
+            if (contributions > 0)
+                throw Conflict($"This owner has {contributions} recorded {(contributions == 1 ? "contribution" : "contributions")}. Delete or reassign them first.");
             owner.DeletedAt = now;
             owner.UpdatedAt = now;
             attempt.BindSemanticAudit(owner, Audit(command, nameof(OwnerEntity), AuditLogOperation.Deleted,

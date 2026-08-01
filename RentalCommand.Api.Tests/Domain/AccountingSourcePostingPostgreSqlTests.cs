@@ -566,6 +566,56 @@ public sealed class AccountingSourcePostingPostgreSqlTests
     }
 
     [Fact]
+    public async Task OwnerContributionPostsCashAndOwnerSpecificContributionEquity()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        await SeedChartAsync(setup.Db);
+        var owner = new OwnerEntity
+        {
+            PortfolioId = 1,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Contribution owner",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var property = NewProperty("Contribution posting property");
+        var contribution = new OwnerContribution
+        {
+            PortfolioId = 1,
+            OwnerEntity = owner,
+            Property = property,
+            Date = new DateTime(2027, 1, 21, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 2_000m,
+            Method = DistributionMethod.Ach,
+            Status = OwnerDistributionStatus.Approved,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(contribution);
+        await setup.Db.SaveChangesAsync();
+
+        await MoneyAccountingPosting.PostOwnerContributionAsync(
+            setup.Db, AtomicContext(), contribution, 1);
+        await setup.Db.SaveChangesAsync();
+
+        var lines = await setup.Db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntry!.SourceType == JournalSourceType.OwnerContribution
+                && line.JournalEntry.SourceId == contribution.Id)
+            .OrderBy(line => line.Id)
+            .Select(line => new
+            {
+                SystemKey = line.LedgerAccount!.SystemKey!,
+                line.DebitAmount,
+                line.CreditAmount,
+                line.OwnerEntityId,
+            })
+            .ToListAsync();
+        lines.Should().Equal(
+            new { SystemKey = "operating-cash", DebitAmount = 2_000m, CreditAmount = 0m, OwnerEntityId = (int?)owner.Id },
+            new { SystemKey = "owner-contributions", DebitAmount = 0m, CreditAmount = 2_000m, OwnerEntityId = (int?)owner.Id });
+    }
+
+    [Fact]
     public async Task BankClearDoesNotReverseOwnerDistributionApprovalJournal()
     {
         await using var setup = await _fixture.CreateContextAsync();
