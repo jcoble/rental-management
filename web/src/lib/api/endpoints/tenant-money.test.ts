@@ -38,6 +38,17 @@ describe('tenant money API contract', () => {
 		}
 		assert.match(source, /function mutationOptions\(operationKey: string\)/);
 		assert.match(source, /'Idempotency-Key': operationKey/);
+		for (const mutation of [
+			'recordReceipt',
+			'postCharge',
+			'reverseCharge',
+			'postCredit',
+			'postAdjustment',
+			'reverseLedgerEntry',
+			'refundPayment'
+		]) {
+			assert.match(source, new RegExp(`${mutation}:[\\s\\S]*mutationOptions\\(operationKey\\)`));
+		}
 		assert.match(source, /TenantMoneyCommandResponse<RecordTenantReceiptResult>/);
 		assert.match(source, /TenantMoneyCommandResponse<TenantPaymentRefundResult>/);
 	});

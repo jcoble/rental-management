@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense';
@@ -301,9 +302,17 @@ export const accountingBooks = {
 	chartOfAccounts: (params?: ChartOfAccountsParams) =>
 		api.get<AccountingPage<ChartOfAccountsRow>>(buildChartOfAccountsPath(params)),
 	createChartOfAccount: (body: CreateChartOfAccountsRequest) =>
-		api.post<ChartOfAccountsRow>('/accounting/chart-of-accounts', body),
+		idempotentMutation(`accounting:chart-of-accounts:create:${JSON.stringify(body)}`, (key) =>
+			api.post<ChartOfAccountsRow>('/accounting/chart-of-accounts', body, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	patchChartOfAccount: (id: number, body: PatchChartOfAccountsRequest) =>
-		api.patch<ChartOfAccountsRow>(`/accounting/chart-of-accounts/${id}`, body),
+		idempotentMutation(`accounting:chart-of-accounts:update:${id}:${JSON.stringify(body)}`, (key) =>
+			api.patch<ChartOfAccountsRow>(`/accounting/chart-of-accounts/${id}`, body, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	generalLedger: (params?: GeneralLedgerParams) =>
 		api.get<AccountingPage<GeneralLedgerRow>>(buildGeneralLedgerPath(params)),
 	journalDetail: (publicId: string) =>
