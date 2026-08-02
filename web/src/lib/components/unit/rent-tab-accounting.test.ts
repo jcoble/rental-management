@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { tenantLedgerPeriodRange } from './money.ts';
+import { projectedRemainingCharge } from '../../accounting/tenant-credit-preview.ts';
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const rentTab = source('./tabs/RentTab.svelte');
@@ -68,10 +69,18 @@ describe('W2 unit tenant ledger composition', () => {
 		}
 		assert.match(creditSheet, /DepositCharge/);
 		assert.match(creditSheet, /selectedTarget\.openAmount/);
+		assert.match(creditSheet, /formatAccountingCurrency\(projectedRemainingAmount, currency\)/);
 		assert.match(
 			creditSheet,
 			/This credit is larger than what's left of the original charge\. Enter it as a standalone credit instead\./
 		);
+	});
+
+	it('projects the remaining targeted charge live and safely', () => {
+		assert.equal(projectedRemainingCharge(500, '125.50'), 374.5);
+		assert.equal(projectedRemainingCharge(500, '700'), 0);
+		assert.equal(projectedRemainingCharge(500, ''), 500);
+		assert.equal(projectedRemainingCharge(500, 'not-a-number'), 500);
 	});
 
 	it('computes only the date window for the server query', () => {
