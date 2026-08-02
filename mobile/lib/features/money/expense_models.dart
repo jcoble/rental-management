@@ -112,6 +112,9 @@ class Expense {
     this.documentKind,
     this.propertyName,
     this.vendorName,
+    this.accountId,
+    this.accountName,
+    this.journalEntryPublicId,
     required this.hasReceipt,
     required this.receiptIsImage,
     required this.lineItems,
@@ -144,6 +147,9 @@ class Expense {
   final String? documentKind;
   final String? propertyName;
   final String? vendorName;
+  final int? accountId;
+  final String? accountName;
+  final String? journalEntryPublicId;
   final bool hasReceipt;
   final bool receiptIsImage;
   final List<ExpenseLineItem> lineItems;
@@ -178,6 +184,9 @@ class Expense {
       documentKind: json['documentKind'] as String?,
       propertyName: json['propertyName'] as String?,
       vendorName: json['vendorName'] as String?,
+      accountId: (json['accountId'] as num?)?.toInt(),
+      accountName: json['accountName'] as String?,
+      journalEntryPublicId: json['journalEntryPublicId'] as String?,
       hasReceipt: json['hasReceipt'] as bool? ?? false,
       receiptIsImage: json['receiptIsImage'] as bool? ?? false,
       lineItems: ((json['lineItems'] as List<dynamic>?) ?? const [])
