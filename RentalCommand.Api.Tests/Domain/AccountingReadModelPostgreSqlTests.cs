@@ -99,15 +99,17 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
-    public async Task ChartJournalAndFinancialStatements_StayPortfolioScopedAndBalanced()
+    public async Task ChartJournalAndFinancialStatements_StayPortfolioScopedAndSatisfyAccountingEquation()
     {
-        await using var setup = await _fixture.CreateContextAsync();
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
         var seed = new ChartOfAccountsSeedService(setup.Db);
         await seed.SeedAsync(1);
         await setup.Db.SaveChangesAsync();
         setup.Db.ChangeTracker.Clear();
         var accounts = await setup.Db.LedgerAccounts
-            .Where(account => account.PortfolioId == 1 && (account.Code == "1000" || account.Code == "4000"))
+            .Where(account => account.PortfolioId == 1
+                && (account.Code == "1000" || account.Code == "2100" || account.Code == "4000"))
             .OrderBy(account => account.Code)
             .ToArrayAsync();
         var entry = await new AccountingPostingService(setup.Db).PostAsync(new AccountingProposedEntry
@@ -126,7 +128,26 @@ public sealed class AccountingReadModelPostgreSqlTests
             Lines =
             [
                 new AccountingProposedLine { LedgerAccountId = accounts[0].Id, DebitAmount = 250m },
-                new AccountingProposedLine { LedgerAccountId = accounts[1].Id, CreditAmount = 250m },
+                new AccountingProposedLine { LedgerAccountId = accounts[2].Id, CreditAmount = 250m },
+            ],
+        });
+        await new AccountingPostingService(setup.Db).PostAsync(new AccountingProposedEntry
+        {
+            PortfolioId = 1,
+            EffectiveOn = new DateOnly(2026, 8, 1),
+            Currency = "USD",
+            Description = "Security deposit liability",
+            SourceType = JournalSourceType.OpeningBalance,
+            SourceId = 8103,
+            SourceBusinessKey = "read-model:8103",
+            PostingRuleVersion = 1,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = 1,
+            Lines =
+            [
+                new AccountingProposedLine { LedgerAccountId = accounts[0].Id, DebitAmount = 50m },
+                new AccountingProposedLine { LedgerAccountId = accounts[1].Id, CreditAmount = 50m },
             ],
         });
         await setup.Db.SaveChangesAsync();
@@ -141,12 +162,15 @@ public sealed class AccountingReadModelPostgreSqlTests
             To = new DateOnly(2026, 8, 31),
             Currency = "USD",
         });
+        commands.Reset();
         var balanceSheet = await service.GetBalanceSheetAsync(1, new StatementQuery
         {
             From = new DateOnly(2026, 8, 1),
             To = new DateOnly(2026, 8, 31),
             Currency = "USD",
         });
+        var balanceSheetQueryCount = commands.Count;
+        var balanceSheetSql = commands.Sql;
         var incomeStatement = await service.GetIncomeStatementAsync(1, new StatementQuery
         {
             From = new DateOnly(2026, 8, 1),
@@ -161,9 +185,18 @@ public sealed class AccountingReadModelPostgreSqlTests
         detail.TotalCredits.Should().Be(250m);
         detail.IsBalanced.Should().BeTrue();
         trialBalance.IsBalanced.Should().BeTrue();
-        trialBalance.TotalDebits.Should().Be(250m);
-        trialBalance.TotalCredits.Should().Be(250m);
+        trialBalance.TotalDebits.Should().Be(300m);
+        trialBalance.TotalCredits.Should().Be(300m);
         balanceSheet.Sections.Should().ContainSingle(section => section.Label == nameof(AccountType.Asset));
+        balanceSheet.Sections.Should().ContainSingle(section => section.Label == nameof(AccountType.Liability))
+            .Which.Rows.Should().ContainSingle(row => row.AccountName == "Tenant Security Deposits Payable" && row.Amount == 50m);
+        balanceSheet.Sections.Should().ContainSingle(section => section.Label == nameof(AccountType.Equity))
+            .Which.Rows.Should().ContainSingle(row => row.AccountId == 0 && row.AccountName == "Net income" && row.Amount == 250m);
+        balanceSheet.Totals.Assets.Should().Be(300m);
+        balanceSheet.Totals.LiabilitiesAndEquity.Should().Be(300m);
+        balanceSheet.Totals.NetIncome.Should().Be(250m);
+        balanceSheetQueryCount.Should().Be(4);
+        balanceSheetSql.Should().OnlyContain(sql => sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
         incomeStatement.Totals.NetIncome.Should().Be(250m);
     }
 
