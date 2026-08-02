@@ -55,6 +55,7 @@
 	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
 	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
 	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
+	import CashFlowPanel from '$lib/components/accounting/CashFlowPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -848,10 +849,7 @@
 {/snippet}
 
 {#snippet cashFlowPlaceholder()}
-	<div class="rounded-xl border border-dashed border-border bg-card p-6" data-testid="cash-flow-placeholder" data-todo="TODO-W1B">
-		<h2 class="text-lg font-semibold">Cash flow</h2>
-		<p class="mt-1 text-sm text-muted-foreground">Cash flow details will be connected from the W1-B panel.</p>
-	</div>
+	<CashFlowPanel />
 {/snippet}
 
 <svelte:head>
