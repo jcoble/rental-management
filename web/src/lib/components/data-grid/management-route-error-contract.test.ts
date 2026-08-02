@@ -14,8 +14,8 @@ const managementRoutes = [
 const sources = Object.fromEntries(
 	managementRoutes.map(([name, path]) => [name, readFileSync(path, 'utf8')])
 );
-const rentTab = readFileSync(
-	'src/lib/components/unit/tabs/RentTab.svelte',
+const tenantLedgerPanel = readFileSync(
+	'src/lib/components/accounting/TenantLedgerPanel.svelte',
 	'utf8'
 );
 const paymentDetail = readFileSync(
@@ -36,9 +36,13 @@ describe('management route error contract', () => {
 			);
 		}
 
-		assert.match(rentTab, /data-testid="rent-receipts-error"/);
-		assert.match(rentTab, /receiptsQuery\.isError/);
-		assert.match(rentTab, /receiptsQuery\.refetch\(\)/);
+		assert.match(tenantLedgerPanel, /data-testid="tenant-ledger-error"/);
+		assert.match(tenantLedgerPanel, /readError/);
+		assert.match(tenantLedgerPanel, /retryReads/);
+		assert.ok(
+			tenantLedgerPanel.indexOf('{:else if readError}') < tenantLedgerPanel.indexOf('data-testid="tenant-ledger-months"'),
+			'canonical tenant-ledger errors must render before month rows'
+		);
 		assert.match(paymentDetail, /data-testid="payment-detail-error"/);
 		assert.match(paymentDetail, /paymentQuery\.isError/);
 		assert.match(paymentDetail, /paymentQuery\.refetch\(\)/);
@@ -54,7 +58,8 @@ describe('management route error contract', () => {
 		assert.match(sources.owners, /emptyMessage=\{ownerEmptyMessage\}/);
 		assert.match(sources.leases, /emptyMessage=\{relationshipEmptyMessage\}/);
 		assert.match(sources.applications, /\{emptyMessage\}/);
-		assert.match(rentTab, /No payments received yet\./);
+		assert.match(tenantLedgerPanel, /data-testid="tenant-ledger-empty"/);
+		assert.match(tenantLedgerPanel, /No charges or payments yet\. Record the first payment or charge above\./);
 		assert.match(paymentDetail, /data-testid="payment-detail-not-found"/);
 	});
 

@@ -6,6 +6,18 @@ const source = readFileSync(
 	new URL('./tabs/RentTab.svelte', import.meta.url),
 	'utf8'
 );
+const panelSource = readFileSync(
+	new URL('../accounting/TenantLedgerPanel.svelte', import.meta.url),
+	'utf8'
+);
+const paymentSheetSource = readFileSync(
+	new URL('../accounting/RecordPaymentSheet.svelte', import.meta.url),
+	'utf8'
+);
+const chargeSheetSource = readFileSync(
+	new URL('../accounting/OneTimeChargeSheet.svelte', import.meta.url),
+	'utf8'
+);
 
 // TSK-457: RentTab lost its inline expand-to-edit payment UI; editing a payment's reference
 // and notes now lives in the extracted PaymentDetail component, folded into the Rent tab on
@@ -19,38 +31,45 @@ const portalServiceSource = readFileSync(
 	'utf8'
 );
 
-describe('unit rent canonical receipt and charge commands', () => {
-	it('captures receipt metadata and posts with an idempotency key', () => {
-		assert.match(source, /method: ''/);
-		assert.match(source, /reference: ''/);
-		assert.match(source, /operationKey \?\?= crypto\.randomUUID\(\)/);
-		assert.match(source, /payments\.recordReceipt\(tenantAccountId, operationKey/);
-		assert.match(source, /targetChargeEntryId: receiptTargetChargeEntryId\(\)/);
-		assert.match(source, /Leave unapplied\/advance receipt/);
-		assert.doesNotMatch(source, /allocateOldestCharges/);
+describe('unit rent canonical tenant ledger workflows', () => {
+	it('delegates RentTab to the canonical ledger surface and keeps receipt detail navigation', () => {
+		assert.match(source, /AccountingDetailMode/);
+		assert.match(source, /TenantLedgerPanel \{dashboard\} \{onScan\} onopenpayment=\{openReceipt\}/);
+		assert.match(source, /PaymentDetail/);
+		assert.match(source, /unitPaymentId: id/);
+		assert.doesNotMatch(source, /tenantAccounts\.(accountEntriesPage|chargesPage|depositsPage)/);
+		assert.doesNotMatch(source, /payments\.(recordReceipt|postCharge)/);
 	});
 
-	it('receives receipt targets from the server-side open-charge query without client filtering', () => {
-		assert.match(source, /tenantAccounts\.chargesPage\(tenantAccountId as number/);
-		assert.match(source, /\{#each chargesQuery\.data\?\.items \?\? \[\] as charge/);
-		assert.doesNotMatch(source, /chargesQuery\.data\?\.items\.filter/);
+	it('records payments through the canonical command and server-side open-charge query', () => {
+		assert.match(paymentSheetSource, /openOnly: true/);
+		assert.match(paymentSheetSource, /tenantMoney\.recordReceipt\(tenantAccountId, operationKey/);
+		assert.match(paymentSheetSource, /operationKey \?\?= crypto\.randomUUID\(\)/);
+		assert.match(paymentSheetSource, /targetChargeEntryId: form\.applyMode === 'specific'/);
+		assert.match(paymentSheetSource, /allocateOldestCharges: form\.applyMode === 'oldest'/);
+		assert.doesNotMatch(paymentSheetSource, /openCharges\.filter/);
 		assert.match(
 			portalServiceSource,
 			/BuildTenantChargeQuery[\s\S]*balance\.OpenAmount > 0m[\s\S]*return ApplyTenantChargeFilters/
 		);
 	});
 
-	it('offers a manual charge only from tenant-account context', () => {
-		assert.match(source, /payments\.postCharge\(tenantAccountId, operationKey/);
-		assert.match(source, /Use this only for a true one-off charge/);
+	it('creates category-aware one-time charges with server-owned correction boundaries', () => {
+		assert.match(chargeSheetSource, /tenantMoney\.postCharge\(tenantAccountId, operationKey/);
+		assert.match(chargeSheetSource, /incomeLedgerAccountId: resolvedAccount\?\.id \?\? null/);
+		assert.match(chargeSheetSource, /servicePeriodStartOn: form\.servicePeriodStartOn \|\| null/);
+		assert.match(chargeSheetSource, /servicePeriodEndOn: form\.servicePeriodEndOn \|\| null/);
+		assert.match(panelSource, /tenantMoney\.reverseCharge/);
+		assert.match(panelSource, /Posts a credit applied to this charge/);
+		assert.match(panelSource, /Posts an additional charge/);
+		assert.match(panelSource, /Reverses the charge/);
 	});
 
-	it('offers an idempotent generic ledger reversal for non-payment activity rows', () => {
-		assert.match(source, /tenantAccounts\.reverseEntry\(tenantAccountId, operationKey/);
-		assert.match(source, /canReverseTenantLedgerEntry\(entry\)/);
-		assert.match(source, /data-testid=\{`rent-reverse-ledger-entry-\$\{entry\.tenantLedgerEntryId\}`\}/);
-		assert.match(source, /data-testid="rent-reversal-form"/);
-		assert.doesNotMatch(source, /entry\.entryType === 'PaymentReceipt'[\s\S]*tenantAccounts\.reverseEntry/);
+	it('keeps correction actions in the canonical month ledger and out of RentTab', () => {
+		assert.match(panelSource, /data-testid="fix-charge-dialog"/);
+		assert.match(panelSource, /if \(action === 'give-credit'\)/);
+		assert.match(panelSource, /if \(action === 'fix-charge'\)/);
+		assert.doesNotMatch(source, /reverseEntry/);
 	});
 
 	it('renders immutable receipt detail without edit or delete actions', () => {
