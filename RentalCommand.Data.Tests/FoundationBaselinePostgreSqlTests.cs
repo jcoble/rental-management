@@ -823,6 +823,10 @@ public sealed class FoundationBaselinePostgreSqlTests
 
         var normalizedAuthoritySql = Regex.Replace(
             FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+        normalizedAuthoritySql.Should().Contain("receipt.\"CommandType\" = 'sandbox.demo-seed'");
+        normalizedAuthoritySql.Should().Contain("receipt.xmin = pg_current_xact_id()::xid");
+        normalizedAuthoritySql.Should().Contain("membership.\"Status\" = 'Active'");
+        normalizedAuthoritySql.Should().Contain("assignment.\"Status\" = 'Active'");
         Regex.Matches(normalizedAuthoritySql, "SECURITY DEFINER").Should().HaveCount(
             FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Count);
         foreach (var function in FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions)

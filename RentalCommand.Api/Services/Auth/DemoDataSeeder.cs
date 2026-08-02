@@ -12,6 +12,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Sandbox;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Documents;
 using RentalCommand.Data.Sandbox;
@@ -700,6 +701,13 @@ public class DemoDataSeeder
 
         db.Expenses.AddRange(expenses);
         await attempt.FlushBusinessAsync(ct);
+        await MoneyAccountingPosting.PostExpenseOccurrenceAsync(
+            db,
+            attempt,
+            expenses[0],
+            actorUserId,
+            ct,
+            actorLabel: "system:demo-seed");
 
         // ── 9. WorkOrders (~15) ───────────────────────────────────────────────────────
         var woDefs = new (int propIdx, int? unitIdx, int vendorIdx, int? tenantLeaseIdx,
@@ -958,16 +966,33 @@ public class DemoDataSeeder
             leaseSeed.LegalDocumentIntent?.AgreementId);
     }
 
-    private async Task<int> ResolveActorUserIdAsync(int portfolioId, CancellationToken ct) =>
-        await _db.Users
-            .Where(user => user.WorkspaceAccessContexts.Any(context =>
-                context.PortfolioId == portfolioId && context.Membership != null))
-            .OrderBy(user => user.Id)
-            .Select(user => user.Id)
-            .FirstOrDefaultAsync(ct) is var actorUserId && actorUserId > 0
-                ? actorUserId
-                : throw new InvalidOperationException(
-                    $"Portfolio {portfolioId} has no administering user for demo facts.");
+    private async Task<int> ResolveActorUserIdAsync(int portfolioId, CancellationToken ct)
+    {
+        var actorUserIds = await ResolveEffectiveWorkspaceUserIdsAsync(
+            _db,
+            portfolioId,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
+        return actorUserIds.FirstOrDefault() is var actorUserId && actorUserId > 0
+            ? actorUserId
+            : throw new InvalidOperationException(
+                $"Portfolio {portfolioId} has no administering user for demo facts.");
+    }
+
+    private static Task<List<int>> ResolveEffectiveWorkspaceUserIdsAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        DateTime effectiveAtUtc,
+        CancellationToken ct) =>
+        db.QuerySqlAsync<int>($$"""
+            SELECT users."Id" AS "Value"
+            FROM "AspNetUsers" AS users
+            JOIN LATERAL rc_list_effective_access_contexts(
+                users."Id", {{effectiveAtUtc}}) AS context ON TRUE
+            WHERE context."PortfolioId" = {{portfolioId}}
+            ORDER BY users."Id"
+            """,
+            ct);
 
     private static SeedDemoPortfolioResult Result(
         int portfolioId,
@@ -1470,27 +1495,23 @@ public sealed class DemoSeedCommandHandler
             return;
         }
 
-        var authorized = await db.QuerySqlAsync<int>($$"""
-            SELECT 1 AS "Value"
-            FROM "Portfolios" AS portfolio
-            WHERE portfolio."Id" = {{command.PortfolioId}}
+        var authorized = await db.QuerySqlAsync<DemoSeedAuthorizationScope>($$"""
+            SELECT users."Id" AS "UserId",
+                   context."AccessContextId",
+                   context."AccessRevision"
+            FROM "AspNetUsers" AS users
+            JOIN LATERAL rc_list_effective_access_contexts(
+                users."Id", {{command.BusinessNowUtc}}) AS context ON TRUE
+            WHERE context."PortfolioId" = {{command.PortfolioId}}
               AND (
                     NOT {{command.RequirePendingSandboxOnboarding}}
-                    OR COALESCE(portfolio."Settings"::jsonb #>> '{onboarding,choice}', 'pending')
-                        = 'pending')
-              AND EXISTS (
-                    SELECT 1
-                    FROM "WorkspaceAccessContexts" AS context
-                    JOIN "WorkspaceMemberships" AS membership
-                      ON membership."AccessContextId" = context."Id"
-                     AND membership."PortfolioId" = context."PortfolioId"
-                    WHERE context."PortfolioId" = portfolio."Id"
-                      AND context."Status" = 'Active'
-                      AND context."SuspendedAtUtc" IS NULL
-                      AND context."RevokedAtUtc" IS NULL
-                      AND membership."Status" = 'Active'
-                      AND membership."SuspendedAtUtc" IS NULL
-                      AND membership."RevokedAtUtc" IS NULL)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM "Portfolios" AS portfolio
+                        WHERE portfolio."Id" = context."PortfolioId"
+                          AND COALESCE(
+                              portfolio."Settings"::jsonb #>> '{onboarding,choice}',
+                              'pending') = 'pending'))
             LIMIT 1
             """,
             ct);
@@ -1499,6 +1520,37 @@ public sealed class DemoSeedCommandHandler
             throw new UnauthorizedAccessException(
                 "The portfolio has no active administering membership for demo seeding.");
         }
+
+        var scope = authorized.Single();
+        await db.QuerySqlAsync<int>($$"""
+            SELECT 1 AS "Value"
+            FROM (
+                SELECT set_config(
+                           'app.current_portfolio_id',
+                           {{command.PortfolioId.ToString()}},
+                           true),
+                       set_config(
+                           'app.current_user_id',
+                           {{scope.UserId.ToString()}},
+                           true),
+                       set_config(
+                           'app.current_access_context_id',
+                           {{scope.AccessContextId.ToString()}},
+                           true),
+                       set_config(
+                           'app.access_revision',
+                           {{scope.AccessRevision.ToString()}},
+                           true)
+            ) AS seed_scope
+            """,
+            ct);
+    }
+
+    private sealed class DemoSeedAuthorizationScope
+    {
+        public int UserId { get; init; }
+        public int AccessContextId { get; init; }
+        public long AccessRevision { get; init; }
     }
 
     private void Validate(SeedDemoPortfolioCommand command)
