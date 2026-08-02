@@ -13,8 +13,10 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -418,6 +420,164 @@ public class AccountingServiceTests : IAsyncLifetime
         _commands.Should().OnlyContain(sql =>
             sql.Contains("\"TenantLedgerAllocations\"", StringComparison.OrdinalIgnoreCase),
             "both the count and page query must resolve receipt categories from allocations DB-side");
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_ReturnsLedgerFieldsAndFiltersByAnyJournalLineInTwoQueries()
+    {
+        var now = new DateTime(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
+        var (property, lease) = SeedPropertyAndLease(now, agreementNumber: "LEASE-12");
+        var charge = SeedPayment(lease, 125m, dueDate: now, paidInFull: false);
+        await new ChartOfAccountsSeedService(_db).SeedAsync(PortfolioId);
+        await _db.SaveChangesAsync();
+        var accounts = await _db.LedgerAccounts
+            .Where(account => account.PortfolioId == PortfolioId &&
+                              (account.Code == "1100" || account.Code == "4000"))
+            .ToDictionaryAsync(account => account.Code);
+        var posting = new AccountingPostingService(_db);
+        var chargeJournal = await posting.PostAsync(new AccountingProposedEntry
+        {
+            PortfolioId = PortfolioId,
+            SourceType = JournalSourceType.TenantCharge,
+            SourceId = charge.Id,
+            SourceBusinessKey = charge.BusinessKey,
+            PostingRuleVersion = 1,
+            EffectiveOn = charge.EffectiveOn,
+            Currency = "USD",
+            Description = charge.Description,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = 1,
+            Lines =
+            [
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = accounts["1100"].Id,
+                    DebitAmount = charge.Amount,
+                    PropertyId = property.Id,
+                    UnitId = lease.LeaseManagement!.UnitId,
+                    TenantAccountId = charge.TenantAccountId,
+                },
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = accounts["4000"].Id,
+                    CreditAmount = charge.Amount,
+                    PropertyId = property.Id,
+                    UnitId = lease.LeaseManagement!.UnitId,
+                    TenantAccountId = charge.TenantAccountId,
+                },
+            ],
+        });
+        await _db.SaveChangesAsync();
+        async Task PostJournalOnly(
+            JournalSourceType sourceType,
+            long sourceId,
+            string description,
+            int? reversesJournalEntryId = null)
+        {
+            await posting.PostAsync(new AccountingProposedEntry
+            {
+                PortfolioId = PortfolioId,
+                SourceType = sourceType,
+                SourceId = sourceId,
+                SourceBusinessKey = $"read-model:{sourceType}:{sourceId}",
+                PostingRuleVersion = 1,
+                EffectiveOn = DateOnly.FromDateTime(now),
+                Currency = "USD",
+                Description = description,
+                ReversesJournalEntryId = reversesJournalEntryId,
+                AttemptId = Guid.NewGuid(),
+                AtomicReceiptId = Guid.NewGuid(),
+                UserId = 1,
+                Lines =
+                [
+                    new AccountingProposedLine
+                    {
+                        LedgerAccountId = accounts["1100"].Id,
+                        DebitAmount = 25m,
+                        PropertyId = property.Id,
+                    },
+                    new AccountingProposedLine
+                    {
+                        LedgerAccountId = accounts["4000"].Id,
+                        CreditAmount = 25m,
+                        PropertyId = property.Id,
+                    },
+                ],
+            });
+        }
+        await PostJournalOnly(JournalSourceType.LoanPayment, 9001, "Mortgage payment posted");
+        await PostJournalOnly(JournalSourceType.OwnerContribution, 9002, "Owner contribution received");
+        await PostJournalOnly(JournalSourceType.OwnerDistribution, 9003, "Owner distribution paid");
+        await posting.PostAsync(new AccountingProposedEntry
+        {
+            PortfolioId = PortfolioId,
+            SourceType = JournalSourceType.TenantCharge,
+            SourceId = 9004,
+            SourceBusinessKey = "read-model:reversal:9004",
+            PostingRuleVersion = 1,
+            EffectiveOn = DateOnly.FromDateTime(now),
+            Currency = "USD",
+            Description = "Charge reversed",
+            ReversesJournalEntryId = chargeJournal.Id,
+            AttemptId = Guid.NewGuid(),
+            AtomicReceiptId = Guid.NewGuid(),
+            UserId = 1,
+            Lines =
+            [
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = accounts["4000"].Id,
+                    DebitAmount = charge.Amount,
+                    PropertyId = property.Id,
+                    UnitId = lease.LeaseManagement!.UnitId,
+                    TenantAccountId = charge.TenantAccountId,
+                },
+                new AccountingProposedLine
+                {
+                    LedgerAccountId = accounts["1100"].Id,
+                    CreditAmount = charge.Amount,
+                    PropertyId = property.Id,
+                    UnitId = lease.LeaseManagement!.UnitId,
+                    TenantAccountId = charge.TenantAccountId,
+                },
+            ],
+        });
+        await _db.SaveChangesAsync();
+
+        var allRows = await _sut.GetTransactionsAsync(_scope, new AccountingTransactionsQuery { Take = 20 });
+        allRows.Items.Should().ContainSingle(row => row.DisplayType == "LoanPayment");
+        allRows.Items.Should().Contain(row =>
+            row.DisplayType == "OwnerActivity" && row.Title == "Owner contribution received");
+        allRows.Items.Should().Contain(row =>
+            row.DisplayType == "OwnerActivity" && row.Title == "Owner distribution paid");
+        allRows.Items.Should().ContainSingle(row => row.DisplayType == "Reversal");
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(_scope, new AccountingTransactionsQuery
+        {
+            AccountId = accounts["4000"].Id,
+            Take = 20,
+        });
+
+        var row = result.Items.Single(item => item.Title == charge.Description);
+        row.DisplayType.Should().Be("Charge");
+        row.EffectiveOn.Should().Be(charge.EffectiveOn);
+        row.EnteredAtUtc.Should().NotBe(default);
+        row.Title.Should().Be(charge.Description);
+        row.SourceContext.Should().Be("Lease · LEASE-12");
+        row.ChargeAmount.Should().Be(125m);
+        row.PaymentAmount.Should().Be(0m);
+        row.CreditAmount.Should().Be(0m);
+        row.AccountId.Should().Be(accounts["1100"].Id,
+            "tenant charges use the tenant receivable asset line as their primary account");
+        row.AccountCode.Should().Be("1100");
+        row.AccountName.Should().Be("Tenant Accounts Receivable");
+        row.JournalEntryPublicId.Should().NotBeNullOrWhiteSpace();
+        _commands.Should().HaveCount(2, "one count plus one bounded 20-row page query");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("rc_api_effective_capability_scopes", StringComparison.Ordinal) &&
+            sql.Contains("JournalLines", StringComparison.Ordinal));
     }
 
     [Fact]
