@@ -910,6 +910,12 @@ public class AccountingService : IAccountingService
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(query.DisplayType))
+        {
+            var displayType = query.DisplayType.Trim();
+            rows = rows.Where(row => EF.Functions.ILike(row.DisplayType, displayType));
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Status))
         {
             // Case-insensitive exact match DB-side via ILIKE (no wildcards). Postgres-native; the

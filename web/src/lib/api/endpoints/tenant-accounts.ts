@@ -307,6 +307,8 @@ export const tenantAccounts = {
 	} = {}) => api.get<Page<TenantLedgerRow>>(
 		`/tenant-accounts/${tenantAccountId}/ledger${queryString(params)}`
 	),
+	ledgerEntry: (tenantAccountId: number, entryId: number) =>
+		api.get<TenantLedgerRow>(`/tenant-accounts/${tenantAccountId}/ledger/${entryId}`),
 	monthSummary: (tenantAccountId: number, params: { from?: string; to?: string } = {}) =>
 		api.get<TenantMonthSummary[]>(`/tenant-accounts/${tenantAccountId}/month-summary${queryString(params)}`),
 	recurringCharges: (tenantAccountId: number, params: ListParams = {}) =>

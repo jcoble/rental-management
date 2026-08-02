@@ -55,6 +55,18 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         return page is null ? NotFound() : Ok(page);
     }
 
+    [HttpGet("ledger/{entryId:long}")]
+    [ProducesResponseType(typeof(TenantLedgerRow), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TenantLedgerRow>> LedgerEntry(
+        int tenantAccountId, long entryId, CancellationToken ct)
+    {
+        if (!await TenantAccountExistsAsync(tenantAccountId, ct)) return NotFound();
+        var row = await _ledgerReadModels.GetTenantLedgerEntryAsync(
+            GetPortfolioId(), tenantAccountId, entryId, ct);
+        return row is null ? NotFound() : Ok(row);
+    }
+
     [HttpGet("month-summary")]
     [ProducesResponseType(typeof(IReadOnlyList<TenantMonthSummary>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

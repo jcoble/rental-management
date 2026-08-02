@@ -42,6 +42,7 @@ public sealed class AccountingApiContractFreezeTests
 
         routes.Should().Contain(
             "GET ledger",
+            "GET ledger/{entryId:long}",
             "GET month-summary",
             "GET ledger-summary",
             "GET recurring-charges",

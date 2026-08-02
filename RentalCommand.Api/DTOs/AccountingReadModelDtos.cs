@@ -16,6 +16,9 @@ public sealed class ChartOfAccountsQuery : ListQuery
 {
     [FromQuery(Name = "activeOnly")]
     public bool? ActiveOnly { get; set; }
+
+    [FromQuery(Name = "accountTypes")]
+    public string? AccountTypes { get; set; }
 }
 
 public sealed class GeneralLedgerQuery : ListQuery
