@@ -14,9 +14,7 @@ import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
-import '../payments/payment_detail_screen.dart';
 import '../payments/tenant_account_receipt_flow.dart';
-import 'expense_detail_screen.dart';
 import 'expense_form_sheet.dart';
 import 'money_format.dart';
 import 'money_repository.dart';
@@ -24,6 +22,9 @@ import 'money_snapshot_card.dart';
 import 'overdue_screen.dart';
 import 'transaction_models.dart';
 import 'transactions_controller.dart';
+import 'widgets/accounting_impact_block.dart';
+import 'widgets/journal_entry_screen.dart';
+import 'widgets/ledger_type_badge.dart';
 
 enum MoneyScreenView { insights, ledger, payments, expenses }
 
@@ -638,6 +639,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(transactionsProvider);
+    final accounts = ref.watch(chartOfAccountsProvider);
 
     return RefreshIndicator(
       onRefresh: () => ref.read(transactionsProvider.notifier).refresh(),
@@ -660,15 +662,25 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
           : ListView.separated(
               controller: _scroll,
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-              itemCount: state.items.length + (state.loadingMore ? 1 : 0),
+              itemCount: state.items.length + (state.loadingMore ? 1 : 0) + 1,
               separatorBuilder: (_, index) {
-                if (index >= state.items.length - 1) {
+                if (index >= state.items.length) {
                   return const SizedBox(height: 12);
                 }
                 return const MobileM3ListDivider();
               },
               itemBuilder: (_, i) {
-                if (i >= state.items.length) {
+                if (i == 0) {
+                  return _LedgerFilters(
+                    filter: state.filter,
+                    accounts: accounts.value ?? const [],
+                    onChanged: ref
+                        .read(transactionsProvider.notifier)
+                        .setFilter,
+                  );
+                }
+                final rowIndex = i - 1;
+                if (rowIndex >= state.items.length) {
                   return const Padding(
                     padding: EdgeInsets.all(16),
                     child: Center(
@@ -682,9 +694,9 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
                   );
                 }
                 return _TransactionCard(
-                  tx: state.items[i],
+                  tx: state.items[rowIndex],
                   position: MobileM3ListItemPositionForIndex.forIndex(
-                    i,
+                    rowIndex,
                     state.items.length,
                   ),
                 );
@@ -692,6 +704,88 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
             ),
     );
   }
+}
+
+class _LedgerFilters extends StatelessWidget {
+  const _LedgerFilters({
+    required this.filter,
+    required this.accounts,
+    required this.onChanged,
+  });
+  final TransactionsFilter filter;
+  final List<ChartOfAccountsRow> accounts;
+  final ValueChanged<TransactionsFilter> onChanged;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String?>(
+            initialValue: filter.displayType,
+            decoration: const InputDecoration(
+              labelText: 'Type',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(value: null, child: Text('All types')),
+              DropdownMenuItem(value: 'Charge', child: Text('Charge')),
+              DropdownMenuItem(
+                value: 'PaymentReceived',
+                child: Text('Payment received'),
+              ),
+              DropdownMenuItem(value: 'Credit', child: Text('Credit')),
+              DropdownMenuItem(value: 'Expense', child: Text('Expense')),
+              DropdownMenuItem(value: 'Bill', child: Text('Bill')),
+              DropdownMenuItem(
+                value: 'BankTransfer',
+                child: Text('Bank transfer'),
+              ),
+              DropdownMenuItem(
+                value: 'LoanPayment',
+                child: Text('Loan payment'),
+              ),
+              DropdownMenuItem(
+                value: 'OwnerActivity',
+                child: Text('Owner activity'),
+              ),
+              DropdownMenuItem(value: 'Reversal', child: Text('Reversal')),
+            ],
+            onChanged: (value) => onChanged(
+              filter.copyWith(
+                displayType: value,
+                clearDisplayType: value == null,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: DropdownButtonFormField<int?>(
+            initialValue: filter.accountId,
+            decoration: const InputDecoration(
+              labelText: 'Account',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('All accounts')),
+              for (final account in accounts)
+                DropdownMenuItem(
+                  value: account.id,
+                  child: Text(
+                    '${account.code} ${account.name}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (value) => onChanged(
+              filter.copyWith(accountId: value, clearAccountId: value == null),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _LedgerLoadingBody extends StatelessWidget {
@@ -714,78 +808,45 @@ String _emptyMessageFor(MoneyScreenView view) => switch (view) {
   MoneyScreenView.expenses => 'No expenses yet.',
 };
 
-class _TransactionCard extends StatelessWidget {
+class _TransactionCard extends ConsumerWidget {
   const _TransactionCard({required this.tx, required this.position});
 
   final AccountingTransaction tx;
   final MobileM3ListItemPosition position;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isPayment = tx.isPayment;
-    final isTenantAccountEntry = tx.isTenantAccountEntry;
-    final signColor = isPayment ? Colors.green.shade700 : cs.error;
+    final signColor = isPayment
+        ? Colors.green.shade700
+        : Theme.of(context).colorScheme.error;
 
     return MobileM3ListItem(
       position: position,
       onTap: () {
-        final accountId = tx.tenantAccountId;
-        if (isTenantAccountEntry && accountId == null) return;
-        if (!isTenantAccountEntry && !tx.isExpense) return;
-        final MobileDetailBuilder detailBuilder = isTenantAccountEntry
-            ? (BuildContext _) => PaymentDetailScreen(
-                tenantAccountId: accountId!,
-                tenantLedgerEntryId: tx.id,
-              )
-            : (BuildContext _) => ExpenseDetailScreen(expenseId: tx.id);
-        final shellNavigator = mobileShellNavigatorOf(context);
-        if (shellNavigator != null) {
-          shellNavigator.openTab(
-            MobileShellTabId.money,
-            destination: MobileDestinationId.moneyLedger,
-            detailBuilder: detailBuilder,
-          );
-          revealMobileShellIfDetached(context);
-          return;
-        }
-
-        final domainNavigator = MobileDomainNavigation.maybeOf(context);
-        if (domainNavigator != null) {
-          domainNavigator.openDestination(
-            MobileDestinationId.moneyLedger,
-            detailBuilder: detailBuilder,
-          );
-          return;
-        }
-
-        if (isTenantAccountEntry) {
-          Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => PaymentDetailScreen(
-                tenantAccountId: accountId!,
-                tenantLedgerEntryId: tx.id,
-              ),
+        final auth = ref.read(authControllerProvider);
+        final canSeeAccounting =
+            auth is AuthStateAuthenticated &&
+            canUseMobileCapabilityAction(
+              experience: auth.activeExperience,
+              capabilities: auth.capabilities,
+              capability: 'money.balances.read',
+              experiences: const {WorkspaceExperience.management},
+            );
+        Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => _LedgerTransactionDetailScreen(
+              tx: tx,
+              showAccounting: canSeeAccounting,
             ),
-          );
-        } else {
-          Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => ExpenseDetailScreen(expenseId: tx.id),
-            ),
-          );
-        }
+          ),
+        );
       },
-      leading: MobileM3LeadingIcon(
-        icon: isPayment ? Icons.south_west : Icons.north_east,
-        backgroundColor: isPayment ? cs.primaryContainer : cs.errorContainer,
-        foregroundColor: isPayment
-            ? cs.onPrimaryContainer
-            : cs.onErrorContainer,
-      ),
+      leading: LedgerTypeBadge(type: tx.displayType),
       title: Text(
-        tx.description.isEmpty ? tx.kind : tx.description,
+        tx.title.isEmpty ? tx.description : tx.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: theme.textTheme.titleSmall?.copyWith(
@@ -798,7 +859,9 @@ class _TransactionCard extends StatelessWidget {
             if (tx.counterparty != null && tx.counterparty!.isNotEmpty)
               tx.counterparty!,
             if (tx.category.isNotEmpty) tx.category,
-            shortDateFmt(tx.date),
+            if (tx.sourceContext?.isNotEmpty == true) tx.sourceContext!,
+            'Effective ${shortDateFmt(tx.date)}',
+            'Entered ${shortDateFmt(tx.enteredAtUtc)}',
           ].where((s) => s.isNotEmpty).join(' / '),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -830,6 +893,67 @@ class _TransactionCard extends StatelessWidget {
               tx.status,
               style: theme.textTheme.labelSmall?.copyWith(
                 color: cs.onSurfaceVariant,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LedgerTransactionDetailScreen extends ConsumerWidget {
+  const _LedgerTransactionDetailScreen({
+    required this.tx,
+    required this.showAccounting,
+  });
+  final AccountingTransaction tx;
+  final bool showAccounting;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final publicId = showAccounting ? tx.journalEntryPublicId : null;
+    final journal = publicId == null
+        ? null
+        : ref.watch(journalEntryProvider(publicId));
+    return Scaffold(
+      appBar: AppBar(title: const Text('Money details')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          LedgerTypeBadge(type: tx.displayType),
+          const SizedBox(height: 12),
+          Text(tx.title, style: Theme.of(context).textTheme.headlineSmall),
+          if (tx.sourceContext?.isNotEmpty == true) Text(tx.sourceContext!),
+          if (tx.paidByOrTo?.isNotEmpty == true) Text(tx.paidByOrTo!),
+          const SizedBox(height: 16),
+          ListTile(
+            title: const Text('Effective date'),
+            subtitle: Text(shortDateFmt(tx.date)),
+          ),
+          ListTile(
+            title: const Text('Entered date'),
+            subtitle: Text(shortDateFmt(tx.enteredAtUtc)),
+          ),
+          ListTile(
+            title: const Text('Amount'),
+            trailing: Text(moneyFmt(tx.amount)),
+          ),
+          if (tx.accountName != null)
+            ListTile(
+              title: const Text('Account'),
+              subtitle: Text('${tx.accountCode ?? ''} ${tx.accountName}'),
+            ),
+          if (journal != null)
+            journal.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) =>
+                  Text("Couldn't load accounting impact: $error"),
+              data: (value) => AccountingImpactBlock(
+                journal: value,
+                onOpenJournal: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => JournalEntryScreen(publicId: publicId!),
+                  ),
+                ),
               ),
             ),
         ],

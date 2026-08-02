@@ -1,3 +1,78 @@
+class ChartOfAccountsRow {
+  const ChartOfAccountsRow({
+    required this.id,
+    required this.code,
+    required this.name,
+  });
+  final int id;
+  final String code;
+  final String name;
+  factory ChartOfAccountsRow.fromJson(Map<String, dynamic> json) =>
+      ChartOfAccountsRow(
+        id: (json['id'] as num).toInt(),
+        code: json['code'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+      );
+}
+
+class JournalDetailLine {
+  const JournalDetailLine({
+    required this.accountCode,
+    required this.accountName,
+    required this.debitAmount,
+    required this.creditAmount,
+  });
+  final String accountCode;
+  final String accountName;
+  final double debitAmount;
+  final double creditAmount;
+  factory JournalDetailLine.fromJson(Map<String, dynamic> json) =>
+      JournalDetailLine(
+        accountCode: json['accountCode'] as String? ?? '',
+        accountName: json['accountName'] as String? ?? '',
+        debitAmount: (json['debitAmount'] as num?)?.toDouble() ?? 0,
+        creditAmount: (json['creditAmount'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class JournalDetail {
+  const JournalDetail({
+    required this.publicId,
+    required this.description,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.sourceType,
+    required this.actor,
+    required this.currency,
+    required this.lines,
+    required this.totalDebits,
+    required this.totalCredits,
+    required this.isBalanced,
+  });
+  final String publicId, description, sourceType, currency;
+  final DateTime effectiveOn, postedAtUtc;
+  final String? actor;
+  final List<JournalDetailLine> lines;
+  final double totalDebits, totalCredits;
+  final bool isBalanced;
+  factory JournalDetail.fromJson(Map<String, dynamic> json) => JournalDetail(
+    publicId: json['publicId'] as String? ?? '',
+    description: json['description'] as String? ?? '',
+    effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+    postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+    sourceType: json['sourceType'] as String? ?? '',
+    actor: json['actor'] as String?,
+    currency: json['currency'] as String? ?? 'USD',
+    lines: ((json['lines'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(JournalDetailLine.fromJson)
+        .toList(growable: false),
+    totalDebits: (json['totalDebits'] as num?)?.toDouble() ?? 0,
+    totalCredits: (json['totalCredits'] as num?)?.toDouble() ?? 0,
+    isBalanced: json['isBalanced'] as bool? ?? false,
+  );
+}
+
 // Models for the money-legibility surfaces: the plain-English money snapshot
 // (`GET /api/v1/accounting/snapshot`).
 
