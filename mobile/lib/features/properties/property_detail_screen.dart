@@ -8,6 +8,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
 import '../activity/activity_history_screen.dart';
 import '../money/money_format.dart' as money;
 import '../scan/scan_capture.dart';
@@ -2162,6 +2164,11 @@ class _LoanPaymentRow extends StatelessWidget {
               ),
             ],
           ),
+          if (payment.status.toLowerCase() == 'paid')
+            AccountingImpactCard(
+              sourceType: JournalSourceType.loanPayment,
+              sourceId: payment.id,
+            ),
           if (onRecordPaid != null) ...[
             const SizedBox(height: 8),
             Align(
