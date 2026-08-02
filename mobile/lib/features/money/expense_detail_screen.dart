@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../activity/activity_history_screen.dart';
 import '../properties/capital_assets_repository.dart';
@@ -12,6 +15,9 @@ import 'receipt_attachment_repository.dart';
 import 'receipt_upload_sheet.dart';
 import 'receipt_viewer_screen.dart';
 import 'transactions_controller.dart';
+import '../accounting/accounting_repository.dart';
+import 'widgets/accounting_impact_block.dart';
+import 'widgets/journal_entry_screen.dart';
 
 /// Detail page for one expense — view, inline edit, delete, and receipt viewer.
 ///
@@ -192,6 +198,19 @@ class _ExpenseBody extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final auth = ref.watch(authControllerProvider);
+    final canSeeAccounting =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.balances.read',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final journalId = canSeeAccounting ? expense.journalEntryPublicId : null;
+    final journal = journalId == null
+        ? null
+        : ref.watch(journalEntryProvider(journalId));
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -235,6 +254,8 @@ class _ExpenseBody extends ConsumerWidget {
           _DetailRow(label: 'Property', value: expense.propertyName!),
         if (expense.vendorName != null)
           _DetailRow(label: 'Vendor', value: expense.vendorName!),
+        if (canSeeAccounting && expense.accountName != null)
+          _DetailRow(label: 'Account', value: expense.accountName!),
         if (expense.paymentMethod != null && expense.paymentMethod!.isNotEmpty)
           _DetailRow(
             label: 'Paid with',
@@ -244,6 +265,22 @@ class _ExpenseBody extends ConsumerWidget {
                 '••${expense.cardLast4}',
             ].join(' '),
           ),
+        if (journal != null) ...[
+          const SizedBox(height: 20),
+          journal.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) =>
+                Text("Couldn't load accounting impact: $error"),
+            data: (value) => AccountingImpactBlock(
+              journal: value,
+              onOpenJournal: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => JournalEntryScreen(publicId: journalId!),
+                ),
+              ),
+            ),
+          ),
+        ],
         if (expense.subtotal != null)
           _DetailRow(label: 'Subtotal', value: moneyFmt(expense.subtotal!)),
         if (expense.taxAmount != null)
