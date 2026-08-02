@@ -3,7 +3,7 @@
 	import { formatDate } from '$lib/utils/date';
 	import LedgerAmount from './LedgerAmount.svelte';
 
-	let { entry, sourceContext }: { entry: JournalDetail; sourceContext?: string | null } = $props();
+	let { entry, sourceContext, onJournalSelect }: { entry: JournalDetail; sourceContext?: string | null; onJournalSelect?: (publicId: string) => void } = $props();
 	const posted = $derived(new Date(entry.postedAtUtc).toLocaleString());
 	const dimensions = (line: JournalDetail['lines'][number]) => [
 		line.propertyId ? `Property ${line.propertyId}` : null,
@@ -40,8 +40,8 @@
 
 	<section class="evidence">
 		<h4>Lineage and evidence</h4>
-		<p>Reverses: {entry.reversesJournalEntryPublicId ?? 'None'}</p>
-		<p>Reversed by: {entry.reversalPublicIds.length ? entry.reversalPublicIds.join(', ') : 'None'}</p>
+		<p>Reverses: {#if entry.reversesJournalEntryPublicId}<button type="button" onclick={() => onJournalSelect?.(entry.reversesJournalEntryPublicId!)}>{entry.reversesJournalEntryPublicId}</button>{:else}None{/if}</p>
+		<p>Reversed by: {#if entry.reversalPublicIds.length}{#each entry.reversalPublicIds as publicId, index (publicId)}{#if index > 0}, {/if}<button type="button" onclick={() => onJournalSelect?.(publicId)}>{publicId}</button>{/each}{:else}None{/if}</p>
 		<p>Documents: {entry.documentIds.length ? entry.documentIds.join(', ') : 'None attached'}</p>
 		{#if entry.bankReconciliationEvidence}
 			<p>Bank match: {entry.bankReconciliationEvidence.status ?? 'Recorded'}{entry.bankReconciliationEvidence.bankAccountLabel ? ` · ${entry.bankReconciliationEvidence.bankAccountLabel}` : ''}{entry.bankReconciliationEvidence.matchedOn ? ` · ${formatDate(entry.bankReconciliationEvidence.matchedOn)}` : ''}</p>
@@ -63,5 +63,6 @@
 	.evidence { display: grid; gap: 0.35rem; border-radius: 0.75rem; background: var(--m3c-surface-container-high); padding: 1rem; }
 	h4 { font-weight: 700; }
 	a { color: var(--m3c-primary); text-decoration: underline; }
+	button { color: var(--m3c-primary); overflow-wrap: anywhere; text-align: left; text-decoration: underline; text-underline-offset: 0.15em; }
 	@media (max-width: 40rem) { .line { flex-direction: column; } .line-values { text-align: left; } }
 </style>

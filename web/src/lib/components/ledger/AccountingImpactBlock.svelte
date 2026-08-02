@@ -10,10 +10,14 @@
 	let { journalEntryPublicId, compact = false, sourceContext }: { journalEntryPublicId: string; compact?: boolean; sourceContext?: string | null } = $props();
 	const portfolioId = getAuthState().accessEnvelope?.selectedContext.portfolioId ?? 0;
 	let expanded = $state(false);
+	let selectedJournalEntryPublicId = $state('');
+	$effect(() => {
+		selectedJournalEntryPublicId = journalEntryPublicId;
+	});
 	const journalQuery = createQuery(() => ({
-		queryKey: ['journal-entry', portfolioId, journalEntryPublicId],
-		queryFn: () => accounting.journalEntry(journalEntryPublicId),
-		enabled: portfolioId > 0 && journalEntryPublicId.length > 0
+		queryKey: ['journal-entry', portfolioId, selectedJournalEntryPublicId],
+		queryFn: () => accounting.journalEntry(selectedJournalEntryPublicId),
+		enabled: portfolioId > 0 && selectedJournalEntryPublicId.length > 0
 	}));
 </script>
 
@@ -33,7 +37,7 @@
 			<div class="totals"><strong>Totals</strong><span class="values">Debit <LedgerAmount amount={journalQuery.data.totalDebits} currency={journalQuery.data.currency} /> · Credit <LedgerAmount amount={journalQuery.data.totalCredits} currency={journalQuery.data.currency} /></span></div>
 		</div>
 		<p class:balanced={journalQuery.data.isBalanced} class="balance-state">{journalQuery.data.isBalanced ? 'Balanced ✓' : 'Not balanced'}</p>
-		{#if !compact || expanded}<div class="expanded"><JournalEntryDetail entry={journalQuery.data} {sourceContext} /></div>{/if}
+		{#if !compact || expanded}<div class="expanded"><JournalEntryDetail entry={journalQuery.data} {sourceContext} onJournalSelect={(publicId) => (selectedJournalEntryPublicId = publicId)} /></div>{/if}
 	{/if}
 </section>
 

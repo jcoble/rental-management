@@ -2,13 +2,16 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { Receipt, CircleCheck, FileText } from '@lucide/svelte';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
+	import { accounting } from '$lib/api/endpoints/accounting';
 	import {
 		isTenantPaymentRefundConflict,
 		linkedTenantPaymentRefund,
 		payments
 	} from '$lib/api/endpoints/payments';
 	import { ApiError } from '$lib/api/client';
-	import { currentCapabilities } from '$lib/stores/auth.svelte';
+	import { currentCapabilities, hasCapability } from '$lib/stores/auth.svelte';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import {
 		canCorrectPayment,
 		paymentCorrectionContext
@@ -24,6 +27,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import AccountingImpactBlock from '$lib/components/ledger/AccountingImpactBlock.svelte';
 
 	let {
 		tenantAccountId,
@@ -43,7 +47,23 @@
 		queryFn: () => tenantAccounts.entry(tenantAccountId, tenantLedgerEntryId),
 		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0
 	}));
+	const ledgerRowQuery = createQuery(() => ({
+		queryKey: ['tenant-ledger-row', tenantAccountId, tenantLedgerEntryId],
+		queryFn: () => tenantAccounts.ledgerEntry(tenantAccountId, tenantLedgerEntryId),
+		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0 && hasCapability(CAPABILITY.moneyBalancesRead)
+	}));
 	const receipt = $derived(paymentQuery.data);
+	const ledgerRow = $derived(ledgerRowQuery.data);
+	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
+	const portfolioId = $derived(getCurrentPortfolioId());
+	const journalQuery = createQuery(() => ({
+		queryKey: ['journal-entry', portfolioId, ledgerRow?.journalEntryPublicId],
+		queryFn: () => accounting.journalEntry(ledgerRow!.journalEntryPublicId!),
+		enabled: canViewAccounting && !!ledgerRow?.journalEntryPublicId
+	}));
+	const mappedAccountNames = $derived(
+		journalQuery.data?.lines.map((line) => `${line.accountCode} · ${line.accountName}`).join(' · ') ?? 'Not assigned'
+	);
 	const correctionAllowed = $derived(
 		canCorrectPayment(currentCapabilities(), receipt?.entryType)
 	);
@@ -101,6 +121,10 @@
 			correctionError = correctionResult ? '' : 'The payment was not changed.';
 			queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
 			queryClient.invalidateQueries({ queryKey: ['tenant-ledger-entry', tenantAccountId, tenantLedgerEntryId] });
+			queryClient.invalidateQueries({ queryKey: ['tenant-ledger-row', tenantAccountId, tenantLedgerEntryId] });
+			if (ledgerRow?.journalEntryPublicId) {
+				queryClient.invalidateQueries({ queryKey: ['journal-entry', portfolioId, ledgerRow.journalEntryPublicId] });
+			}
 		},
 		onError: (error) => {
 			correctionResult = null;
@@ -212,8 +236,17 @@
 					<div><dt class="text-xs text-muted-foreground">Unit</dt><dd class="font-medium">{receipt.unitNumber ? `Unit ${receipt.unitNumber}` : 'Unit not listed'}</dd></div>
 					<div><dt class="text-xs text-muted-foreground">Tenant</dt><dd class="font-medium">{formatResidentName(receipt.tenantName)}</dd></div>
 					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Posted</dt><dd class="font-medium">{postedAt(receipt.postedAtUtc)}</dd></div>
+					{#if canViewAccounting}
+						<div class="sm:col-span-2" data-testid="payment-mapped-account"><dt class="text-xs text-muted-foreground">Mapped accounts</dt><dd class="font-medium">{mappedAccountNames}</dd></div>
+					{/if}
 				</dl>
 			</DetailCard>
+
+			{#if canViewAccounting && ledgerRow?.journalEntryPublicId}
+				<div class="lg:col-span-2" data-testid="payment-accounting-impact">
+					<AccountingImpactBlock journalEntryPublicId={ledgerRow.journalEntryPublicId} sourceContext={receipt.description} compact />
+				</div>
+			{/if}
 
 			{#if receipt.sourceStoredFileId}
 				<DetailCard title="Source document" icon={FileText} accent="muted" testid="payment-card-scanned-document" class="lg:col-span-2">
