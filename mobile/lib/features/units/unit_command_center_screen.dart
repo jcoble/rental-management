@@ -33,6 +33,7 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../money/widgets/month_group.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_repository.dart';
@@ -2483,12 +2484,12 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
   static const _pageSize = 10;
   final _tenantAccountKey = GlobalKey();
   final _operatingCostsKey = GlobalKey();
-  int _activityPage = 0;
   int _chargePage = 0;
   int _depositPage = 0;
   int _unitExpensePage = 0;
   int _propertyExpensePage = 0;
   int _financingPage = 0;
+  int _periodMonths = 3;
 
   @override
   void initState() {
@@ -2530,12 +2531,25 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
             tenantAccountId: accountId,
             propertyId: dashboard.unit.propertyId,
             unitId: dashboard.unit.id,
-            skip: _activityPage * _pageSize,
+            skip: 0,
             take: _pageSize,
           );
-    final activityAsync = key == null
+    final now = DateTime.now().toUtc();
+    final from = DateTime.utc(now.year, now.month - _periodMonths + 1, 1);
+    final to = DateTime.utc(now.year, now.month + 1, 0);
+    final ledgerRequest = accountId == null
         ? null
-        : ref.watch(unitMoneyActivityPageProvider(key));
+        : (
+            tenantAccountId: accountId,
+            from: _dateOnly(from),
+            to: _dateOnly(to),
+          );
+    final activityAsync = ledgerRequest == null
+        ? null
+        : ref.watch(tenantLedgerProvider(ledgerRequest));
+    final summariesAsync = ledgerRequest == null
+        ? null
+        : ref.watch(tenantMonthSummariesProvider(ledgerRequest));
     final chargesAsync = key == null
         ? null
         : ref.watch(
@@ -2624,6 +2638,19 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
         const SizedBox(height: 14),
         _PaymentsSection(items: dashboard.overview.recentPayments),
         const SizedBox(height: 14),
+        if (accountId != null)
+          SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 3, label: Text('3 mo')),
+              ButtonSegment(value: 6, label: Text('6 mo')),
+              ButtonSegment(value: 9, label: Text('9 mo')),
+              ButtonSegment(value: 12, label: Text('12 mo')),
+            ],
+            selected: {_periodMonths},
+            onSelectionChanged: (value) =>
+                setState(() => _periodMonths = value.single),
+          ),
+        const SizedBox(height: 14),
         if (activityAsync == null)
           const _Section(
             title: 'Account activity',
@@ -2637,27 +2664,46 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
               title: 'Account activity',
               message: e is ApiException ? e.message : e.toString(),
               onRetry: () =>
-                  ref.invalidate(unitMoneyActivityPageProvider(key!)),
+                  ref.invalidate(tenantLedgerProvider(ledgerRequest!)),
             ),
-            data: (page) => _Section(
-              title: 'Account activity',
-              empty: 'No account activity',
-              children: [
-                for (final entry in page.items)
-                  _CompactRow(
-                    icon: Symbols.receipt_long_rounded,
-                    title: entry.description,
-                    subtitle:
-                        '${tenantLedgerEntryLabel(entry.entryType)} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
-                  ),
-                _MoneyPager(
-                  page: _activityPage,
-                  hasPrevious: page.hasPrevious,
-                  hasNext: page.hasNext,
-                  onPrevious: () => setState(() => _activityPage--),
-                  onNext: () => setState(() => _activityPage++),
+            data: (rows) => summariesAsync!.when(
+              loading: () => const _LoadingSection(title: 'Account activity'),
+              error: (e, _) => _RetrySection(
+                title: 'Account activity',
+                message: e.toString(),
+                onRetry: () => ref.invalidate(
+                  tenantMonthSummariesProvider(ledgerRequest!),
                 ),
-              ],
+              ),
+              data: (summaries) => Column(
+                children: [
+                  for (final summary in summaries)
+                    MonthGroup(
+                      summary: summary,
+                      rows: rows
+                          .where(
+                            (row) =>
+                                row.effectiveOn.year == summary.year &&
+                                row.effectiveOn.month == summary.month,
+                          )
+                          .toList(growable: false),
+                      onRowTap: (row) => Navigator.of(context).push<void>(
+                        MaterialPageRoute(
+                          builder: (_) => PaymentDetailScreen(
+                            tenantAccountId: accountId!,
+                            tenantLedgerEntryId: row.tenantLedgerEntryId,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (summaries.isEmpty)
+                    const _Section(
+                      title: 'Account activity',
+                      empty: 'No account activity',
+                      children: [],
+                    ),
+                ],
+              ),
             ),
           ),
         const SizedBox(height: 14),
@@ -2802,6 +2848,9 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
     );
   }
 }
+
+String _dateOnly(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 
 class _UnitExpensesSection extends StatelessWidget {
   const _UnitExpensesSection({

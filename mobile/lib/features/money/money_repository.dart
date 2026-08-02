@@ -179,6 +179,118 @@ class TenantDepositPosition {
       );
 }
 
+class TenantLedgerAllocationRef {
+  const TenantLedgerAllocationRef({
+    required this.targetDescription,
+    required this.amount,
+    required this.effectiveOn,
+  });
+  final String targetDescription;
+  final double amount;
+  final DateTime effectiveOn;
+  factory TenantLedgerAllocationRef.fromJson(Map<String, dynamic> json) =>
+      TenantLedgerAllocationRef(
+        targetDescription: json['targetDescription'] as String? ?? '',
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      );
+}
+
+class TenantLedgerRow {
+  const TenantLedgerRow({
+    required this.tenantLedgerEntryId,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.type,
+    required this.description,
+    required this.chargeAmount,
+    required this.paymentAmount,
+    required this.creditAmount,
+    required this.runningAmountOwed,
+    required this.openAmount,
+    required this.currency,
+    required this.allocations,
+    this.paymentMethod,
+    this.reference,
+    this.accountLabel,
+    this.recurringScheduleContext,
+    this.sourceDocumentContext,
+    this.journalEntryPublicId,
+  });
+  final int tenantLedgerEntryId;
+  final DateTime effectiveOn, postedAtUtc;
+  final String type, description, currency;
+  final double chargeAmount,
+      paymentAmount,
+      creditAmount,
+      runningAmountOwed,
+      openAmount;
+  final String? paymentMethod,
+      reference,
+      accountLabel,
+      recurringScheduleContext,
+      sourceDocumentContext,
+      journalEntryPublicId;
+  final List<TenantLedgerAllocationRef> allocations;
+  factory TenantLedgerRow.fromJson(Map<String, dynamic> json) =>
+      TenantLedgerRow(
+        tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+        effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+        postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+        type: json['type'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        currency: json['currency'] as String? ?? 'USD',
+        chargeAmount: (json['chargeAmount'] as num?)?.toDouble() ?? 0,
+        paymentAmount: (json['paymentAmount'] as num?)?.toDouble() ?? 0,
+        creditAmount: (json['creditAmount'] as num?)?.toDouble() ?? 0,
+        runningAmountOwed: (json['runningAmountOwed'] as num?)?.toDouble() ?? 0,
+        openAmount: (json['openAmount'] as num?)?.toDouble() ?? 0,
+        paymentMethod: json['paymentMethod'] as String?,
+        reference: json['reference'] as String?,
+        accountLabel: json['accountLabel'] as String?,
+        recurringScheduleContext: json['recurringScheduleContext'] as String?,
+        sourceDocumentContext: json['sourceDocumentContext'] as String?,
+        journalEntryPublicId: json['journalEntryPublicId'] as String?,
+        allocations: ((json['allocations'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(TenantLedgerAllocationRef.fromJson)
+            .toList(growable: false),
+      );
+}
+
+class TenantMonthSummary {
+  const TenantMonthSummary({
+    required this.year,
+    required this.month,
+    required this.currency,
+    required this.openingBalance,
+    required this.chargeAmount,
+    required this.paymentAmount,
+    required this.creditAmount,
+    required this.closingBalance,
+  });
+  final int year, month;
+  final String currency;
+  final double openingBalance,
+      chargeAmount,
+      paymentAmount,
+      creditAmount,
+      closingBalance;
+  factory TenantMonthSummary.fromJson(Map<String, dynamic> json) =>
+      TenantMonthSummary(
+        year: (json['year'] as num).toInt(),
+        month: (json['month'] as num).toInt(),
+        currency: json['currency'] as String? ?? 'USD',
+        openingBalance: (json['openingBalance'] as num?)?.toDouble() ?? 0,
+        chargeAmount: (json['chargeAmount'] as num?)?.toDouble() ?? 0,
+        paymentAmount: (json['paymentAmount'] as num?)?.toDouble() ?? 0,
+        creditAmount: (json['creditAmount'] as num?)?.toDouble() ?? 0,
+        closingBalance: (json['closingBalance'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+typedef TenantLedgerRequest = ({int tenantAccountId, String from, String to});
+
 class UnitMoneyPage<T> {
   const UnitMoneyPage({
     required this.items,
@@ -222,6 +334,46 @@ class MoneyRepository {
   const MoneyRepository(this._dio);
 
   final Dio _dio;
+
+  Future<List<TenantLedgerRow>> tenantLedger(
+    TenantLedgerRequest request,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/${request.tenantAccountId}/ledger',
+        queryParameters: {
+          'skip': 0,
+          'take': 200,
+          'effectiveFrom': request.from,
+          'effectiveTo': request.to,
+          'sort': 'effectiveOn,postedAtUtc,tenantLedgerEntryId',
+        },
+      );
+      return ((response.data?['items'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TenantLedgerRow.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<TenantMonthSummary>> tenantMonthSummaries(
+    TenantLedgerRequest request,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/tenant-accounts/${request.tenantAccountId}/month-summary',
+        queryParameters: {'from': request.from, 'to': request.to},
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TenantMonthSummary.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 
   Future<UnitMoneyPage<StaffTenantLedgerEntry>> accountActivityPage(
     UnitMoneyPageKey key,
@@ -592,6 +744,17 @@ final unitMoneyActivityPageProvider = FutureProvider.autoDispose
     ) {
       return ref.watch(moneyRepositoryProvider).accountActivityPage(key);
     });
+
+final tenantLedgerProvider = FutureProvider.autoDispose
+    .family<List<TenantLedgerRow>, TenantLedgerRequest>(
+      (ref, request) =>
+          ref.watch(moneyRepositoryProvider).tenantLedger(request),
+    );
+final tenantMonthSummariesProvider = FutureProvider.autoDispose
+    .family<List<TenantMonthSummary>, TenantLedgerRequest>(
+      (ref, request) =>
+          ref.watch(moneyRepositoryProvider).tenantMonthSummaries(request),
+    );
 
 final unitMoneyChargesPageProvider = FutureProvider.autoDispose
     .family<UnitMoneyPage<TenantChargePosition>, UnitMoneyPageKey>((ref, key) {
