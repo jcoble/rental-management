@@ -65,6 +65,46 @@ public class ReportsService : IReportsService
                     [
                         new ReportCatalogEntry
                         {
+                            Key = "accounting-profit-and-loss",
+                            Title = "Profit & Loss",
+                            Description = "Income, expenses, and net income for the selected period.",
+                            Endpoint = "/api/v1/accounting/income-statement",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-balance-sheet",
+                            Title = "Balance Sheet",
+                            Description = "What the portfolio owns, owes, and has in equity as of a date.",
+                            Endpoint = "/api/v1/accounting/balance-sheet",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-trial-balance",
+                            Title = "Trial Balance",
+                            Description = "A check that account debits and credits balance as of a date.",
+                            Endpoint = "/api/v1/accounting/trial-balance",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-general-ledger",
+                            Title = "General Ledger",
+                            Description = "Review posted accounting activity by account, property, and source.",
+                            Endpoint = "/api/v1/accounting/general-ledger",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-cash-flow",
+                            Title = "Cash Flow",
+                            Description = "See operating cash received, cash paid, debt service, and net cash flow.",
+                            Endpoint = "/api/v1/accounting/cash-flow",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
                             Key = "income-expense-statement",
                             Title = "Income / Expense Statement (P&L)",
                             Description = "Profit & loss with monthly columns over the selected range.",
@@ -81,9 +121,9 @@ public class ReportsService : IReportsService
                         },
                         new ReportCatalogEntry
                         {
-                            Key = "general-ledger",
-                            Title = "General Ledger / Account Transactions",
-                            Description = "Every payment and expense in date order with a running balance.",
+                            Key = "cash-and-operating-activity",
+                            Title = "Cash and operating activity",
+                            Description = "Payments and expenses in date order with a running balance.",
                             Endpoint = "/api/v1/reports/general-ledger",
                             Params = [ReportParamKeys.From, ReportParamKeys.To, ReportParamKeys.PropertyId],
                         },
