@@ -14,6 +14,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatRentalLocation, formatResidentName } from '$lib/accounting/money-display';
 	import { depositDeductionSchema, parseForm } from '$lib/schemas';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -365,6 +366,8 @@
 				</details>
 			</Card.Content>
 		</Card.Root>
+
+		<AccountingImpactCard sourceType="SecurityDepositReceipt" sourceId={deposit.securityDepositAccountId} />
 
 		<Card.Root data-testid="deposit-photos">
 			<Card.Header class="flex flex-row items-center justify-between space-y-0 pb-3">
