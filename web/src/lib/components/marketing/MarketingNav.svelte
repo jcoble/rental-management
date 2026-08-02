@@ -11,7 +11,7 @@
 	 * scroll-progress rail, and ships a real mobile menu so the Features/Docs links
 	 * aren't lost below `md`. `current` highlights the active top-level link.
 	 */
-	let { current }: { current?: 'features' | 'docs' } = $props();
+	let { current }: { current?: 'features' | 'docs' | 'blog' } = $props();
 
 	let scrolled = $state(false);
 	let progress = $state(0);
@@ -27,6 +27,7 @@
 
 	const links = [
 		{ href: '/features', label: 'Features', key: 'features' },
+		{ href: '/blog', label: 'Blog', key: 'blog' },
 		{ href: '/docs', label: 'Docs', key: 'docs' }
 	] as const;
 </script>

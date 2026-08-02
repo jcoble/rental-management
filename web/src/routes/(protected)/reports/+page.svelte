@@ -32,6 +32,8 @@
 		Lightbulb
 	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
 		reportCategoryTitle,
 		reportDescription,
@@ -146,13 +148,21 @@
 		description="Pick a report, set the dates and properties, then export or print."
 		data-testid="reports-header"
 	>
-		<a
-			href="/docs/reports"
-			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-			data-testid="reports-help-link"
-		>
-			How reports work
-		</a>
+		<div class="mt-3 flex items-center gap-1.5">
+			<a
+				href="/docs/reports"
+				class="inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="reports-help-link"
+			>
+				How reports work
+			</a>
+			<HelpPopover
+				title={ACCOUNTING_HELP.reports.title}
+				summary={ACCOUNTING_HELP.reports.summary}
+				learnMoreUrl={ACCOUNTING_HELP.reports.href}
+				testid="reports-catalog-help"
+			/>
+		</div>
 	</PageHeader>
 
 	{#if catalogQuery.isLoading}

@@ -14,6 +14,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 
 	export interface OneTimeChargeSeed {
 		description?: string;
@@ -139,7 +141,15 @@
 	<Dialog.Content class="max-w-xl" data-testid="one-time-charge-sheet">
 		<Dialog.Header>
 			<Dialog.Title>Add one-time charge</Dialog.Title>
-			<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+			<div class="flex items-start gap-1.5">
+				<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+				<HelpPopover
+					title={ACCOUNTING_HELP.oneTimeCharge.title}
+					summary={ACCOUNTING_HELP.oneTimeCharge.summary}
+					learnMoreUrl={ACCOUNTING_HELP.oneTimeCharge.href}
+					testid="one-time-charge-help"
+				/>
+			</div>
 		</Dialog.Header>
 
 		<div class="grid gap-4 sm:grid-cols-2">
