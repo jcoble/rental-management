@@ -28,10 +28,11 @@ const entityQueryKeys: Record<string, string[][]> = {
 	// outstanding / overdue / total expenses), keyed `['accounting-summary', ...]`
 	// on the accounting page. The earlier `payment-summary` / `expense-summary`
 	// keys matched no query, so the summary cards stayed stale on realtime events.
-	Payment: [['payments'], ['accounting-summary'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	Payment: [['payments'], ['accounting-summary'], ['journal-entry'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Expense: [
 		['expenses'],
 		['accounting-summary'],
+		['journal-entry'],
 		['dashboard'],
 		['unit-expenses'],
 		['unit-dashboard'],
