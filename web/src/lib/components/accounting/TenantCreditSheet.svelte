@@ -11,6 +11,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 
 	const TARGETED_CREDIT_ERROR = "This credit is larger than what's left of the original charge. Enter it as a standalone credit instead.";
 
@@ -133,7 +135,15 @@
 	<Dialog.Content class="max-w-xl" data-testid="tenant-credit-sheet">
 		<Dialog.Header>
 			<Dialog.Title>Give credit</Dialog.Title>
-			<Dialog.Description>Credits keep the original charge and payment history intact.</Dialog.Description>
+			<div class="flex items-start gap-1.5">
+				<Dialog.Description>Credits keep the original charge and payment history intact.</Dialog.Description>
+				<HelpPopover
+					title={ACCOUNTING_HELP.tenantCredit.title}
+					summary={ACCOUNTING_HELP.tenantCredit.summary}
+					learnMoreUrl={ACCOUNTING_HELP.tenantCredit.href}
+					testid="tenant-credit-help"
+				/>
+			</div>
 		</Dialog.Header>
 
 		<div class="grid gap-4 sm:grid-cols-2">

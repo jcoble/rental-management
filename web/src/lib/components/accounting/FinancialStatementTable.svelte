@@ -1,5 +1,7 @@
 <script lang="ts">
 	import * as Table from '$lib/components/ui/table';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
 		accountingAmountClass,
 		formatAccountingCurrency,
@@ -49,6 +51,15 @@
 
 {#if authorized}
 	<div class="overflow-hidden rounded-xl border border-border bg-card" data-testid="financial-statement-table">
+		<div class="flex items-center justify-end gap-1.5 border-b border-border px-4 py-2 text-xs font-medium text-muted-foreground print:hidden">
+			<span>About this statement</span>
+			<HelpPopover
+				title={ACCOUNTING_HELP.financialStatements.title}
+				summary={ACCOUNTING_HELP.financialStatements.summary}
+				learnMoreUrl={ACCOUNTING_HELP.financialStatements.href}
+				testid="financial-statement-help"
+			/>
+		</div>
 		{#if loading}
 			<div class="space-y-4 p-4" role="status" aria-label="Loading financial statement">
 				<div class="h-5 w-40 animate-pulse rounded bg-muted"></div>

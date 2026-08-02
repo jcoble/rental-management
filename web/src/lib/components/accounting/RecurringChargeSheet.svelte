@@ -12,6 +12,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 
 	let {
 		open,
@@ -121,7 +123,15 @@
 	<Dialog.Content class="max-w-xl" data-testid="recurring-charge-sheet">
 		<Dialog.Header>
 			<Dialog.Title>{schedule ? 'Edit recurring charge' : 'Recurring charge'}</Dialog.Title>
-			<Dialog.Description>Set up the charge that should be created for future periods.</Dialog.Description>
+			<div class="flex items-start gap-1.5">
+				<Dialog.Description>Set up the charge that should be created for future periods.</Dialog.Description>
+				<HelpPopover
+					title={ACCOUNTING_HELP.recurringCharge.title}
+					summary={ACCOUNTING_HELP.recurringCharge.summary}
+					learnMoreUrl={ACCOUNTING_HELP.recurringCharge.href}
+					testid="recurring-charge-help"
+				/>
+			</div>
 		</Dialog.Header>
 
 		<div class="grid gap-4 sm:grid-cols-2">
