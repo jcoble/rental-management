@@ -16,6 +16,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatResidentName } from '$lib/accounting/money-display';
 	import { apiErrorMessage } from '$lib/utils/toast';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import HeroCard from '$lib/components/shared/HeroCard.svelte';
@@ -230,6 +231,8 @@
 				</dl>
 			</details>
 		</div>
+
+		<AccountingImpactCard sourceType="TenantReceipt" sourceId={tenantLedgerEntryId} />
 
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
 			<h2 class="mb-1 text-base font-semibold">History</h2>
