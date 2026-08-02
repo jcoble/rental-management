@@ -71,8 +71,8 @@ class ExpenseListQuery {
   @override
   int get hashCode => Object.hash(
     skip,
-      take,
-      operationalScope,
+    take,
+    operationalScope,
     propertyId,
     unitId,
     workOrderId,
@@ -204,11 +204,7 @@ typedef UnitMoneyPageKey = ({
   int take,
 });
 
-typedef PropertyMoneyPageKey = ({
-  int propertyId,
-  int skip,
-  int take,
-});
+typedef PropertyMoneyPageKey = ({int propertyId, int skip, int take});
 
 /// Repository for the Money tab: the unified accounting ledger plus full
 /// expense CRUD and receipt streaming.
@@ -339,6 +335,10 @@ class MoneyRepository {
         'sort': '-createdAt',
       };
       if (filter.kind != null) params['kind'] = filter.kind;
+      if (filter.displayType != null) {
+        params['displayType'] = filter.displayType;
+      }
+      if (filter.accountId != null) params['accountId'] = filter.accountId;
       if (filter.from != null) {
         params['from'] = filter.from!.toIso8601String();
       }

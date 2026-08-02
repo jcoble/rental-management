@@ -18,6 +18,37 @@ class AccountingRepository {
 
   final Dio _dio;
 
+  Future<List<ChartOfAccountsRow>> chartOfAccounts() async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/accounting/chart-of-accounts',
+        queryParameters: {
+          'skip': 0,
+          'take': 200,
+          'activeOnly': true,
+          'accountTypes': 'Asset,Liability,Equity,Income,Expense',
+        },
+      );
+      return ((response.data?['items'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChartOfAccountsRow.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<JournalDetail> journalEntry(String publicId) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/accounting/journal-entries/$publicId',
+      );
+      return JournalDetail.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Fetches the plain-English money snapshot for the caller's portfolio.
   Future<MoneySnapshot> snapshot() async {
     try {
@@ -100,10 +131,7 @@ class AccountingRepository {
         'accounting:direction:$provider:$pullEnabled:$pushEnabled',
         (operationKey) => _dio.post<void>(
           '/integrations/accounting/$provider/direction',
-          data: {
-            'pullEnabled': pullEnabled,
-            'pushEnabled': pushEnabled,
-          },
+          data: {'pullEnabled': pullEnabled, 'pushEnabled': pushEnabled},
           options: Options(headers: {'Idempotency-Key': operationKey}),
         ),
       );
@@ -116,6 +144,16 @@ class AccountingRepository {
 final accountingRepositoryProvider = Provider<AccountingRepository>((ref) {
   return AccountingRepository(ref.watch(dioProvider));
 });
+
+final chartOfAccountsProvider =
+    FutureProvider.autoDispose<List<ChartOfAccountsRow>>(
+      (ref) => ref.watch(accountingRepositoryProvider).chartOfAccounts(),
+    );
+final journalEntryProvider = FutureProvider.autoDispose
+    .family<JournalDetail, String>(
+      (ref, publicId) =>
+          ref.watch(accountingRepositoryProvider).journalEntry(publicId),
+    );
 
 /// The landlord home money snapshot. autoDispose so it refreshes on each visit.
 final moneySnapshotProvider = FutureProvider.autoDispose<MoneySnapshot>((ref) {
