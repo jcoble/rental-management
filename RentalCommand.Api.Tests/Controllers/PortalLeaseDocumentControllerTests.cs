@@ -159,7 +159,8 @@ public sealed class PortalLeaseDocumentControllerTests
             service,
             Mock.Of<IConversationService>(),
             Mock.Of<IStripePaymentService>(),
-            files)
+            files,
+            Mock.Of<IAccountingLedgerReadModelService>())
         {
             ControllerContext = new ControllerContext
             {

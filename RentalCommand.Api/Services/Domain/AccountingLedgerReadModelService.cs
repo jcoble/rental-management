@@ -35,6 +35,9 @@ public interface IAccountingLedgerReadModelService
     Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(
         int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
 
+    Task<TenantStatementBalances> GetTenantStatementBalancesAsync(
+        int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
+
     Task<TenantLedgerPeriodSummary?> GetTenantLedgerPeriodSummaryAsync(
         int portfolioId, int tenantAccountId, int months, CancellationToken ct = default);
 
@@ -667,6 +670,29 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             ORDER BY "Year", "Month", "Currency"
             """).ToListAsync(ct);
         return summaries;
+    }
+
+    public Task<TenantStatementBalances> GetTenantStatementBalancesAsync(
+        int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query,
+        CancellationToken ct = default)
+    {
+        var from = query.From;
+        var to = query.To;
+        return _db.Database.SqlQuery<TenantStatementBalances>($$"""
+            SELECT
+                COALESCE(SUM(CASE
+                    WHEN {{from}} IS NULL OR "EffectiveOn" < {{from}}
+                    THEN CASE WHEN "Direction" = 'Debit' THEN "Amount" ELSE -"Amount" END
+                    ELSE 0 END), 0) AS "OpeningBalance",
+                COALESCE(SUM(CASE
+                    WHEN {{to}} IS NULL OR "EffectiveOn" <= {{to}}
+                    THEN CASE WHEN "Direction" = 'Debit' THEN "Amount" ELSE -"Amount" END
+                    ELSE 0 END), 0) AS "ClosingBalance"
+            FROM "TenantLedgerEntries"
+            WHERE "PortfolioId" = {{portfolioId}}
+              AND "TenantAccountId" = {{tenantAccountId}}
+              AND ({{to}} IS NULL OR "EffectiveOn" <= {{to}})
+            """).SingleAsync(ct);
     }
 
     public async Task<TenantLedgerPeriodSummary?> GetTenantLedgerPeriodSummaryAsync(

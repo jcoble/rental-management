@@ -52,6 +52,29 @@ public sealed class AccountingApiContractFreezeTests
     }
 
     [Fact]
+    public void Portal_money_routes_and_tenant_safe_dto_are_additively_frozen()
+    {
+        var routes = typeof(PortalController)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .SelectMany(method => method.GetCustomAttributes().OfType<HttpMethodAttribute>()
+                .Select(attribute => $"{attribute.HttpMethods.Single()} {attribute.Template}"))
+            .ToArray();
+        routes.Should().Contain(
+            "GET tenant-accounts/{id:int}/ledger",
+            "GET tenant-accounts/{id:int}/month-summary",
+            "GET tenant-accounts/{id:int}/ledger/{entryId:long}",
+            "GET tenant-accounts/{id:int}/statement",
+            "GET tenant-accounts/{id:int}/statement.csv");
+
+        var fields = typeof(PortalTenantLedgerRowResponse).GetProperties()
+            .Select(property => property.Name).ToArray();
+        fields.Should().NotContain(
+            "JournalEntryPublicId", "AccountLabel", "AccountCode", "AccountName", "Actor",
+            "SourceType", "SourceId", "SourcePublicId");
+        fields.Should().Contain(nameof(PortalTenantLedgerRowResponse.Allocations));
+    }
+
+    [Fact]
     public void Frozen_dto_shapes_keep_required_running_and_typed_allocation_fields()
     {
         typeof(TenantLedgerRow).GetProperty(nameof(TenantLedgerRow.RunningAmountOwed))

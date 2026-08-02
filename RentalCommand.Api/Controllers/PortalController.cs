@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Globalization;
+using System.Text;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
@@ -22,17 +24,20 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     private readonly IConversationService _conversations;
     private readonly IStripePaymentService _stripe;
     private readonly IFileStorage _files;
+    private readonly IAccountingLedgerReadModelService _ledgerReadModels;
 
     public PortalController(
         IPortalService service,
         IConversationService conversations,
         IStripePaymentService stripe,
-        IFileStorage files)
+        IFileStorage files,
+        IAccountingLedgerReadModelService ledgerReadModels)
     {
         _service = service;
         _conversations = conversations;
         _stripe = stripe;
         _files = files;
+        _ledgerReadModels = ledgerReadModels;
     }
 
     private Task<int?> GetTenantIdAsync(CancellationToken ct) =>
@@ -154,6 +159,139 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             ? NotFound(new { error = "Tenant account not found" })
             : Ok(history);
     }
+
+    [HttpGet("tenant-accounts/{id:int}/ledger")]
+    [ProducesResponseType(typeof(PortalTenantLedgerPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantLedgerPageResponse>> TenantAccountLedger(
+        int id, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to,
+        [FromQuery] int skip = 0, [FromQuery] int take = 50,
+        CancellationToken ct = default)
+    {
+        if (!await CanReadTenantAccountAsync(id, ct)) return NotFound();
+        var page = await _ledgerReadModels.GetTenantLedgerAsync(GetPortfolioId(), id,
+            new TenantLedgerQuery { EffectiveFrom = from, EffectiveTo = to, Skip = skip, Take = take }, ct);
+        return page is null ? NotFound() : Ok(ToPortalPage(page));
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/month-summary")]
+    [ProducesResponseType(typeof(IReadOnlyList<TenantMonthSummary>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<TenantMonthSummary>>> TenantAccountMonthSummary(
+        int id, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
+    {
+        if (!await CanReadTenantAccountAsync(id, ct)) return NotFound();
+        var summaries = await _ledgerReadModels.GetTenantMonthSummaryAsync(GetPortfolioId(), id, query, ct);
+        return summaries is null ? NotFound() : Ok(summaries);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/ledger/{entryId:long}")]
+    [ProducesResponseType(typeof(PortalTenantLedgerRowResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantLedgerRowResponse>> TenantAccountLedgerEntry(
+        int id, long entryId, CancellationToken ct)
+    {
+        if (!await CanReadTenantAccountAsync(id, ct)) return NotFound();
+        var row = await _ledgerReadModels.GetTenantLedgerEntryAsync(GetPortfolioId(), id, entryId, ct);
+        return row is null ? NotFound() : Ok(ToPortalRow(row));
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/statement")]
+    [ProducesResponseType(typeof(PortalTenantStatementResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantStatementResponse>> TenantAccountStatement(
+        int id, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
+    {
+        var statement = await BuildStatementAsync(id, query, ct);
+        return statement is null ? NotFound() : Ok(statement);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/statement.csv")]
+    [Produces("text/csv")]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> TenantAccountStatementCsv(
+        int id, [FromQuery] TenantMonthSummaryQuery query, CancellationToken ct)
+    {
+        var statement = await BuildStatementAsync(id, query, ct);
+        if (statement is null) return NotFound();
+        var csv = new StringBuilder("Effective date,Posted at,Type,Description,Charge,Payment,Credit,Running amount owed,Due date,Open amount,Status,Payment method,Reference,Currency\n");
+        foreach (var row in statement.Rows)
+        {
+            csv.Append(Csv(row.EffectiveOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))).Append(',')
+                .Append(Csv(row.PostedAtUtc.ToString("O", CultureInfo.InvariantCulture))).Append(',')
+                .Append(Csv(row.Type.ToString())).Append(',').Append(Csv(row.Description)).Append(',')
+                .Append(row.ChargeAmount.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                .Append(row.PaymentAmount.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                .Append(row.CreditAmount.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                .Append(row.RunningAmountOwed.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                .Append(Csv(row.DueOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))).Append(',')
+                .Append(row.OpenAmount.ToString("F2", CultureInfo.InvariantCulture)).Append(',')
+                .Append(Csv(row.Status)).Append(',').Append(Csv(row.PaymentMethod)).Append(',')
+                .Append(Csv(row.Reference)).Append(',').Append(Csv(row.Currency)).AppendLine();
+        }
+        return File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv", $"tenant-statement-{id}.csv");
+    }
+
+    private async Task<bool> CanReadTenantAccountAsync(int tenantAccountId, CancellationToken ct) =>
+        await _service.GetTenantAccountAsync(GetTenantReadScope(), tenantAccountId, ct) is not null;
+
+    private async Task<PortalTenantStatementResponse?> BuildStatementAsync(
+        int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct)
+    {
+        if (!await CanReadTenantAccountAsync(tenantAccountId, ct)) return null;
+        var rows = await _ledgerReadModels.GetTenantLedgerAsync(GetPortfolioId(), tenantAccountId,
+            new TenantLedgerQuery { EffectiveFrom = query.From, EffectiveTo = query.To, Take = 200 }, ct);
+        var summaries = await _ledgerReadModels.GetTenantMonthSummaryAsync(
+            GetPortfolioId(), tenantAccountId, query, ct);
+        var balances = await _ledgerReadModels.GetTenantStatementBalancesAsync(
+            GetPortfolioId(), tenantAccountId, query, ct);
+        if (rows is null || summaries is null) return null;
+        return new PortalTenantStatementResponse
+        {
+            TenantAccountId = tenantAccountId,
+            PeriodFrom = query.From,
+            PeriodTo = query.To,
+            OpeningBalance = balances.OpeningBalance,
+            ClosingBalance = balances.ClosingBalance,
+            Rows = rows.Items.Select(ToPortalRow).ToArray(),
+            MonthSummaries = summaries,
+        };
+    }
+
+    internal static PortalTenantLedgerPageResponse ToPortalPage(AccountingPage<TenantLedgerRow> page) => new()
+    {
+        Items = page.Items.Select(ToPortalRow).ToArray(),
+        TotalCount = page.TotalCount,
+        Skip = page.Skip,
+        Take = page.Take,
+    };
+
+    internal static PortalTenantLedgerRowResponse ToPortalRow(TenantLedgerRow row) => new()
+    {
+        TenantLedgerEntryId = row.TenantLedgerEntryId,
+        PublicId = row.PublicId,
+        EffectiveOn = row.EffectiveOn,
+        PostedAtUtc = row.PostedAtUtc,
+        Type = row.Type,
+        Description = row.Description,
+        ChargeAmount = row.ChargeAmount,
+        PaymentAmount = row.PaymentAmount,
+        CreditAmount = row.CreditAmount,
+        RunningAmountOwed = row.RunningAmountOwed,
+        DueOn = row.DueOn,
+        OpenAmount = row.OpenAmount,
+        Status = row.Status,
+        PaymentMethod = row.PaymentMethod,
+        Reference = row.Reference,
+        SourceDocumentContext = row.SourceDocumentContext,
+        Allocations = row.Allocations,
+        ReversesEntryId = row.ReversesEntryId,
+        ReplacedByEntryId = row.ReplacedByEntryId,
+        Currency = row.Currency,
+    };
+
+    private static string Csv(string? value) =>
+        $"\"{(value ?? string.Empty).Replace("\"", "\"\"")}\"";
 
     [HttpGet("tenant-accounts/{id:int}/charges/page")]
     [ProducesResponseType(typeof(PortalTenantChargePageResponse), StatusCodes.Status200OK)]

@@ -241,6 +241,50 @@ public sealed class PortalTenantAccountHistoryItemResponse
     public bool IsFocused { get; init; }
 }
 
+/// <summary>Tenant-safe ledger row with no journal, chart-account, actor, or raw source fields.</summary>
+public sealed class PortalTenantLedgerRowResponse
+{
+    public long TenantLedgerEntryId { get; init; }
+    public Guid PublicId { get; init; }
+    public DateOnly EffectiveOn { get; init; }
+    public DateTime PostedAtUtc { get; init; }
+    public TenantLedgerEntryType Type { get; init; }
+    public string Description { get; init; } = string.Empty;
+    public decimal ChargeAmount { get; init; }
+    public decimal PaymentAmount { get; init; }
+    public decimal CreditAmount { get; init; }
+    public decimal RunningAmountOwed { get; init; }
+    public DateOnly? DueOn { get; init; }
+    public decimal OpenAmount { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public string? PaymentMethod { get; init; }
+    public string? Reference { get; init; }
+    public string? SourceDocumentContext { get; init; }
+    public IReadOnlyList<AllocationRef> Allocations { get; init; } = [];
+    public long? ReversesEntryId { get; init; }
+    public long? ReplacedByEntryId { get; init; }
+    public string Currency { get; init; } = string.Empty;
+}
+
+public sealed class PortalTenantLedgerPageResponse
+{
+    public IReadOnlyList<PortalTenantLedgerRowResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+public sealed class PortalTenantStatementResponse
+{
+    public int TenantAccountId { get; init; }
+    public DateOnly? PeriodFrom { get; init; }
+    public DateOnly? PeriodTo { get; init; }
+    public decimal OpeningBalance { get; init; }
+    public decimal ClosingBalance { get; init; }
+    public IReadOnlyList<PortalTenantLedgerRowResponse> Rows { get; init; } = [];
+    public IReadOnlyList<TenantMonthSummary> MonthSummaries { get; init; } = [];
+}
+
 public sealed class PortalTenantChargePageResponse
 {
     public int TenantAccountId { get; init; }
