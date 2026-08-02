@@ -22,8 +22,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
+	import AccountingImpactBlock from '$lib/components/ledger/AccountingImpactBlock.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 
 	const queryClient = useQueryClient();
+	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
 	const tenantAccountId = $derived(parseInt(page.params.id ?? '0', 10));
 	const today = () => new Date().toISOString().slice(0, 10);
 	function positiveQueryInt(value: string | null): number | null {
@@ -365,6 +369,13 @@
 				</details>
 			</Card.Content>
 		</Card.Root>
+
+		{#if canViewAccounting && deposit.journalEntryPublicId}
+			<div class="mb-6" data-testid="deposit-accounting-impact">
+				<p class="mb-2 text-sm text-muted-foreground">Account <strong class="text-foreground">{deposit.accountName ?? 'Not assigned'}</strong></p>
+				<AccountingImpactBlock journalEntryPublicId={deposit.journalEntryPublicId} sourceContext={`Security deposit for ${formatRentalLocation(deposit)}`} compact />
+			</div>
+		{/if}
 
 		<Card.Root data-testid="deposit-photos">
 			<Card.Header class="flex flex-row items-center justify-between space-y-0 pb-3">
