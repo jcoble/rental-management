@@ -18,7 +18,9 @@ class AccountingRepository {
 
   final Dio _dio;
 
-  Future<List<ChartOfAccountsRow>> chartOfAccounts() async {
+  Future<List<ChartOfAccountsRow>> chartOfAccounts({
+    String accountTypes = 'Asset,Liability,Equity,Income,Expense',
+  }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         '/accounting/chart-of-accounts',
@@ -26,7 +28,7 @@ class AccountingRepository {
           'skip': 0,
           'take': 200,
           'activeOnly': true,
-          'accountTypes': 'Asset,Liability,Equity,Income,Expense',
+          'accountTypes': accountTypes,
         },
       );
       return ((response.data?['items'] as List?) ?? const [])
@@ -148,6 +150,12 @@ final accountingRepositoryProvider = Provider<AccountingRepository>((ref) {
 final chartOfAccountsProvider =
     FutureProvider.autoDispose<List<ChartOfAccountsRow>>(
       (ref) => ref.watch(accountingRepositoryProvider).chartOfAccounts(),
+    );
+final incomeAccountsProvider =
+    FutureProvider.autoDispose<List<ChartOfAccountsRow>>(
+      (ref) => ref
+          .watch(accountingRepositoryProvider)
+          .chartOfAccounts(accountTypes: 'Income'),
     );
 final journalEntryProvider = FutureProvider.autoDispose
     .family<JournalDetail, String>(
