@@ -716,75 +716,79 @@ class _LedgerFilters extends StatelessWidget {
   final List<ChartOfAccountsRow> accounts;
   final ValueChanged<TransactionsFilter> onChanged;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Row(
-      children: [
-        Expanded(
-          child: DropdownButtonFormField<String?>(
-            initialValue: filter.displayType,
-            decoration: const InputDecoration(
-              labelText: 'Type',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(value: null, child: Text('All types')),
-              DropdownMenuItem(value: 'Charge', child: Text('Charge')),
-              DropdownMenuItem(
-                value: 'PaymentReceived',
-                child: Text('Payment received'),
-              ),
-              DropdownMenuItem(value: 'Credit', child: Text('Credit')),
-              DropdownMenuItem(value: 'Expense', child: Text('Expense')),
-              DropdownMenuItem(value: 'Bill', child: Text('Bill')),
-              DropdownMenuItem(
-                value: 'BankTransfer',
-                child: Text('Bank transfer'),
-              ),
-              DropdownMenuItem(
-                value: 'LoanPayment',
-                child: Text('Loan payment'),
-              ),
-              DropdownMenuItem(
-                value: 'OwnerActivity',
-                child: Text('Owner activity'),
-              ),
-              DropdownMenuItem(value: 'Reversal', child: Text('Reversal')),
-            ],
-            onChanged: (value) => onChanged(
-              filter.copyWith(
-                displayType: value,
-                clearDisplayType: value == null,
-              ),
-            ),
-          ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final typeFilter = DropdownButtonFormField<String?>(
+        isExpanded: true,
+        initialValue: filter.displayType,
+        decoration: const InputDecoration(
+          labelText: 'Type',
+          border: OutlineInputBorder(),
         ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: DropdownButtonFormField<int?>(
-            initialValue: filter.accountId,
-            decoration: const InputDecoration(
-              labelText: 'Account',
-              border: OutlineInputBorder(),
-            ),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('All accounts')),
-              for (final account in accounts)
-                DropdownMenuItem(
-                  value: account.id,
-                  child: Text(
-                    '${account.code} ${account.name}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (value) => onChanged(
-              filter.copyWith(accountId: value, clearAccountId: value == null),
-            ),
+        items: const [
+          DropdownMenuItem(value: null, child: Text('All types')),
+          DropdownMenuItem(value: 'Charge', child: Text('Charge')),
+          DropdownMenuItem(
+            value: 'PaymentReceived',
+            child: Text('Payment received'),
           ),
+          DropdownMenuItem(value: 'Credit', child: Text('Credit')),
+          DropdownMenuItem(value: 'Expense', child: Text('Expense')),
+          DropdownMenuItem(value: 'Bill', child: Text('Bill')),
+          DropdownMenuItem(value: 'BankTransfer', child: Text('Bank transfer')),
+          DropdownMenuItem(value: 'LoanPayment', child: Text('Loan payment')),
+          DropdownMenuItem(
+            value: 'OwnerActivity',
+            child: Text('Owner activity'),
+          ),
+          DropdownMenuItem(value: 'Reversal', child: Text('Reversal')),
+        ],
+        onChanged: (value) => onChanged(
+          filter.copyWith(displayType: value, clearDisplayType: value == null),
         ),
-      ],
-    ),
+      );
+      final accountFilter = DropdownButtonFormField<int?>(
+        isExpanded: true,
+        initialValue: filter.accountId,
+        decoration: const InputDecoration(
+          labelText: 'Account',
+          border: OutlineInputBorder(),
+        ),
+        items: [
+          const DropdownMenuItem(value: null, child: Text('All accounts')),
+          for (final account in accounts)
+            DropdownMenuItem(
+              value: account.id,
+              child: Text(
+                '${account.code} ${account.name}',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: (value) => onChanged(
+          filter.copyWith(accountId: value, clearAccountId: value == null),
+        ),
+      );
+
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: constraints.maxWidth < 520
+            ? Column(
+                children: [
+                  typeFilter,
+                  const SizedBox(height: 8),
+                  accountFilter,
+                ],
+              )
+            : Row(
+                children: [
+                  Expanded(child: typeFilter),
+                  const SizedBox(width: 8),
+                  Expanded(child: accountFilter),
+                ],
+              ),
+      );
+    },
   );
 }
 
@@ -844,7 +848,6 @@ class _TransactionCard extends ConsumerWidget {
           ),
         );
       },
-      leading: LedgerTypeBadge(type: tx.displayType),
       title: Text(
         tx.title.isEmpty ? tx.description : tx.title,
         maxLines: 1,
@@ -854,6 +857,10 @@ class _TransactionCard extends ConsumerWidget {
         ),
       ),
       supporting: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: LedgerTypeBadge(type: tx.displayType),
+        ),
         Text(
           [
             if (tx.counterparty != null && tx.counterparty!.isNotEmpty)
@@ -886,13 +893,6 @@ class _TransactionCard extends ConsumerWidget {
               'Cleared',
               style: theme.textTheme.labelSmall?.copyWith(
                 color: Colors.green.shade700,
-              ),
-            )
-          else
-            Text(
-              tx.status,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: cs.onSurfaceVariant,
               ),
             ),
         ],
