@@ -14,6 +14,8 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_books_repository.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
 import '../accounting/general_ledger_view.dart';
@@ -548,12 +550,21 @@ class _CashPositionCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Cash on hand',
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: cs.onPrimaryContainer,
-                fontWeight: FontWeight.w800,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Cash on hand',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: cs.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const AccountingHelpTipButton(
+                  topic: AccountingHelpTopic.cashPosition,
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -731,7 +742,12 @@ class _PeriodFacts extends StatelessWidget {
             DropdownButtonFormField<String>(
               key: const Key('money-overview-period'),
               initialValue: request.label,
-              decoration: const InputDecoration(labelText: 'Period facts'),
+              decoration: const InputDecoration(
+                labelText: 'Period facts',
+                suffixIcon: AccountingHelpTipButton(
+                  topic: AccountingHelpTopic.cashFlow,
+                ),
+              ),
               items: const [
                 DropdownMenuItem(
                   value: 'This month',

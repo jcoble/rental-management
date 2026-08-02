@@ -5,6 +5,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/time/app_clock.dart';
 import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../deposits/deposits_repository.dart';
 import '../units/units_repository.dart';
 import 'money_format.dart';
@@ -547,7 +549,19 @@ class _TenantLedgerHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('Tenant ledger', style: Theme.of(context).textTheme.titleLarge),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Tenant ledger',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            const AccountingHelpTipButton(
+              topic: AccountingHelpTopic.tenantLedger,
+            ),
+          ],
+        ),
         if (name?.isNotEmpty == true || rentalLabel.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(
@@ -561,10 +575,14 @@ class _TenantLedgerHeader extends StatelessWidget {
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerRight,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               const Text('Advanced detail'),
+              const AccountingHelpTipButton(
+                topic: AccountingHelpTopic.detailMode,
+              ),
               Switch.adaptive(
                 key: const Key('tenant-ledger-detail-mode'),
                 value: detailMode == TenantLedgerDetailMode.advanced,

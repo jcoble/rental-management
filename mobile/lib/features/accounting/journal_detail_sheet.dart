@@ -10,6 +10,8 @@ import '../../core/presentation/plain_english_labels.dart';
 import '../money/money_format.dart';
 import 'accounting_book_models.dart';
 import 'accounting_books_repository.dart';
+import 'accounting_help.dart';
+import 'accounting_help_tip.dart';
 
 /// Shared with the web detail-mode preference contract.
 const accountingDetailModeStorageKey = 'rc.accounting.detail-mode.v1';
@@ -162,12 +164,21 @@ class _JournalDetailBody extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Accounting record',
-          style: theme.textTheme.labelLarge?.copyWith(
-            color: cs.onSurfaceVariant,
-            fontWeight: FontWeight.w700,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Accounting record',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const AccountingHelpTipButton(
+              topic: AccountingHelpTopic.journalDetail,
+            ),
+          ],
         ),
         const SizedBox(height: 4),
         Text(
@@ -446,30 +457,37 @@ class AccountingDetailModeToggle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(accountingDetailModeProvider);
-    return SegmentedButton<AccountingDetailMode>(
-      key: const Key('accounting-detail-mode-toggle'),
-      showSelectedIcon: false,
-      style: compact
-          ? const ButtonStyle(visualDensity: VisualDensity.compact)
-          : null,
-      segments: const [
-        ButtonSegment(
-          value: AccountingDetailMode.simple,
-          label: Text('Simple'),
+    return Wrap(
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SegmentedButton<AccountingDetailMode>(
+          key: const Key('accounting-detail-mode-toggle'),
+          showSelectedIcon: false,
+          style: compact
+              ? const ButtonStyle(visualDensity: VisualDensity.compact)
+              : null,
+          segments: const [
+            ButtonSegment(
+              value: AccountingDetailMode.simple,
+              label: Text('Simple'),
+            ),
+            ButtonSegment(
+              value: AccountingDetailMode.advanced,
+              label: Text('Advanced'),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: (selection) {
+            unawaited(
+              ref
+                  .read(accountingDetailModeProvider.notifier)
+                  .setMode(selection.single),
+            );
+          },
         ),
-        ButtonSegment(
-          value: AccountingDetailMode.advanced,
-          label: Text('Advanced'),
-        ),
+        const AccountingHelpTipButton(topic: AccountingHelpTopic.detailMode),
       ],
-      selected: {mode},
-      onSelectionChanged: (selection) {
-        unawaited(
-          ref
-              .read(accountingDetailModeProvider.notifier)
-              .setMode(selection.single),
-        );
-      },
     );
   }
 }
