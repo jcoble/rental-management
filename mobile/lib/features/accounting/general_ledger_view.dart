@@ -8,6 +8,8 @@ import '../home/mobile_domain_chrome.dart';
 import '../money/money_format.dart';
 import 'accounting_book_models.dart';
 import 'accounting_books_repository.dart';
+import 'accounting_help.dart';
+import 'accounting_help_tip.dart';
 import 'journal_detail_sheet.dart';
 
 class GeneralLedgerFilterState {
@@ -212,6 +214,21 @@ class _LedgerControls extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Column(
         children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'General ledger',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const AccountingHelpTipButton(
+                topic: AccountingHelpTopic.generalLedger,
+              ),
+            ],
+          ),
           DropdownButtonFormField<int?>(
             key: const Key('general-ledger-account-selector'),
             initialValue: accountValue,

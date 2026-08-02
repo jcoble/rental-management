@@ -5,6 +5,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/time/app_clock.dart';
 import '../accounting/accounting_book_models.dart';
 import '../accounting/accounting_books_repository.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../home/mobile_quick_action_fab.dart';
 import 'money_format.dart';
 import 'tenant_ledger_models.dart';
@@ -237,9 +239,18 @@ class _OneTimeChargeSheetState extends ConsumerState<_OneTimeChargeSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Add one-time charge',
-                style: Theme.of(context).textTheme.titleLarge,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Add one-time charge',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  const AccountingHelpTipButton(
+                    topic: AccountingHelpTopic.oneTimeCharge,
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               const Text('Create a real charge on this tenant account.'),
