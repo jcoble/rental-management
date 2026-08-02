@@ -3,7 +3,7 @@
   key, renders a parameter bar (properties multi-select + date range + year/days where the report
   declares them), generates the report on demand, and renders it as a clean table with subtotals,
   totals, semantic money colors and tabular-nums. Actions menu offers CSV / Print / (for external
-  reports) deep-links to the existing PDF pages.
+  reports) deep-links to the existing pages.
 -->
 <script lang="ts">
 	import { page } from '$app/state';
@@ -82,6 +82,11 @@
 
 	// External reports are only deep-linked, never viewed here.
 	const externalLinks: Record<string, string> = {
+		'accounting-profit-and-loss': '/accounting/profit-and-loss',
+		'accounting-balance-sheet': '/accounting/balance-sheet',
+		'accounting-trial-balance': '/accounting/trial-balance',
+		'accounting-general-ledger': '/accounting?tab=general-ledger',
+		'accounting-cash-flow': '/accounting?tab=cash-flow',
 		'schedule-e': '/tax',
 		'year-end-packet': '/tax',
 		'owner-statement': '/owners-report',
@@ -129,7 +134,7 @@
 		if (accepts.has('from') && rangeStart) p.from = rangeStart;
 		if (accepts.has('to') && rangeEnd) p.to = rangeEnd;
 		if (accepts.has('propertyIds') && selectedPropertyIds.length) p.propertyIds = [...selectedPropertyIds];
-		// A single-property report (general-ledger) reuses the same multi-select; send the first pick.
+		// A single-property report (cash-and-operating-activity) reuses the same multi-select; send the first pick.
 		if (accepts.has('propertyId') && selectedPropertyIds.length) p.propertyId = selectedPropertyIds[0];
 		if (accepts.has('year') && year.trim()) p.year = Number(year);
 		if (accepts.has('days') && days) p.days = Number(days);
@@ -219,7 +224,7 @@
 			? (reportQuery.data as CashFlowResponse | undefined)
 			: undefined
 	);
-	const generalLedger = $derived(reportKey === 'general-ledger' ? (reportQuery.data as GeneralLedgerResponse | undefined) : undefined);
+	const generalLedger = $derived(reportKey === 'cash-and-operating-activity' ? (reportQuery.data as GeneralLedgerResponse | undefined) : undefined);
 	const propertyPnl = $derived(reportKey === 'property-pnl-summary' ? (reportQuery.data as PropertyProfitAndLossResponse | undefined) : undefined);
 	const occupancy = $derived(reportKey === 'occupancy' ? (reportQuery.data as OccupancyResponse | undefined) : undefined);
 	const leaseExp = $derived(reportKey === 'lease-expirations' ? (reportQuery.data as LeaseExpirationsResponse | undefined) : undefined);
