@@ -93,6 +93,98 @@ export interface Page<T> {
 	take: number;
 }
 
+export interface TenantLedgerAllocationRef {
+	targetSourceId: number;
+	targetPublicId: string;
+	targetDescription: string;
+	amount: number;
+	effectiveOn: string;
+}
+
+export interface TenantLedgerRow {
+	tenantLedgerEntryId: number;
+	publicId: string;
+	sourceType: string;
+	sourceId: number;
+	sourcePublicId: string | null;
+	effectiveOn: string;
+	postedAtUtc: string;
+	type: string;
+	description: string;
+	chargeAmount: number;
+	paymentAmount: number;
+	creditAmount: number;
+	runningAmountOwed: number;
+	dueOn: string | null;
+	openAmount: number;
+	status: string;
+	paymentMethod: string | null;
+	reference: string | null;
+	accountLabel: string | null;
+	recurringScheduleContext: string | null;
+	sourceDocumentContext: string | null;
+	allocations: TenantLedgerAllocationRef[];
+	reversesEntryId: number | null;
+	replacedByEntryId: number | null;
+	journalEntryPublicId: string | null;
+	currency: string;
+}
+
+export interface TenantMonthSummary {
+	year: number;
+	month: number;
+	currency: string;
+	openingBalance: number;
+	chargeAmount: number;
+	paymentAmount: number;
+	creditAmount: number;
+	closingBalance: number;
+}
+
+export interface RecurringTenantChargeRow {
+	id: number;
+	publicId: string;
+	tenantAccountId: number;
+	leaseAgreementId: number | null;
+	displayName: string;
+	amount: number;
+	currency: string;
+	ledgerAccountId: number;
+	effectiveStartOn: string;
+	effectiveEndOn: string | null;
+	monthlyDueDay: number;
+	nextRunDate: string;
+	isActive: boolean;
+	propertyId: number | null;
+	unitId: number | null;
+}
+
+export interface CreateRecurringTenantChargeRequest {
+	displayName: string;
+	amount: number;
+	ledgerAccountId: number;
+	leaseAgreementId: number;
+	effectiveStartOn: string;
+	effectiveEndOn?: string | null;
+	monthlyDueDay: number;
+	nextRunDate?: string | null;
+	propertyId?: number | null;
+	unitId?: number | null;
+}
+
+export interface PatchRecurringTenantChargeRequest {
+	displayName?: string;
+	amount?: number;
+	ledgerAccountId?: number;
+	effectiveStartOn?: string;
+	effectiveEndOn?: string | null;
+	monthlyDueDay?: number;
+	nextRunDate?: string;
+	isActive?: boolean;
+	propertyId?: number;
+	unitId?: number;
+}
+
 export interface EntryPage<T> extends Page<T> {
 	tenantAccountId?: number;
 	leaseManagementId?: number;
@@ -206,6 +298,46 @@ export function buildTenantAccountReversalsPath(tenantAccountId: number): string
 }
 
 export const tenantAccounts = {
+	ledger: (tenantAccountId: number, params: ListParams & {
+		entryType?: string;
+		effectiveFrom?: string;
+		effectiveTo?: string;
+		openOnly?: boolean;
+		settledOnly?: boolean;
+	} = {}) => api.get<Page<TenantLedgerRow>>(
+		`/tenant-accounts/${tenantAccountId}/ledger${queryString(params)}`
+	),
+	monthSummary: (tenantAccountId: number, params: { from?: string; to?: string } = {}) =>
+		api.get<TenantMonthSummary[]>(`/tenant-accounts/${tenantAccountId}/month-summary${queryString(params)}`),
+	recurringCharges: (tenantAccountId: number, params: ListParams = {}) =>
+		api.get<Page<RecurringTenantChargeRow>>(
+			`/tenant-accounts/${tenantAccountId}/recurring-charges${queryString(params)}`
+		),
+	createRecurringCharge: (
+		tenantAccountId: number,
+		operationKey: string,
+		body: CreateRecurringTenantChargeRequest
+	) => api.post<RecurringTenantChargeRow>(
+		`/tenant-accounts/${tenantAccountId}/recurring-charges`,
+		body,
+		{ headers: { 'Idempotency-Key': operationKey } }
+	),
+	patchRecurringCharge: (
+		tenantAccountId: number,
+		id: number,
+		operationKey: string,
+		body: PatchRecurringTenantChargeRequest
+	) => api.patch<RecurringTenantChargeRow>(
+		`/tenant-accounts/${tenantAccountId}/recurring-charges/${id}`,
+		body,
+		{ headers: { 'Idempotency-Key': operationKey } }
+	),
+	deactivateRecurringCharge: (tenantAccountId: number, id: number, operationKey: string) =>
+		api.post<RecurringTenantChargeRow>(
+			`/tenant-accounts/${tenantAccountId}/recurring-charges/${id}/deactivate`,
+			{},
+			{ headers: { 'Idempotency-Key': operationKey } }
+		),
 	listPage: (params: ListParams = {}) =>
 		api.get<Page<TenantAccountListItem>>(`/tenant-accounts/page${queryString(params)}`),
 	get: (tenantAccountId: number) =>
