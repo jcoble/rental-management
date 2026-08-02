@@ -4,6 +4,38 @@ export function money(value: number | null | undefined): string {
 	return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 }
 
+export const TENANT_CHARGE_TYPES = [
+	{ value: 'Rent', label: 'Rent', systemKey: 'rental-income' },
+	{ value: 'Late fee', label: 'Late fee', systemKey: 'late-fee-income' },
+	{ value: 'Utility', label: 'Utility', systemKey: 'utility-reimbursement-income' },
+	{ value: 'Damage', label: 'Damage', systemKey: 'other-rental-income' },
+	{ value: 'Pet', label: 'Pet', systemKey: 'pet-income' },
+	{ value: 'Parking', label: 'Parking', systemKey: 'parking-income' },
+	{ value: 'Storage', label: 'Storage', systemKey: 'other-rental-income' },
+	{ value: 'Cleaning', label: 'Cleaning', systemKey: 'other-rental-income' },
+	{ value: 'Returned payment', label: 'Returned payment', systemKey: 'late-fee-income' },
+	{ value: 'Other', label: 'Other', systemKey: null }
+] as const;
+
+export type TenantChargeType = (typeof TENANT_CHARGE_TYPES)[number]['value'];
+
+export function tenantChargeType(value: string): (typeof TENANT_CHARGE_TYPES)[number] {
+	return TENANT_CHARGE_TYPES.find((option) => option.value === value) ?? TENANT_CHARGE_TYPES[0];
+}
+
+export function tenantLedgerPeriodRange(
+	months: 3 | 6 | 9 | 12,
+	anchor = new Date()
+): { from: string; to: string } {
+	const year = anchor.getUTCFullYear();
+	const month = anchor.getUTCMonth();
+	const from = new Date(Date.UTC(year, month - months + 1, 1));
+	return {
+		from: from.toISOString().slice(0, 10),
+		to: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+	};
+}
+
 export interface UnitMoneyIdentity {
 	tenantAccountId: number | null;
 	leaseManagementId: number | null;
