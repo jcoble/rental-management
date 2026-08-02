@@ -4,6 +4,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -12,6 +13,7 @@
 		formatAccountingCurrency,
 		formatAccountingDate
 	} from '$lib/accounting/accounting-display';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 
 	type Period = 'this-month' | 'last-month' | 'year-to-date' | 'custom';
@@ -132,7 +134,15 @@
 		<div class="grid gap-4 lg:grid-cols-[1.25fr_1fr]">
 			<Card.Root class="gap-0 py-0" data-testid="money-position-cash-card">
 				<Card.Header class="px-5 pb-2 pt-5">
-					<Card.Title class="text-base">Cash</Card.Title>
+					<Card.Title class="flex items-center gap-1.5 text-base">
+						Cash
+						<HelpPopover
+							title={ACCOUNTING_HELP.cashPosition.title}
+							summary={ACCOUNTING_HELP.cashPosition.summary}
+							learnMoreUrl={ACCOUNTING_HELP.cashPosition.href}
+							testid="money-position-cash-help"
+						/>
+					</Card.Title>
 				</Card.Header>
 				<Card.Content class="space-y-5 px-5 pb-5 pt-0">
 					<div>

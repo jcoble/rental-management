@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { ArrowRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import {
 		formatAccountingCurrency,
@@ -9,6 +10,7 @@
 		formatJournalPostingLabel,
 		formatSourceTypeLabel
 	} from '$lib/accounting/accounting-display';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
 		accountingBooks,
 		type JournalSourceType
@@ -65,7 +67,15 @@
 		</section>
 	{:else if !sourceJournalsQuery.isError && journals.length > 0}
 		<section class="rounded-xl border border-border bg-card p-4" data-testid="accounting-impact-card">
-			<h2 class="text-sm font-semibold">{title}</h2>
+			<div class="flex items-center gap-1.5">
+				<h2 class="text-sm font-semibold">{title}</h2>
+				<HelpPopover
+					title={ACCOUNTING_HELP.accountingImpact.title}
+					summary={ACCOUNTING_HELP.accountingImpact.summary}
+					learnMoreUrl={ACCOUNTING_HELP.accountingImpact.href}
+					testid="accounting-impact-help"
+				/>
+			</div>
 			<div class="mt-3 divide-y divide-border">
 				{#each journals as journal (journal.publicId)}
 					<div class="py-3 first:pt-0 last:pb-0">

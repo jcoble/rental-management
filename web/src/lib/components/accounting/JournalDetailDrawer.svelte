@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import {
@@ -15,6 +16,7 @@
 		getJournalLineEntry,
 		type JournalLineDisplayInput
 	} from '$lib/accounting/accounting-display';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { accountingBooks, type JournalDetailLine } from '$lib/api/endpoints/accounting-books';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 
@@ -125,9 +127,17 @@
 
 				<div class="space-y-6 px-6 py-5">
 					<section aria-labelledby="journal-detail-lines-heading">
-						<h3 id="journal-detail-lines-heading" class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-							{advanced ? 'Detail' : 'What this did'}
-						</h3>
+						<div class="flex items-center gap-1.5">
+							<h3 id="journal-detail-lines-heading" class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+								{advanced ? 'Detail' : 'What this did'}
+							</h3>
+							<HelpPopover
+								title={ACCOUNTING_HELP.journalDetail.title}
+								summary={ACCOUNTING_HELP.journalDetail.summary}
+								learnMoreUrl={ACCOUNTING_HELP.journalDetail.href}
+								testid="journal-detail-help"
+							/>
+						</div>
 						<div class="mt-3 divide-y divide-border rounded-lg border border-border">
 							{#each detail.lines as line (line.id)}
 								{@const input = lineInput(line)}

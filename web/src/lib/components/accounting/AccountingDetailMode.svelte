@@ -20,6 +20,8 @@
 	import type { Snippet } from 'svelte';
 	import { setContext } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 
 	const STORAGE_KEY = 'rc.accounting.detail-mode.v1';
 
@@ -89,6 +91,12 @@
 	>
 		Advanced
 	</Button>
+	<HelpPopover
+		title={ACCOUNTING_HELP.detailMode.title}
+		summary={ACCOUNTING_HELP.detailMode.summary}
+		learnMoreUrl={ACCOUNTING_HELP.detailMode.href}
+		testid="accounting-detail-mode-help"
+	/>
 </div>
 
 {#if children}

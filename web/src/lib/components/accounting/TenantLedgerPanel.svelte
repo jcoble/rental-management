@@ -27,6 +27,8 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import JournalDetailDrawer from './JournalDetailDrawer.svelte';
 	import TenantLedgerMonth, { type TenantLedgerRowAction } from './TenantLedgerMonth.svelte';
 	import RecordPaymentSheet from './RecordPaymentSheet.svelte';
@@ -290,6 +292,15 @@
 </script>
 
 <div class="space-y-4" data-testid="tenant-ledger-panel">
+	<div class="flex items-center justify-end gap-1.5 text-sm font-medium text-muted-foreground">
+		<span>About this ledger</span>
+		<HelpPopover
+			title={ACCOUNTING_HELP.tenantLedger.title}
+			summary={ACCOUNTING_HELP.tenantLedger.summary}
+			learnMoreUrl={ACCOUNTING_HELP.tenantLedger.href}
+			testid="tenant-ledger-help"
+		/>
+	</div>
 	<div class="grid gap-2 overflow-x-auto sm:grid-cols-2 lg:grid-cols-5">
 		<div class="min-w-36 rounded-xl border border-border bg-card px-4 py-3">
 			<p class="text-xs text-muted-foreground">Balance due</p>
