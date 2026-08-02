@@ -32,8 +32,18 @@ describe('tenant ledger API contract', () => {
 		]) {
 			assert.match(source, new RegExp(`\\b${field}\\b`));
 		}
-		assert.match(source, /api\.post<RecurringTenantChargeRow>[\s\S]*body[\s\S]*mutationOptions\(operationKey\)/);
-		assert.match(source, /api\.patch<RecurringTenantChargeRow>[\s\S]*body[\s\S]*mutationOptions\(operationKey\)/);
-		assert.match(source, /Idempotency-Key/);
+		assert.match(
+			source,
+			/createRecurringCharge:[\s\S]*api\.post<RecurringTenantChargeRow>[\s\S]*body,[\s\S]*mutationOptions\(operationKey\)/
+		);
+		assert.match(
+			source,
+			/patchRecurringCharge:[\s\S]*api\.patch<RecurringTenantChargeRow>[\s\S]*body,[\s\S]*mutationOptions\(operationKey\)/
+		);
+		assert.match(
+			source,
+			/deactivateRecurringCharge:[\s\S]*api\.post<RecurringTenantChargeRow>[\s\S]*undefined,[\s\S]*mutationOptions\(operationKey\)/
+		);
+		assert.match(source, /'Idempotency-Key': operationKey/);
 	});
 });

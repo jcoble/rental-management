@@ -30,7 +30,14 @@ describe('accounting books API contract', () => {
 		}
 		assert.match(source, /buildTrialBalancePath[\s\S]*to: params\.to/);
 		assert.doesNotMatch(source, /buildTrialBalancePath[\s\S]*from:/);
-		assert.match(source, /api\.post<ChartOfAccountsRow>\('\/accounting\/chart-of-accounts', body\)/);
-		assert.match(source, /api\.patch<ChartOfAccountsRow>\(`\/accounting\/chart-of-accounts\/\$\{id\}`, body\)/);
+		assert.match(source, /import \{ idempotentMutation \} from '\.\.\/idempotency';/);
+		assert.match(
+			source,
+			/idempotentMutation\(`accounting:chart-of-accounts:create:\$\{JSON\.stringify\(body\)\}`,[\s\S]*api\.post<ChartOfAccountsRow>\('\/accounting\/chart-of-accounts', body, \{[\s\S]*'Idempotency-Key': key/
+		);
+		assert.match(
+			source,
+			/idempotentMutation\(`accounting:chart-of-accounts:update:\$\{id\}:\$\{JSON\.stringify\(body\)\}`,[\s\S]*api\.patch<ChartOfAccountsRow>\(`\/accounting\/chart-of-accounts\/\$\{id\}`, body, \{[\s\S]*'Idempotency-Key': key/
+		);
 	});
 });
