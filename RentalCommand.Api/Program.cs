@@ -440,6 +440,7 @@ if (migrateOnly)
     await using (var migrationDb = new RentalCommandDbContext(migrationOptions))
     {
         await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
+        await new ChartOfAccountsSeedService(migrationDb).SeedAllWithLockAsync();
     }
 
     await RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ProvisionAsync(

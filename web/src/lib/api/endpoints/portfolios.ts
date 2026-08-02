@@ -32,5 +32,9 @@ export const portfolios = {
 	 * keeps an empty real portfolio. Idempotent. Returns the resulting sandbox state.
 	 */
 	onboardingChoice: (mode: 'sandbox' | 'live') =>
-		api.post<SandboxState>('/portfolio/onboarding-choice', { mode }),
+		idempotentMutation(`portfolio:onboarding-choice:${mode}`, (operationKey) =>
+			api.post<SandboxState>('/portfolio/onboarding-choice', { mode }, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
 };

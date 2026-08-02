@@ -91,4 +91,11 @@ describe('W2 unit tenant ledger composition', () => {
 		assert.match(panel, /This money view is not available\./);
 		assert.match(panel, /LoadingState/);
 	});
+
+	it('keeps ledger rows available when optional summary reads fail', () => {
+		assert.match(panel, /const coreReadError = \$derived\(ledgerQuery\.error \?\? monthSummaryQuery\.error\)/);
+		assert.match(panel, /const summaryReadError = \$derived\(accountQuery\.error \?\? ledgerSummaryQuery\.error\)/);
+		assert.match(panel, /data-testid="tenant-ledger-summary-error"/);
+		assert.doesNotMatch(panel, /ledgerSummaryQuery\.isLoading\s*\)/);
+	});
 });

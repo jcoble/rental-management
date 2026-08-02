@@ -166,13 +166,10 @@
 		return typeof status === 'number' ? status : undefined;
 	}
 
-	const readError = $derived(
-		ledgerQuery.error ?? monthSummaryQuery.error ?? ledgerSummaryQuery.error ?? accountQuery.error
-	);
-	const unavailable = $derived([401, 403, 404].includes(errorStatus(readError) ?? 0));
-	const loading = $derived(
-		accountQuery.isLoading || ledgerQuery.isLoading || monthSummaryQuery.isLoading || ledgerSummaryQuery.isLoading
-	);
+	const coreReadError = $derived(ledgerQuery.error ?? monthSummaryQuery.error);
+	const summaryReadError = $derived(accountQuery.error ?? ledgerSummaryQuery.error);
+	const unavailable = $derived([401, 403, 404].includes(errorStatus(coreReadError) ?? 0));
+	const loading = $derived(ledgerQuery.isLoading || monthSummaryQuery.isLoading);
 
 	function invalidateMoney(): void {
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-summary', tenantAccountId] });
@@ -362,9 +359,15 @@
 		</div>
 	</div>
 
+	{#if summaryReadError}
+		<div class="inline-flex w-fit items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs text-foreground" role="status" data-testid="tenant-ledger-summary-error">
+			Some summary totals are unavailable. Rent and payment history is still shown below.
+		</div>
+	{/if}
+
 	{#if loading}
 		<LoadingState label="Loading rent and payment history" variant="section" testid="tenant-ledger-loading" />
-	{:else if readError}
+	{:else if coreReadError}
 		<section class="rounded-xl border border-border bg-card px-4 py-8 text-center" role="alert" data-testid="tenant-ledger-error">
 			<p class="font-medium">{unavailable ? 'This money view is not available.' : 'Rent and payment history is unavailable.'}</p>
 			{#if !unavailable}<Button class="mt-4" variant="outline" size="sm" onclick={retryReads}>Try again</Button>{/if}

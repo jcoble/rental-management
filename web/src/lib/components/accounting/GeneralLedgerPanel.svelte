@@ -86,6 +86,7 @@
 	let pageNumber = $state(initialState.page);
 	let sort = $state<GeneralLedgerSort>(initialState.sort);
 	let journalPublicId = $state<string | null>(null);
+	let filtersOpen = $state(false);
 	let filtersPrimed = false;
 
 	const debouncedSearch = debounced(() => search, 300);
@@ -327,13 +328,20 @@
 {#if !unauthorized}
 	<section class={['space-y-4', className]} data-testid={testid}>
 		<div class="rounded-xl border border-border bg-card p-4">
-			<details class="group">
-				<summary class="flex cursor-pointer list-none items-center justify-between gap-3 lg:hidden">
+				<button
+					type="button"
+					class="flex w-full cursor-pointer items-center justify-between gap-3 lg:hidden"
+					aria-expanded={filtersOpen}
+					aria-controls="general-ledger-filters"
+					onclick={() => filtersOpen = !filtersOpen}
+				>
 					<span class="font-semibold">Filters</span>
-					<span class="text-sm text-muted-foreground group-open:hidden">Show</span>
-					<span class="hidden text-sm text-muted-foreground group-open:inline">Hide</span>
-				</summary>
-				<div class="hidden gap-3 pt-4 group-open:grid lg:grid lg:grid-cols-12 lg:items-end lg:pt-0">
+					<span class="text-sm text-muted-foreground">{filtersOpen ? 'Hide' : 'Show'}</span>
+				</button>
+				<div
+					id="general-ledger-filters"
+					class={[filtersOpen ? 'grid' : 'hidden', 'gap-3 pt-4 lg:grid lg:grid-cols-12 lg:items-end lg:pt-0']}
+				>
 					<div class="lg:col-span-4">
 						<AccountPicker bind:selectedAccountId allowAll={true} />
 					</div>
@@ -396,7 +404,6 @@
 						<span class="text-xs text-muted-foreground">{advanced ? 'Advanced details' : 'Plain-language details'}</span>
 					</div>
 				</div>
-			</details>
 		</div>
 
 		{#if !hasAccount}

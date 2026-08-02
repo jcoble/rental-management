@@ -772,15 +772,19 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var from = today.AddMonths(-months);
-        var entries = _db.TenantLedgerEntries.AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId
-                && entry.EffectiveOn >= from && entry.EffectiveOn <= today);
-        var currency = await entries.Select(entry => entry.Currency).Distinct().SingleOrDefaultAsync(ct);
+        var currency = await _db.TenantAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId && account.Id == tenantAccountId)
+            .Select(account => account.Currency)
+            .SingleOrDefaultAsync(ct);
         if (currency is null)
             return null;
 
+        var entries = _db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId
+                && entry.Currency == currency
+                && entry.EffectiveOn >= from && entry.EffectiveOn <= today);
+
         var totals = await entries
-            .Where(entry => entry.Currency == currency)
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -797,11 +801,17 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             })
             .SingleOrDefaultAsync(ct);
         if (totals is null)
-            return null;
+        {
+            return new TenantLedgerPeriodSummary
+            {
+                PeriodMonths = months,
+                Currency = currency,
+            };
+        }
 
         // Aging buckets remain SQL-side; each amount is a conditional aggregate over open charges.
         var aging = await entries
-            .Where(entry => entry.Currency == currency && entry.Direction == TenantLedgerDirection.Debit)
+            .Where(entry => entry.Direction == TenantLedgerDirection.Debit)
             .GroupBy(_ => 1)
             .Select(group => new
             {

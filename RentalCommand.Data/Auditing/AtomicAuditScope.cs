@@ -542,8 +542,10 @@ internal sealed class AtomicAuditScope
     {
         ValidateSemanticShape(audit);
         var entityType = entry.Entity.GetType().Name;
-        var portfolioId = Convert.ToInt32(
-            entry.Property(nameof(RentalCommand.Core.Interfaces.IPortfolioScoped.PortfolioId)).CurrentValue);
+        var portfolioId = entry.Entity is RentalCommand.Core.Entities.Portfolio portfolio
+            ? portfolio.Id
+            : Convert.ToInt32(
+                entry.Property(nameof(RentalCommand.Core.Interfaces.IPortfolioScoped.PortfolioId)).CurrentValue);
         var id = entry.Metadata.FindPrimaryKey()?.Properties.Count == 1
             ? Convert.ToInt32(entry.Property(entry.Metadata.FindPrimaryKey()!.Properties[0].Name).CurrentValue)
             : 0;

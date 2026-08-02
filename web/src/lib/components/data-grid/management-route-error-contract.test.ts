@@ -37,10 +37,10 @@ describe('management route error contract', () => {
 		}
 
 		assert.match(tenantLedgerPanel, /data-testid="tenant-ledger-error"/);
-		assert.match(tenantLedgerPanel, /readError/);
+		assert.match(tenantLedgerPanel, /coreReadError/);
 		assert.match(tenantLedgerPanel, /retryReads/);
 		assert.ok(
-			tenantLedgerPanel.indexOf('{:else if readError}') < tenantLedgerPanel.indexOf('data-testid="tenant-ledger-months"'),
+			tenantLedgerPanel.indexOf('{:else if coreReadError}') < tenantLedgerPanel.indexOf('data-testid="tenant-ledger-months"'),
 			'canonical tenant-ledger errors must render before month rows'
 		);
 		assert.match(paymentDetail, /data-testid="payment-detail-error"/);
