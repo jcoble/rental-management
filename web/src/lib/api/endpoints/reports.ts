@@ -14,65 +14,88 @@
  * `/api/v1` prefix before dispatching.
  */
 
-import { fetchApi } from '../client';
+import { fetchApi } from "../client";
+import type {
+  AccountingPage,
+  ChartOfAccountsRow,
+  FinancialStatementResponse,
+  GeneralLedgerRow,
+  TrialBalanceResponse,
+} from "./accounting";
 
 // ── Catalog ─────────────────────────────────────────────────────────────────────────────────────
 
 /** Well-known param keys a catalog entry can declare (mirrors `ReportParamKeys`). */
 export type ReportParamKey =
-	| 'from'
-	| 'to'
-	| 'propertyId'
-	| 'propertyIds'
-	| 'year'
-	| 'ownerId'
-	| 'days'
-	| 'skip'
-	| 'take'
-	| 'sort';
+  | "from"
+  | "to"
+  | "propertyId"
+  | "propertyIds"
+  | "year"
+  | "ownerId"
+  | "days"
+  | "skip"
+  | "take"
+  | "sort"
+  | "accountId"
+  | "unitId"
+  | "sourceType"
+  | "effectiveFrom"
+  | "effectiveTo"
+  | "search"
+  | "activeOnly"
+  | "accountTypes";
 
 export interface ReportCatalogEntry {
-	/** Stable report key, e.g. "rent-roll" — also the URL segment in /reports/[report]. */
-	key: string;
-	title: string;
-	description: string;
-	/** API path to call, absolute under the API root (e.g. "/api/v1/reports/cash-flow"). */
-	endpoint: string;
-	/** Which params the report accepts, so the param bar renders generically. */
-	params: ReportParamKey[];
-	/** True when served by a pre-existing endpoint (deep-link, not fetched as data). */
-	external: boolean;
+  /** Stable report key, e.g. "rent-roll" — also the URL segment in /reports/[report]. */
+  key: string;
+  title: string;
+  description: string;
+  /** API path to call, absolute under the API root (e.g. "/api/v1/reports/cash-flow"). */
+  endpoint: string;
+  /** Which params the report accepts, so the param bar renders generically. */
+  params: ReportParamKey[];
+  /** True when served by a pre-existing endpoint (deep-link, not fetched as data). */
+  external: boolean;
 }
 
 export interface ReportCategoryGroup {
-	key: string;
-	title: string;
-	reports: ReportCatalogEntry[];
+  key: string;
+  title: string;
+  reports: ReportCatalogEntry[];
 }
 
 export interface ReportsCatalogResponse {
-	categories: ReportCategoryGroup[];
+  categories: ReportCategoryGroup[];
 }
 
 // ── Shared request params ─────────────────────────────────────────────────────────────────────────
 
 export interface ReportRequestParams {
-	/** ISO yyyy-MM-dd (inclusive). Defaults to year-to-date server-side when omitted. */
-	from?: string;
-	to?: string;
-	/** Single-property filter (general-ledger). */
-	propertyId?: number;
-	/** Multi-property filter — repeated `propertyIds` query params. */
-	propertyIds?: number[];
-	/** Tax/calendar year (vendor-1099, owner-distributions). */
-	year?: number;
-	/** Forward-looking window in days (lease-expirations). */
-	days?: number;
-	/** Server-side row window for paged reports. */
-	skip?: number;
-	take?: number;
-	/** Server-side sort, with a leading "-" for descending. */
-	sort?: string;
+  /** ISO yyyy-MM-dd (inclusive). Defaults to year-to-date server-side when omitted. */
+  from?: string;
+  to?: string;
+  /** Single-property filter (general-ledger). */
+  propertyId?: number;
+  /** Multi-property filter — repeated `propertyIds` query params. */
+  propertyIds?: number[];
+  /** Tax/calendar year (vendor-1099, owner-distributions). */
+  year?: number;
+  /** Forward-looking window in days (lease-expirations). */
+  days?: number;
+  /** Server-side row window for paged reports. */
+  skip?: number;
+  take?: number;
+  /** Server-side sort, with a leading "-" for descending. */
+  sort?: string;
+  accountId?: number;
+  unitId?: number;
+  sourceType?: string;
+  effectiveFrom?: string;
+  effectiveTo?: string;
+  search?: string;
+  activeOnly?: boolean;
+  accountTypes?: string;
 }
 
 // ── Report response DTOs (match ReportsDtos.cs exactly) ─────────────────────────────────────────────
@@ -80,302 +103,306 @@ export interface ReportRequestParams {
 export type LeaseStatusName = string;
 
 export interface RentRollRow {
-	leaseManagementId: number;
-	tenantAccountId: number;
-	agreementId: number;
-	relationshipNumber: string;
-	agreementNumber: string;
-	propertyId: number;
-	propertyName: string;
-	unitId: number;
-	unitNumber: string;
-	tenantId: number;
-	tenantName: string;
-	monthlyRent: number;
-	securityDeposit: number;
-	startOn: string;
-	endOn: string | null;
-	statusName: string;
+  leaseManagementId: number;
+  tenantAccountId: number;
+  agreementId: number;
+  relationshipNumber: string;
+  agreementNumber: string;
+  propertyId: number;
+  propertyName: string;
+  unitId: number;
+  unitNumber: string;
+  tenantId: number;
+  tenantName: string;
+  monthlyRent: number;
+  securityDeposit: number;
+  startOn: string;
+  endOn: string | null;
+  statusName: string;
 }
 
 export interface RentRollResponse {
-	generatedAt: string;
-	rows: RentRollRow[];
-	leaseCount: number;
-	totalMonthlyRent: number;
-	totalSecurityDeposit: number;
+  generatedAt: string;
+  rows: RentRollRow[];
+  leaseCount: number;
+  totalMonthlyRent: number;
+  totalSecurityDeposit: number;
 }
 
 export interface RentLedgerEntry {
-	date: string;
-	type: string; // "Charge" | "Receipt" | "Credit"
-	description: string;
-	charge: number;
-	credit: number;
-	balance: number;
+  date: string;
+  type: string; // "Charge" | "Receipt" | "Credit"
+  description: string;
+  charge: number;
+  credit: number;
+  balance: number;
 }
 
 export interface RentLedgerLease {
-	leaseManagementId: number;
-	relationshipNumber: string;
-	propertyId: number;
-	propertyName: string;
-	unitNumber: string;
-	tenantName: string;
-	entries: RentLedgerEntry[];
-	totalCharged: number;
-	totalCredits: number;
-	balance: number;
+  leaseManagementId: number;
+  relationshipNumber: string;
+  propertyId: number;
+  propertyName: string;
+  unitNumber: string;
+  tenantName: string;
+  entries: RentLedgerEntry[];
+  totalCharged: number;
+  totalCredits: number;
+  balance: number;
 }
 
 export interface RentLedgerResponse {
-	from: string;
-	to: string;
-	leases: RentLedgerLease[];
-	totalCharged: number;
-	totalCredits: number;
-	totalBalance: number;
+  from: string;
+  to: string;
+  leases: RentLedgerLease[];
+  totalCharged: number;
+  totalCredits: number;
+  totalBalance: number;
 }
 
 export interface DelinquencyBuckets {
-	current: number;
-	days31To60: number;
-	days61To90: number;
-	over90: number;
+  current: number;
+  days31To60: number;
+  days61To90: number;
+  over90: number;
 }
 
 export interface DelinquencyRow {
-	leaseManagementId: number;
-	relationshipNumber: string;
-	propertyId: number;
-	propertyName: string;
-	unitNumber: string;
-	tenantId: number;
-	tenantName: string;
-	buckets: DelinquencyBuckets;
-	total: number;
-	oldestOverdueDays: number;
+  leaseManagementId: number;
+  relationshipNumber: string;
+  propertyId: number;
+  propertyName: string;
+  unitNumber: string;
+  tenantId: number;
+  tenantName: string;
+  buckets: DelinquencyBuckets;
+  total: number;
+  oldestOverdueDays: number;
 }
 
 export interface DelinquencyResponse {
-	asOf: string;
-	rows: DelinquencyRow[];
-	totals: DelinquencyBuckets;
-	totalOutstanding: number;
+  asOf: string;
+  rows: DelinquencyRow[];
+  totals: DelinquencyBuckets;
+  totalOutstanding: number;
 }
 
 export interface CashFlowMonth {
-	year: number;
-	month: number;
-	monthKey: string;
-	label: string;
-	income: number;
-	expense: number;
-	net: number;
+  year: number;
+  month: number;
+  monthKey: string;
+  label: string;
+  income: number;
+  expense: number;
+  net: number;
 }
 
 export interface CashFlowResponse {
-	from: string;
-	to: string;
-	months: CashFlowMonth[];
-	totalCount: number;
-	skip: number;
-	take: number;
-	sort: string;
-	totalIncome: number;
-	totalExpense: number;
-	totalNet: number;
+  from: string;
+  to: string;
+  months: CashFlowMonth[];
+  totalCount: number;
+  skip: number;
+  take: number;
+  sort: string;
+  totalIncome: number;
+  totalExpense: number;
+  totalNet: number;
 }
 
 export interface GeneralLedgerEntry {
-	date: string;
-	type: string; // "Payment" | "Expense"
-	id: number;
-	description: string;
-	category: string;
-	propertyId?: number | null;
-	propertyName?: string | null;
-	counterparty?: string | null;
-	/** Signed: positive income, negative expense. */
-	amount: number;
-	runningBalance: number;
+  date: string;
+  type: string; // "Payment" | "Expense"
+  id: number;
+  description: string;
+  category: string;
+  propertyId?: number | null;
+  propertyName?: string | null;
+  counterparty?: string | null;
+  /** Signed: positive income, negative expense. */
+  amount: number;
+  runningBalance: number;
 }
 
 export interface GeneralLedgerResponse {
-	from: string;
-	to: string;
-	entries: GeneralLedgerEntry[];
-	totalIncome: number;
-	totalExpense: number;
-	closingBalance: number;
+  from: string;
+  to: string;
+  entries: GeneralLedgerEntry[];
+  totalIncome: number;
+  totalExpense: number;
+  closingBalance: number;
 }
 
 export interface PropertyProfitAndLossRow {
-	propertyId: number;
-	propertyName: string;
-	income: number;
-	expense: number;
-	net: number;
+  propertyId: number;
+  propertyName: string;
+  income: number;
+  expense: number;
+  net: number;
 }
 
 export interface PropertyProfitAndLossResponse {
-	from: string;
-	to: string;
-	rows: PropertyProfitAndLossRow[];
-	totalIncome: number;
-	totalExpense: number;
-	totalNet: number;
+  from: string;
+  to: string;
+  rows: PropertyProfitAndLossRow[];
+  totalIncome: number;
+  totalExpense: number;
+  totalNet: number;
 }
 
 export interface OccupancyRow {
-	propertyId: number;
-	propertyName: string;
-	totalUnits: number;
-	occupiedUnits: number;
-	vacantUnits: number;
-	occupancyPercent: number;
+  propertyId: number;
+  propertyName: string;
+  totalUnits: number;
+  occupiedUnits: number;
+  vacantUnits: number;
+  occupancyPercent: number;
 }
 
 export interface OccupancyResponse {
-	generatedAt: string;
-	rows: OccupancyRow[];
-	totalUnits: number;
-	occupiedUnits: number;
-	vacantUnits: number;
-	occupancyPercent: number;
+  generatedAt: string;
+  rows: OccupancyRow[];
+  totalUnits: number;
+  occupiedUnits: number;
+  vacantUnits: number;
+  occupancyPercent: number;
 }
 
 export interface LeaseExpirationRow {
-	leaseManagementId: number;
-	agreementId: number;
-	relationshipNumber: string;
-	agreementNumber: string;
-	propertyId: number;
-	propertyName: string;
-	unitNumber: string;
-	tenantId: number | null;
-	tenantName: string;
-	monthlyRent: number;
-	endOn: string;
-	daysUntilExpiry: number;
-	statusName: string;
+  leaseManagementId: number;
+  agreementId: number;
+  relationshipNumber: string;
+  agreementNumber: string;
+  propertyId: number;
+  propertyName: string;
+  unitNumber: string;
+  tenantId: number | null;
+  tenantName: string;
+  monthlyRent: number;
+  endOn: string;
+  daysUntilExpiry: number;
+  statusName: string;
 }
 
 export interface LeaseExpirationsResponse {
-	asOf: string;
-	windowDays: number;
-	rows: LeaseExpirationRow[];
-	leaseCount: number;
-	totalMonthlyRent: number;
+  asOf: string;
+  windowDays: number;
+  rows: LeaseExpirationRow[];
+  leaseCount: number;
+  totalMonthlyRent: number;
 }
 
 export interface SecurityDepositRegisterRow {
-	depositId: number;
-	leaseManagementId: number;
-	relationshipNumber: string;
-	propertyId: number;
-	propertyName: string;
-	unitNumber: string;
-	tenantName: string;
-	held: number;
-	deductions: number;
-	returned: number;
-	currentBalance: number;
-	status: string;
-	statusName: string;
-	heldAt: string;
-	returnedAt?: string | null;
+  depositId: number;
+  leaseManagementId: number;
+  relationshipNumber: string;
+  propertyId: number;
+  propertyName: string;
+  unitNumber: string;
+  tenantName: string;
+  held: number;
+  deductions: number;
+  returned: number;
+  currentBalance: number;
+  status: string;
+  statusName: string;
+  heldAt: string;
+  returnedAt?: string | null;
 }
 
 export interface SecurityDepositRegisterResponse {
-	generatedAt: string;
-	rows: SecurityDepositRegisterRow[];
-	totalCount: number;
-	skip: number;
-	take: number;
-	sort: string;
-	totalHeld: number;
-	totalDeductions: number;
-	totalReturned: number;
-	totalCurrentBalance: number;
+  generatedAt: string;
+  rows: SecurityDepositRegisterRow[];
+  totalCount: number;
+  skip: number;
+  take: number;
+  sort: string;
+  totalHeld: number;
+  totalDeductions: number;
+  totalReturned: number;
+  totalCurrentBalance: number;
 }
 
 export interface Vendor1099Row {
-	vendorId: number;
-	vendorName: string;
-	taxId?: string | null;
-	totalPaid: number;
-	is1099Eligible: boolean;
-	w9OnFile: boolean;
-	needsW9: boolean;
-	needs1099Review: boolean;
+  vendorId: number;
+  vendorName: string;
+  taxId?: string | null;
+  totalPaid: number;
+  is1099Eligible: boolean;
+  w9OnFile: boolean;
+  needsW9: boolean;
+  needs1099Review: boolean;
 }
 
 export interface Vendor1099Response {
-	year: number;
-	rows: Vendor1099Row[];
-	totalPaid: number;
-	needsW9Count: number;
-	threshold: number;
+  year: number;
+  rows: Vendor1099Row[];
+  totalPaid: number;
+  needsW9Count: number;
+  threshold: number;
 }
 
 export interface OwnerDistributionRow {
-	ownerId: number;
-	ownerName: string;
-	netToOwner: number;
-	totalDistributed: number;
-	undistributed: number;
+  ownerId: number;
+  ownerName: string;
+  netToOwner: number;
+  totalDistributed: number;
+  undistributed: number;
 }
 
 export interface OwnerDistributionsResponse {
-	year: number;
-	rows: OwnerDistributionRow[];
-	totalNetToOwners: number;
-	totalDistributed: number;
-	totalUndistributed: number;
+  year: number;
+  rows: OwnerDistributionRow[];
+  totalNetToOwners: number;
+  totalDistributed: number;
+  totalUndistributed: number;
 }
 
 export interface WorkOrderReportRow {
-	workOrderId: number;
-	propertyId: number;
-	propertyName: string;
-	unitNumber?: string | null;
-	title: string;
-	category: string;
-	priority: string;
-	priorityName: string;
-	status: string;
-	statusName: string;
-	vendorName?: string | null;
-	requestedAt: string;
-	completedAt?: string | null;
-	actualCost?: number | null;
+  workOrderId: number;
+  propertyId: number;
+  propertyName: string;
+  unitNumber?: string | null;
+  title: string;
+  category: string;
+  priority: string;
+  priorityName: string;
+  status: string;
+  statusName: string;
+  vendorName?: string | null;
+  requestedAt: string;
+  completedAt?: string | null;
+  actualCost?: number | null;
 }
 
 export interface WorkOrderReportResponse {
-	from: string;
-	to: string;
-	rows: WorkOrderReportRow[];
-	totalCount: number;
-	openCount: number;
-	completedCount: number;
-	totalActualCost: number;
+  from: string;
+  to: string;
+  rows: WorkOrderReportRow[];
+  totalCount: number;
+  openCount: number;
+  completedCount: number;
+  totalActualCost: number;
 }
 
 /** Any non-external report response shape (discriminated at the call site by report key). */
 export type ReportData =
-	| RentRollResponse
-	| RentLedgerResponse
-	| DelinquencyResponse
-	| CashFlowResponse
-	| GeneralLedgerResponse
-	| PropertyProfitAndLossResponse
-	| OccupancyResponse
-	| LeaseExpirationsResponse
-	| SecurityDepositRegisterResponse
-	| Vendor1099Response
-	| OwnerDistributionsResponse
-	| WorkOrderReportResponse;
+  | RentRollResponse
+  | RentLedgerResponse
+  | DelinquencyResponse
+  | CashFlowResponse
+  | GeneralLedgerResponse
+  | PropertyProfitAndLossResponse
+  | OccupancyResponse
+  | LeaseExpirationsResponse
+  | SecurityDepositRegisterResponse
+  | Vendor1099Response
+  | OwnerDistributionsResponse
+  | WorkOrderReportResponse
+  | AccountingPage<ChartOfAccountsRow>
+  | AccountingPage<GeneralLedgerRow>
+  | TrialBalanceResponse
+  | FinancialStatementResponse;
 
 // ── Query-string + endpoint helpers ───────────────────────────────────────────────────────────────
 
@@ -384,7 +411,7 @@ export type ReportData =
  * the remainder to the client. Tolerates entries already given relative.
  */
 export function reportEndpointPath(endpoint: string): string {
-	return endpoint.replace(/^\/api\/v1/, '');
+  return endpoint.replace(/^\/api\/v1/, "");
 }
 
 /**
@@ -392,68 +419,220 @@ export function reportEndpointPath(endpoint: string): string {
  * never send irrelevant params. `propertyIds` is repeated once per id. Empty values are omitted so
  * the backend applies its defaults (YTD range, current year, 90-day window).
  */
-export function buildReportQuery(params: ReportRequestParams, accepts: ReportParamKey[]): string {
-	const set = new Set(accepts);
-	const qs = new URLSearchParams();
+export function buildReportQuery(
+  params: ReportRequestParams,
+  accepts: ReportParamKey[],
+): string {
+  const set = new Set(accepts);
+  const qs = new URLSearchParams();
 
-	if (set.has('from') && params.from) qs.set('from', params.from);
-	if (set.has('to') && params.to) qs.set('to', params.to);
-	if (set.has('propertyId') && params.propertyId != null) qs.set('propertyId', String(params.propertyId));
-	if (set.has('propertyIds') && params.propertyIds?.length) {
-		for (const id of params.propertyIds) qs.append('propertyIds', String(id));
-	}
-	if (set.has('year') && params.year != null) qs.set('year', String(params.year));
-	if (set.has('days') && params.days != null) qs.set('days', String(params.days));
-	if (set.has('skip') && params.skip != null) qs.set('skip', String(params.skip));
-	if (set.has('take') && params.take != null) qs.set('take', String(params.take));
-	if (set.has('sort') && params.sort) qs.set('sort', params.sort);
+  if (set.has("from") && params.from) qs.set("from", params.from);
+  if (set.has("to") && params.to) qs.set("to", params.to);
+  if (set.has("propertyId") && params.propertyId != null)
+    qs.set("propertyId", String(params.propertyId));
+  if (set.has("propertyIds") && params.propertyIds?.length) {
+    for (const id of params.propertyIds) qs.append("propertyIds", String(id));
+  }
+  if (set.has("year") && params.year != null)
+    qs.set("year", String(params.year));
+  if (set.has("days") && params.days != null)
+    qs.set("days", String(params.days));
+  if (set.has("skip") && params.skip != null)
+    qs.set("skip", String(params.skip));
+  if (set.has("take") && params.take != null)
+    qs.set("take", String(params.take));
+  if (set.has("sort") && params.sort) qs.set("sort", params.sort);
+  if (set.has("accountId") && params.accountId != null)
+    qs.set("accountId", String(params.accountId));
+  if (set.has("unitId") && params.unitId != null)
+    qs.set("unitId", String(params.unitId));
+  if (set.has("sourceType") && params.sourceType)
+    qs.set("sourceType", params.sourceType);
+  if (set.has("effectiveFrom") && params.effectiveFrom)
+    qs.set("effectiveFrom", params.effectiveFrom);
+  if (set.has("effectiveTo") && params.effectiveTo)
+    qs.set("effectiveTo", params.effectiveTo);
+  if (set.has("search") && params.search) qs.set("search", params.search);
+  if (set.has("activeOnly") && params.activeOnly != null)
+    qs.set("activeOnly", String(params.activeOnly));
+  if (set.has("accountTypes") && params.accountTypes)
+    qs.set("accountTypes", params.accountTypes);
 
-	const s = qs.toString();
-	return s ? `?${s}` : '';
+  const s = qs.toString();
+  return s ? `?${s}` : "";
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────────────────────────
 
 export const reports = {
-	/** GET /reports/catalog — the grouped report catalog that drives the hub UI. */
-	catalog: () => fetchApi<ReportsCatalogResponse>('/reports/catalog'),
+  /** GET /reports/catalog — the grouped report catalog that drives the hub UI. */
+  catalog: async () => {
+    const catalog = await fetchApi<ReportsCatalogResponse>("/reports/catalog");
+    for (const category of catalog.categories) {
+      category.reports = category.reports.filter(
+        (entry) => entry.key !== "rent-roll",
+      );
+    }
+    const accounting = catalog.categories.find(
+      (category) => category.key === "accounting",
+    );
+    if (!accounting) return catalog;
 
-	/**
-	 * Generic report fetch. Resolves the endpoint from the catalog entry, sends only the params the
-	 * entry declares, and returns the matching DTO. The caller narrows the result by report key.
-	 * Throws if the entry is `external` (those are deep-linked, not fetched).
-	 */
-	run: <T extends ReportData>(entry: ReportCatalogEntry, params: ReportRequestParams) => {
-		if (entry.external) {
-			throw new Error(`Report "${entry.key}" is external and cannot be fetched as data.`);
-		}
-		const path = reportEndpointPath(entry.endpoint) + buildReportQuery(params, entry.params);
-		return fetchApi<T>(path);
-	},
+    accounting.reports = [
+      ...accounting.reports.map((entry) =>
+          entry.key === "general-ledger"
+            ? {
+                ...entry,
+                key: "complete-money-history",
+                title: "Complete money history",
+              }
+            : entry,
+        ),
+      {
+        key: "chart-of-accounts",
+        title: "Chart of Accounts",
+        description: "Review every account used to organize your books.",
+        endpoint: "/api/v1/accounting/chart-of-accounts",
+        params: [
+          "search",
+          "skip",
+          "take",
+          "sort",
+          "activeOnly",
+        ] as ReportParamKey[],
+        external: false,
+      },
+      {
+        key: "general-ledger",
+        title: "General Ledger",
+        description:
+          "Review debit and credit lines with account-level running balances.",
+        endpoint: "/api/v1/accounting/general-ledger",
+        params: [
+          "accountId",
+          "propertyId",
+          "unitId",
+          "sourceType",
+          "effectiveFrom",
+          "effectiveTo",
+          "search",
+          "skip",
+          "take",
+          "sort",
+        ] as ReportParamKey[],
+        external: false,
+      },
+      {
+        key: "trial-balance",
+        title: "Trial Balance",
+        description: "Confirm that debit and credit balances agree.",
+        endpoint: "/api/v1/accounting/trial-balance",
+        params: [] as ReportParamKey[],
+        external: false,
+      },
+      {
+        key: "balance-sheet",
+        title: "Balance Sheet",
+        description:
+          "Review assets, liabilities, and equity by effective date.",
+        endpoint: "/api/v1/accounting/balance-sheet",
+        params: [] as ReportParamKey[],
+        external: false,
+      },
+      {
+        key: "income-statement",
+        title: "Income Statement",
+        description:
+          "Review income, expenses, and net income by effective date.",
+        endpoint: "/api/v1/accounting/income-statement",
+        params: [] as ReportParamKey[],
+        external: false,
+      },
+    ];
+    return catalog;
+  },
 
-	// Typed convenience accessors (paths relative to /api/v1).
-	rentRoll: (params: ReportRequestParams = {}) =>
-		fetchApi<RentRollResponse>(`/reports/rent-roll${buildReportQuery(params, ['propertyIds'])}`),
-	rentLedger: (params: ReportRequestParams = {}) =>
-		fetchApi<RentLedgerResponse>(`/reports/rent-ledger${buildReportQuery(params, ['from', 'to', 'propertyIds'])}`),
-	delinquency: (params: ReportRequestParams = {}) =>
-		fetchApi<DelinquencyResponse>(`/reports/delinquency${buildReportQuery(params, ['propertyIds'])}`),
-	cashFlow: (params: ReportRequestParams = {}) =>
-		fetchApi<CashFlowResponse>(`/reports/cash-flow${buildReportQuery(params, ['from', 'to', 'propertyIds'])}`),
-	generalLedger: (params: ReportRequestParams = {}) =>
-		fetchApi<GeneralLedgerResponse>(`/reports/general-ledger${buildReportQuery(params, ['from', 'to', 'propertyId'])}`),
-	propertyPnl: (params: ReportRequestParams = {}) =>
-		fetchApi<PropertyProfitAndLossResponse>(`/reports/property-pnl${buildReportQuery(params, ['from', 'to', 'propertyIds'])}`),
-	occupancy: (params: ReportRequestParams = {}) =>
-		fetchApi<OccupancyResponse>(`/reports/occupancy${buildReportQuery(params, ['propertyIds'])}`),
-	leaseExpirations: (params: ReportRequestParams = {}) =>
-		fetchApi<LeaseExpirationsResponse>(`/reports/lease-expirations${buildReportQuery(params, ['days', 'propertyIds'])}`),
-	securityDeposits: (params: ReportRequestParams = {}) =>
-		fetchApi<SecurityDepositRegisterResponse>(`/reports/security-deposits${buildReportQuery(params, ['propertyIds', 'skip', 'take', 'sort'])}`),
-	vendor1099: (params: ReportRequestParams = {}) =>
-		fetchApi<Vendor1099Response>(`/reports/vendor-1099${buildReportQuery(params, ['year'])}`),
-	ownerDistributions: (params: ReportRequestParams = {}) =>
-		fetchApi<OwnerDistributionsResponse>(`/reports/owner-distributions${buildReportQuery(params, ['year'])}`),
-	workOrders: (params: ReportRequestParams = {}) =>
-		fetchApi<WorkOrderReportResponse>(`/reports/work-orders${buildReportQuery(params, ['from', 'to', 'propertyIds'])}`),
+  /**
+   * Generic report fetch. Resolves the endpoint from the catalog entry, sends only the params the
+   * entry declares, and returns the matching DTO. The caller narrows the result by report key.
+   * Throws if the entry is `external` (those are deep-linked, not fetched).
+   */
+  run: <T extends ReportData>(
+    entry: ReportCatalogEntry,
+    params: ReportRequestParams,
+  ) => {
+    if (entry.external) {
+      throw new Error(
+        `Report "${entry.key}" is external and cannot be fetched as data.`,
+      );
+    }
+    const path =
+      reportEndpointPath(entry.endpoint) +
+      buildReportQuery(params, entry.params);
+    return fetchApi<T>(path);
+  },
+
+  // Typed convenience accessors (paths relative to /api/v1).
+  rentRoll: (params: ReportRequestParams = {}) =>
+    fetchApi<RentRollResponse>(
+      `/reports/rent-roll${buildReportQuery(params, ["propertyIds"])}`,
+    ),
+  rentLedger: (params: ReportRequestParams = {}) =>
+    fetchApi<RentLedgerResponse>(
+      `/reports/rent-ledger${buildReportQuery(params, ["from", "to", "propertyIds"])}`,
+    ),
+  delinquency: (params: ReportRequestParams = {}) =>
+    fetchApi<DelinquencyResponse>(
+      `/reports/delinquency${buildReportQuery(params, ["propertyIds"])}`,
+    ),
+  cashFlow: (params: ReportRequestParams = {}) =>
+    fetchApi<CashFlowResponse>(
+      `/reports/cash-flow${buildReportQuery(params, ["from", "to", "propertyIds"])}`,
+    ),
+  generalLedger: (params: ReportRequestParams = {}) =>
+    fetchApi<GeneralLedgerResponse>(
+      `/reports/general-ledger${buildReportQuery(params, ["from", "to", "propertyId"])}`,
+    ),
+  propertyPnl: (params: ReportRequestParams = {}) =>
+    fetchApi<PropertyProfitAndLossResponse>(
+      `/reports/property-pnl${buildReportQuery(params, ["from", "to", "propertyIds"])}`,
+    ),
+  occupancy: (params: ReportRequestParams = {}) =>
+    fetchApi<OccupancyResponse>(
+      `/reports/occupancy${buildReportQuery(params, ["propertyIds"])}`,
+    ),
+  leaseExpirations: (params: ReportRequestParams = {}) =>
+    fetchApi<LeaseExpirationsResponse>(
+      `/reports/lease-expirations${buildReportQuery(params, ["days", "propertyIds"])}`,
+    ),
+  securityDeposits: (params: ReportRequestParams = {}) =>
+    fetchApi<SecurityDepositRegisterResponse>(
+      `/reports/security-deposits${buildReportQuery(params, ["propertyIds", "skip", "take", "sort"])}`,
+    ),
+  vendor1099: (params: ReportRequestParams = {}) =>
+    fetchApi<Vendor1099Response>(
+      `/reports/vendor-1099${buildReportQuery(params, ["year"])}`,
+    ),
+  ownerDistributions: (params: ReportRequestParams = {}) =>
+    fetchApi<OwnerDistributionsResponse>(
+      `/reports/owner-distributions${buildReportQuery(params, ["year"])}`,
+    ),
+  workOrders: (params: ReportRequestParams = {}) =>
+    fetchApi<WorkOrderReportResponse>(
+      `/reports/work-orders${buildReportQuery(params, ["from", "to", "propertyIds"])}`,
+    ),
+  chartOfAccounts: (params: ReportRequestParams = {}) =>
+    fetchApi<AccountingPage<ChartOfAccountsRow>>(
+      `/accounting/chart-of-accounts${buildReportQuery(params, ["search", "skip", "take", "sort", "activeOnly", "accountTypes"])}`,
+    ),
+  accountingGeneralLedger: (params: ReportRequestParams = {}) =>
+    fetchApi<AccountingPage<GeneralLedgerRow>>(
+      `/accounting/general-ledger${buildReportQuery(params, ["accountId", "propertyId", "unitId", "sourceType", "effectiveFrom", "effectiveTo", "search", "skip", "take", "sort"])}`,
+    ),
+  trialBalance: () =>
+    fetchApi<TrialBalanceResponse>("/accounting/trial-balance"),
+  balanceSheet: () =>
+    fetchApi<FinancialStatementResponse>("/accounting/balance-sheet"),
+  incomeStatement: () =>
+    fetchApi<FinancialStatementResponse>("/accounting/income-statement"),
 };
