@@ -5,6 +5,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../money/money_format.dart';
@@ -138,6 +140,10 @@ class _ReceiptBody extends StatelessWidget {
           _DetailRow(label: 'Check', value: receipt.checkNumber!),
         if (receipt.bankName?.trim().isNotEmpty == true)
           _DetailRow(label: 'Bank', value: receipt.bankName!),
+        AccountingImpactCard(
+          sourceType: JournalSourceType.tenantReceipt,
+          sourceId: receipt.tenantLedgerEntryId,
+        ),
         const SizedBox(height: 20),
         Text(
           'This receipt is a permanent account record. If it needs a '
