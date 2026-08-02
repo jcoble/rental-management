@@ -132,6 +132,58 @@ export interface PortalTenantAccountHistoryItem {
 	isFocused: boolean;
 }
 
+export interface PortalTenantLedgerAllocationRef {
+	targetSourceId: number;
+	targetPublicId: string;
+	targetDescription: string;
+	amount: number;
+	effectiveOn: string;
+}
+
+export interface PortalTenantLedgerRow {
+	tenantLedgerEntryId: number;
+	publicId: string;
+	effectiveOn: string;
+	postedAtUtc: string;
+	type: string;
+	description: string;
+	chargeAmount: number;
+	paymentAmount: number;
+	creditAmount: number;
+	runningAmountOwed: number;
+	dueOn: string | null;
+	openAmount: number;
+	status: string;
+	paymentMethod: string | null;
+	reference: string | null;
+	sourceDocumentContext: string | null;
+	allocations: PortalTenantLedgerAllocationRef[];
+	reversesEntryId: number | null;
+	replacedByEntryId: number | null;
+	currency: string;
+}
+
+export interface PortalTenantMonthSummary {
+	year: number;
+	month: number;
+	currency: string;
+	openingBalance: number;
+	chargeAmount: number;
+	paymentAmount: number;
+	creditAmount: number;
+	closingBalance: number;
+}
+
+export interface PortalTenantStatement {
+	tenantAccountId: number;
+	periodFrom: string | null;
+	periodTo: string | null;
+	openingBalance: number;
+	closingBalance: number;
+	rows: PortalTenantLedgerRow[];
+	monthSummaries: PortalTenantMonthSummary[];
+}
+
 export interface PortalTenantAccountHistory {
 	tenantAccountId: number;
 	leaseManagementId: number;
@@ -340,6 +392,33 @@ export const portal = {
 		api.get<PortalTenantAccountHistory>(
 			`/portal/tenant-accounts/${tenantAccountId}/history${queryString(params)}`
 		),
+	tenantAccountLedger: (
+		tenantAccountId: number,
+		params: { from?: string; to?: string; skip?: number; take?: number } = {}
+	) => api.get<PortalPage<PortalTenantLedgerRow>>(
+		`/portal/tenant-accounts/${tenantAccountId}/ledger${queryString(params)}`
+	),
+	tenantAccountMonthSummary: (
+		tenantAccountId: number,
+		params: { from?: string; to?: string } = {}
+	) => api.get<PortalTenantMonthSummary[]>(
+		`/portal/tenant-accounts/${tenantAccountId}/month-summary${queryString(params)}`
+	),
+	tenantAccountLedgerEntry: (tenantAccountId: number, entryId: number) =>
+		api.get<PortalTenantLedgerRow>(
+			`/portal/tenant-accounts/${tenantAccountId}/ledger/${entryId}`
+		),
+	tenantAccountStatement: (
+		tenantAccountId: number,
+		params: { from?: string; to?: string } = {}
+	) => api.get<PortalTenantStatement>(
+		`/portal/tenant-accounts/${tenantAccountId}/statement${queryString(params)}`
+	),
+	downloadTenantAccountStatementCsv: (
+		tenantAccountId: number,
+		params: { from?: string; to?: string } = {}
+	) =>
+		downloadFile(`/portal/tenant-accounts/${tenantAccountId}/statement.csv${queryString(params)}`),
 	tenantAccountChargesPage: (
 		tenantAccountId: number,
 		params: PortalTenantChargeListParams = {}

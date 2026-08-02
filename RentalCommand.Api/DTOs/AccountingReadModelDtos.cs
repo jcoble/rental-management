@@ -203,6 +203,12 @@ public sealed class TenantMonthSummary
     public decimal ClosingBalance { get; set; }
 }
 
+public sealed class TenantStatementBalances
+{
+    public decimal OpeningBalance { get; init; }
+    public decimal ClosingBalance { get; init; }
+}
+
 public sealed class TenantLedgerPeriodSummary
 {
     public int PeriodMonths { get; init; }

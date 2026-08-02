@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
@@ -656,6 +657,35 @@ public class AccountingServiceTests : IAsyncLifetime
 
         var readModels = new AccountingLedgerReadModelService(_db);
         _commands.Clear();
+        var staffLedger = await readModels.GetTenantLedgerAsync(
+            PortfolioId, charge.TenantAccountId, new TenantLedgerQuery { Take = 20 });
+        var portalLedger = PortalController.ToPortalPage(staffLedger!);
+        portalLedger.Items.Should().BeEquivalentTo(staffLedger!.Items, options => options
+            .ExcludingMissingMembers(), "portal values are a tenant-safe projection of staff rows");
+        typeof(PortalTenantLedgerRowResponse).GetProperties().Select(property => property.Name)
+            .Should().NotContain(
+                "JournalEntryPublicId", "AccountLabel", "AccountCode", "AccountName", "Actor",
+                "SourceType", "SourceId", "SourcePublicId");
+        _commands.Should().HaveCount(3,
+            "portal collection reuses one count, one bounded row page, and one bounded allocation query");
+
+        _commands.Clear();
+        var staffMonths = await readModels.GetTenantMonthSummaryAsync(PortfolioId, charge.TenantAccountId,
+            new TenantMonthSummaryQuery { From = charge.EffectiveOn, To = charge.EffectiveOn });
+        var portalMonths = await readModels.GetTenantMonthSummaryAsync(PortfolioId, charge.TenantAccountId,
+            new TenantMonthSummaryQuery { From = charge.EffectiveOn, To = charge.EffectiveOn });
+        portalMonths.Should().BeEquivalentTo(staffMonths);
+        _commands.Should().HaveCount(2, "staff and portal month summaries each execute one SQL statement");
+
+        _commands.Clear();
+        var statementBalances = await readModels.GetTenantStatementBalancesAsync(
+            PortfolioId, charge.TenantAccountId,
+            new TenantMonthSummaryQuery { From = charge.EffectiveOn, To = charge.EffectiveOn });
+        statementBalances.OpeningBalance.Should().Be(0m);
+        statementBalances.ClosingBalance.Should().Be(40m);
+        _commands.Should().ContainSingle().Which.Should().ContainEquivalentOf("SUM");
+
+        _commands.Clear();
         var incomeAndExpenses = await readModels.GetChartOfAccountsAsync(PortfolioId,
             new ChartOfAccountsQuery { AccountTypes = "Income,Expense", Take = 100 });
         incomeAndExpenses.Items.Should().NotBeEmpty().And.OnlyContain(account =>
@@ -669,6 +699,9 @@ public class AccountingServiceTests : IAsyncLifetime
         chargeDetail.Should().NotBeNull();
         chargeDetail!.RunningAmountOwed.Should().Be(125m);
         chargeDetail.Allocations.Should().ContainSingle(allocation =>
+            allocation.TargetSourceId == receipt.Id && allocation.Amount == 75m);
+        var portalChargeDetail = PortalController.ToPortalRow(chargeDetail);
+        portalChargeDetail.Allocations.Should().ContainSingle(allocation =>
             allocation.TargetSourceId == receipt.Id && allocation.Amount == 75m);
         _commands.Should().HaveCount(2, "detail uses one row query and one allocation query");
         _commands[0].Should().ContainEquivalentOf("SUM", "running amount owed must be calculated by PostgreSQL");
