@@ -2,6 +2,8 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { ChevronDown, ChevronUp, Info, RefreshCw } from '@lucide/svelte';
 	import { cashFlow } from '$lib/api/endpoints/cash-flow';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
 		formatAccountingCurrency,
 		formatAccountingDate
@@ -252,7 +254,15 @@
 			<section class="rounded-2xl border border-border bg-card p-5 sm:p-6" data-testid="cash-flow-headline">
 				<div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
 					<div>
-						<p class="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Net cash flow</p>
+						<div class="flex items-center gap-1.5">
+							<p class="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Net cash flow</p>
+							<HelpPopover
+								title={ACCOUNTING_HELP.cashFlow.title}
+								summary={ACCOUNTING_HELP.cashFlow.summary}
+								learnMoreUrl={ACCOUNTING_HELP.cashFlow.href}
+								testid="cash-flow-help"
+							/>
+						</div>
 						<h1 class="mt-2 font-mono text-3xl font-semibold tracking-tight sm:text-4xl" data-testid="cash-flow-headline-value">
 							{formatAccountingCurrency(response.totalCashFlow)}
 						</h1>

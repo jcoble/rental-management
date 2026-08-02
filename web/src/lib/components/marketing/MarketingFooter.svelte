@@ -15,6 +15,7 @@
 		</div>
 		<div class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
 			<a href="/features" class="transition-colors hover:text-foreground">Features</a>
+			<a href="/blog" class="transition-colors hover:text-foreground">Blog</a>
 			<a href="/docs" class="transition-colors hover:text-foreground">Docs</a>
 			<a href="/login" class="transition-colors hover:text-foreground">Sign in</a>
 			<a href="/register" class="transition-colors hover:text-foreground">Create account</a>

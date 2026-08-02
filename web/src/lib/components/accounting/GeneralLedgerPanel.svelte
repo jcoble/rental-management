@@ -3,6 +3,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { Info } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -34,6 +35,7 @@
 		formatSourceTypeLabel,
 		getIncreaseDecreaseAmounts
 	} from '$lib/accounting/accounting-display';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 	import AccountPicker from './AccountPicker.svelte';
 	import JournalDetailDrawer from './JournalDetailDrawer.svelte';
@@ -328,6 +330,15 @@
 {#if !unauthorized}
 	<section class={['space-y-4', className]} data-testid={testid}>
 		<div class="rounded-xl border border-border bg-card p-4">
+				<div class="mb-3 flex items-center gap-1.5">
+					<h2 class="font-semibold">General ledger</h2>
+					<HelpPopover
+						title={ACCOUNTING_HELP.generalLedger.title}
+						summary={ACCOUNTING_HELP.generalLedger.summary}
+						learnMoreUrl={ACCOUNTING_HELP.generalLedger.href}
+						testid="general-ledger-help"
+					/>
+				</div>
 				<button
 					type="button"
 					class="flex w-full cursor-pointer items-center justify-between gap-3 lg:hidden"

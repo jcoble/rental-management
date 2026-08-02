@@ -48,6 +48,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
@@ -889,7 +890,15 @@
 		<div data-testid="accounting-reports">
 		<div class="mb-3 flex items-center justify-between">
 			<div>
-				<h2 class="text-lg font-semibold">Reports</h2>
+				<div class="flex items-center gap-1.5">
+					<h2 class="text-lg font-semibold">Reports</h2>
+					<HelpPopover
+						title={ACCOUNTING_HELP.reports.title}
+						summary={ACCOUNTING_HELP.reports.summary}
+						learnMoreUrl={ACCOUNTING_HELP.reports.href}
+						testid="accounting-reports-help"
+					/>
+				</div>
 				<p class="text-sm text-muted-foreground">Money history, property income and expenses (P&amp;L), Schedule E totals, and 1099 review.</p>
 			</div>
 			<div class="flex flex-wrap items-center justify-end gap-2">
