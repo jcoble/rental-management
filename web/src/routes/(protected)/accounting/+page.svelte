@@ -37,7 +37,7 @@
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
+	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles, ListTree } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -905,6 +905,7 @@
 			{#each accountingTabs as t}
 				<Tabs.Trigger value={t.value} data-testid="accounting-tab-{t.value}">{t.label}</Tabs.Trigger>
 			{/each}
+			<Button variant="ghost" size="sm" href="/accounting/accounts" data-testid="accounting-accounts-link"><ListTree class="h-4 w-4" /> Accounts</Button>
 		</Tabs.List>
 
 		<!-- ───────────────────────── REPORTS ───────────────────────── -->
