@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import type { GeneralLedgerRow, ReconciledAccountingTransaction } from '$lib/api/endpoints/accounting';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
+	import type { TenantLedgerRow } from '$lib/api/endpoints/tenant-accounts';
 	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { formatDate } from '$lib/utils/date';
@@ -14,29 +15,38 @@
 	let {
 		row,
 		transactionRow,
+		tenantRow,
+		tenantAccountId,
 		fullRecordHref,
 		onClose
 	}: {
 		row?: GeneralLedgerRow;
 		transactionRow?: ReconciledAccountingTransaction;
+		tenantRow?: TenantLedgerRow;
+		tenantAccountId?: number;
 		fullRecordHref?: string;
 		onClose: () => void;
 	} = $props();
 	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
 	const tenantLedgerQuery = createQuery(() => ({
-		queryKey: ['tenant-ledger-entry', transactionRow?.tenantAccountId, transactionRow?.id],
-		queryFn: () => tenantAccounts.ledgerEntry(transactionRow!.tenantAccountId!, transactionRow!.id),
-		enabled: transactionRow?.kind === 'TenantLedger' && !!transactionRow.tenantAccountId
+		queryKey: ['tenant-ledger-entry', tenantAccountId ?? transactionRow?.tenantAccountId, tenantRow?.tenantLedgerEntryId ?? transactionRow?.id],
+		queryFn: () => tenantAccounts.ledgerEntry(
+			(tenantAccountId ?? transactionRow!.tenantAccountId)!,
+			(tenantRow?.tenantLedgerEntryId ?? transactionRow!.id)
+		),
+		enabled: (!!tenantRow && !!tenantAccountId) || (transactionRow?.kind === 'TenantLedger' && !!transactionRow.tenantAccountId)
 	}));
-	const title = $derived(transactionRow?.title ?? row?.description ?? 'Money activity');
-	const type = $derived(transactionRow?.displayType ?? row?.sourceType ?? 'OwnerActivity');
-	const effectiveOn = $derived(transactionRow?.effectiveOn ?? row?.effectiveOn ?? '');
-	const enteredAt = $derived(transactionRow?.enteredAtUtc ?? row?.postedAtUtc ?? '');
-	const journalEntryPublicId = $derived(transactionRow?.journalEntryPublicId ?? row?.journalEntryPublicId ?? null);
-	const currency = $derived(tenantLedgerQuery.data?.currency ?? row?.currency ?? 'USD');
+	const title = $derived(tenantRow?.description ?? transactionRow?.title ?? row?.description ?? 'Money activity');
+	const type = $derived(tenantRow?.type ?? transactionRow?.displayType ?? row?.sourceType ?? 'OwnerActivity');
+	const effectiveOn = $derived(tenantRow?.effectiveOn ?? transactionRow?.effectiveOn ?? row?.effectiveOn ?? '');
+	const enteredAt = $derived(tenantRow?.postedAtUtc ?? transactionRow?.enteredAtUtc ?? row?.postedAtUtc ?? '');
+	const journalEntryPublicId = $derived(tenantRow?.journalEntryPublicId ?? transactionRow?.journalEntryPublicId ?? row?.journalEntryPublicId ?? null);
+	const currency = $derived(tenantLedgerQuery.data?.currency ?? tenantRow?.currency ?? row?.currency ?? 'USD');
 	const amount = $derived(transactionRow
 		? transactionRow.chargeAmount || transactionRow.paymentAmount || transactionRow.creditAmount
-		: row?.debitAmount || row?.creditAmount || 0);
+		: tenantRow
+			? tenantRow.chargeAmount || tenantRow.paymentAmount || tenantRow.creditAmount
+			: row?.debitAmount || row?.creditAmount || 0);
 </script>
 
 <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -47,14 +57,14 @@
 			<Dialog.Description>Effective {formatDate(effectiveOn)} · Entered {new Date(enteredAt).toLocaleString()}</Dialog.Description>
 		</Dialog.Header>
 		<section class="summary">
-			<div><span>Account</span><strong>{transactionRow ? (transactionRow.accountName ? `${transactionRow.accountCode} · ${transactionRow.accountName}` : 'Not assigned') : `${row?.accountCode} · ${row?.accountName}`}</strong></div>
-			<div><span>Source</span><strong>{transactionRow?.sourceContext ?? row?.sourceType ?? 'Recorded activity'}</strong></div>
-			<div><span>Paid by / paid to</span><strong>{transactionRow?.paidByOrTo ?? 'Not specified'}</strong></div>
+			<div><span>Account</span><strong>{tenantRow?.accountLabel ?? (transactionRow ? (transactionRow.accountName ? `${transactionRow.accountCode} · ${transactionRow.accountName}` : 'Not assigned') : `${row?.accountCode} · ${row?.accountName}`)}</strong></div>
+			<div><span>Source</span><strong>{tenantRow?.recurringScheduleContext ?? tenantRow?.sourceDocumentContext ?? transactionRow?.sourceContext ?? row?.sourceType ?? 'Recorded activity'}</strong></div>
+			<div><span>Paid by / paid to</span><strong>{tenantRow?.paymentMethod ?? transactionRow?.paidByOrTo ?? 'Not specified'}</strong></div>
 			<div><span>Amount recorded</span><strong><LedgerAmount {amount} {currency} /></strong></div>
 			{#if tenantLedgerQuery.data}<div><span>Amount owed after entry</span><strong><LedgerAmount amount={tenantLedgerQuery.data.runningAmountOwed} currency={tenantLedgerQuery.data.currency} /></strong></div>{/if}
 			{#if !transactionRow && row?.runningBalance !== null && row?.runningBalance !== undefined}<div><span>Balance</span><strong><LedgerAmount amount={row.runningBalance} {currency} /></strong></div>{/if}
 		</section>
-		{#if transactionRow?.kind === 'TenantLedger'}
+		{#if tenantRow || transactionRow?.kind === 'TenantLedger'}
 			<section class="allocations" aria-label="Allocations">
 				<h3>Allocations</h3>
 				{#if tenantLedgerQuery.isLoading}<p>Loading allocations…</p>

@@ -4,7 +4,9 @@
 	import { page } from '$app/state';
 	import type { UnitDashboard } from '$lib/types';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
-	import type { TenantLedgerEntry } from '$lib/api/endpoints/tenant-accounts';
+	import type { TenantLedgerEntry, TenantLedgerRow, TenantMonthSummary } from '$lib/api/endpoints/tenant-accounts';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { canReverseTenantLedgerEntry, money, tenantLedgerReversalReason, unitMoneyIdentity } from '../money';
@@ -12,13 +14,18 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PaymentDetail from '$lib/components/records/PaymentDetail.svelte';
+	import MonthGroup from '$lib/components/ledger/MonthGroup.svelte';
+	import LedgerRowSheet from '$lib/components/ledger/LedgerRowSheet.svelte';
+	import LedgerTypeBadge from '$lib/components/ledger/LedgerTypeBadge.svelte';
+	import LedgerAmount from '$lib/components/ledger/LedgerAmount.svelte';
+	import RecurringChargeDialog from './RecurringChargeDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
-	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2, Undo2 } from '@lucide/svelte';
+	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2, Repeat2, Undo2 } from '@lucide/svelte';
 
 	let { dashboard, onScan, tabQuery = 'rent', ledgerQuery }: {
 		dashboard: UnitDashboard;
@@ -33,11 +40,27 @@
 		leaseManagementId: dashboard.leaseManagementId
 	}));
 	const tenantAccountId = $derived(moneyIdentity.tenantAccountId);
+	const canManagePayments = $derived(hasCapability(CAPABILITY.moneyPaymentsManage));
 	const selectedReceipt = $derived(
 		page.state.unitPaymentId ?? (Number(page.url.searchParams.get('payment')) || null)
 	);
-	const PAGE_SIZE = 20;
+	const LEDGER_TAKE = 200;
 	const today = () => new Date().toISOString().slice(0, 10);
+	type PeriodMonths = 3 | 6 | 9 | 12;
+	let periodMonths = $state<PeriodMonths>(3);
+	let recurringOpen = $state(false);
+	let selectedLedgerRow = $state<TenantLedgerRow | null>(null);
+
+	function periodRange(months: PeriodMonths) {
+		const now = new Date();
+		const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - months + 1, 1));
+		const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+		return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+	}
+	const range = $derived(periodRange(periodMonths));
+	function belongsToMonth(row: TenantLedgerRow, month: TenantMonthSummary) {
+		return Number(row.effectiveOn.slice(0, 4)) === month.year && Number(row.effectiveOn.slice(5, 7)) === month.month;
+	}
 
 	function unitUrl(payment?: number) {
 		const url = new URL(`/units/${dashboard.unit.id}`, page.url.origin);
@@ -65,61 +88,32 @@
 		});
 	}
 
-	let receiptPage = $state(1);
-	let activityPage = $state(1);
-	let chargePage = $state(1);
-	let depositPage = $state(1);
-	const activityQuery = createQuery(() => ({
-		queryKey: ['tenant-account-entries', tenantAccountId, 'activity', activityPage, PAGE_SIZE],
+	const tenantLedgerQuery = createQuery(() => ({
+		queryKey: ['tenant-ledger', tenantAccountId, periodMonths, range.from, range.to, LEDGER_TAKE],
 		enabled: !!tenantAccountId,
-		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
-			skip: (activityPage - 1) * PAGE_SIZE,
-			take: PAGE_SIZE,
-			sort: '-postedAtUtc'
+		queryFn: () => tenantAccounts.ledger(tenantAccountId as number, {
+			skip: 0,
+			take: LEDGER_TAKE,
+			effectiveFrom: range.from,
+			effectiveTo: range.to,
+			sort: 'effectiveOn,postedAtUtc,tenantLedgerEntryId'
 		})
 	}));
-	const chargesQuery = createQuery(() => ({
-		queryKey: ['tenant-account-charges', tenantAccountId, chargePage, PAGE_SIZE],
+	const monthSummaryQuery = createQuery(() => ({
+		queryKey: ['tenant-month-summary', tenantAccountId, periodMonths, range.from, range.to],
 		enabled: !!tenantAccountId,
-		queryFn: () => tenantAccounts.chargesPage(tenantAccountId as number, {
-			skip: (chargePage - 1) * PAGE_SIZE,
-			take: PAGE_SIZE,
-			sort: '-effectiveOn'
-		})
-	}));
-	const depositsQuery = createQuery(() => ({
-		queryKey: ['tenant-account-deposits', tenantAccountId, depositPage, PAGE_SIZE],
-		enabled: !!tenantAccountId,
-		queryFn: () => tenantAccounts.depositsPage({
-			tenantAccountId: tenantAccountId as number,
-			skip: (depositPage - 1) * PAGE_SIZE,
-			take: PAGE_SIZE,
-			sort: '-createdAtUtc'
-		})
-	}));
-	const receiptsQuery = createQuery(() => ({
-		queryKey: ['tenant-account-entries', tenantAccountId, 'receipts', receiptPage, PAGE_SIZE],
-		enabled: !!tenantAccountId,
-		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
-			entryType: 'PaymentReceipt',
-			skip: (receiptPage - 1) * PAGE_SIZE,
-			take: PAGE_SIZE,
-			sort: '-effectiveOn'
-		})
+		queryFn: () => tenantAccounts.monthSummary(tenantAccountId as number, range)
 	}));
 
 	$effect(() => {
 		void tenantAccountId;
-		receiptPage = 1;
-		activityPage = 1;
-		chargePage = 1;
-		depositPage = 1;
+		selectedLedgerRow = null;
+		recurringOpen = false;
 	});
 
-	const receiptItems = $derived(receiptsQuery.data?.items ?? []);
-
 	function invalidateMoney() {
-		receiptPage = 1;
+		queryClient.invalidateQueries({ queryKey: ['tenant-ledger', tenantAccountId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-month-summary', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-charges', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-deposits', tenantAccountId] });
@@ -287,9 +281,10 @@
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-card p-4">
 		<div><p class="text-sm text-muted-foreground">Outstanding balance</p><p class="text-2xl font-bold">{money(dashboard.header.outstandingRentBalance)}</p></div>
 		<div class="flex flex-wrap gap-2">
-			{#if tenantAccountId}
+			{#if tenantAccountId && canManagePayments}
 				<Button class="gap-2" onclick={() => formKind === 'receipt' ? closeForm() : openForm('receipt')} data-testid="rent-post-payment"><Receipt class="h-4 w-4" /> Record payment</Button>
-				<Button variant="outline" class="gap-2" onclick={() => formKind === 'charge' ? closeForm() : openForm('charge')} data-testid="rent-post-charge"><FilePlus2 class="h-4 w-4" /> Add charge</Button>
+				<Button variant="outline" class="gap-2" onclick={() => formKind === 'charge' ? closeForm() : openForm('charge')} data-testid="rent-post-charge"><FilePlus2 class="h-4 w-4" /> Post charge</Button>
+				<Button variant="outline" class="gap-2" onclick={() => (recurringOpen = true)} data-testid="rent-recurring-charge"><Repeat2 class="h-4 w-4" /> Recurring charge</Button>
 			{/if}
 			<Button variant="outline" class="gap-2" onclick={onScan} data-testid="rent-scan"><ScanLine class="h-4 w-4" /> Scan payment</Button>
 		</div>
@@ -312,8 +307,8 @@
 							<Select.Trigger class="w-full">{receiptForm.targetChargeEntryId === 'unapplied' ? 'Leave unapplied/advance receipt' : receiptForm.targetChargeEntryId ? `Charge #${receiptForm.targetChargeEntryId}` : 'Choose a charge or leave unapplied'}</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="unapplied" label="Leave unapplied/advance receipt">Leave unapplied/advance receipt</Select.Item>
-								{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
-									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} - ${money(charge.openAmount)} still owed`}>{charge.description} - {money(charge.openAmount)} still owed</Select.Item>
+								{#each tenantLedgerQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
+									{#if charge.chargeAmount > 0 && charge.openAmount > 0}<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} - ${money(charge.openAmount)} still owed`}>{charge.description} - {money(charge.openAmount)} still owed</Select.Item>{/if}
 								{/each}
 							</Select.Content>
 						</Select.Root>
@@ -354,118 +349,45 @@
 	{#if !tenantAccountId}
 		<p class="rounded-xl bg-card p-6 text-center text-sm text-muted-foreground">No tenant account exists for this rental yet. Payments and charges begin when the tenancy is created.</p>
 	{:else}
-		<section class="space-y-2" data-testid="account-activity-section">
-			<h3 class="text-sm font-semibold">Account activity</h3>
-			{#if activityQuery.isLoading}
-				<LoadingState label="Loading account activity" testid="account-activity-loading" />
-			{:else if activityQuery.isError}
-				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="account-activity-error">
-					<p class="text-sm font-medium text-destructive">Account activity could not be loaded.</p>
-					<Button class="mt-3" variant="outline" size="sm" onclick={() => activityQuery.refetch()}>Try again</Button>
-				</div>
-			{:else if (activityQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No account activity yet.</p>
-			{:else}
-				<ul class="divide-y overflow-hidden rounded-xl bg-card">
-					{#each activityQuery.data?.items ?? [] as entry (entry.tenantLedgerEntryId)}
-						<li class="text-sm">
-							{#if entry.entryType === 'PaymentReceipt'}
-								<button type="button" class="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/40" onclick={() => openReceipt(entry.tenantLedgerEntryId)}>
-									<span><span class="font-medium">{formatStatusLabel(entry.entryType)}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
-									<span class="font-semibold">{money(entry.amount)}</span>
-								</button>
-							{:else}
-								<div class="flex items-center justify-between gap-3 p-3">
-									<span><span class="font-medium">{formatStatusLabel(entry.entryType)}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
-									<span class="flex items-center gap-2">
-										<span class="font-semibold">{money(entry.amount)}</span>
-										{#if canReverseTenantLedgerEntry(entry)}
-											<Button variant="outline" size="sm" class="gap-1" onclick={() => openReversal(entry)} aria-label={`Reverse ${formatStatusLabel(entry.entryType)} entry ${entry.tenantLedgerEntryId}`} data-testid={`rent-reverse-ledger-entry-${entry.tenantLedgerEntryId}`}><Undo2 class="h-4 w-4" /> Reverse</Button>
-										{/if}
-									</span>
-								</div>
-							{/if}
-						</li>
+		<section class="space-y-4" data-testid="unit-money-ledger">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div><h3 class="text-sm font-semibold">Tenant ledger</h3><p class="text-xs text-muted-foreground">Every charge, payment, and credit with the amount owed after each entry.</p></div>
+				<div class="inline-flex rounded-lg bg-muted p-1" role="group" aria-label="Ledger period" data-testid="unit-money-period-switch">
+					{#each [3, 6, 9, 12] as months}
+						<button type="button" class="rounded-md px-3 py-1.5 text-sm font-medium transition-colors {periodMonths === months ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}" aria-pressed={periodMonths === months} onclick={() => (periodMonths = months as PeriodMonths)} data-testid={`unit-money-period-${months}`}>{months} mo</button>
 					{/each}
-				</ul>
-				{#if activityQuery.data && activityQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (activityPage -= 1)} disabled={activityPage === 1 || activityQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {activityPage} of {Math.ceil(activityQuery.data.totalCount / PAGE_SIZE)} · {activityQuery.data.totalCount} entries</span><Button variant="outline" size="sm" onclick={() => (activityPage += 1)} disabled={activityPage * PAGE_SIZE >= activityQuery.data.totalCount || activityQuery.isFetching}>Next</Button></div>{/if}
-			{/if}
-		</section>
-
-		<section class="space-y-2 border-t pt-4" data-testid="charge-allocation-section">
-			<div>
-				<h3 class="text-sm font-semibold">Rent and charges</h3>
-				<p class="text-xs text-muted-foreground">See what has been paid and what is still owed.</p>
+				</div>
 			</div>
-			{#if chargesQuery.isLoading}
-				<LoadingState label="Loading charges" testid="charges-loading" />
-			{:else if chargesQuery.isError}
-				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="charges-error">
-					<p class="text-sm font-medium text-destructive">Charges could not be loaded.</p>
-					<Button class="mt-3" variant="outline" size="sm" onclick={() => chargesQuery.refetch()}>Try again</Button>
-				</div>
-			{:else if (chargesQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No rent or other charges yet.</p>
+			{#if tenantLedgerQuery.isLoading || monthSummaryQuery.isLoading}
+				<LoadingState label="Loading tenant ledger" testid="unit-money-ledger-loading" />
+			{:else if tenantLedgerQuery.isError || monthSummaryQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-money-ledger-error"><p class="text-sm font-medium text-destructive">The tenant ledger could not be loaded.</p><Button class="mt-3" variant="outline" size="sm" onclick={() => { tenantLedgerQuery.refetch(); monthSummaryQuery.refetch(); }}>Try again</Button></div>
+			{:else if (monthSummaryQuery.data?.length ?? 0) === 0}
+				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No account activity in this period.</p>
 			{:else}
-				<ul class="divide-y overflow-hidden rounded-xl bg-card">
-					{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
-						<li class="p-3 text-sm">
-							<div class="flex items-center justify-between gap-3">
-								<span class="font-medium">{charge.description}</span>
-								<span class="font-semibold">{charge.openAmount <= 0 ? 'Paid in full' : `${money(charge.openAmount)} still owed`}</span>
-							</div>
-							<p class="text-xs text-muted-foreground">{charge.netAllocations >= charge.originalAmount ? `${money(charge.originalAmount)} paid` : `${money(charge.netAllocations)} paid of ${money(charge.originalAmount)}`}</p>
-						</li>
+				<div class="space-y-4">
+					{#each monthSummaryQuery.data ?? [] as month (`${month.year}-${month.month}`)}
+						<MonthGroup {month}>
+							<div class="hidden grid-cols-[7rem_minmax(0,1fr)_8rem_9rem_9rem] gap-3 border-b px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground md:grid"><span>Date</span><span>What happened</span><span class="text-right">Charges</span><span class="text-right">Payments / credits</span><span class="text-right">Amount owed</span></div>
+							{#each tenantLedgerQuery.data?.items ?? [] as row (row.tenantLedgerEntryId)}
+								{#if belongsToMonth(row, month)}
+									<button type="button" class="grid w-full gap-2 border-b px-4 py-3 text-left transition-colors hover:bg-muted/40 md:grid-cols-[7rem_minmax(0,1fr)_8rem_9rem_9rem] md:items-center md:gap-3" onclick={() => (selectedLedgerRow = row)} data-testid={`unit-money-ledger-row-${row.tenantLedgerEntryId}`}>
+										<div><time class="text-sm font-medium" datetime={row.effectiveOn}>{formatDateOnly(row.effectiveOn)}</time><p class="text-xs text-muted-foreground">Entered {formatDateOnly(row.postedAtUtc)}</p></div>
+										<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><LedgerTypeBadge type={row.type} /><span class="font-medium">{row.description}</span></div>{#if row.recurringScheduleContext || row.sourceDocumentContext}<p class="mt-1 text-xs text-muted-foreground">{row.recurringScheduleContext ?? row.sourceDocumentContext}</p>{/if}{#if row.reversesEntryId || row.replacedByEntryId}<p class="mt-1 text-xs text-muted-foreground">{row.reversesEntryId ? `Reverses entry #${row.reversesEntryId}` : `Reversed by entry #${row.replacedByEntryId}`}</p>{/if}</div>
+										<div class="flex justify-between text-sm md:block md:text-right"><span class="text-muted-foreground md:hidden">Charges</span>{#if row.chargeAmount}<LedgerAmount amount={row.chargeAmount} currency={row.currency} tone="charge" />{:else}<span class="text-muted-foreground">—</span>{/if}</div>
+										<div class="flex justify-between text-sm md:block md:text-right"><span class="text-muted-foreground md:hidden">Payments / credits</span>{#if row.paymentAmount}<LedgerAmount amount={row.paymentAmount} currency={row.currency} tone="payment" />{:else if row.creditAmount}<LedgerAmount amount={row.creditAmount} currency={row.currency} tone="credit" />{:else}<span class="text-muted-foreground">—</span>{/if}</div>
+										<div class="flex items-center justify-between gap-2 text-sm md:justify-end"><span class="text-muted-foreground md:hidden">Amount owed</span><LedgerAmount amount={row.runningAmountOwed} currency={row.currency} />{#if canManagePayments && canReverseTenantLedgerEntry({ entryType: row.type, reversesEntryId: row.reversesEntryId, hasReversal: row.replacedByEntryId != null })}<Button variant="ghost" size="icon" onclick={(event) => { event.stopPropagation(); openReversal({ tenantAccountId, leaseManagementId: dashboard.leaseManagementId ?? 0, tenantLedgerEntryId: row.tenantLedgerEntryId, publicId: row.publicId, entryType: row.type, direction: row.chargeAmount > 0 ? 'Debit' : 'Credit', amount: row.chargeAmount || row.paymentAmount || row.creditAmount, currency: row.currency, effectiveOn: row.effectiveOn, dueOn: row.dueOn, postedAtUtc: row.postedAtUtc, description: row.description, businessKey: row.sourcePublicId ?? row.publicId, reversesEntryId: row.reversesEntryId, hasReversal: row.replacedByEntryId != null }); }} aria-label={`Reverse ${row.description}`} data-testid={`rent-reverse-ledger-entry-${row.tenantLedgerEntryId}`}><Undo2 class="h-4 w-4" /></Button>{/if}</div>
+									</button>
+								{/if}
+							{/each}
+						</MonthGroup>
 					{/each}
-				</ul>
-				{#if chargesQuery.data && chargesQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (chargePage -= 1)} disabled={chargePage === 1 || chargesQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {chargePage} of {Math.ceil(chargesQuery.data.totalCount / PAGE_SIZE)} · {chargesQuery.data.totalCount} charges</span><Button variant="outline" size="sm" onclick={() => (chargePage += 1)} disabled={chargePage * PAGE_SIZE >= chargesQuery.data.totalCount || chargesQuery.isFetching}>Next</Button></div>{/if}
-			{/if}
-		</section>
-
-		<section class="space-y-2 border-t pt-4" data-testid="deposits-section">
-			<h3 class="text-sm font-semibold">Deposits</h3>
-			{#if depositsQuery.isLoading}
-				<LoadingState label="Loading deposits" testid="deposits-loading" />
-			{:else if depositsQuery.isError}
-				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="deposits-error">
-					<p class="text-sm font-medium text-destructive">Deposits could not be loaded.</p>
-					<Button class="mt-3" variant="outline" size="sm" onclick={() => depositsQuery.refetch()}>Try again</Button>
 				</div>
-			{:else if (depositsQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No security deposit is recorded for this rental.</p>
-			{:else}
-				<ul class="divide-y overflow-hidden rounded-xl bg-card">
-					{#each depositsQuery.data?.items ?? [] as deposit (deposit.securityDepositAccountId)}
-						<li class="flex items-center justify-between gap-3 p-3 text-sm">
-							<span><span class="font-medium">{deposit.status}</span><span class="ml-2 text-muted-foreground">Security deposit</span></span>
-							<span class="font-semibold">{money(deposit.heldBalance)} held</span>
-						</li>
-					{/each}
-				</ul>
-				{#if depositsQuery.data && depositsQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (depositPage -= 1)} disabled={depositPage === 1 || depositsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {depositPage} of {Math.ceil(depositsQuery.data.totalCount / PAGE_SIZE)} · {depositsQuery.data.totalCount} deposit records</span><Button variant="outline" size="sm" onclick={() => (depositPage += 1)} disabled={depositPage * PAGE_SIZE >= depositsQuery.data.totalCount || depositsQuery.isFetching}>Next</Button></div>{/if}
-			{/if}
-		</section>
-
-		<section class="space-y-2 border-t pt-4" data-testid="rent-payments">
-			<h3 class="text-sm font-semibold">Payments received</h3>
-			{#if receiptsQuery.isLoading}
-				<LoadingState label="Loading payment receipts" testid="rent-receipts-loading" />
-			{:else if receiptsQuery.isError}
-				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="rent-receipts-error">
-					<p class="text-sm font-medium text-destructive">Could not load payment receipts.</p>
-					<Button class="mt-3" variant="outline" size="sm" onclick={() => receiptsQuery.refetch()}>Try again</Button>
-				</div>
-			{:else if receiptItems.length === 0}
-				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No payments received yet. Record one manually or scan a payment.</p>
-			{:else}
-				<ul class="divide-y overflow-hidden rounded-xl bg-card">
-					{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
-						<li><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-muted/40" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
-					{/each}
-				</ul>
-				{#if receiptsQuery.data && receiptsQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {receiptPage} of {Math.ceil(receiptsQuery.data.totalCount / PAGE_SIZE)} · {receiptsQuery.data.totalCount} payments</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
+				{#if tenantLedgerQuery.data && tenantLedgerQuery.data.totalCount > tenantLedgerQuery.data.items.length}<p class="text-sm text-destructive" role="alert">This period contains more than {tenantLedgerQuery.data.items.length} entries. Choose a shorter period to see every row.</p>{/if}
 			{/if}
 		</section>
 	{/if}
+	{#if recurringOpen && tenantAccountId && dashboard.leaseManagementId && canManagePayments}<RecurringChargeDialog open tenantAccountId={tenantAccountId} leaseAgreementId={dashboard.currentLease?.id} leaseManagementId={dashboard.leaseManagementId} propertyId={dashboard.unit.propertyId} unitId={dashboard.unit.id} onClose={() => (recurringOpen = false)} />{/if}
+	{#if selectedLedgerRow && tenantAccountId}<LedgerRowSheet tenantRow={selectedLedgerRow} tenantAccountId={tenantAccountId} onClose={() => (selectedLedgerRow = null)} />{/if}
 {/if}
 </div>
