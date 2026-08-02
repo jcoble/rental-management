@@ -428,6 +428,48 @@ public class AccountingServiceTests : IAsyncLifetime
         var now = new DateTime(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
         var (property, lease) = SeedPropertyAndLease(now, agreementNumber: "LEASE-12");
         var charge = SeedPayment(lease, 125m, dueDate: now, paidInFull: false);
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = charge.TenantAccountId,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 75m,
+            Currency = "USD",
+            EffectiveOn = charge.EffectiveOn,
+            PostedAtUtc = charge.PostedAtUtc,
+            Description = "Payment received by check",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(receipt);
+        await _db.SaveChangesAsync();
+        var credit = new TenantLedgerEntry
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = charge.TenantAccountId,
+            EntryType = TenantLedgerEntryType.Credit,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 10m,
+            Currency = "USD",
+            EffectiveOn = charge.EffectiveOn,
+            PostedAtUtc = charge.PostedAtUtc,
+            Description = "Tenant credit",
+            BusinessKey = $"credit:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        _db.TenantLedgerEntries.Add(credit);
+        _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = charge.TenantAccountId,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = receipt.Amount,
+            AllocatedAtUtc = now,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        });
         await new ChartOfAccountsSeedService(_db).SeedAsync(PortfolioId);
         await _db.SaveChangesAsync();
         var accounts = await _db.LedgerAccounts
@@ -578,6 +620,67 @@ public class AccountingServiceTests : IAsyncLifetime
         _commands.Should().OnlyContain(sql =>
             sql.Contains("rc_api_effective_capability_scopes", StringComparison.Ordinal) &&
             sql.Contains("JournalLines", StringComparison.Ordinal));
+
+        _commands.Clear();
+        var charges = await _sut.GetTransactionsAsync(_scope, new AccountingTransactionsQuery
+        {
+            DisplayType = "Charge",
+            Take = 20,
+        });
+        charges.Items.Should().NotBeEmpty().And.OnlyContain(item => item.DisplayType == "Charge");
+        charges.Items.Should().NotContain(item => item.Id == receipt.Id);
+        charges.Items.Should().NotContain(item => item.Id == credit.Id);
+        _commands.Should().HaveCount(2, "display-type filtering stays in the count and page SQL queries");
+
+        _commands.Clear();
+        var receipts = await _sut.GetTransactionsAsync(_scope, new AccountingTransactionsQuery
+        {
+            DisplayType = "PaymentReceived",
+            Take = 20,
+        });
+        receipts.Items.Should().ContainSingle(item => item.Id == receipt.Id);
+        receipts.Items.Should().OnlyContain(item => item.DisplayType == "PaymentReceived");
+        receipts.Items.Should().NotContain(item => item.Id == charge.Id);
+        _commands.Should().HaveCount(2, "display-type filtering stays in the count and page SQL queries");
+
+        _commands.Clear();
+        var credits = await _sut.GetTransactionsAsync(_scope, new AccountingTransactionsQuery
+        {
+            DisplayType = "Credit",
+            Take = 20,
+        });
+        credits.Items.Should().ContainSingle(item => item.Id == credit.Id);
+        credits.Items.Should().OnlyContain(item => item.DisplayType == "Credit");
+        credits.Items.Should().NotContain(item => item.Id == charge.Id || item.Id == receipt.Id);
+        _commands.Should().HaveCount(2, "credit display filtering stays in the count and page SQL queries");
+
+        var readModels = new AccountingLedgerReadModelService(_db);
+        _commands.Clear();
+        var incomeAndExpenses = await readModels.GetChartOfAccountsAsync(PortfolioId,
+            new ChartOfAccountsQuery { AccountTypes = "Income,Expense", Take = 100 });
+        incomeAndExpenses.Items.Should().NotBeEmpty().And.OnlyContain(account =>
+            account.AccountType == AccountType.Income || account.AccountType == AccountType.Expense);
+        _commands.Should().HaveCount(2, "chart filtering uses one SQL count and one SQL page query");
+        _commands.Should().OnlyContain(sql => sql.Contains("AccountType", StringComparison.Ordinal));
+
+        _commands.Clear();
+        var chargeDetail = await readModels.GetTenantLedgerEntryAsync(
+            PortfolioId, charge.TenantAccountId, charge.Id);
+        chargeDetail.Should().NotBeNull();
+        chargeDetail!.RunningAmountOwed.Should().Be(125m);
+        chargeDetail.Allocations.Should().ContainSingle(allocation =>
+            allocation.TargetSourceId == receipt.Id && allocation.Amount == 75m);
+        _commands.Should().HaveCount(2, "detail uses one row query and one allocation query");
+        _commands[0].Should().ContainEquivalentOf("SUM", "running amount owed must be calculated by PostgreSQL");
+
+        _commands.Clear();
+        var receiptDetail = await readModels.GetTenantLedgerEntryAsync(
+            PortfolioId, charge.TenantAccountId, receipt.Id);
+        receiptDetail.Should().NotBeNull();
+        receiptDetail!.RunningAmountOwed.Should().Be(50m);
+        receiptDetail.Allocations.Should().ContainSingle(allocation =>
+            allocation.TargetSourceId == charge.Id && allocation.Amount == 75m);
+        _commands.Should().HaveCount(2, "detail command count remains bounded for receipt rows");
     }
 
     [Fact]

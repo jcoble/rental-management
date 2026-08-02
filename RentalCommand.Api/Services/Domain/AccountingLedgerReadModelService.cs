@@ -29,6 +29,9 @@ public interface IAccountingLedgerReadModelService
     Task<AccountingPage<TenantLedgerRow>?> GetTenantLedgerAsync(
         int portfolioId, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default);
 
+    Task<TenantLedgerRow?> GetTenantLedgerEntryAsync(
+        int portfolioId, int tenantAccountId, long entryId, CancellationToken ct = default);
+
     Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(
         int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
 
@@ -58,6 +61,20 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         if (query.ActiveOnly is true)
         {
             accounts = accounts.Where(account => account.IsActive);
+        }
+        if (!string.IsNullOrWhiteSpace(query.AccountTypes))
+        {
+            var accountTypes = query.AccountTypes
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => Enum.TryParse<AccountType>(value, true, out var accountType)
+                    ? accountType
+                    : (AccountType?)null)
+                .Where(accountType => accountType.HasValue)
+                .Select(accountType => accountType!.Value)
+                .Distinct()
+                .ToArray();
+            if (accountTypes.Length > 0)
+                accounts = accounts.Where(account => accountTypes.Contains(account.AccountType));
         }
 
         var totalCount = await accounts.CountAsync(ct);
@@ -504,6 +521,99 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             Skip = skip,
             Take = take,
         };
+    }
+
+    public async Task<TenantLedgerRow?> GetTenantLedgerEntryAsync(
+        int portfolioId, int tenantAccountId, long entryId, CancellationToken ct = default)
+    {
+        var row = await _db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == tenantAccountId
+                && entry.Id == entryId)
+            .Select(entry => new TenantLedgerRow
+            {
+                TenantLedgerEntryId = entry.Id,
+                PublicId = entry.PublicId,
+                SourceType = "tenant-ledger",
+                SourceId = entry.Id,
+                SourcePublicId = entry.PublicId,
+                EffectiveOn = entry.EffectiveOn,
+                PostedAtUtc = entry.PostedAtUtc,
+                Type = entry.EntryType,
+                Description = entry.Description,
+                ChargeAmount = entry.Direction == TenantLedgerDirection.Debit
+                    && entry.EntryType != TenantLedgerEntryType.PaymentReceipt
+                    && entry.EntryType != TenantLedgerEntryType.Credit
+                    && entry.EntryType != TenantLedgerEntryType.Adjustment
+                    ? entry.Amount : 0m,
+                PaymentAmount = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    && entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : 0m,
+                CreditAmount = (entry.EntryType == TenantLedgerEntryType.Credit
+                    || entry.EntryType == TenantLedgerEntryType.Adjustment)
+                    && entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : 0m,
+                RunningAmountOwed = _db.TenantLedgerEntries
+                    .Where(previous => previous.PortfolioId == portfolioId
+                        && previous.TenantAccountId == tenantAccountId
+                        && previous.Currency == entry.Currency
+                        && (previous.EffectiveOn < entry.EffectiveOn
+                            || (previous.EffectiveOn == entry.EffectiveOn
+                                && (previous.PostedAtUtc < entry.PostedAtUtc
+                                    || (previous.PostedAtUtc == entry.PostedAtUtc && previous.Id <= entry.Id)))))
+                    .Select(previous => previous.Direction == TenantLedgerDirection.Debit
+                        ? previous.Amount : -previous.Amount)
+                    .Sum(),
+                DueOn = entry.DueOn,
+                OpenAmount = entry.Direction == TenantLedgerDirection.Debit
+                    ? entry.Amount - _db.TenantLedgerAllocations
+                        .Where(allocation => allocation.DebitEntryId == entry.Id)
+                        .Sum(allocation => allocation.Amount)
+                    : 0m,
+                Status = entry.Direction == TenantLedgerDirection.Debit
+                    ? (entry.Amount - _db.TenantLedgerAllocations
+                        .Where(allocation => allocation.DebitEntryId == entry.Id)
+                        .Sum(allocation => allocation.Amount) > 0m ? "Open" : "Settled")
+                    : "Settled",
+                PaymentMethod = entry.ProviderPaymentAttempt!.PaymentMethodSummary,
+                Reference = entry.ProviderPaymentAttempt.ProviderObjectId
+                    ?? entry.ProviderPaymentAttempt.CheckNumber,
+                AccountLabel = entry.EntryType.ToString(),
+                SourceDocumentContext = entry.SourceStoredFile!.FileName,
+                ReversesEntryId = entry.ReversesEntryId,
+                JournalEntryPublicId = _db.JournalEntries
+                    .Where(journal => journal.PortfolioId == portfolioId && journal.SourceId == entry.Id)
+                    .OrderByDescending(journal => journal.Id)
+                    .Select(journal => (Guid?)journal.PublicId)
+                    .FirstOrDefault(),
+                Currency = entry.Currency,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (row is null)
+            return null;
+
+        row.Allocations = await _db.TenantLedgerAllocations
+            .AsNoTracking()
+            .Where(allocation => allocation.PortfolioId == portfolioId
+                && (allocation.DebitEntryId == entryId || allocation.CreditEntryId == entryId))
+            .Select(allocation => allocation.DebitEntryId == entryId
+                ? new AllocationRef
+                {
+                    TargetSourceId = allocation.CreditEntryId,
+                    TargetPublicId = allocation.CreditEntry!.PublicId,
+                    TargetDescription = allocation.CreditEntry.Description,
+                    Amount = allocation.Amount,
+                    EffectiveOn = allocation.CreditEntry.EffectiveOn,
+                }
+                : new AllocationRef
+                {
+                    TargetSourceId = allocation.DebitEntryId,
+                    TargetPublicId = allocation.DebitEntry!.PublicId,
+                    TargetDescription = allocation.DebitEntry.Description,
+                    Amount = allocation.Amount,
+                    EffectiveOn = allocation.DebitEntry.EffectiveOn,
+                })
+            .ToArrayAsync(ct);
+        return row;
     }
 
     public async Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(

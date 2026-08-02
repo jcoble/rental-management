@@ -237,6 +237,9 @@ public class AccountingTransactionsQuery : ListQuery
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "accountId")]
     public int? AccountId { get; set; }
 
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "displayType")]
+    public string? DisplayType { get; set; }
+
     // From/To (the ?from=&to= date range) are inherited from ListQuery now, so the grid date filter is
     // uniform across every list endpoint. AccountingService keeps applying them to the transaction date.
 }

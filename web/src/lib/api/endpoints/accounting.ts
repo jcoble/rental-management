@@ -22,6 +22,7 @@ export type AccountingTransactionParams = ListParams & {
 	category?: string;
 	propertyId?: number;
 	accountId?: number;
+	displayType?: string;
 	from?: string;
 	to?: string;
 };
@@ -239,7 +240,10 @@ export interface ReconciledAccountingTransactionsResponse {
 }
 
 export const accounting = {
-	chartOfAccounts: (params: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'> & { activeOnly?: boolean } = {}) =>
+	chartOfAccounts: (params: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'> & {
+		activeOnly?: boolean;
+		accountTypes?: string;
+	} = {}) =>
 		api.get<AccountingPage<ChartOfAccountsRow>>(`/accounting/chart-of-accounts${buildListQuery(params)}`),
 	createChartOfAccounts: (body: CreateChartOfAccountsRequest) =>
 		api.post<ChartOfAccountsRow>('/accounting/chart-of-accounts', body),
@@ -274,9 +278,9 @@ export const accounting = {
 		api.get<PastDueResponse>(`/accounting/past-due${buildListQuery(params)}`),
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
 	transactions: (params?: AccountingTransactionParams) => {
-		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};
+		const { kind, status, category, propertyId, accountId, displayType, from, to, ...list } = params ?? {};
 		return api.get<ReconciledAccountingTransactionsResponse>(
-			`/accounting/transactions${buildListQuery(list, { kind, status, category, propertyId, from, to })}`
+			`/accounting/transactions${buildListQuery(list, { kind, status, category, propertyId, accountId, displayType, from, to })}`
 		);
 	},
 
