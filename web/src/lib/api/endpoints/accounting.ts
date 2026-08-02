@@ -25,6 +25,181 @@ export type AccountingTransactionParams = ListParams & {
 	to?: string;
 };
 
+export interface AccountingPage<T> {
+	items: T[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export interface ChartOfAccountsRow {
+	id: number;
+	publicId: string;
+	code: string;
+	name: string;
+	accountType: string;
+	normalBalance: string;
+	parentAccountId: number | null;
+	systemKey: string | null;
+	scheduleECategory: string | null;
+	isSystem: boolean;
+	isActive: boolean;
+	hasPostedLines: boolean;
+}
+
+export interface CreateChartOfAccountsRequest {
+	code: string;
+	name: string;
+	accountType: string;
+	normalBalance: string;
+	parentAccountId?: number | null;
+	systemKey?: string | null;
+	scheduleECategory?: string | null;
+	isActive?: boolean;
+}
+
+export interface PatchChartOfAccountsRequest {
+	name?: string;
+	isActive?: boolean;
+	scheduleECategory?: string | null;
+	parentAccountId?: number | null;
+}
+
+export interface GeneralLedgerRow {
+	journalEntryPublicId: string;
+	lineId: number;
+	effectiveOn: string;
+	postedAtUtc: string;
+	sourceType: string;
+	sourceId: number;
+	sourceBusinessKey: string;
+	description: string;
+	accountId: number;
+	accountCode: string;
+	accountName: string;
+	debitAmount: number;
+	creditAmount: number;
+	currency: string;
+	propertyId: number | null;
+	unitId: number | null;
+	tenantAccountId: number | null;
+	ownerEntityId: number | null;
+	runningBalance: number | null;
+}
+
+export interface JournalDetailLine {
+	id: number;
+	accountId: number;
+	accountCode: string;
+	accountName: string;
+	debitAmount: number;
+	creditAmount: number;
+	memo: string | null;
+	propertyId: number | null;
+	unitId: number | null;
+	tenantAccountId: number | null;
+	ownerEntityId: number | null;
+}
+
+export interface BankReconciliationEvidence {
+	bankTransactionId: number | null;
+	bankAccountLabel: string | null;
+	matchedOn: string | null;
+	status: string | null;
+}
+
+export interface JournalDetail {
+	publicId: string;
+	description: string;
+	effectiveOn: string;
+	postedAtUtc: string;
+	sourceType: string;
+	sourceId: number;
+	sourceBusinessKey: string;
+	actor: string | null;
+	attemptId: string;
+	atomicReceiptId: string;
+	idempotencyDigest: string;
+	currency: string;
+	lines: JournalDetailLine[];
+	totalDebits: number;
+	totalCredits: number;
+	isBalanced: boolean;
+	reversesJournalEntryPublicId: string | null;
+	reversalPublicIds: string[];
+	auditLink: string | null;
+	documentIds: number[];
+	bankReconciliationEvidence: BankReconciliationEvidence | null;
+}
+
+export interface TrialBalanceRow {
+	accountId: number;
+	accountCode: string;
+	accountName: string;
+	accountType: string;
+	debitBalance: number;
+	creditBalance: number;
+	currency: string;
+}
+
+export interface TrialBalanceResponse {
+	rows: TrialBalanceRow[];
+	totalDebits: number;
+	totalCredits: number;
+	isBalanced: boolean;
+}
+
+export interface FinancialStatementRow {
+	accountId: number;
+	accountCode: string;
+	accountName: string;
+	amount: number;
+	currency: string;
+}
+
+export interface FinancialStatementSection {
+	label: string;
+	rows: FinancialStatementRow[];
+	subtotal: number;
+}
+
+export interface FinancialStatementTotals {
+	total: number;
+	netIncome: number | null;
+	assets: number | null;
+	liabilitiesAndEquity: number | null;
+}
+
+export interface FinancialStatementResponse {
+	sections: FinancialStatementSection[];
+	totals: FinancialStatementTotals;
+}
+
+export interface OwnerContributionResponse {
+	id: number;
+	portfolioId: number;
+	ownerEntityId: number;
+	ownerName: string;
+	propertyId: number | null;
+	propertyName: string | null;
+	date: string;
+	amount: number;
+	method: string;
+	status: string;
+	approvedAt: string | null;
+	approvedBusinessDate: string | null;
+	approvedByUserId: number | null;
+	rejectedAt: string | null;
+	rejectedByUserId: number | null;
+	rejectionReason: string | null;
+	bankReference: string | null;
+	exportReference: string | null;
+	exportedAt: string | null;
+	memo: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
 /**
  * A high-confidence, still-unmatched bank line the user can one-tap confirm against a
  * Payment/Expense row. Powers the "Match?" chip on the accounting ledger. Nothing is auto-matched.
@@ -63,6 +238,27 @@ export interface ReconciledAccountingTransactionsResponse {
 }
 
 export const accounting = {
+	chartOfAccounts: (params: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'> & { activeOnly?: boolean } = {}) =>
+		api.get<AccountingPage<ChartOfAccountsRow>>(`/accounting/chart-of-accounts${buildListQuery(params)}`),
+	createChartOfAccounts: (body: CreateChartOfAccountsRequest) =>
+		api.post<ChartOfAccountsRow>('/accounting/chart-of-accounts', body),
+	patchChartOfAccounts: (id: number, body: PatchChartOfAccountsRequest) =>
+		api.patch<ChartOfAccountsRow>(`/accounting/chart-of-accounts/${id}`, body),
+	generalLedger: (params: ListParams & {
+		accountId?: number;
+		propertyId?: number;
+		unitId?: number;
+		sourceType?: string;
+		effectiveFrom?: string;
+		effectiveTo?: string;
+	} = {}) => api.get<AccountingPage<GeneralLedgerRow>>(`/accounting/general-ledger${buildListQuery(params)}`),
+	journalEntry: (publicId: string) =>
+		api.get<JournalDetail>(`/accounting/journal-entries/${publicId}`),
+	trialBalance: () => api.get<TrialBalanceResponse>('/accounting/trial-balance'),
+	balanceSheet: () => api.get<FinancialStatementResponse>('/accounting/balance-sheet'),
+	incomeStatement: () => api.get<FinancialStatementResponse>('/accounting/income-statement'),
+	ownerContributions: (params: ListParams = {}) =>
+		api.get<OwnerContributionResponse[]>(`/owner-contributions${buildListQuery(params)}`),
 	// GET /api/v1/accounting/summary — portfolio scope comes from the JWT claim.
 	// Returns expense totals by Schedule E category + a payment collection rollup
 	// (collected / outstanding / overdue).
