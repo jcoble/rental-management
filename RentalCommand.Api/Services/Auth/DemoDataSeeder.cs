@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core;
@@ -70,7 +71,16 @@ public class DemoDataSeeder
         // Each application start is a new reconciliation action. One key is created for this
         // invocation and reused by every exact retry within the action.
         var operationKey = $"startup:{Guid.NewGuid():N}";
-        return SeedPortfolioAsync(1, operationKey, ct);
+        return SeedStartupPortfolioAsync(1, operationKey, ct);
+    }
+
+    private async Task SeedStartupPortfolioAsync(
+        int portfolioId,
+        string operationKey,
+        CancellationToken ct)
+    {
+        using var startupScope = DemoSeedStartupScope.Begin($"portfolio:{portfolioId}:{operationKey}");
+        await SeedPortfolioAsync(portfolioId, operationKey, ct);
     }
 
     /// <summary>

@@ -10,6 +10,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -176,6 +177,10 @@ public sealed class AccountingReadModelPostgreSqlTests
         detail!.TotalDebits.Should().Be(250m);
         detail.TotalCredits.Should().Be(250m);
         detail.IsBalanced.Should().BeTrue();
+        detail.Lines.Should().Contain(line =>
+            line.AccountCode == "1000" && line.NormalBalance == NormalBalance.Debit);
+        detail.Lines.Should().Contain(line =>
+            line.AccountCode == "4000" && line.NormalBalance == NormalBalance.Credit);
         trialBalance.IsBalanced.Should().BeTrue();
         trialBalance.TotalDebits.Should().Be(250m);
         trialBalance.TotalCredits.Should().Be(250m);
@@ -290,6 +295,75 @@ public sealed class AccountingReadModelPostgreSqlTests
         result.CashPaid.Should().Be(20m);
         result.NetCashMovement.Should().Be(110m);
         result.ProfitOrLoss.Should().Be(80m);
+    }
+
+    [Fact]
+    public async Task MoneyPosition_IncludesAuthorizedOperationalDepositLiabilityInOneSqlAggregate()
+    {
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
+        var scope = setup.Db.SeedAdministratorScope(
+            1, nameof(MoneyPosition_IncludesAuthorizedOperationalDepositLiabilityInOneSqlAggregate));
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = 1, Name = "Deposit bridge", AddressLine1 = "1 Deposit Way",
+            City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = 1, Property = property, UnitNumber = "1", MarketRent = 1_050m,
+            CreatedAt = now, UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = 1, Property = property, Unit = unit, RelationshipNumber = "DEPOSIT-BRIDGE",
+            PossessionGivenAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now,
+            CreatedByUserId = scope.UserId, RowVersion = Guid.NewGuid(),
+        };
+        var tenantAccount = new TenantAccount
+        {
+            PortfolioId = 1, LeaseManagement = relationship, AccountNumber = "DEPOSIT-BRIDGE",
+            Currency = "USD", OpenedAtUtc = now, CreatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        var source = LegalDocumentSourceVersionTestData.BuiltIn(
+            1, scope.UserId, now, "money-position-deposit-bridge");
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = 1, LeaseManagement = relationship,
+            VersionNumber = 1, AgreementNumber = "DEPOSIT-BRIDGE", ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm, TermStartOn = DateOnly.FromDateTime(now.AddDays(-30)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)), GoverningFromOn = DateOnly.FromDateTime(now.AddDays(-30)),
+            BaseRentAmount = 1_050m, RentDueDay = 1, SecurityDepositObligation = 1_050m,
+            Currency = "USD", TermsSchemaVersion = 1, TermsPayload = "{}", DocumentSourceVersion = source,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = 1, TenantAccount = tenantAccount, OriginatingAgreement = agreement,
+            Currency = "USD", CreatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        setup.Db.AddRange(property, unit, relationship, tenantAccount, source, agreement, depositAccount);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.SecurityDepositEntries.Add(new SecurityDepositEntry
+        {
+            PortfolioId = 1, SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
+            Amount = 1_050m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(now.AddDays(-1)),
+            PostedAtUtc = now, BusinessKey = "deposit-bridge:receipt", Description = "Deposit received",
+            LeaseAgreementId = agreement.Id, CreatedByUserId = scope.UserId,
+        });
+        await setup.Db.SaveChangesAsync();
+        await setup.ActivateApiScopeAsync(scope);
+        commands.Reset();
+
+        var result = await new AccountingLedgerReadModelService(setup.Db).GetMoneyPositionAsync(
+            scope, new MoneyPositionQuery { To = DateOnly.FromDateTime(now) });
+
+        result.TenantDepositsHeld.Should().Be(1_050m);
+        commands.Sql.Should().ContainSingle(sql =>
+            sql.Contains("vw_security_deposit_balances", StringComparison.Ordinal)
+            && sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

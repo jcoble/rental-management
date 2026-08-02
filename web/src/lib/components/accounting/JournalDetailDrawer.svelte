@@ -15,7 +15,7 @@
 		getJournalLineEntry,
 		type JournalLineDisplayInput
 	} from '$lib/accounting/accounting-display';
-	import { accountingBooks, type JournalDetailLine, type NormalBalance } from '$lib/api/endpoints/accounting-books';
+	import { accountingBooks, type JournalDetailLine } from '$lib/api/endpoints/accounting-books';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 
 	let {
@@ -35,12 +35,6 @@
 		enabled: authState.isAuthenticated && !!journalPublicId,
 		queryFn: () => accountingBooks.journalDetail(journalPublicId as string)
 	}));
-	const chartQuery = createQuery(() => ({
-		queryKey: ['accounting-chart-of-accounts', 'all'],
-		enabled: authState.isAuthenticated && !!journalPublicId,
-		queryFn: () => accountingBooks.chartOfAccounts({ activeOnly: false })
-	}));
-
 	function errorStatus(error: unknown): number | undefined {
 		if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
 		const status = (error as { status?: unknown }).status;
@@ -49,10 +43,9 @@
 
 	const unauthorized = $derived(
 		!authState.isAuthenticated ||
-			[401, 403, 404].includes(errorStatus(journalQuery.error) ?? 0) ||
-			[401, 403, 404].includes(errorStatus(chartQuery.error) ?? 0)
+			[401, 403, 404].includes(errorStatus(journalQuery.error) ?? 0)
 	);
-	const isLoading = $derived(journalQuery.isLoading || chartQuery.isLoading);
+	const isLoading = $derived(journalQuery.isLoading);
 
 	$effect(() => {
 		open = !!journalPublicId;
@@ -64,15 +57,12 @@
 	}
 
 	function lineInput(line: JournalDetailLine): JournalLineDisplayInput {
-		const chartAccount = chartQuery.data?.items.find((account) => account.id === line.accountId);
 		return {
 			accountName: line.accountName,
 			accountCode: line.accountCode,
 			debitAmount: line.debitAmount,
 			creditAmount: line.creditAmount,
-			normalBalance:
-				chartAccount?.normalBalance ??
-				(line as JournalDetailLine & { normalBalance?: NormalBalance }).normalBalance
+			normalBalance: line.normalBalance
 		};
 	}
 

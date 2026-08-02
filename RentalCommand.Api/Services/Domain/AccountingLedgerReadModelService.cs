@@ -242,6 +242,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 AccountId = line.LedgerAccountId,
                 AccountCode = line.LedgerAccount!.Code,
                 AccountName = line.LedgerAccount.Name,
+                NormalBalance = line.LedgerAccount.NormalBalance,
                 DebitAmount = line.DebitAmount,
                 CreditAmount = line.CreditAmount,
                 Memo = line.Memo,
@@ -398,6 +399,27 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             })
             .SingleOrDefaultAsync(ct) ?? new MoneyPositionSqlRow();
 
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
+        var depositPosition = await (
+                from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { balance.PortfolioId, Id = balance.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                where balance.PortfolioId == scope.PortfolioId &&
+                      authorizedProperties.Any(property =>
+                          property.PortfolioId == management.PortfolioId &&
+                          property.Id == management.PropertyId)
+                select balance)
+            .GroupBy(_ => 1)
+            .Select(group => new DepositPositionSqlRow
+            {
+                TenantDepositsHeld = group.Sum(balance => balance.HeldBalance),
+            })
+            .SingleOrDefaultAsync(ct);
+        var tenantDepositsHeld = depositPosition?.TenantDepositsHeld
+            ?? position.TenantDepositsHeld;
+
         var cashSystemKeys = new[]
         {
             "operating-cash",
@@ -429,8 +451,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             FromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
             ToUtc = to.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
             TotalCashOnHand = position.TotalCashOnHand,
-            TenantDepositsHeld = position.TenantDepositsHeld,
-            CashAfterTenantDeposits = position.TotalCashOnHand - position.TenantDepositsHeld,
+            TenantDepositsHeld = tenantDepositsHeld,
+            CashAfterTenantDeposits = position.TotalCashOnHand - tenantDepositsHeld,
             RentStillOwed = position.RentStillOwed,
             LoanBalance = position.LoanBalance,
             BookEquity = position.Assets - position.Liabilities,
@@ -1064,6 +1086,11 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         public decimal Assets { get; init; }
         public decimal Liabilities { get; init; }
         public decimal ProfitOrLoss { get; init; }
+    }
+
+    private sealed class DepositPositionSqlRow
+    {
+        public decimal TenantDepositsHeld { get; init; }
     }
 
     private sealed class CashMovementSqlRow

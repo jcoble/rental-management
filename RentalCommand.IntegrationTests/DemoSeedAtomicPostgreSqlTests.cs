@@ -1,3 +1,4 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -53,8 +54,28 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
             },
         });
         await _context.Db.SaveChangesAsync();
+        var membershipId = await _context.Db.WorkspaceMemberships
+            .Select(membership => membership.Id)
+            .SingleAsync();
+        _context.Db.MembershipRoleAssignments.Add(new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = membershipId,
+            PortfolioId = 1,
+            RoleProfileId = 1,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = BusinessNowUtc.AddDays(-1),
+            CreatedAtUtc = BusinessNowUtc.AddDays(-1),
+            UpdatedAtUtc = BusinessNowUtc.AddDays(-1),
+        });
+        await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
 
+        _services = BuildServices();
+    }
+
+    private ServiceProvider BuildServices(params IInterceptor[] additionalInterceptors)
+    {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(TimeProvider.System);
@@ -66,10 +87,16 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
             SeedDemoPortfolioResult,
             DemoSeedCommandHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
             builder.UseNpgsql(_context.ConnectionString)
                 .AddInterceptors(provider.GetRequiredService<FailOnOutboxInsertInterceptor>())
-                .UseAtomicPersistenceKernel(provider));
-        _services = services.BuildServiceProvider(new ServiceProviderOptions
+                .UseAtomicPersistenceKernel(provider);
+            if (additionalInterceptors.Length > 0)
+            {
+                builder.AddInterceptors(additionalInterceptors);
+            }
+        });
+        return services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateOnBuild = true,
             ValidateScopes = true,
@@ -150,6 +177,56 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
             && row.IdempotencyKey == "demo-seed/1/demo-seed-atomic-contract")).Should().Be(1);
     }
 
+    [Fact]
+    public async Task Runtime_api_role_with_blank_scope_seeds_and_reconciles_a_fresh_portfolio()
+    {
+        var scopeAuthority = await _context.Db.Database
+            .SqlQueryRaw<string>("""
+                SELECT pg_get_functiondef('rc_api_scope_allows(integer)'::regprocedure) AS "Value"
+                """)
+            .SingleAsync();
+        scopeAuthority.Should().Contain("sandbox.demo-seed");
+
+        await using var runtimeServices = BuildServices(
+            new RuntimeApiRoleInterceptor("portfolio:1:runtime-startup-first"));
+        var command = new SeedDemoPortfolioCommand(
+            1,
+            true,
+            BusinessNowUtc,
+            "runtime-startup-first");
+
+        var first = await ExecuteAtomicAsync(
+            runtimeServices,
+            new AtomicCommandIdentity("sandbox.demo-seed", "portfolio:1:runtime-startup-first"),
+            command,
+            Codec);
+        await using var secondRuntimeServices = BuildServices(
+            new RuntimeApiRoleInterceptor("portfolio:1:runtime-startup-second"));
+        var second = await ExecuteAtomicAsync(
+            secondRuntimeServices,
+            new AtomicCommandIdentity("sandbox.demo-seed", "portfolio:1:runtime-startup-second"),
+            command with
+            {
+                RequirePendingSandboxOnboarding = false,
+                OperationKey = "runtime-startup-second",
+            },
+            Codec);
+
+        first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        first.Value.AlreadyPresent.Should().BeFalse();
+        await using (var postCommitScope = runtimeServices.CreateAsyncScope())
+        {
+            var runtimeDb = postCommitScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            (await runtimeDb.Properties.CountAsync()).Should().Be(8);
+        }
+        second.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        second.Value.AlreadyPresent.Should().BeTrue();
+
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.Properties.IgnoreQueryFilters().CountAsync(row => row.PortfolioId == 1))
+            .Should().Be(8);
+    }
+
     private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
         TCommand command,
@@ -158,9 +235,46 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
         where TCommand : notnull, IAtomicCommandData
         where TResult : notnull
     {
-        await using var scope = _services.CreateAsyncScope();
+        return await ExecuteAtomicAsync(_services, identity, command, resultCodec, ct);
+    }
+
+    private static async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
+        ServiceProvider services,
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> resultCodec,
+        CancellationToken ct = default)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await using var scope = services.CreateAsyncScope();
         var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         return await atomic.ExecuteAsync(identity, command, resultCodec, ct);
+    }
+
+    private sealed class RuntimeApiRoleInterceptor : DbConnectionInterceptor
+    {
+        private readonly string _demoSeedIdempotencyKey;
+
+        public RuntimeApiRoleInterceptor(string demoSeedIdempotencyKey) =>
+            _demoSeedIdempotencyKey = demoSeedIdempotencyKey;
+
+        public override async Task ConnectionOpenedAsync(
+            DbConnection connection,
+            ConnectionEndEventData eventData,
+            CancellationToken cancellationToken = default)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SET SESSION AUTHORIZATION rentalcommand_api;
+                SELECT set_config('app.demo_seed_idempotency_key', @key, false);
+                """;
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "key";
+            parameter.Value = _demoSeedIdempotencyKey;
+            command.Parameters.Add(parameter);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private sealed class TestActor : ICurrentActor
