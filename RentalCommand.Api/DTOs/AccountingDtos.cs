@@ -234,6 +234,9 @@ public class AccountingTransactionsQuery : ListQuery
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyId")]
     public int? PropertyId { get; set; }
 
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "accountId")]
+    public int? AccountId { get; set; }
+
     // From/To (the ?from=&to= date range) are inherited from ListQuery now, so the grid date filter is
     // uniform across every list endpoint. AccountingService keeps applying them to the transaction date.
 }
@@ -291,6 +294,20 @@ public class AccountingTransactionResponse
 
     /// <summary>Posted date of the matched bank line, when <see cref="Reconciled"/> is true.</summary>
     public DateTime? ClearedAt { get; set; }
+
+    public DateOnly EffectiveOn { get; set; }
+    public DateTime EnteredAtUtc { get; set; }
+    public string DisplayType { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? SourceContext { get; set; }
+    public string? PaidByOrTo { get; set; }
+    public decimal ChargeAmount { get; set; }
+    public decimal PaymentAmount { get; set; }
+    public decimal CreditAmount { get; set; }
+    public int? AccountId { get; set; }
+    public string? AccountCode { get; set; }
+    public string? AccountName { get; set; }
+    public string? JournalEntryPublicId { get; set; }
 
     /// <summary>
     /// A high-confidence, still-unmatched bank line the user could one-tap confirm against this

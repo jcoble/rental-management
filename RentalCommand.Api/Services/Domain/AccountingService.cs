@@ -485,19 +485,21 @@ public class AccountingService : IAccountingService
             scope.PortfolioId,
             query,
             AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead),
+            BuildAllPropertiesAuthorityQuery(scope, CapabilityKeys.MoneyBalancesRead),
             ct);
 
     private async Task<AccountingTransactionsResponse> GetTransactionsCoreAsync(
         int portfolioId,
         AccountingTransactionsQuery query,
         IQueryable<Property> authorizedProperties,
+        IQueryable<int> allPropertiesAuthority,
         CancellationToken ct)
     {
         // Build the canonical transaction surface as one translated UNION ALL over tenant-account
         // ledger entries, expenses, bank movements, and the separate application-fee subledger.
         // Posted ledger debits are negative and credits are positive; no mutable Payment status is
         // consulted and security-deposit receipts remain visibly typed rather than misreported as rent.
-        IQueryable<AccountingTransactionView> rows = _db.TenantLedgerEntries
+        IQueryable<AccountingTransactionView> operationalRows = _db.TenantLedgerEntries
             .AsNoTracking()
             .Where(entry =>
                 entry.PortfolioId == portfolioId &&
@@ -533,6 +535,9 @@ public class AccountingService : IAccountingService
                 Reconciled = false,
                 ClearedBankName = null,
                 ClearedAt = null,
+                SourceContext = "Lease · " + (entry.LeaseAgreement == null
+                    ? entry.TenantAccount.LeaseManagement.RelationshipNumber
+                    : entry.LeaseAgreement.AgreementNumber),
             })
             .Concat(_db.Expenses.AsNoTracking()
                 .Where(expense =>
@@ -592,6 +597,15 @@ public class AccountingService : IAccountingService
                         .OrderByDescending(bank => bank.PostedAt)
                         .Select(bank => (DateTime?)bank.PostedAt)
                         .FirstOrDefault(),
+                    SourceContext = expense.Vendor == null
+                        ? "Expense"
+                        : (_db.StoredFiles.Any(file =>
+                            file.PortfolioId == expense.PortfolioId &&
+                            file.EntityType == "Expense" &&
+                            file.EntityId == expense.Id &&
+                            file.DeletedAt == null)
+                                ? "Scanned bill · "
+                                : "Expense · ") + expense.Vendor.Name,
                 }))
             .Concat(_db.ApplicationFinancialEntries
                 .IgnoreQueryFilters()
@@ -632,7 +646,244 @@ public class AccountingService : IAccountingService
                     Reconciled = false,
                     ClearedBankName = null,
                     ClearedAt = null,
+                    SourceContext = "Rental application",
                 }));
+
+        var rowsWithJournal =
+            from row in operationalRows
+            from journal in _db.JournalEntries
+                .AsNoTracking()
+                .Where(entry =>
+                    entry.PortfolioId == portfolioId &&
+                    entry.SourceId == row.Id &&
+                    ((row.Kind == KindPayment && entry.SourceType == JournalSourceType.TenantReceipt) ||
+                     (row.Kind == KindTenantLedger &&
+                      ((row.Category == nameof(TenantLedgerEntryType.RentCharge) ||
+                        row.Category == nameof(TenantLedgerEntryType.DepositCharge) ||
+                        row.Category == nameof(TenantLedgerEntryType.LateFeeCharge) ||
+                        row.Category == nameof(TenantLedgerEntryType.AddendumCharge) ||
+                        row.Category == nameof(TenantLedgerEntryType.ManualCharge)) &&
+                       entry.SourceType == JournalSourceType.TenantCharge ||
+                       (row.Category == nameof(TenantLedgerEntryType.Credit) ||
+                        row.Category == nameof(TenantLedgerEntryType.Adjustment)) &&
+                       entry.SourceType == JournalSourceType.TenantConcession ||
+                       row.Category == nameof(TenantLedgerEntryType.OpeningBalance) &&
+                       entry.SourceType == JournalSourceType.OpeningBalance)) ||
+                     (row.Kind == KindExpense &&
+                      (entry.SourceType == JournalSourceType.ExpensePayment ||
+                       entry.SourceType == JournalSourceType.BillIncurred ||
+                       entry.SourceType == JournalSourceType.BillPayment))))
+                .OrderBy(entry => entry.SourceType == JournalSourceType.BillIncurred ? 0 : 1)
+                .ThenByDescending(entry => entry.Id)
+                .Take(1)
+                .DefaultIfEmpty()
+            from primaryLine in _db.JournalLines
+                .AsNoTracking()
+                .Where(line => journal != null && line.JournalEntryId == journal.Id)
+                .OrderBy(line =>
+                    row.Kind == KindTenantLedger &&
+                    line.TenantAccountId == row.TenantAccountId &&
+                    line.LedgerAccount!.AccountType == AccountType.Asset
+                        ? 0
+                        : row.Kind == KindPayment && line.LedgerAccount!.AccountType == AccountType.Asset
+                            ? 0
+                            : row.Kind == KindExpense && line.LedgerAccount!.AccountType == AccountType.Expense
+                                ? 0
+                                : 1)
+                .ThenBy(line => line.LedgerAccount!.Code)
+                .Take(1)
+                .DefaultIfEmpty()
+            select new AccountingTransactionView
+            {
+                Kind = row.Kind,
+                Id = row.Id,
+                PortfolioId = row.PortfolioId,
+                Date = row.Date,
+                CreatedAt = row.CreatedAt,
+                UpdatedAt = row.UpdatedAt,
+                Description = row.Description,
+                Category = row.Category,
+                Status = row.Status,
+                Amount = row.Amount,
+                TenantAccountId = row.TenantAccountId,
+                PropertyId = row.PropertyId,
+                UnitId = row.UnitId,
+                PropertyName = row.PropertyName,
+                Counterparty = row.Counterparty,
+                Reference = row.Reference,
+                Notes = row.Notes,
+                HasReceipt = row.HasReceipt,
+                ReceiptIsImage = row.ReceiptIsImage,
+                Reconciled = row.Reconciled,
+                ClearedBankName = row.ClearedBankName,
+                ClearedAt = row.ClearedAt,
+                EffectiveOn = journal == null ? DateOnly.FromDateTime(row.Date) : journal.EffectiveOn,
+                EnteredAtUtc = journal == null ? row.CreatedAt : journal.PostedAtUtc,
+                DisplayType = row.Kind == KindPayment
+                    ? "PaymentReceived"
+                    : row.Kind == KindExpense
+                        ? journal != null && journal.SourceType == JournalSourceType.BillIncurred ? "Bill" : "Expense"
+                        : row.Kind == KindTenantLedger && row.Category == nameof(TenantLedgerEntryType.Reversal)
+                            ? "Reversal"
+                            : row.Kind == KindTenantLedger &&
+                              (row.Category == nameof(TenantLedgerEntryType.Credit) ||
+                               row.Category == nameof(TenantLedgerEntryType.Adjustment))
+                                ? "Credit"
+                                : "Charge",
+                Title = row.Description,
+                SourceContext = row.SourceContext,
+                PaidByOrTo = row.Counterparty,
+                ChargeAmount = row.Kind == KindPayment ||
+                               row.Kind == KindTenantLedger &&
+                               (row.Category == nameof(TenantLedgerEntryType.Credit) ||
+                                row.Category == nameof(TenantLedgerEntryType.Adjustment) ||
+                                row.Category == nameof(TenantLedgerEntryType.Reversal))
+                    ? 0m
+                    : row.Amount < 0m ? -row.Amount : row.Amount,
+                PaymentAmount = row.Kind == KindPayment ? row.Amount < 0m ? -row.Amount : row.Amount : 0m,
+                CreditAmount = row.Kind == KindTenantLedger &&
+                               (row.Category == nameof(TenantLedgerEntryType.Credit) ||
+                                row.Category == nameof(TenantLedgerEntryType.Adjustment) ||
+                                row.Category == nameof(TenantLedgerEntryType.Reversal))
+                    ? row.Amount < 0m ? -row.Amount : row.Amount
+                    : 0m,
+                AccountId = primaryLine == null ? null : primaryLine.LedgerAccountId,
+                AccountCode = primaryLine == null ? null : primaryLine.LedgerAccount!.Code,
+                AccountName = primaryLine == null ? null : primaryLine.LedgerAccount!.Name,
+                JournalEntryPublicId = journal == null ? null : journal.PublicId,
+            };
+
+        var journalOnlyRows = _db.JournalEntries
+            .AsNoTracking()
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                (entry.ReversesJournalEntryId != null ||
+                 entry.SourceType == JournalSourceType.LoanPayment ||
+                 entry.SourceType == JournalSourceType.OwnerContribution ||
+                 entry.SourceType == JournalSourceType.OwnerDistribution ||
+                 entry.SourceType == JournalSourceType.BankTransfer) &&
+                (entry.Lines.Any(line =>
+                     line.PropertyId != null &&
+                     authorizedProperties.Any(property => property.Id == line.PropertyId)) ||
+                 (!entry.Lines.Any(line => line.PropertyId != null) && allPropertiesAuthority.Any())))
+            .Select(entry => new AccountingTransactionView
+            {
+                Kind = entry.ReversesJournalEntryId != null
+                    ? "Reversal"
+                    : entry.SourceType == JournalSourceType.LoanPayment
+                        ? "LoanPayment"
+                        : entry.SourceType == JournalSourceType.BankTransfer
+                            ? "Bank"
+                            : "OwnerActivity",
+                Id = entry.Id,
+                PortfolioId = entry.PortfolioId,
+                Date = entry.PostedAtUtc,
+                CreatedAt = entry.PostedAtUtc,
+                UpdatedAt = entry.PostedAtUtc,
+                Description = entry.Description,
+                Category = entry.ReversesJournalEntryId != null ? "Reversal" : entry.SourceType.ToString(),
+                Status = "Posted",
+                Amount = entry.Lines.Sum(line => line.DebitAmount),
+                TenantAccountId = entry.Lines
+                    .Where(line => line.TenantAccountId != null)
+                    .Select(line => line.TenantAccountId)
+                    .FirstOrDefault(),
+                PropertyId = entry.Lines
+                    .Where(line => line.PropertyId != null)
+                    .Select(line => line.PropertyId)
+                    .FirstOrDefault(),
+                UnitId = entry.Lines
+                    .Where(line => line.UnitId != null)
+                    .Select(line => line.UnitId)
+                    .FirstOrDefault(),
+                PropertyName = entry.Lines
+                    .Where(line => line.PropertyId != null)
+                    .Select(line => line.Property!.Name)
+                    .FirstOrDefault(),
+                Counterparty = entry.Lines
+                    .Where(line => line.OwnerEntityId != null)
+                    .Select(line => line.OwnerEntity!.Name)
+                    .FirstOrDefault(),
+                Reference = null,
+                Notes = null,
+                HasReceipt = false,
+                ReceiptIsImage = false,
+                Reconciled = false,
+                ClearedBankName = null,
+                ClearedAt = null,
+                EffectiveOn = entry.EffectiveOn,
+                EnteredAtUtc = entry.PostedAtUtc,
+                DisplayType = entry.ReversesJournalEntryId != null
+                    ? "Reversal"
+                    : entry.SourceType == JournalSourceType.LoanPayment
+                        ? "LoanPayment"
+                        : entry.SourceType == JournalSourceType.BankTransfer
+                            ? "BankTransfer"
+                            : "OwnerActivity",
+                Title = entry.Description,
+                SourceContext = entry.ReversesJournalEntryId != null
+                    ? "Correction · Reversal"
+                    : entry.SourceType == JournalSourceType.LoanPayment
+                        ? "Loan payment"
+                        : entry.SourceType == JournalSourceType.BankTransfer
+                            ? "Bank transfer"
+                            : entry.Lines.Where(line => line.OwnerEntityId != null)
+                                .Select(line => "Owner activity · " + line.OwnerEntity!.Name)
+                                .FirstOrDefault(),
+                PaidByOrTo = entry.Lines
+                    .Where(line => line.OwnerEntityId != null)
+                    .Select(line => line.OwnerEntity!.Name)
+                    .FirstOrDefault(),
+                ChargeAmount = 0m,
+                PaymentAmount = entry.SourceType == JournalSourceType.LoanPayment ||
+                                entry.SourceType == JournalSourceType.OwnerDistribution ||
+                                entry.SourceType == JournalSourceType.BankTransfer
+                    ? entry.Lines.Sum(line => line.DebitAmount)
+                    : 0m,
+                CreditAmount = entry.SourceType == JournalSourceType.OwnerContribution ||
+                               entry.ReversesJournalEntryId != null
+                    ? entry.Lines.Sum(line => line.DebitAmount)
+                    : 0m,
+                AccountId = entry.Lines
+                    .OrderBy(line =>
+                        entry.SourceType == JournalSourceType.LoanPayment &&
+                        line.LedgerAccount!.AccountType == AccountType.Liability
+                            ? 0
+                            : entry.SourceType == JournalSourceType.OwnerContribution ||
+                              entry.SourceType == JournalSourceType.OwnerDistribution
+                                ? line.LedgerAccount!.AccountType == AccountType.Equity ? 0 : 1
+                                : line.LedgerAccount!.AccountType == AccountType.Asset ? 0 : 1)
+                    .ThenBy(line => line.LedgerAccount!.Code)
+                    .Select(line => (int?)line.LedgerAccountId)
+                    .FirstOrDefault(),
+                AccountCode = entry.Lines
+                    .OrderBy(line =>
+                        entry.SourceType == JournalSourceType.LoanPayment &&
+                        line.LedgerAccount!.AccountType == AccountType.Liability
+                            ? 0
+                            : entry.SourceType == JournalSourceType.OwnerContribution ||
+                              entry.SourceType == JournalSourceType.OwnerDistribution
+                                ? line.LedgerAccount!.AccountType == AccountType.Equity ? 0 : 1
+                                : line.LedgerAccount!.AccountType == AccountType.Asset ? 0 : 1)
+                    .ThenBy(line => line.LedgerAccount!.Code)
+                    .Select(line => line.LedgerAccount!.Code)
+                    .FirstOrDefault(),
+                AccountName = entry.Lines
+                    .OrderBy(line =>
+                        entry.SourceType == JournalSourceType.LoanPayment &&
+                        line.LedgerAccount!.AccountType == AccountType.Liability
+                            ? 0
+                            : entry.SourceType == JournalSourceType.OwnerContribution ||
+                              entry.SourceType == JournalSourceType.OwnerDistribution
+                                ? line.LedgerAccount!.AccountType == AccountType.Equity ? 0 : 1
+                                : line.LedgerAccount!.AccountType == AccountType.Asset ? 0 : 1)
+                    .ThenBy(line => line.LedgerAccount!.Code)
+                    .Select(line => line.LedgerAccount!.Name)
+                    .FirstOrDefault(),
+                JournalEntryPublicId = entry.PublicId,
+            });
+
+        IQueryable<AccountingTransactionView> rows = rowsWithJournal.Concat(journalOnlyRows);
 
         if (!string.IsNullOrWhiteSpace(query.Kind))
         {
@@ -693,6 +944,16 @@ public class AccountingService : IAccountingService
         if (query.PropertyId.HasValue)
         {
             rows = rows.Where(r => r.PropertyId == query.PropertyId.Value);
+        }
+
+        if (query.AccountId.HasValue)
+        {
+            rows = rows.Where(row =>
+                row.JournalEntryPublicId != null &&
+                _db.JournalLines.Any(line =>
+                    line.JournalEntry!.PublicId == row.JournalEntryPublicId &&
+                    line.JournalEntry.PortfolioId == portfolioId &&
+                    line.LedgerAccountId == query.AccountId.Value));
         }
 
         if (query.From.HasValue)
@@ -784,6 +1045,21 @@ public class AccountingService : IAccountingService
                     Reconciled = r.Reconciled,
                     ClearedBankName = r.ClearedBankName,
                     ClearedAt = r.ClearedAt,
+                    EffectiveOn = r.EffectiveOn,
+                    EnteredAtUtc = r.EnteredAtUtc,
+                    DisplayType = r.DisplayType,
+                    Title = r.Title,
+                    SourceContext = r.SourceContext,
+                    PaidByOrTo = r.PaidByOrTo,
+                    ChargeAmount = r.ChargeAmount,
+                    PaymentAmount = r.PaymentAmount,
+                    CreditAmount = r.CreditAmount,
+                    AccountId = r.AccountId,
+                    AccountCode = r.AccountCode,
+                    AccountName = r.AccountName,
+                    JournalEntryPublicId = r.JournalEntryPublicId == null
+                        ? null
+                        : r.JournalEntryPublicId.Value.ToString(),
                 };
 
                 return item;

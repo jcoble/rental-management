@@ -877,7 +877,15 @@ export interface AccountingTransactionsResponse {
 }
 
 export interface AccountingTransaction {
-	kind: 'Payment' | 'TenantLedger' | 'Expense' | 'Bank' | 'ApplicationFee';
+	kind:
+		| 'Payment'
+		| 'TenantLedger'
+		| 'Expense'
+		| 'Bank'
+		| 'ApplicationFee'
+		| 'LoanPayment'
+		| 'OwnerActivity'
+		| 'Reversal';
 	id: number;
 	date: string;
 	/** When the row entered the system (created). Backs the "Entered" column + default sort. */
@@ -898,6 +906,28 @@ export interface AccountingTransaction {
 	detailHref?: string;
 	hasReceipt: boolean;
 	receiptIsImage: boolean;
+	effectiveOn: string;
+	enteredAtUtc: string;
+	displayType:
+		| 'Charge'
+		| 'PaymentReceived'
+		| 'Credit'
+		| 'Expense'
+		| 'Bill'
+		| 'BankTransfer'
+		| 'LoanPayment'
+		| 'OwnerActivity'
+		| 'Reversal';
+	title: string;
+	sourceContext: string | null;
+	paidByOrTo: string | null;
+	chargeAmount: number;
+	paymentAmount: number;
+	creditAmount: number;
+	accountId: number | null;
+	accountCode: string | null;
+	accountName: string | null;
+	journalEntryPublicId: string | null;
 }
 
 export interface LedgerTransaction {

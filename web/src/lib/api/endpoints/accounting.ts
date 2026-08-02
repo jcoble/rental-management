@@ -21,6 +21,7 @@ export type AccountingTransactionParams = ListParams & {
 	status?: string;
 	category?: string;
 	propertyId?: number;
+	accountId?: number;
 	from?: string;
 	to?: string;
 };

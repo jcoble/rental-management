@@ -59,4 +59,18 @@ public class AccountingTransactionView
     public bool Reconciled { get; set; }
     public string? ClearedBankName { get; set; }
     public DateTime? ClearedAt { get; set; }
+
+    public DateOnly EffectiveOn { get; set; }
+    public DateTime EnteredAtUtc { get; set; }
+    public string DisplayType { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? SourceContext { get; set; }
+    public string? PaidByOrTo { get; set; }
+    public decimal ChargeAmount { get; set; }
+    public decimal PaymentAmount { get; set; }
+    public decimal CreditAmount { get; set; }
+    public int? AccountId { get; set; }
+    public string? AccountCode { get; set; }
+    public string? AccountName { get; set; }
+    public Guid? JournalEntryPublicId { get; set; }
 }
