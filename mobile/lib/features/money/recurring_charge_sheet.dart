@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/time/app_clock.dart';
 import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../home/mobile_quick_action_fab.dart';
 import 'money_format.dart';
 import 'one_time_charge_sheet.dart';
@@ -165,9 +167,18 @@ class _RecurringChargeSheetState extends ConsumerState<_RecurringChargeSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Recurring charge',
-                style: Theme.of(context).textTheme.titleLarge,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Recurring charge',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  const AccountingHelpTipButton(
+                    topic: AccountingHelpTopic.recurringCharge,
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               const Text('Set up a charge for future periods.'),

@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/theme/app_recipes.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../money/money_format.dart';
 import 'tenant_portal_repository.dart';
 
@@ -464,12 +466,21 @@ class _AccountHistoryContent extends StatelessWidget {
           onSetup: onAutopaySetup,
         ),
         const SizedBox(height: 24),
-        Text(
-          'Account history',
-          key: const Key('account-history-heading'),
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Account history',
+                key: const Key('account-history-heading'),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const AccountingHelpTipButton(
+              topic: AccountingHelpTopic.tenantLedger,
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         if (history.items.isEmpty)
