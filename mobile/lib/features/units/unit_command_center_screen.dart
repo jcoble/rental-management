@@ -22,6 +22,7 @@ import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../applications/applications_repository.dart';
 import '../applications/applications_shared.dart';
+import '../accounting/accounting_repository.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -2515,11 +2516,65 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
     });
   }
 
+  Future<void> _showManualCharge(int tenantAccountId) async {
+    final created = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (_) => _PostTenantChargeSheet(tenantAccountId: tenantAccountId),
+    );
+    if (created == true && mounted) {
+      ref.invalidate(tenantLedgerProvider);
+      ref.invalidate(tenantMonthSummariesProvider);
+      ref.invalidate(unitMoneyChargesPageProvider);
+      ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
+      setState(() {});
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Charge posted.')));
+    }
+  }
+
+  Future<void> _showRecurringCharges(int tenantAccountId) async {
+    final leaseAgreementId = widget.dashboard.currentLease?.id;
+    if (leaseAgreementId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This tenant account does not have a lease agreement.'),
+        ),
+      );
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (_) => _RecurringTenantChargesSheet(
+        tenantAccountId: tenantAccountId,
+        leaseAgreementId: leaseAgreementId,
+        propertyId: widget.dashboard.unit.propertyId,
+        unitId: widget.dashboard.unit.id,
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final dashboard = widget.dashboard;
     final lease = dashboard.currentLease;
     final accountId = dashboard.tenantAccountId;
+    final auth = ref.watch(authControllerProvider);
+    final canManagePayments =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.payments.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
     final propertyAsync = ref.watch(
       propertyDetailProvider(dashboard.unit.propertyId),
     );
@@ -2637,6 +2692,27 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
         ),
         const SizedBox(height: 14),
         _PaymentsSection(items: dashboard.overview.recentPayments),
+        if (accountId != null && canManagePayments) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('unit-money-post-charge'),
+                onPressed: () => _showManualCharge(accountId),
+                icon: const Icon(Icons.post_add_rounded),
+                label: const Text('Post charge'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('unit-money-recurring-charge'),
+                onPressed: () => _showRecurringCharges(accountId),
+                icon: const Icon(Icons.repeat_rounded),
+                label: const Text('Recurring charge'),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 14),
         if (accountId != null)
           SegmentedButton<int>(
@@ -2845,6 +2921,483 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _PostTenantChargeSheet extends ConsumerStatefulWidget {
+  const _PostTenantChargeSheet({required this.tenantAccountId});
+
+  final int tenantAccountId;
+
+  @override
+  ConsumerState<_PostTenantChargeSheet> createState() =>
+      _PostTenantChargeSheetState();
+}
+
+class _PostTenantChargeSheetState
+    extends ConsumerState<_PostTenantChargeSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _amountController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  late DateTime _effectiveOn;
+  late DateTime _dueOn;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final today = DateUtils.dateOnly(DateTime.now());
+    _effectiveOn = today;
+    _dueOn = today;
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate({required bool dueDate}) async {
+    final initial = dueDate ? _dueOn : _effectiveOn;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (dueDate) {
+        _dueOn = picked;
+      } else {
+        _effectiveOn = picked;
+      }
+    });
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(moneyRepositoryProvider)
+          .postTenantCharge(
+            tenantAccountId: widget.tenantAccountId,
+            amount: double.parse(_amountController.text.trim()),
+            effectiveOn: _effectiveOn,
+            dueOn: _dueOn,
+            description: _descriptionController.text,
+          );
+      ref.invalidate(recurringTenantChargesProvider(widget.tenantAccountId));
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is ApiException ? error.message : error.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        0,
+        20,
+        MediaQuery.viewInsetsOf(context).bottom + 20,
+      ),
+      child: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Add a manual charge',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                key: const ValueKey('manual-charge-amount'),
+                controller: _amountController,
+                decoration: const InputDecoration(labelText: 'Amount'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (value) =>
+                    (double.tryParse(value?.trim() ?? '') ?? 0) > 0
+                    ? null
+                    : 'Enter an amount greater than zero.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('manual-charge-description'),
+                controller: _descriptionController,
+                decoration: const InputDecoration(
+                  labelText: 'Description',
+                  hintText: 'One-time fee or correction',
+                ),
+                validator: (value) => (value?.trim().isNotEmpty ?? false)
+                    ? null
+                    : 'Describe this charge.',
+              ),
+              const SizedBox(height: 12),
+              _ChargeDateButton(
+                label: 'Effective date',
+                value: _effectiveOn,
+                onPressed: () => _pickDate(dueDate: false),
+              ),
+              _ChargeDateButton(
+                label: 'Due date',
+                value: _dueOn,
+                onPressed: () => _pickDate(dueDate: true),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Use this only for a true one-off charge. Rent, deposits, and addenda come from their own workflows.',
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                key: const ValueKey('manual-charge-submit'),
+                onPressed: _saving ? null : _submit,
+                child: Text(_saving ? 'Adding…' : 'Add charge'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChargeDateButton extends StatelessWidget {
+  const _ChargeDateButton({
+    required this.label,
+    required this.value,
+    required this.onPressed,
+  });
+
+  final String label;
+  final DateTime value;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    contentPadding: EdgeInsets.zero,
+    title: Text(label),
+    subtitle: Text(_dateOnly(value)),
+    trailing: const Icon(Icons.calendar_month_outlined),
+    onTap: onPressed,
+  );
+}
+
+class _RecurringTenantChargesSheet extends ConsumerStatefulWidget {
+  const _RecurringTenantChargesSheet({
+    required this.tenantAccountId,
+    required this.leaseAgreementId,
+    required this.propertyId,
+    required this.unitId,
+  });
+
+  final int tenantAccountId, leaseAgreementId, propertyId, unitId;
+
+  @override
+  ConsumerState<_RecurringTenantChargesSheet> createState() =>
+      _RecurringTenantChargesSheetState();
+}
+
+class _RecurringTenantChargesSheetState
+    extends ConsumerState<_RecurringTenantChargesSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController(text: 'Monthly rent');
+  final _amountController = TextEditingController();
+  final _dueDayController = TextEditingController(text: '1');
+  late DateTime _startOn;
+  DateTime? _endOn;
+  int? _accountId;
+  bool _saving = false;
+  int? _togglingId;
+
+  @override
+  void initState() {
+    super.initState();
+    _startOn = DateUtils.dateOnly(DateTime.now());
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _amountController.dispose();
+    _dueDayController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate({required bool endDate}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: endDate ? (_endOn ?? _startOn) : _startOn,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (endDate) {
+        _endOn = picked;
+      } else {
+        _startOn = picked;
+      }
+    });
+  }
+
+  Future<void> _create() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_accountId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose an income account.')),
+      );
+      return;
+    }
+    final endOn = _endOn;
+    if (endOn != null && endOn.isBefore(_startOn)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('End date must be on or after the start date.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await ref
+          .read(moneyRepositoryProvider)
+          .createRecurringCharge(
+            tenantAccountId: widget.tenantAccountId,
+            leaseAgreementId: widget.leaseAgreementId,
+            propertyId: widget.propertyId,
+            unitId: widget.unitId,
+            displayName: _nameController.text,
+            amount: double.parse(_amountController.text.trim()),
+            ledgerAccountId: _accountId!,
+            monthlyDueDay: int.parse(_dueDayController.text.trim()),
+            effectiveStartOn: _startOn,
+            effectiveEndOn: _endOn,
+          );
+      ref.invalidate(recurringTenantChargesProvider(widget.tenantAccountId));
+      _amountController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Recurring charge created.')),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is ApiException ? error.message : error.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _setActive(RecurringTenantCharge charge, bool active) async {
+    setState(() => _togglingId = charge.id);
+    try {
+      await ref
+          .read(moneyRepositoryProvider)
+          .setRecurringChargeActive(
+            tenantAccountId: widget.tenantAccountId,
+            id: charge.id,
+            isActive: active,
+          );
+      ref.invalidate(recurringTenantChargesProvider(widget.tenantAccountId));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is ApiException ? error.message : error.toString(),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _togglingId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accounts = ref.watch(incomeAccountsProvider);
+    final schedules = ref.watch(
+      recurringTenantChargesProvider(widget.tenantAccountId),
+    );
+    accounts.whenData((items) {
+      if (_accountId != null || items.isEmpty) return;
+      final preferred = items.where((item) => item.code == '4000').firstOrNull;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _accountId == null) {
+          setState(() => _accountId = (preferred ?? items.first).id);
+        }
+      });
+    });
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        20,
+        0,
+        20,
+        MediaQuery.viewInsetsOf(context).bottom + 20,
+      ),
+      child: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Recurring charges',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Create monthly obligations and manage existing schedules.',
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                key: const ValueKey('recurring-charge-name'),
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Name'),
+                validator: (value) => (value?.trim().isNotEmpty ?? false)
+                    ? null
+                    : 'Enter a name.',
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('recurring-charge-amount'),
+                controller: _amountController,
+                decoration: const InputDecoration(labelText: 'Amount'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (value) =>
+                    (double.tryParse(value?.trim() ?? '') ?? 0) > 0
+                    ? null
+                    : 'Enter an amount greater than zero.',
+              ),
+              const SizedBox(height: 12),
+              accounts.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (error, _) =>
+                    Text('Income accounts could not be loaded: $error'),
+                data: (items) => DropdownButtonFormField<int>(
+                  key: const ValueKey('recurring-charge-account'),
+                  initialValue: _accountId,
+                  decoration: const InputDecoration(
+                    labelText: 'Income account',
+                  ),
+                  items: [
+                    for (final account in items)
+                      DropdownMenuItem(
+                        value: account.id,
+                        child: Text('${account.code} · ${account.name}'),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => _accountId = value),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('recurring-charge-due-day'),
+                controller: _dueDayController,
+                decoration: const InputDecoration(labelText: 'Monthly due day'),
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  final day = int.tryParse(value?.trim() ?? '');
+                  return day != null && day >= 1 && day <= 31
+                      ? null
+                      : 'Enter a day from 1 to 31.';
+                },
+              ),
+              _ChargeDateButton(
+                label: 'Start date',
+                value: _startOn,
+                onPressed: () => _pickDate(endDate: false),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('End date (optional)'),
+                subtitle: Text(
+                  _endOn == null ? 'No end date' : _dateOnly(_endOn!),
+                ),
+                trailing: _endOn == null
+                    ? const Icon(Icons.calendar_month_outlined)
+                    : IconButton(
+                        tooltip: 'Clear end date',
+                        onPressed: () => setState(() => _endOn = null),
+                        icon: const Icon(Icons.clear),
+                      ),
+                onTap: () => _pickDate(endDate: true),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: true,
+                onChanged: null,
+                title: const Text('Active'),
+                subtitle: const Text('New schedules start active.'),
+              ),
+              FilledButton(
+                key: const ValueKey('recurring-charge-submit'),
+                onPressed: _saving || accounts.isLoading ? null : _create,
+                child: Text(_saving ? 'Creating…' : 'Create recurring charge'),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Existing schedules',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              schedules.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (error, _) =>
+                    Text('Recurring charges could not be loaded: $error'),
+                data: (items) => items.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Text('No recurring charges yet.'),
+                      )
+                    : Column(
+                        children: [
+                          for (final charge in items)
+                            SwitchListTile(
+                              key: ValueKey('recurring-charge-${charge.id}'),
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(charge.displayName),
+                              subtitle: Text(
+                                '${_formatCurrency(charge.amount)} · Due day ${charge.monthlyDueDay} · Next ${_dateOnly(charge.nextRunDate)}',
+                              ),
+                              value: charge.isActive,
+                              onChanged: _togglingId == null
+                                  ? (value) => _setActive(charge, value)
+                                  : null,
+                            ),
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

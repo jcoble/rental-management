@@ -289,6 +289,45 @@ class TenantMonthSummary {
       );
 }
 
+class RecurringTenantCharge {
+  const RecurringTenantCharge({
+    required this.id,
+    required this.displayName,
+    required this.amount,
+    required this.currency,
+    required this.ledgerAccountId,
+    required this.effectiveStartOn,
+    required this.effectiveEndOn,
+    required this.monthlyDueDay,
+    required this.nextRunDate,
+    required this.isActive,
+  });
+
+  final int id;
+  final String displayName, currency;
+  final double amount;
+  final int ledgerAccountId, monthlyDueDay;
+  final DateTime effectiveStartOn, nextRunDate;
+  final DateTime? effectiveEndOn;
+  final bool isActive;
+
+  factory RecurringTenantCharge.fromJson(Map<String, dynamic> json) =>
+      RecurringTenantCharge(
+        id: (json['id'] as num).toInt(),
+        displayName: json['displayName'] as String? ?? '',
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        currency: json['currency'] as String? ?? 'USD',
+        ledgerAccountId: (json['ledgerAccountId'] as num).toInt(),
+        effectiveStartOn: DateTime.parse(json['effectiveStartOn'] as String),
+        effectiveEndOn: json['effectiveEndOn'] == null
+            ? null
+            : DateTime.parse(json['effectiveEndOn'] as String),
+        monthlyDueDay: (json['monthlyDueDay'] as num).toInt(),
+        nextRunDate: DateTime.parse(json['nextRunDate'] as String),
+        isActive: json['isActive'] as bool? ?? false,
+      );
+}
+
 typedef TenantLedgerRequest = ({int tenantAccountId, String from, String to});
 
 class UnitMoneyPage<T> {
@@ -374,6 +413,121 @@ class MoneyRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  Future<void> postTenantCharge({
+    required int tenantAccountId,
+    required double amount,
+    required DateTime effectiveOn,
+    required DateTime dueOn,
+    required String description,
+  }) async {
+    final data = {
+      'amount': amount,
+      'effectiveOn': _wireDate(effectiveOn),
+      'dueOn': _wireDate(dueOn),
+      'description': description.trim(),
+    };
+    try {
+      await IdempotentMutation.run(
+        'tenant-charge:$tenantAccountId:${jsonEncode(data)}',
+        (key) => _dio.post<void>(
+          '/tenant-accounts/$tenantAccountId/charges',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<RecurringTenantCharge>> recurringCharges(
+    int tenantAccountId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/$tenantAccountId/recurring-charges',
+        queryParameters: {'skip': 0, 'take': 100, 'sort': 'displayName'},
+      );
+      return ((response.data?['items'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(RecurringTenantCharge.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<RecurringTenantCharge> createRecurringCharge({
+    required int tenantAccountId,
+    required int leaseAgreementId,
+    required int propertyId,
+    required int unitId,
+    required String displayName,
+    required double amount,
+    required int ledgerAccountId,
+    required int monthlyDueDay,
+    required DateTime effectiveStartOn,
+    DateTime? effectiveEndOn,
+  }) async {
+    final data = {
+      'displayName': displayName.trim(),
+      'amount': amount,
+      'ledgerAccountId': ledgerAccountId,
+      'leaseAgreementId': leaseAgreementId,
+      'effectiveStartOn': _wireDate(effectiveStartOn),
+      'effectiveEndOn': effectiveEndOn == null
+          ? null
+          : _wireDate(effectiveEndOn),
+      'monthlyDueDay': monthlyDueDay,
+      'propertyId': propertyId,
+      'unitId': unitId,
+    };
+    try {
+      final response = await IdempotentMutation.run(
+        'recurring-charge:create:$tenantAccountId:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/tenant-accounts/$tenantAccountId/recurring-charges',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+      return RecurringTenantCharge.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<RecurringTenantCharge> setRecurringChargeActive({
+    required int tenantAccountId,
+    required int id,
+    required bool isActive,
+  }) async {
+    try {
+      final response = await IdempotentMutation.run(
+        'recurring-charge:active:$tenantAccountId:$id:$isActive',
+        (key) => isActive
+            ? _dio.patch<Map<String, dynamic>>(
+                '/tenant-accounts/$tenantAccountId/recurring-charges/$id',
+                data: const {'isActive': true},
+                options: Options(headers: {'Idempotency-Key': key}),
+              )
+            : _dio.post<Map<String, dynamic>>(
+                '/tenant-accounts/$tenantAccountId/recurring-charges/$id/deactivate',
+                data: const <String, dynamic>{},
+                options: Options(headers: {'Idempotency-Key': key}),
+              ),
+      );
+      return RecurringTenantCharge.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  static String _wireDate(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   Future<UnitMoneyPage<StaffTenantLedgerEntry>> accountActivityPage(
     UnitMoneyPageKey key,
@@ -754,6 +908,11 @@ final tenantMonthSummariesProvider = FutureProvider.autoDispose
     .family<List<TenantMonthSummary>, TenantLedgerRequest>(
       (ref, request) =>
           ref.watch(moneyRepositoryProvider).tenantMonthSummaries(request),
+    );
+final recurringTenantChargesProvider = FutureProvider.autoDispose
+    .family<List<RecurringTenantCharge>, int>(
+      (ref, tenantAccountId) =>
+          ref.watch(moneyRepositoryProvider).recurringCharges(tenantAccountId),
     );
 
 final unitMoneyChargesPageProvider = FutureProvider.autoDispose
