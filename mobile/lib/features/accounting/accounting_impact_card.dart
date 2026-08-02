@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../money/money_format.dart';
+import 'accounting_help.dart';
+import 'accounting_help_tip.dart';
 import 'accounting_book_models.dart';
 import 'accounting_books_repository.dart';
 
@@ -176,11 +178,20 @@ class _AccountingImpactCardContent extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Accounting impact',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Accounting impact',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const AccountingHelpTipButton(
+                  topic: AccountingHelpTopic.accountingImpact,
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             for (var index = 0; index < journals.length; index++) ...[
@@ -343,11 +354,20 @@ class _AccountingJournalDetailSheet extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Accounting record',
-            style: theme.textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Accounting record',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const AccountingHelpTipButton(
+                topic: AccountingHelpTopic.journalDetail,
+              ),
+            ],
           ),
           const SizedBox(height: 6),
           Text(
