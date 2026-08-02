@@ -334,12 +334,13 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         int portfolioId, StatementQuery query, CancellationToken ct = default)
     {
         var sections = new List<StatementSection>();
-        foreach (var type in new[] { AccountType.Asset, AccountType.Liability, AccountType.Equity })
+        foreach (var type in new[] { AccountType.Asset, AccountType.Liability })
         {
             var section = await LoadStatementSectionAsync(portfolioId, query, type, ct);
             if (section.Rows.Count > 0)
                 sections.Add(section);
         }
+        sections.Add(await LoadBalanceSheetEquitySectionAsync(portfolioId, query, ct));
 
         var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
         return new FinancialStatementResponse
@@ -348,6 +349,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             Totals = new StatementTotals
             {
                 Total = totals.Assets,
+                NetIncome = totals.NetIncome,
                 Assets = totals.Assets,
                 LiabilitiesAndEquity = totals.LiabilitiesAndEquity,
             },
@@ -366,11 +368,10 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         }
 
         var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
-        var netIncome = totals.Income - totals.Expenses;
         return new FinancialStatementResponse
         {
             Sections = sections,
-            Totals = new StatementTotals { Total = netIncome, NetIncome = netIncome },
+            Totals = new StatementTotals { Total = totals.NetIncome, NetIncome = totals.NetIncome },
         };
     }
 
@@ -898,6 +899,89 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         public decimal SectionSubtotal { get; init; }
     }
 
+    private async Task<StatementSection> LoadBalanceSheetEquitySectionAsync(
+        int portfolioId, StatementQuery query, CancellationToken ct)
+    {
+        // Current-period net income belongs in equity until closing entries move it to a posted
+        // equity account. PostgreSQL computes both that synthetic row and the full equity subtotal.
+        var rows = await _db.Database.SqlQuery<StatementSqlRow>($$"""
+            WITH posted_equity AS (
+                SELECT account."Id" AS "AccountId",
+                       account."Code" AS "AccountCode",
+                       account."Name" AS "AccountName",
+                       entry."Currency" AS "Currency",
+                       SUM(CASE WHEN account."NormalBalance" = 'Debit'
+                                THEN line."DebitAmount" - line."CreditAmount"
+                                ELSE line."CreditAmount" - line."DebitAmount" END) AS "Amount"
+                FROM "JournalLines" AS line
+                JOIN "JournalEntries" AS entry ON entry."Id" = line."JournalEntryId"
+                JOIN "LedgerAccounts" AS account ON account."Id" = line."LedgerAccountId"
+                JOIN "Portfolios" AS portfolio
+                  ON portfolio."Id" = entry."PortfolioId" AND portfolio."DeletedAt" IS NULL
+                WHERE entry."PortfolioId" = {{portfolioId}}
+                  AND account."AccountType" = 'Equity'
+                  AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
+                  AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
+                  AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
+                  AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
+                  AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
+                GROUP BY account."Id", account."Code", account."Name",
+                         account."NormalBalance", entry."Currency"
+            ), current_net_income AS (
+                SELECT 0 AS "AccountId",
+                       '' AS "AccountCode",
+                       'Net income' AS "AccountName",
+                       COALESCE({{query.Currency}}, MIN(entry."Currency"), '') AS "Currency",
+                       COALESCE(SUM(CASE
+                           WHEN account."AccountType" = 'Income' THEN
+                               CASE WHEN account."NormalBalance" = 'Debit'
+                                    THEN line."DebitAmount" - line."CreditAmount"
+                                    ELSE line."CreditAmount" - line."DebitAmount" END
+                           WHEN account."AccountType" = 'Expense' THEN -(
+                               CASE WHEN account."NormalBalance" = 'Debit'
+                                    THEN line."DebitAmount" - line."CreditAmount"
+                                    ELSE line."CreditAmount" - line."DebitAmount" END)
+                           ELSE 0 END), 0) AS "Amount"
+                FROM "JournalLines" AS line
+                JOIN "JournalEntries" AS entry ON entry."Id" = line."JournalEntryId"
+                JOIN "LedgerAccounts" AS account ON account."Id" = line."LedgerAccountId"
+                JOIN "Portfolios" AS portfolio
+                  ON portfolio."Id" = entry."PortfolioId" AND portfolio."DeletedAt" IS NULL
+                WHERE entry."PortfolioId" = {{portfolioId}}
+                  AND account."AccountType" IN ('Income', 'Expense')
+                  AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
+                  AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
+                  AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
+                  AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
+                  AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
+            ), combined AS (
+                SELECT * FROM posted_equity
+                UNION ALL
+                SELECT * FROM current_net_income
+            ), with_subtotal AS (
+                SELECT combined.*, SUM(combined."Amount") OVER () AS "SectionSubtotal"
+                FROM combined
+            )
+            SELECT "AccountId", "AccountCode", "AccountName", "Currency", "Amount", "SectionSubtotal"
+            FROM with_subtotal
+            ORDER BY CASE WHEN "AccountId" = 0 THEN 1 ELSE 0 END, "AccountCode", "Currency"
+            """).ToListAsync(ct);
+
+        return new StatementSection
+        {
+            Label = AccountType.Equity.ToString(),
+            Rows = rows.Select(row => new FinancialStatementRow
+            {
+                AccountId = row.AccountId,
+                AccountCode = row.AccountCode,
+                AccountName = row.AccountName,
+                Amount = row.Amount,
+                Currency = row.Currency,
+            }).ToArray(),
+            Subtotal = rows.First().SectionSubtotal,
+        };
+    }
+
     private async Task<StatementTotalsSqlRow> LoadStatementTotalsAsync(
         int portfolioId, StatementQuery query, CancellationToken ct)
     {
@@ -908,10 +992,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                               THEN line."DebitAmount" - line."CreditAmount"
                               ELSE line."CreditAmount" - line."DebitAmount" END
                     ELSE 0 END), 0) AS "Assets",
-                COALESCE(SUM(CASE WHEN account."AccountType" IN ('Liability', 'Equity')
+                COALESCE(SUM(CASE
+                    WHEN account."AccountType" IN ('Liability', 'Equity', 'Income')
                     THEN CASE WHEN account."NormalBalance" = 'Debit'
                               THEN line."DebitAmount" - line."CreditAmount"
                               ELSE line."CreditAmount" - line."DebitAmount" END
+                    WHEN account."AccountType" = 'Expense'
+                    THEN -(CASE WHEN account."NormalBalance" = 'Debit'
+                                THEN line."DebitAmount" - line."CreditAmount"
+                                ELSE line."CreditAmount" - line."DebitAmount" END)
                     ELSE 0 END), 0) AS "LiabilitiesAndEquity",
                 COALESCE(SUM(CASE WHEN account."AccountType" = 'Income'
                     THEN CASE WHEN account."NormalBalance" = 'Debit'
@@ -922,7 +1011,17 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     THEN CASE WHEN account."NormalBalance" = 'Debit'
                               THEN line."DebitAmount" - line."CreditAmount"
                               ELSE line."CreditAmount" - line."DebitAmount" END
-                    ELSE 0 END), 0) AS "Expenses"
+                    ELSE 0 END), 0) AS "Expenses",
+                COALESCE(SUM(CASE
+                    WHEN account."AccountType" = 'Income'
+                    THEN CASE WHEN account."NormalBalance" = 'Debit'
+                              THEN line."DebitAmount" - line."CreditAmount"
+                              ELSE line."CreditAmount" - line."DebitAmount" END
+                    WHEN account."AccountType" = 'Expense'
+                    THEN -(CASE WHEN account."NormalBalance" = 'Debit'
+                                THEN line."DebitAmount" - line."CreditAmount"
+                                ELSE line."CreditAmount" - line."DebitAmount" END)
+                    ELSE 0 END), 0) AS "NetIncome"
             FROM "JournalLines" AS line
             JOIN "JournalEntries" AS entry
               ON entry."Id" = line."JournalEntryId"
@@ -947,6 +1046,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         public decimal LiabilitiesAndEquity { get; init; }
         public decimal Income { get; init; }
         public decimal Expenses { get; init; }
+        public decimal NetIncome { get; init; }
     }
 
     private async Task<BankReconciliationEvidence?> GetBankEvidenceAsync(
