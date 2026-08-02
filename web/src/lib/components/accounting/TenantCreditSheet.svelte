@@ -5,6 +5,7 @@
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { projectedRemainingCharge } from '$lib/accounting/tenant-credit-preview';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -64,6 +65,9 @@
 	);
 	const selectedTarget = $derived(
 		eligibleCharges.find((row) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
+	);
+	const projectedRemainingAmount = $derived(
+		selectedTarget ? projectedRemainingCharge(selectedTarget.openAmount, form.amount) : 0
 	);
 
 	$effect(() => {
@@ -205,7 +209,7 @@
 				<dl class="mt-3 grid gap-2 text-sm sm:grid-cols-3">
 					<div><dt class="text-xs text-muted-foreground">Original charge</dt><dd class="font-mono font-medium tabular-nums">{formatAccountingCurrency(selectedTarget.chargeAmount, currency)}</dd></div>
 					<div><dt class="text-xs text-muted-foreground">Credit</dt><dd class="font-mono font-medium tabular-nums">{form.amount ? formatAccountingCurrency(Number(form.amount), currency) : '—'}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Remaining charge</dt><dd class="font-mono font-medium tabular-nums">{formatAccountingCurrency(selectedTarget.openAmount, currency)}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Remaining charge</dt><dd class="font-mono font-medium tabular-nums">{formatAccountingCurrency(projectedRemainingAmount, currency)}</dd></div>
 				</dl>
 				<p class="mt-3 text-xs text-muted-foreground">The remaining balance is re-read from the server after the credit is saved.</p>
 			</section>

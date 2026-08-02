@@ -151,7 +151,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
 
         var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -268,7 +268,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     public async Task SeedPortfolio_ExactOperationRetryReplaysOnce()
     {
         var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -294,6 +294,48 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
         (await _ctx.Db.OutboxMessages.CountAsync(message =>
             message.IdempotencyKey == "demo-seed/1/seed-idempotency")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_FirstPassUsesContentAddressedLegalUploadRegistrations()
+    {
+        var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "seed-first-pass-content-addressed", CancellationToken.None);
+
+        await action.Should().NotThrowAsync<UploadOperationConflictException>();
+        legalDocuments.OperationIdsByPurpose.Should().ContainKey("demo-legal-issued");
+        legalDocuments.OperationIdsByPurpose["demo-legal-issued"]
+            .Should().EndWith(legalDocuments.AdmissionsByPurpose["demo-legal-issued"].RequestFingerprint);
+        legalDocuments.OperationIdsByPurpose.Should().ContainKey("demo-legal-executed");
+        legalDocuments.OperationIdsByPurpose["demo-legal-executed"]
+            .Should().EndWith(legalDocuments.AdmissionsByPurpose["demo-legal-executed"].RequestFingerprint);
+        await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_FreshPostgreSqlDatabaseSucceedsOnFirstPassWithRealPendingUploadStore()
+    {
+        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
+        var (atomic, atomicContext, pendingUploads) = BuildAtomicServices(_ctx.Db);
+        var seeder = new DemoDataSeeder(
+            _ctx.Db,
+            NullLogger<DemoDataSeeder>.Instance,
+            TimeProvider.System,
+            atomic,
+            atomicContext,
+            legalDocuments,
+            legalDocuments,
+            legalDocuments,
+            pendingUploads,
+            legalDocuments);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "seed-first-pass-real-pending-store", CancellationToken.None);
+
+        await action.Should().NotThrowAsync<UploadOperationConflictException>();
+        await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
 
     [Fact]
@@ -610,7 +652,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var legalDocuments = new DemoLegalTestDependencies(db);
-        var (atomic, atomicContext) = BuildAtomicServices(db, interceptors);
+        var (atomic, atomicContext, _) = BuildAtomicServices(db, interceptors);
         return (new DemoDataSeeder(
             db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -624,7 +666,8 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             legalDocuments), legalDocuments);
     }
 
-    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context) BuildAtomicServices(
+    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads)
+        BuildAtomicServices(
         RentalCommandDbContext db,
         IEnumerable<IInterceptor>? interceptors = null)
     {
@@ -641,6 +684,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             FinalizeDemoLegalDocumentCommand,
             FinalizeDemoLegalDocumentResult,
             DemoLegalDocumentFinalizeCommandHandler>();
+        services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(db.Database.GetConnectionString());
@@ -654,7 +698,8 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _atomicProviders.Add(serviceProvider);
         return (
             serviceProvider.GetRequiredService<IAtomicUnitOfWork>(),
-            serviceProvider.GetRequiredService<IAtomicCommandContext>());
+            serviceProvider.GetRequiredService<IAtomicCommandContext>(),
+            serviceProvider.GetRequiredService<IPendingFileUploadStore>());
     }
 
     private sealed class DemoSeedTestActor : ICurrentActor
@@ -771,6 +816,8 @@ internal sealed class DemoLegalTestDependencies :
     public IReadOnlyDictionary<string, byte[]> StoredBytes => _stored;
     public Dictionary<string, PendingFileUploadAdmission> AdmissionsByPurpose { get; } =
         new(StringComparer.Ordinal);
+    public Dictionary<string, string> OperationIdsByPurpose { get; } =
+        new(StringComparer.Ordinal);
 
     public DemoLegalTestDependencies(RentalCommandDbContext db) => _db = db;
 
@@ -815,6 +862,7 @@ internal sealed class DemoLegalTestDependencies :
         CancellationToken ct = default)
     {
         EnsureOutsideInfrastructure();
+        OperationIdsByPurpose[purpose] = clientOperationId;
         var operationHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(clientOperationId))).ToLowerInvariant();
         var existing = await _db.PendingFileUploads.SingleOrDefaultAsync(upload =>
