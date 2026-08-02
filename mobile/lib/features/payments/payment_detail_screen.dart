@@ -8,6 +8,9 @@ import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../money/money_format.dart';
+import '../accounting/accounting_repository.dart';
+import '../money/widgets/accounting_impact_block.dart';
+import '../money/widgets/journal_entry_screen.dart';
 import 'payments_repository.dart';
 
 final paymentDetailProvider = FutureProvider.autoDispose
@@ -18,6 +21,15 @@ final paymentDetailProvider = FutureProvider.autoDispose
       return ref
           .read(paymentsRepositoryProvider)
           .getTenantLedgerEntry(key.accountId, key.entryId);
+    });
+final paymentAccountingImpactProvider = FutureProvider.autoDispose
+    .family<PaymentAccountingImpact, ({int accountId, int entryId})>((
+      ref,
+      key,
+    ) {
+      return ref
+          .read(paymentsRepositoryProvider)
+          .getPaymentAccountingImpact(key.accountId, key.entryId);
     });
 
 /// Read-only detail for one permanent tenant-account receipt.
@@ -42,6 +54,14 @@ class PaymentDetailScreen extends ConsumerWidget {
           experience: auth.activeExperience,
           capabilities: auth.capabilities,
           capability: 'money.payments.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final canSeeAccounting =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.balances.read',
           experiences: const {WorkspaceExperience.management},
         );
     return Scaffold(
@@ -71,6 +91,9 @@ class PaymentDetailScreen extends ConsumerWidget {
         ),
         data: (receipt) => _ReceiptBody(
           receipt: receipt,
+          accountingImpact: canSeeAccounting
+              ? ref.watch(paymentAccountingImpactProvider(key))
+              : null,
           onCorrect: canCorrect && receipt.entryType == 'PaymentReceipt'
               ? () => showModalBottomSheet<void>(
                   context: context,
@@ -85,9 +108,14 @@ class PaymentDetailScreen extends ConsumerWidget {
 }
 
 class _ReceiptBody extends StatelessWidget {
-  const _ReceiptBody({required this.receipt, this.onCorrect});
+  const _ReceiptBody({
+    required this.receipt,
+    this.accountingImpact,
+    this.onCorrect,
+  });
 
   final StaffTenantLedgerEntryDetail receipt;
+  final AsyncValue<PaymentAccountingImpact>? accountingImpact;
   final VoidCallback? onCorrect;
 
   @override
@@ -138,6 +166,21 @@ class _ReceiptBody extends StatelessWidget {
           _DetailRow(label: 'Check', value: receipt.checkNumber!),
         if (receipt.bankName?.trim().isNotEmpty == true)
           _DetailRow(label: 'Bank', value: receipt.bankName!),
+        if (accountingImpact != null) ...[
+          const SizedBox(height: 16),
+          accountingImpact!.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (_, _) => const SizedBox.shrink(),
+            data: (impact) {
+              final journalId = impact.journalEntryPublicId;
+              if (journalId == null) return const SizedBox.shrink();
+              return _PaymentImpact(
+                accountName: impact.accountName,
+                journalId: journalId,
+              );
+            },
+          ),
+        ],
         const SizedBox(height: 20),
         Text(
           'This receipt is a permanent account record. If it needs a '
@@ -156,6 +199,37 @@ class _ReceiptBody extends StatelessWidget {
             onPressed: onCorrect,
           ),
         ],
+      ],
+    );
+  }
+}
+
+class _PaymentImpact extends ConsumerWidget {
+  const _PaymentImpact({required this.accountName, required this.journalId});
+
+  final String? accountName;
+  final String journalId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final journal = ref.watch(journalEntryProvider(journalId));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (accountName?.trim().isNotEmpty == true)
+          _DetailRow(label: 'Account', value: accountName!),
+        journal.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (_, _) => const SizedBox.shrink(),
+          data: (value) => AccountingImpactBlock(
+            journal: value,
+            onOpenJournal: () => Navigator.of(context).push<void>(
+              MaterialPageRoute(
+                builder: (_) => JournalEntryScreen(publicId: journalId),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

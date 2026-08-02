@@ -220,6 +220,25 @@ class StaffTenantLedgerEntryDetail extends StaffTenantLedgerEntry {
   }
 }
 
+class PaymentAccountingImpact {
+  const PaymentAccountingImpact({
+    this.accountId,
+    this.accountName,
+    this.journalEntryPublicId,
+  });
+
+  final int? accountId;
+  final String? accountName, journalEntryPublicId;
+
+  factory PaymentAccountingImpact.fromJson(Map<String, dynamic> json) =>
+      PaymentAccountingImpact(
+        accountId: (json['accountId'] as num?)?.toInt(),
+        accountName:
+            json['accountName'] as String? ?? json['accountLabel'] as String?,
+        journalEntryPublicId: json['journalEntryPublicId'] as String?,
+      );
+}
+
 class TenantLedgerEntryListPage {
   const TenantLedgerEntryListPage({
     required this.items,
@@ -603,6 +622,20 @@ class PaymentsRepository {
         );
       }
       return StaffTenantLedgerEntryDetail.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PaymentAccountingImpact> getPaymentAccountingImpact(
+    int tenantAccountId,
+    int tenantLedgerEntryId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/$tenantAccountId/ledger/$tenantLedgerEntryId',
+      );
+      return PaymentAccountingImpact.fromJson(response.data ?? const {});
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

@@ -3,12 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/time/app_clock.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../accounting/accounting_repository.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../money/widgets/accounting_impact_block.dart';
+import '../money/widgets/journal_entry_screen.dart';
 import 'owner_reports_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,7 +85,9 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
       await ref.read(monthlyReportsProvider.notifier).load(month: month);
     } on DioException catch (error) {
       if (!mounted) return;
-      setState(() => _clockError = ApiException.fromDioException(error).message);
+      setState(
+        () => _clockError = ApiException.fromDioException(error).message,
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _clockError = error.toString());
@@ -606,7 +613,10 @@ List<OwnerReportDisplaySection> ownerReportDisplaySections(
       ),
     ],
     'rent-roll' => [
-      _section('Rentals', _maps(result.data['rows']).map(_rentRollRow).toList()),
+      _section(
+        'Rentals',
+        _maps(result.data['rows']).map(_rentRollRow).toList(),
+      ),
     ],
     'rent-ledger' => [
       _section('Leases', _rentLedgerRows(_maps(result.data['leases']))),
@@ -880,7 +890,9 @@ class _ReportPagingControls extends ConsumerWidget {
     final hasNext = total == null ? true : paging.skip + paging.take < total;
     final pageEnd = total == null
         ? paging.skip + paging.take
-        : (paging.skip + paging.take > total ? total : paging.skip + paging.take);
+        : (paging.skip + paging.take > total
+              ? total
+              : paging.skip + paging.take);
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Row(
@@ -1592,14 +1604,14 @@ class _DistributionsSection extends StatelessWidget {
   }
 }
 
-class _DistributionTile extends StatelessWidget {
+class _DistributionTile extends ConsumerWidget {
   const _DistributionTile({required this.distribution, required this.onDelete});
 
   final OwnerDistribution distribution;
   final VoidCallback onDelete;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final subtitleParts = [
@@ -1609,6 +1621,18 @@ class _DistributionTile extends StatelessWidget {
           distribution.propertyName!.trim().isNotEmpty)
         distribution.propertyName!,
     ];
+    final auth = ref.watch(authControllerProvider);
+    final canSeeAccounting =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.balances.read',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final journalId = canSeeAccounting
+        ? distribution.journalEntryPublicId
+        : null;
 
     return ListTile(
       leading: CircleAvatar(
@@ -1631,11 +1655,71 @@ class _DistributionTile extends StatelessWidget {
       ),
       isThreeLine:
           distribution.memo != null && distribution.memo!.trim().isNotEmpty,
+      onTap: journalId == null
+          ? null
+          : () => showModalBottomSheet<void>(
+              context: context,
+              isScrollControlled: true,
+              showDragHandle: true,
+              useSafeArea: true,
+              builder: (_) => _OwnerMoneyImpactSheet(
+                distribution: distribution,
+                journalId: journalId,
+              ),
+            ),
       trailing: IconButton(
         tooltip: 'Delete distribution',
         icon: const Icon(Icons.delete_outline),
         color: cs.error,
         onPressed: onDelete,
+      ),
+    );
+  }
+}
+
+class _OwnerMoneyImpactSheet extends ConsumerWidget {
+  const _OwnerMoneyImpactSheet({
+    required this.distribution,
+    required this.journalId,
+  });
+
+  final OwnerDistribution distribution;
+  final String journalId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final journal = ref.watch(journalEntryProvider(journalId));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      child: ListView(
+        shrinkWrap: true,
+        children: [
+          Text(
+            'Owner money detail',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '${distribution.ownerName} · ${_fmtCurrency(distribution.amount)}',
+          ),
+          Text('${_fmtDate(distribution.date)} · ${distribution.method.label}'),
+          if (distribution.accountName?.trim().isNotEmpty == true)
+            Text('Account ${distribution.accountName}'),
+          const SizedBox(height: 16),
+          journal.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) =>
+                Text('Accounting impact could not be loaded: $error'),
+            data: (value) => AccountingImpactBlock(
+              journal: value,
+              onOpenJournal: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => JournalEntryScreen(publicId: journalId),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -9,7 +9,10 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
+import '../accounting/accounting_repository.dart';
 import '../money/money_format.dart' as money;
+import '../money/widgets/accounting_impact_block.dart';
+import '../money/widgets/journal_entry_screen.dart';
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
@@ -2073,7 +2076,7 @@ class _LoanPaymentScheduleState extends ConsumerState<_LoanPaymentSchedule> {
   }
 }
 
-class _LoanPaymentRow extends StatelessWidget {
+class _LoanPaymentRow extends ConsumerWidget {
   const _LoanPaymentRow({
     required this.payment,
     required this.isPosting,
@@ -2085,12 +2088,22 @@ class _LoanPaymentRow extends StatelessWidget {
   final VoidCallback? onRecordPaid;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final statusColor = payment.status.toLowerCase() == 'paid'
         ? colorScheme.primary
         : colorScheme.onSurfaceVariant;
+    final auth = ref.watch(authControllerProvider);
+    final canSeeAccounting =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.balances.read',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final journalId = canSeeAccounting ? payment.journalEntryPublicId : null;
 
     return Container(
       key: Key('loan-payment-row-${payment.id}'),
@@ -2173,6 +2186,25 @@ class _LoanPaymentRow extends StatelessWidget {
               ),
             ),
           ],
+          if (journalId != null) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: Key('loan-payment-impact-${payment.id}'),
+                icon: const Icon(Icons.account_balance_outlined),
+                label: const Text('Accounting impact'),
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => _LoanPaymentImpactScreen(
+                      payment: payment,
+                      journalId: journalId,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
           if (payment.paymentDoesNotCoverInterest) ...[
             const SizedBox(height: 6),
             Row(
@@ -2194,6 +2226,50 @@ class _LoanPaymentRow extends StatelessWidget {
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LoanPaymentImpactScreen extends ConsumerWidget {
+  const _LoanPaymentImpactScreen({
+    required this.payment,
+    required this.journalId,
+  });
+
+  final LoanPayment payment;
+  final String journalId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final journal = ref.watch(journalEntryProvider(journalId));
+    return Scaffold(
+      appBar: AppBar(title: const Text('Loan payment')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            payment.periodKey,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 8),
+          Text('Paid ${_formatCurrency(payment.totalAmount)}'),
+          if (payment.accountName?.trim().isNotEmpty == true)
+            Text('Account ${payment.accountName}'),
+          const SizedBox(height: 16),
+          journal.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => _InlineError(message: error.toString()),
+            data: (value) => AccountingImpactBlock(
+              journal: value,
+              onOpenJournal: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => JournalEntryScreen(publicId: journalId),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
