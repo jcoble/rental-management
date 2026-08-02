@@ -1,5 +1,5 @@
-import 'dart:typed_data';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,6 +27,7 @@ class PortalTenantAccount {
     required this.nextDueAmount,
     required this.condition,
     this.nextDueOn,
+    this.deposit,
   });
 
   final int tenantAccountId;
@@ -44,6 +45,7 @@ class PortalTenantAccount {
   final DateTime? nextDueOn;
   final double nextDueAmount;
   final String condition;
+  final PortalTenantAccountDeposit? deposit;
 
   factory PortalTenantAccount.fromJson(Map<String, dynamic> json) {
     return PortalTenantAccount(
@@ -64,6 +66,11 @@ class PortalTenantAccount {
           : DateTime.parse(json['nextDueOn'] as String),
       nextDueAmount: (json['nextDueAmount'] as num).toDouble(),
       condition: json['condition'] as String,
+      deposit: json['deposit'] is Map
+          ? PortalTenantAccountDeposit.fromJson(
+              Map<String, dynamic>.from(json['deposit'] as Map),
+            )
+          : null,
     );
   }
 }
