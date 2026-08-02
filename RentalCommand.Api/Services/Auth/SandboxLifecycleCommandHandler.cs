@@ -106,7 +106,7 @@ public sealed class SandboxLifecycleCommandHandler
         }
 
         portfolio.UpdatedAt = now;
-        attempt.BindSemanticAudit(portfolio, Audit(
+        attempt.StageSemanticEvent(Audit(
             command,
             AuditLogOperation.Updated,
             "Sandbox onboarding choice recorded."));
@@ -134,7 +134,7 @@ public sealed class SandboxLifecycleCommandHandler
         portfolio.IsSandbox = false;
         portfolio.SandboxSeededAtUtc = null;
         portfolio.UpdatedAt = now;
-        attempt.BindSemanticAudit(portfolio, Audit(
+        attempt.StageSemanticEvent(Audit(
             command,
             AuditLogOperation.Updated,
             "Portfolio graduated from Sandbox to Live."));

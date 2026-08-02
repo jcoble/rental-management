@@ -9,6 +9,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Sandbox;
 using RentalCommand.Data;
+using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
 using RentalCommand.TestCommon;
 
@@ -50,8 +51,22 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
                 EffectiveFromUtc = BusinessNowUtc.AddDays(-1),
                 CreatedAtUtc = BusinessNowUtc.AddDays(-1),
                 UpdatedAtUtc = BusinessNowUtc.AddDays(-1),
+                RoleAssignments =
+                [
+                    new MembershipRoleAssignment
+                    {
+                        PortfolioId = 1,
+                        RoleProfileId = 1,
+                        ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+                        Status = MembershipRoleAssignmentStatus.Active,
+                        EffectiveFromUtc = BusinessNowUtc.AddDays(-1),
+                        CreatedAtUtc = BusinessNowUtc.AddDays(-1),
+                        UpdatedAtUtc = BusinessNowUtc.AddDays(-1),
+                    },
+                ],
             },
         });
+        await new ChartOfAccountsSeedService(_context.Db).SeedAsync(1);
         await _context.Db.SaveChangesAsync();
         _context.Db.ChangeTracker.Clear();
 
@@ -145,6 +160,10 @@ public sealed class DemoSeedAtomicPostgreSqlTests : IAsyncLifetime
             row.CommandType == identity.CommandType
             && row.CommandIdempotencyKey == identity.IdempotencyKey
             && row.PortfolioId == 1)).Should().BeGreaterThan(0);
+        (await _context.Db.JournalEntries.CountAsync(row => row.PortfolioId == 1))
+            .Should().Be(1);
+        (await _context.Db.JournalLines.CountAsync(row => row.JournalEntry.PortfolioId == 1))
+            .Should().Be(2);
         (await _context.Db.OutboxMessages.CountAsync(row =>
             row.PortfolioId == 1
             && row.IdempotencyKey == "demo-seed/1/demo-seed-atomic-contract")).Should().Be(1);

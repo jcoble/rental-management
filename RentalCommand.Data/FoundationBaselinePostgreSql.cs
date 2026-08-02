@@ -2417,6 +2417,37 @@ internal static class FoundationBaselinePostgreSql
             WHEN EXISTS (
               SELECT 1
               FROM public."AtomicCommandReceipts" receipt
+              JOIN public."WorkspaceAccessContexts" access_context
+                ON access_context."PortfolioId" = target_portfolio_id
+               AND access_context."Status" = 'Active'
+               AND access_context."SuspendedAtUtc" IS NULL
+               AND access_context."RevokedAtUtc" IS NULL
+              JOIN public."WorkspaceMemberships" membership
+                ON membership."AccessContextId" = access_context."Id"
+               AND membership."PortfolioId" = target_portfolio_id
+               AND membership."Status" = 'Active'
+               AND membership."EffectiveFromUtc" <= statement_timestamp()
+               AND (membership."EffectiveToUtc" IS NULL
+                    OR membership."EffectiveToUtc" > statement_timestamp())
+               AND membership."SuspendedAtUtc" IS NULL
+               AND membership."RevokedAtUtc" IS NULL
+              JOIN public."MembershipRoleAssignments" assignment
+                ON assignment."WorkspaceMembershipId" = membership."Id"
+               AND assignment."PortfolioId" = target_portfolio_id
+               AND assignment."Status" = 'Active'
+               AND assignment."EffectiveFromUtc" <= statement_timestamp()
+               AND (assignment."EffectiveToUtc" IS NULL
+                    OR assignment."EffectiveToUtc" > statement_timestamp())
+               AND assignment."SuspendedAtUtc" IS NULL
+               AND assignment."RevokedAtUtc" IS NULL
+              WHERE receipt."CommandType" = 'sandbox.demo-seed'
+                AND receipt."IdempotencyKey" LIKE
+                    'portfolio:' || target_portfolio_id::text || ':%'
+                AND receipt.xmin = pg_current_xact_id()::xid
+            ) THEN TRUE
+            WHEN EXISTS (
+              SELECT 1
+              FROM public."AtomicCommandReceipts" receipt
               JOIN public."AspNetUsers" user_row
                 ON user_row.xmin = pg_current_xact_id()::xid
               JOIN public."Portfolios" portfolio
