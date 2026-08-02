@@ -7,7 +7,7 @@
 -->
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
 		reports,
@@ -27,8 +27,19 @@
 		type OwnerDistributionsResponse,
 		type WorkOrderReportResponse,
 	} from '$lib/api/endpoints/reports';
+	import {
+		accounting,
+		type AccountingPage,
+		type ChartOfAccountsRow,
+		type FinancialStatementResponse,
+		type GeneralLedgerRow,
+		type TrialBalanceResponse,
+	} from '$lib/api/endpoints/accounting';
 	import { properties as propertiesApi } from '$lib/api/endpoints/properties';
+	import { units as unitsApi } from '$lib/api/endpoints/units';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { hasCapability } from '$lib/stores/auth.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { apiErrorMessage } from '$lib/utils/toast';
 	import { formatDate, formatDateOnly } from '$lib/utils/date';
 	import {
@@ -49,6 +60,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import JournalEntryDetail from '$lib/components/ledger/JournalEntryDetail.svelte';
 	import {
 		ArrowLeft,
 		Building2,
@@ -63,6 +76,14 @@
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const reportKey = $derived(page.params.report ?? '');
+	const canViewJournal = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
+	const JOURNAL_SOURCE_TYPES = [
+		'TenantCharge', 'TenantReceipt', 'ProviderSettlement', 'TenantConcession',
+		'ReceivableWriteOff', 'SecurityDepositReceipt', 'SecurityDepositRefund',
+		'SecurityDepositApplication', 'ExpensePayment', 'BillIncurred', 'BillPayment',
+		'BankTransfer', 'LoanPayment', 'CapitalPurchase', 'Depreciation',
+		'OwnerContribution', 'OwnerDistribution', 'OpeningBalance'
+	];
 
 	// --- Catalog (to resolve this report's title, endpoint, accepted params) -------------------------
 	const catalogQuery = createQuery(() => ({
@@ -94,6 +115,18 @@
 		enabled: accepts.has('propertyIds') || accepts.has('propertyId'),
 	}));
 	const propertyList = $derived(propertiesQuery.data ?? []);
+	const accountsQuery = createQuery(() => ({
+		queryKey: ['report-accounts', portfolioId],
+		queryFn: () => accounting.chartOfAccounts({ activeOnly: false, take: 500, sort: 'code' }),
+		enabled: accepts.has('accountId'),
+	}));
+	const accountList = $derived(accountsQuery.data?.items ?? []);
+	const unitsQuery = createQuery(() => ({
+		queryKey: ['report-units', portfolioId],
+		queryFn: () => unitsApi.list({ take: 500, sort: 'unitNumber' }),
+		enabled: accepts.has('unitId'),
+	}));
+	const unitList = $derived(unitsQuery.data ?? []);
 
 	// --- Param state ---------------------------------------------------------------------------------
 	let rangeStart = $state('');
@@ -104,6 +137,16 @@
 	let reportSkip = $state(0);
 	let reportTake = $state(20);
 	let reportSort = $state('property');
+	let selectedAccountId = $state('');
+	let selectedUnitId = $state('');
+	let sourceType = $state('');
+	let search = $state('');
+	let selectedJournalPublicId = $state<string | null>(null);
+	const journalQuery = createQuery(() => ({
+		queryKey: ['journal-entry', portfolioId, selectedJournalPublicId],
+		queryFn: () => accounting.journalEntry(selectedJournalPublicId!),
+		enabled: canViewJournal && Boolean(selectedJournalPublicId),
+	}));
 
 	// The applied params snapshot — only changes when the user clicks Generate, so the table is stable.
 	let applied = $state<ReportRequestParams>({});
@@ -115,9 +158,16 @@
 		rangeStart = '';
 		rangeEnd = '';
 		selectedPropertyIds = [];
-		year = '';
-		days = '90';
-		reportSkip = 0;
+		year = page.url.searchParams.get('year') ?? '';
+		days = page.url.searchParams.get('days') ?? '90';
+		rangeStart = page.url.searchParams.get('from') ?? page.url.searchParams.get('effectiveFrom') ?? '';
+		rangeEnd = page.url.searchParams.get('to') ?? page.url.searchParams.get('effectiveTo') ?? '';
+		selectedPropertyIds = page.url.searchParams.get('propertyId') ? [Number(page.url.searchParams.get('propertyId'))] : page.url.searchParams.getAll('propertyIds').map(Number);
+		selectedAccountId = page.url.searchParams.get('accountId') ?? '';
+		selectedUnitId = page.url.searchParams.get('unitId') ?? '';
+		sourceType = page.url.searchParams.get('sourceType') ?? '';
+		search = page.url.searchParams.get('search') ?? '';
+		reportSkip = Number(page.url.searchParams.get('skip') ?? 0);
 		reportTake = 20;
 		reportSort = 'property';
 		applied = {};
@@ -136,12 +186,30 @@
 		if (accepts.has('skip')) p.skip = reportSkip;
 		if (accepts.has('take')) p.take = reportTake;
 		if (accepts.has('sort')) p.sort = reportSort;
+		if (accepts.has('accountId') && selectedAccountId) p.accountId = Number(selectedAccountId);
+		if (accepts.has('unitId') && selectedUnitId) p.unitId = Number(selectedUnitId);
+		if (accepts.has('sourceType') && sourceType) p.sourceType = sourceType;
+		if (accepts.has('effectiveFrom') && rangeStart) p.effectiveFrom = rangeStart;
+		if (accepts.has('effectiveTo') && rangeEnd) p.effectiveTo = rangeEnd;
+		if (accepts.has('search') && search.trim()) p.search = search.trim();
 		return p;
+	}
+
+	function persistParams(params: ReportRequestParams) {
+		const url = new URL(page.url);
+		url.search = '';
+		for (const [key, value] of Object.entries(params)) {
+			if (value == null || value === '') continue;
+			if (Array.isArray(value)) value.forEach((item) => url.searchParams.append(key, String(item)));
+			else url.searchParams.set(key, String(value));
+		}
+		replaceState(url, {});
 	}
 
 	function generate() {
 		reportSkip = 0;
 		applied = { ...collectParams(), skip: accepts.has('skip') ? 0 : undefined };
+		persistParams(applied);
 		hasGenerated = true;
 	}
 
@@ -149,6 +217,7 @@
 		const nextSkip = Math.max(0, skip);
 		reportSkip = nextSkip;
 		applied = { ...collectParams(), skip: nextSkip };
+		persistParams(applied);
 		hasGenerated = true;
 	}
 
@@ -219,7 +288,12 @@
 			? (reportQuery.data as CashFlowResponse | undefined)
 			: undefined
 	);
-	const generalLedger = $derived(reportKey === 'general-ledger' ? (reportQuery.data as GeneralLedgerResponse | undefined) : undefined);
+	const completeMoneyHistory = $derived(reportKey === 'complete-money-history' ? (reportQuery.data as GeneralLedgerResponse | undefined) : undefined);
+	const chartOfAccounts = $derived(reportKey === 'chart-of-accounts' ? (reportQuery.data as AccountingPage<ChartOfAccountsRow> | undefined) : undefined);
+	const generalLedger = $derived(reportKey === 'general-ledger' ? (reportQuery.data as AccountingPage<GeneralLedgerRow> | undefined) : undefined);
+	const trialBalance = $derived(reportKey === 'trial-balance' ? (reportQuery.data as TrialBalanceResponse | undefined) : undefined);
+	const balanceSheet = $derived(reportKey === 'balance-sheet' ? (reportQuery.data as FinancialStatementResponse | undefined) : undefined);
+	const incomeStatement = $derived(reportKey === 'income-statement' ? (reportQuery.data as FinancialStatementResponse | undefined) : undefined);
 	const propertyPnl = $derived(reportKey === 'property-pnl-summary' ? (reportQuery.data as PropertyProfitAndLossResponse | undefined) : undefined);
 	const occupancy = $derived(reportKey === 'occupancy' ? (reportQuery.data as OccupancyResponse | undefined) : undefined);
 	const leaseExp = $derived(reportKey === 'lease-expirations' ? (reportQuery.data as LeaseExpirationsResponse | undefined) : undefined);
@@ -231,7 +305,7 @@
 	const isEmpty = $derived.by(() => {
 		const data = reportQuery.data as Record<string, unknown> | undefined;
 		if (!data) return false;
-		const rows = (data.rows ?? data.leases ?? data.entries ?? data.months) as unknown[] | undefined;
+		const rows = (data.rows ?? data.items ?? data.leases ?? data.entries ?? data.months) as unknown[] | undefined;
 		return Array.isArray(rows) && rows.length === 0;
 	});
 
@@ -275,9 +349,22 @@
 		} else if (cashFlow) {
 			headers = ['Month', 'Income', 'Expense', 'Net'];
 			rows = cashFlow.months.map((m) => [m.label, m.income, m.expense, m.net]);
-		} else if (generalLedger) {
-			headers = ['Date', 'Type', 'Description', 'Category', 'Property', 'Counterparty', 'Amount', 'Running Balance'];
-			rows = generalLedger.entries.map((e) => [formatDateOnly(e.date), formatMoneyEntryLabel(e.type), e.description, formatMoneyCategoryLabel(e.category), e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
+			} else if (completeMoneyHistory) {
+				headers = ['Date', 'Type', 'Description', 'Category', 'Property', 'Counterparty', 'Amount', 'Running Balance'];
+				rows = completeMoneyHistory.entries.map((e) => [formatDateOnly(e.date), formatMoneyEntryLabel(e.type), e.description, formatMoneyCategoryLabel(e.category), e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
+			} else if (chartOfAccounts) {
+				headers = ['Code', 'Account', 'Type', 'Normal Balance', 'Schedule E', 'Status'];
+				rows = chartOfAccounts.items.map((r) => [r.code, r.name, r.accountType, r.normalBalance, r.scheduleECategory ?? '', r.isActive ? 'Active' : 'Inactive']);
+			} else if (generalLedger) {
+				headers = ['Effective Date', 'Entered', 'Source', 'Description', 'Account Code', 'Account', 'Debit', 'Credit', 'Running Balance'];
+				rows = generalLedger.items.map((r) => [formatDateOnly(r.effectiveOn), formatDate(r.postedAtUtc), r.sourceType, r.description, r.accountCode, r.accountName, r.debitAmount, r.creditAmount, r.runningBalance ?? '']);
+			} else if (trialBalance) {
+				headers = ['Code', 'Account', 'Type', 'Debit', 'Credit'];
+				rows = trialBalance.rows.map((r) => [r.accountCode, r.accountName, r.accountType, r.debitBalance, r.creditBalance]);
+			} else if (balanceSheet || incomeStatement) {
+				const statement = balanceSheet ?? incomeStatement!;
+				headers = ['Section', 'Code', 'Account', 'Amount'];
+				rows = statement.sections.flatMap((section) => section.rows.map((r) => [section.label, r.accountCode, r.accountName, r.amount]));
 		} else if (propertyPnl) {
 			headers = ['Property', 'Income', 'Expense', 'Net'];
 			rows = propertyPnl.rows.map((r) => [r.propertyName, r.income, r.expense, r.net]);
@@ -322,6 +409,9 @@
 			<h1 class="text-2xl font-bold">{reportTitle(reportKey, entry?.title ?? reportKey)}</h1>
 			{#if periodLabel}
 				<p class="text-sm text-muted-foreground" data-testid="report-period">{periodLabel}</p>
+			{/if}
+			{#if ['general-ledger', 'trial-balance', 'balance-sheet', 'income-statement'].includes(reportKey)}
+				<p class="text-sm font-medium text-foreground" data-testid="accrual-basis-caption">Accrual basis — uses effective dates</p>
 			{/if}
 			<a
 				href="/docs/reports"
@@ -381,12 +471,18 @@
 		<!-- Parameter bar -->
 		<Card.Root class="mb-4 print:hidden">
 			<Card.Content class="flex flex-wrap items-end gap-3 p-4">
-				{#if accepts.has('from') || accepts.has('to')}
-					<div class="min-w-[16rem]">
-						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-range">Date range</label>
-						<RangeDatePicker id="report-range" bind:start={rangeStart} bind:end={rangeEnd} presets testid="report-date-range" />
-					</div>
-				{/if}
+					{#if accepts.has('from') || accepts.has('to')}
+						<div class="min-w-[16rem]">
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-range">{accepts.has('effectiveFrom') ? 'Effective date range' : 'Date range'}</label>
+							<RangeDatePicker id="report-range" bind:start={rangeStart} bind:end={rangeEnd} presets testid="report-date-range" />
+						</div>
+					{/if}
+					{#if accepts.has('effectiveFrom') || accepts.has('effectiveTo')}
+						<div class="min-w-[16rem]">
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-effective-range">Effective date range</label>
+							<RangeDatePicker id="report-effective-range" bind:start={rangeStart} bind:end={rangeEnd} presets testid="report-effective-date-range" />
+						</div>
+					{/if}
 
 				{#if accepts.has('propertyIds') || accepts.has('propertyId')}
 					<div>
@@ -445,6 +541,43 @@
 					</div>
 				{/if}
 
+					{#if accepts.has('accountId')}
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-account">Account</label>
+							<select id="report-account" bind:value={selectedAccountId} class="h-10 min-w-52 rounded-md border border-input bg-background px-3 text-sm" data-testid="report-account-select">
+								<option value="">All accounts</option>
+								{#each accountList as account (account.id)}<option value={String(account.id)}>{account.code} · {account.name}</option>{/each}
+							</select>
+						</div>
+					{/if}
+
+					{#if accepts.has('unitId')}
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-unit">Unit</label>
+							<select id="report-unit" bind:value={selectedUnitId} class="h-10 min-w-36 rounded-md border border-input bg-background px-3 text-sm" data-testid="report-unit-select">
+								<option value="">All units</option>
+								{#each unitList as unit (unit.id)}<option value={String(unit.id)}>Unit {unit.unitNumber}</option>{/each}
+							</select>
+						</div>
+					{/if}
+
+					{#if accepts.has('sourceType')}
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-source-type">Source type</label>
+							<select id="report-source-type" bind:value={sourceType} class="h-10 min-w-44 rounded-md border border-input bg-background px-3 text-sm" data-testid="report-source-type-select">
+								<option value="">All source types</option>
+								{#each JOURNAL_SOURCE_TYPES as type}<option value={type}>{formatStatusLabel(type)}</option>{/each}
+							</select>
+						</div>
+					{/if}
+
+					{#if accepts.has('search')}
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="report-search">Search</label>
+							<Input id="report-search" bind:value={search} class="h-10 w-52" placeholder="Description, account, source" data-testid="report-search-input" />
+						</div>
+					{/if}
+
 				<Button onclick={generate} data-testid="report-param-generate" disabled={reportQuery.isFetching}>
 					{#if reportQuery.isFetching}
 						<RefreshCw class="h-4 w-4 animate-spin" /> Generating…
@@ -480,8 +613,27 @@
 			<Card.Root class="overflow-hidden print:border-0 print:shadow-none">
 				<div class="overflow-x-auto">
 					<table class="w-full text-sm" data-testid="report-table">
+						<!-- ── Real accounting reports ──────────────────────────────── -->
+						{#if chartOfAccounts}
+							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground"><tr><th class="px-3 py-2">Code</th><th class="px-3 py-2">Account</th><th class="px-3 py-2">Type</th><th class="px-3 py-2">Normal balance</th><th class="px-3 py-2">Schedule E</th><th class="px-3 py-2">Status</th></tr></thead>
+							<tbody>{#each chartOfAccounts.items as row (row.id)}<tr class="border-b last:border-0"><td class="px-3 py-2 font-mono">{row.code}</td><td class="px-3 py-2 font-medium">{row.name}{#if row.isSystem}<span class="ml-2 text-xs text-muted-foreground">System</span>{/if}</td><td class="px-3 py-2">{row.accountType}</td><td class="px-3 py-2">{row.normalBalance}</td><td class="px-3 py-2 text-muted-foreground">{row.scheduleECategory ?? '—'}</td><td class="px-3 py-2">{row.isActive ? 'Active' : 'Inactive'}</td></tr>{/each}</tbody>
+							<tfoot class="border-t-2 bg-muted/40"><tr><td class="px-3 py-2 text-xs text-muted-foreground" colspan="4">Showing {chartOfAccounts.totalCount === 0 ? 0 : chartOfAccounts.skip + 1}-{Math.min(chartOfAccounts.skip + chartOfAccounts.items.length, chartOfAccounts.totalCount)} of {chartOfAccounts.totalCount}</td><td class="px-3 py-2 text-right print:hidden" colspan="2"><Button variant="outline" size="sm" onclick={() => setReportPage(chartOfAccounts.skip - chartOfAccounts.take)} disabled={chartOfAccounts.skip <= 0}>Previous</Button><Button class="ml-2" variant="outline" size="sm" onclick={() => setReportPage(chartOfAccounts.skip + chartOfAccounts.take)} disabled={chartOfAccounts.skip + chartOfAccounts.take >= chartOfAccounts.totalCount}>Next</Button></td></tr></tfoot>
+						{:else if generalLedger}
+							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground"><tr><th class="px-3 py-2">Effective</th><th class="px-3 py-2">Entered</th><th class="px-3 py-2">Source</th><th class="px-3 py-2">Description</th><th class="px-3 py-2">Account</th><th class="px-3 py-2 text-right">Debit</th><th class="px-3 py-2 text-right">Credit</th>{#if selectedAccountId}<th class="px-3 py-2 text-right">Running balance</th>{/if}</tr></thead>
+							<tbody>{#each generalLedger.items as row (row.lineId)}<tr class="border-b last:border-0 hover:bg-muted/30"><td class="px-3 py-2">{formatDateOnly(row.effectiveOn)}</td><td class="px-3 py-2 text-xs text-muted-foreground">{formatDate(row.postedAtUtc)}</td><td class="px-3 py-2">{formatStatusLabel(row.sourceType)}</td><td class="px-3 py-2">{#if canViewJournal}<button type="button" class="text-left font-medium text-primary underline-offset-2 hover:underline" onclick={() => (selectedJournalPublicId = row.journalEntryPublicId)} data-testid="general-ledger-journal-link">{row.description}</button>{:else}<span class="font-medium">{row.description}</span>{/if}<div class="text-xs text-muted-foreground">{row.sourceBusinessKey}</div></td><td class="px-3 py-2"><a href="/reports/general-ledger?accountId={row.accountId}" class="font-medium hover:underline">{row.accountCode} · {row.accountName}</a></td><td class="px-3 py-2 text-right font-mono tabular-nums">{row.debitAmount ? money(row.debitAmount) : '—'}</td><td class="px-3 py-2 text-right font-mono tabular-nums">{row.creditAmount ? money(row.creditAmount) : '—'}</td>{#if selectedAccountId}<td class="px-3 py-2 text-right font-mono tabular-nums">{row.runningBalance == null ? '—' : money(row.runningBalance)}</td>{/if}</tr>{/each}</tbody>
+							<tfoot class="border-t-2 bg-muted/40"><tr><td class="px-3 py-2 text-xs text-muted-foreground" colspan={selectedAccountId ? 6 : 5}>Showing {generalLedger.totalCount === 0 ? 0 : generalLedger.skip + 1}-{Math.min(generalLedger.skip + generalLedger.items.length, generalLedger.totalCount)} of {generalLedger.totalCount}</td><td class="px-3 py-2 text-right print:hidden" colspan="2"><Button variant="outline" size="sm" onclick={() => setReportPage(generalLedger.skip - generalLedger.take)} disabled={generalLedger.skip <= 0}>Previous</Button><Button class="ml-2" variant="outline" size="sm" onclick={() => setReportPage(generalLedger.skip + generalLedger.take)} disabled={generalLedger.skip + generalLedger.take >= generalLedger.totalCount}>Next</Button></td></tr></tfoot>
+						{:else if trialBalance}
+							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground"><tr><th class="px-3 py-2">Code</th><th class="px-3 py-2">Account</th><th class="px-3 py-2">Type</th><th class="px-3 py-2 text-right">Debit</th><th class="px-3 py-2 text-right">Credit</th></tr></thead>
+							<tbody>{#each trialBalance.rows as row (row.accountId)}<tr class="border-b last:border-0"><td class="px-3 py-2 font-mono">{row.accountCode}</td><td class="px-3 py-2 font-medium"><a href="/reports/general-ledger?accountId={row.accountId}" class="hover:underline">{row.accountName}</a></td><td class="px-3 py-2">{row.accountType}</td><td class="px-3 py-2 text-right font-mono tabular-nums">{row.debitBalance ? money(row.debitBalance) : '—'}</td><td class="px-3 py-2 text-right font-mono tabular-nums">{row.creditBalance ? money(row.creditBalance) : '—'}</td></tr>{/each}</tbody>
+							<tfoot class="border-t-2 bg-muted/40 font-semibold"><tr><td class="px-3 py-2" colspan="3">{trialBalance.isBalanced ? 'Balanced' : 'Out of balance'}</td><td class="px-3 py-2 text-right font-mono tabular-nums" data-testid="trial-balance-total-debits">{money(trialBalance.totalDebits)}</td><td class="px-3 py-2 text-right font-mono tabular-nums" data-testid="trial-balance-total-credits">{money(trialBalance.totalCredits)}</td></tr></tfoot>
+						{:else if balanceSheet || incomeStatement}
+							{@const statement = balanceSheet ?? incomeStatement!}
+							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground"><tr><th class="px-3 py-2">Code</th><th class="px-3 py-2">Account</th><th class="px-3 py-2 text-right">Amount</th></tr></thead>
+							<tbody>{#each statement.sections as section (section.label)}<tr class="border-b bg-muted/20 font-semibold"><td class="px-3 py-2" colspan="3">{section.label}</td></tr>{#each section.rows as row (row.accountId)}<tr class="border-b last:border-0"><td class="px-3 py-2 font-mono">{row.accountCode}</td><td class="px-3 py-2"><a href="/reports/general-ledger?accountId={row.accountId}" class="font-medium text-primary underline-offset-2 hover:underline" data-testid="statement-ledger-link">{row.accountName}</a></td><td class="px-3 py-2 text-right font-mono tabular-nums">{money(row.amount)}</td></tr>{/each}<tr class="border-b font-semibold"><td class="px-3 py-2" colspan="2">{section.label} subtotal</td><td class="px-3 py-2 text-right font-mono tabular-nums">{money(section.subtotal)}</td></tr>{/each}</tbody>
+							<tfoot class="border-t-2 bg-muted/40 font-semibold">{#if balanceSheet}<tr><td class="px-3 py-2" colspan="2">Total assets</td><td class="px-3 py-2 text-right font-mono tabular-nums" data-testid="balance-sheet-assets">{money(statement.totals.assets)}</td></tr><tr><td class="px-3 py-2" colspan="2">Liabilities and equity</td><td class="px-3 py-2 text-right font-mono tabular-nums" data-testid="balance-sheet-liabilities-equity">{money(statement.totals.liabilitiesAndEquity)}</td></tr>{:else}<tr><td class="px-3 py-2" colspan="2">Net income</td><td class="px-3 py-2 text-right font-mono tabular-nums" data-testid="income-statement-net-income">{money(statement.totals.netIncome)}</td></tr>{/if}<tr><td class="px-3 py-2" colspan="2">Statement total</td><td class="px-3 py-2 text-right font-mono tabular-nums">{money(statement.totals.total)}</td></tr></tfoot>
+
 						<!-- ── Rent Roll ────────────────────────────────────────────── -->
-						{#if rentRoll}
+						{:else if rentRoll}
 							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
 								<tr>
 									<th class="px-3 py-2 font-medium">Property / Unit</th>
@@ -624,7 +776,7 @@
 							</tfoot>
 
 						<!-- ── General Ledger ────────────────────────────────────────── -->
-						{:else if generalLedger}
+						{:else if completeMoneyHistory}
 							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
 								<tr>
 									<th class="px-3 py-2 font-medium">Date</th>
@@ -637,7 +789,7 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each generalLedger.entries as e (e.type + '-' + e.id)}
+								{#each completeMoneyHistory.entries as e (e.type + '-' + e.id)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
 										<td class="px-3 py-2">{formatMoneyEntryLabel(e.type)}</td>
@@ -651,9 +803,9 @@
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
-									<td class="px-3 py-2" colspan="5">Income {money(generalLedger.totalIncome)} · Expense {money(generalLedger.totalExpense)}</td>
+									<td class="px-3 py-2" colspan="5">Income {money(completeMoneyHistory.totalIncome)} · Expense {money(completeMoneyHistory.totalExpense)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">Net</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(generalLedger.closingBalance)}">{money(generalLedger.closingBalance)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(completeMoneyHistory.closingBalance)}">{money(completeMoneyHistory.closingBalance)}</td>
 								</tr>
 							</tfoot>
 
@@ -901,6 +1053,21 @@
 		{/if}
 	{/if}
 </div>
+
+{#if selectedJournalPublicId && canViewJournal}
+	<Dialog.Root open onOpenChange={(open) => { if (!open) selectedJournalPublicId = null; }}>
+		<Dialog.Content class="max-h-[90vh] max-w-4xl overflow-y-auto" data-testid="general-ledger-journal-detail">
+			<Dialog.Header><Dialog.Title>Journal entry</Dialog.Title><Dialog.Description>Balanced accounting detail for this ledger row.</Dialog.Description></Dialog.Header>
+			{#if journalQuery.isLoading}
+				<div class="h-40 animate-pulse rounded-lg bg-muted/40"></div>
+			{:else if journalQuery.isError}
+				<p class="text-sm text-destructive">{apiErrorMessage(journalQuery.error, 'Could not load this journal entry.')}</p>
+			{:else if journalQuery.data}
+				<JournalEntryDetail entry={journalQuery.data} />
+			{/if}
+		</Dialog.Content>
+	</Dialog.Root>
+{/if}
 
 <!--
   Print: hide the app chrome (sidebar/header/assistant bubble) so the report prints on its own.

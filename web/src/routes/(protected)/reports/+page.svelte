@@ -50,7 +50,12 @@
 	const reportIcons: Record<string, IconType> = {
 		'income-expense-statement': TrendingUp,
 		'property-pnl-summary': Building2,
+		'complete-money-history': ScrollText,
+		'chart-of-accounts': ClipboardList,
 		'general-ledger': ScrollText,
+		'trial-balance': BarChart3,
+		'balance-sheet': FileBarChart,
+		'income-statement': TrendingUp,
 		'cash-flow': Wallet,
 		'schedule-e': Receipt,
 		'year-end-packet': FileText,

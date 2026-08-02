@@ -111,6 +111,9 @@
 				Estimate the rental income and expenses your accountant may use for Schedule E.
 				This is a reference, not tax advice.
 			</p>
+			<p class="mt-1 text-sm font-medium text-foreground" data-testid="schedule-e-basis-caption">
+				Cash basis — tax oriented
+			</p>
 			<details class="mt-2 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
 				<summary class="cursor-pointer font-medium">Why totals may differ from owner statements</summary>
 				<p class="mt-2">
