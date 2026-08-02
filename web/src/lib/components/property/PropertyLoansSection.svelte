@@ -14,11 +14,15 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
 	import { scanHref } from '$lib/scan/scan-context';
+	import AccountingImpactBlock from '$lib/components/ledger/AccountingImpactBlock.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 
 	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 10;
+	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
 
 	let loanPage = $state(1);
 	let loanSort = $state('-startDate');
@@ -393,6 +397,14 @@
 									<tr>
 										<td colspan="8" class="pb-1 text-xs text-amber-600">
 											<AlertTriangle class="mr-1 inline h-3 w-3" />Payment didn't cover interest this period.
+										</td>
+									</tr>
+								{/if}
+								{#if canViewAccounting && row.journalEntryPublicId}
+									<tr>
+										<td colspan="8" class="pb-3 pt-2">
+											<p class="mb-2 text-xs text-muted-foreground">Account <strong class="text-foreground">{row.accountName ?? 'Not assigned'}</strong></p>
+											<AccountingImpactBlock journalEntryPublicId={row.journalEntryPublicId} sourceContext={`Loan payment ${row.periodKey}`} compact />
 										</td>
 									</tr>
 								{/if}

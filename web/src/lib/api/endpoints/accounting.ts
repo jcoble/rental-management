@@ -205,6 +205,13 @@ export interface OwnerContributionResponse {
 	journalEntryPublicId: string | null;
 }
 
+export type OwnerContributionParams = ListParams & {
+	ownerEntityId?: number;
+	propertyId?: number;
+	year?: number;
+	status?: string;
+};
+
 /**
  * A high-confidence, still-unmatched bank line the user can one-tap confirm against a
  * Payment/Expense row. Powers the "Match?" chip on the accounting ledger. Nothing is auto-matched.
@@ -269,8 +276,13 @@ export const accounting = {
 	trialBalance: () => api.get<TrialBalanceResponse>('/accounting/trial-balance'),
 	balanceSheet: () => api.get<FinancialStatementResponse>('/accounting/balance-sheet'),
 	incomeStatement: () => api.get<FinancialStatementResponse>('/accounting/income-statement'),
-	ownerContributions: (params: ListParams = {}) =>
-		api.get<OwnerContributionResponse[]>(`/owner-contributions${buildListQuery(params)}`),
+	ownerContributions: (params: OwnerContributionParams = {}) =>
+		api.get<OwnerContributionResponse[]>(`/owner-contributions${buildListQuery(params, {
+			ownerEntityId: params.ownerEntityId,
+			propertyId: params.propertyId,
+			year: params.year,
+			status: params.status
+		})}`),
 	// GET /api/v1/accounting/summary — portfolio scope comes from the JWT claim.
 	// Returns expense totals by Schedule E category + a payment collection rollup
 	// (collected / outstanding / overdue).

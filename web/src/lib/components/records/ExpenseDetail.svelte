@@ -16,6 +16,9 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingImpactBlock from '$lib/components/ledger/AccountingImpactBlock.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
@@ -49,6 +52,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
 	const STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Draft'];
 
 	let editing = $state(false);
@@ -498,6 +502,13 @@
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? formatDateOnly(expense.dueDate) : '', testid: 'expense-detail-due-date' })}
 				{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? formatDateOnly(expense.paidAt) : '', testid: 'expense-detail-paid-date' })}
 			</DetailCard>
+
+			{#if canViewAccounting && expense.journalEntryPublicId}
+				<div class="lg:col-span-2" data-testid="expense-accounting-impact">
+					<p class="mb-2 text-sm text-muted-foreground">Account <strong class="text-foreground">{expense.accountName ?? 'Not assigned'}</strong></p>
+					<AccountingImpactBlock journalEntryPublicId={expense.journalEntryPublicId} sourceContext={expense.description} compact />
+				</div>
+			{/if}
 
 			<DetailCard title="Category and rental" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />

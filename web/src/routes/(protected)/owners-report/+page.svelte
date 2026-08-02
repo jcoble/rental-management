@@ -28,6 +28,8 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
 	import { onMount } from 'svelte';
+	import AccountingImpactBlock from '$lib/components/ledger/AccountingImpactBlock.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
@@ -83,6 +85,13 @@
 	}));
 	const distributions = $derived((distributionQuery.data as OwnerDistribution[] | undefined) ?? []);
 	const canCreateDistribution = $derived(hasCapability('money.disbursements.manage'));
+	const canViewAccounting = $derived(hasCapability(CAPABILITY.moneyBalancesRead));
+	const contributionQuery = createQuery(() => ({
+		queryKey: ['owner-contributions', portfolioId, selectedOwnerId, selectedYear],
+		queryFn: () => accounting.ownerContributions({ ownerEntityId: selectedOwnerId!, year: Number(selectedYear), take: 200, sort: '-date' }),
+		enabled: !!portfolioId && selectedOwnerId !== null
+	}));
+	const contributions = $derived(contributionQuery.data ?? []);
 	const canDeleteDistribution = $derived(
 		canCreateDistribution && hasCapability('money.reconciliation.destructive')
 	);
@@ -571,7 +580,7 @@
 														</td>
 														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
 														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
-														<td class="min-w-56 px-4 py-3">
+												<td class="min-w-56 px-4 py-3">
 															{#if distribution.status === 'Draft'}
 																<Input
 																	value={approvalReferences[distribution.id] ?? ''}
@@ -584,7 +593,7 @@
 															{:else}
 																<span class="text-xs text-muted-foreground">{distribution.rejectionReason ?? 'Rejected'}</span>
 															{/if}
-														</td>
+												</td>
 																<td class="px-4 py-3">
 																	<div class="flex flex-wrap items-center justify-end gap-2">
 																		{#if distribution.status === 'Draft' && canCreateDistribution}
@@ -633,8 +642,16 @@
 																		{/if}
 																	</div>
 														</td>
-													</tr>
-												{/each}
+											</tr>
+											{#if canViewAccounting && distribution.journalEntryPublicId}
+												<tr class="border-b border-border/50" data-testid="owner-distribution-accounting-{distribution.id}">
+													<td colspan="7" class="px-4 pb-4">
+														<p class="mb-2 text-xs text-muted-foreground">Account <strong class="text-foreground">{distribution.accountName ?? 'Not assigned'}</strong></p>
+														<AccountingImpactBlock journalEntryPublicId={distribution.journalEntryPublicId} sourceContext={distribution.memo ?? `Owner distribution ${distribution.id}`} compact />
+													</td>
+												</tr>
+											{/if}
+										{/each}
 											</tbody>
 										</table>
 									</div>
@@ -642,6 +659,23 @@
 							</Card.Content>
 						</Card.Root>
 					</div>
+
+					{#if contributions.length > 0}
+						<Card.Root class="mb-6 gap-0 py-0" data-testid="owner-contributions-card">
+							<Card.Header class="border-b border-border px-4 py-3"><Card.Title class="text-base font-semibold">Owner contributions</Card.Title></Card.Header>
+							<Card.Content class="space-y-3 p-4">
+								{#each contributions as contribution (contribution.id)}
+									<div class="rounded-lg border border-border p-3" data-testid="owner-contribution-row-{contribution.id}">
+										<div class="flex flex-wrap justify-between gap-2 text-sm"><span>{formatDate(contribution.date)} · {contribution.method}</span><strong class="font-mono tabular-nums">{money(contribution.amount)}</strong></div>
+										{#if canViewAccounting && contribution.journalEntryPublicId}
+											<p class="mb-2 mt-3 text-xs text-muted-foreground">Account <strong class="text-foreground">{contribution.accountName ?? 'Not assigned'}</strong></p>
+											<AccountingImpactBlock journalEntryPublicId={contribution.journalEntryPublicId} sourceContext={contribution.memo ?? `Owner contribution ${contribution.id}`} compact />
+										{/if}
+									</div>
+								{/each}
+							</Card.Content>
+						</Card.Root>
+					{/if}
 
 					<!-- Property breakdown table -->
 					{#if report.properties.length > 0}
