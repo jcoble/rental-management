@@ -16,6 +16,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
@@ -819,6 +820,14 @@
 				</details>
 			</DetailCard>
 		</div>
+
+		{#if expense.capitalizedAssetId}
+			<AccountingImpactCard sourceType="CapitalPurchase" sourceId={expense.capitalizedAssetId} />
+		{:else if expense.status === 'Paid' || expense.paidAt}
+			<AccountingImpactCard sourceType="ExpensePayment" sourceId={expense.id} />
+		{:else if expense.status !== 'Draft' && expense.status !== 'Rejected'}
+			<AccountingImpactCard sourceType="BillIncurred" sourceId={expense.id} />
+		{/if}
 
 		<!-- Per-record audit history -->
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="expense-history-section">
