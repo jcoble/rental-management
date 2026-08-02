@@ -1,7 +1,7 @@
 <!--
   Reports Hub — catalog. Grouped cards (one per report) from GET /reports/catalog.
   Clicking a non-external report opens the generic viewer at /reports/[key]; external reports
-  (Schedule E / Owner Statement / Year-End Packet) deep-link to their existing pages.
+  (accounting surfaces, Schedule E / Owner Statement / Year-End Packet) deep-link to their existing pages.
   A "Need a report you don't see?" card opens the user's email client (mailto) with the request
   pre-filled — there is no server-side intake yet, so it never claims a request was recorded.
 -->
@@ -48,9 +48,14 @@
 
 	// Icon per report key (fallback per category) — purely cosmetic; the catalog is data-driven.
 	const reportIcons: Record<string, IconType> = {
+		'accounting-profit-and-loss': TrendingUp,
+		'accounting-balance-sheet': FileBarChart,
+		'accounting-trial-balance': ClipboardList,
+		'accounting-general-ledger': ScrollText,
+		'accounting-cash-flow': Wallet,
 		'income-expense-statement': TrendingUp,
 		'property-pnl-summary': Building2,
-		'general-ledger': ScrollText,
+		'cash-and-operating-activity': ScrollText,
 		'cash-flow': Wallet,
 		'schedule-e': Receipt,
 		'year-end-packet': FileText,
@@ -78,6 +83,11 @@
 
 	// External reports deep-link to their existing pages (the hub references, never reimplements).
 	const externalLinks: Record<string, string> = {
+		'accounting-profit-and-loss': '/accounting/profit-and-loss',
+		'accounting-balance-sheet': '/accounting/balance-sheet',
+		'accounting-trial-balance': '/accounting/trial-balance',
+		'accounting-general-ledger': '/accounting?tab=general-ledger',
+		'accounting-cash-flow': '/accounting?tab=cash-flow',
 		'schedule-e': '/tax',
 		'year-end-packet': '/tax',
 		'owner-statement': '/owners-report',
