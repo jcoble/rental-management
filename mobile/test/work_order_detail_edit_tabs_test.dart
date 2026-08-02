@@ -57,8 +57,7 @@ void main() {
         ProviderScope(
           overrides: [
             authControllerProvider.overrideWith(
-              () =>
-                  _StaticAuthController(_managementAuthority({'work.manage'})),
+              () => _StaticAuthController(_managementAuthority(const {})),
             ),
             workOrdersRepositoryProvider.overrideWithValue(repo),
             propertiesRepositoryProvider.overrideWithValue(
@@ -266,7 +265,31 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
 
   @override
   Future<WorkOrderDetail> getWorkOrderDetail(int id) async {
-    return WorkOrderDetail(workOrder: _workOrder(), timeline: const []);
+    return RoleAwareWorkOrderDetail(
+      workOrder: _workOrder(),
+      timeline: const [],
+      detailRole: 'Management',
+      capabilities: const WorkOrderDetailCapabilities(
+        canViewTenantContact: false,
+        canViewResidents: false,
+        canViewAccessInstructions: false,
+        canViewPrivateManagementNotes: true,
+        canViewCosts: true,
+        canCommentPublicly: false,
+        canCommentPrivately: false,
+        canUploadPhoto: false,
+        canDeletePhoto: false,
+        canCancel: false,
+        canEditRequestFields: false,
+        canEditManagementFields: true,
+        canAssignTechnician: false,
+        canDispatchVendor: false,
+        allowedStatusTransitions: [],
+      ),
+      residentNames: const [],
+      activity: const [],
+      hasActiveDispatch: false,
+    );
   }
 
   @override
