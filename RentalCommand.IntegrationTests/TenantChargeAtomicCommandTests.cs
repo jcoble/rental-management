@@ -120,6 +120,49 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         await CreatePhysicalTestSchemaAsync(db);
     }
 
+    [Fact]
+    public async Task StartupChartSweep_SeedsPreexistingPortfolioAndReceiptPosts()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is required for the PostgreSQL accounting contract.");
+        var scenario = await SeedScenarioAsync("preexisting-chart", seedChart: false);
+
+        await using (var db = NewContext())
+        {
+            (await db.LedgerAccounts.CountAsync(account => account.PortfolioId == scenario.PortfolioId))
+                .Should().Be(0);
+            var seed = new ChartOfAccountsSeedService(db);
+            (await seed.SeedAllWithLockAsync()).Should().BeGreaterThan(0);
+            (await seed.SeedAllWithLockAsync()).Should().Be(0);
+            (await db.LedgerAccounts.CountAsync(account => account.PortfolioId == scenario.PortfolioId))
+                .Should().Be(ChartOfAccountsSeedService.DefaultChart.Count);
+        }
+
+        await using var scope = _services!.CreateAsyncScope();
+        var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var command = Receipt(scenario, "preexisting-chart", 125m);
+        var outcome = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity("tenant-account.receipt.record", command.DeliveryIdempotencyKey),
+            command,
+            ReceiptCodec);
+
+        await using var verify = NewContext();
+        outcome.Value.LedgerEntryId.Should().BeGreaterThan(0);
+        var lines = await (
+            from entry in verify.JournalEntries.AsNoTracking()
+            from line in entry.Lines
+            join account in verify.LedgerAccounts.AsNoTracking()
+                on line.LedgerAccountId equals account.Id
+            where entry.PortfolioId == scenario.PortfolioId
+                && entry.SourceType == JournalSourceType.TenantReceipt
+                && entry.SourceId == outcome.Value.LedgerEntryId
+            select new { account.SystemKey, line.DebitAmount, line.CreditAmount })
+            .ToListAsync();
+        lines.Should().ContainSingle(line =>
+            line.SystemKey == "operating-cash" && line.DebitAmount == 125m && line.CreditAmount == 0m);
+        lines.Should().ContainSingle(line =>
+            line.SystemKey == "tenant-accounts-receivable" && line.DebitAmount == 0m && line.CreditAmount == 125m);
+    }
+
     private static async Task CreatePhysicalTestSchemaAsync(RentalCommandDbContext db)
     {
         // The foundation migration chain is intentionally temporary and will disappear at the
@@ -1219,7 +1262,7 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
             && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
     }
 
-    private async Task<Scenario> SeedScenarioAsync(string suffix)
+    private async Task<Scenario> SeedScenarioAsync(string suffix, bool seedChart = true)
     {
         var now = DateTime.UtcNow;
         await using var db = NewContext();
@@ -1245,8 +1288,11 @@ public sealed class TenantChargeAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(user, portfolio);
         await db.SaveChangesAsync();
-        await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
-        await db.SaveChangesAsync();
+        if (seedChart)
+        {
+            await new ChartOfAccountsSeedService(db).SeedAsync(portfolio.Id);
+            await db.SaveChangesAsync();
+        }
 
         var property = new Property
         {

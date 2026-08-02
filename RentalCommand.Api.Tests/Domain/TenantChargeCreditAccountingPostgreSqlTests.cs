@@ -9,6 +9,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Accounting;
@@ -85,6 +86,22 @@ public sealed class TenantChargeCreditAccountingPostgreSqlTests : IAsyncLifetime
             line.SystemKey == "utility-reimbursement-income"
             && line.DebitAmount == 0m
             && line.CreditAmount == 100m);
+    }
+
+    [Fact]
+    public async Task TenantLedgerPeriodSummary_ValidEmptyAccountReturnsZeroSummary()
+    {
+        var graph = SeedTenantAccount("empty-period-summary");
+
+        var summary = await new AccountingLedgerReadModelService(_ctx.Db)
+            .GetTenantLedgerPeriodSummaryAsync(PortfolioId, graph.AccountId, 12);
+
+        summary.Should().NotBeNull();
+        summary!.Currency.Should().Be("USD");
+        summary.EndingBalance.Should().Be(0m);
+        summary.ChargeAmount.Should().Be(0m);
+        summary.PaymentAmount.Should().Be(0m);
+        summary.CreditAmount.Should().Be(0m);
     }
 
     [Fact]

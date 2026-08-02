@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -7,6 +8,7 @@ namespace RentalCommand.Data.Accounting;
 /// <summary>Attaches the locked default chart rows that are missing for one portfolio.</summary>
 public sealed class ChartOfAccountsSeedService
 {
+    private const long StartupSweepLockKey = 59486;
     private static readonly IReadOnlyList<DefaultAccount> Defaults =
     [
         new("1000", "Operating Cash", AccountType.Asset, "operating-cash"),
@@ -82,6 +84,51 @@ public sealed class ChartOfAccountsSeedService
         }
 
         return seeded;
+    }
+
+    /// <summary>
+    /// Backfills the locked chart for every pre-accounting portfolio in one PostgreSQL statement.
+    /// The migration process calls this after schema migration; a transaction advisory lock makes
+    /// concurrent migration containers serialize, and the unique portfolio/code index makes exact
+    /// replay a no-op.
+    /// </summary>
+    public async Task<int> SeedAllWithLockAsync(CancellationToken ct = default)
+    {
+        if (!_db.Database.IsNpgsql())
+            throw new NotSupportedException("The portfolio chart startup sweep requires PostgreSQL.");
+
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await _db.Database.ExecuteSqlRawAsync(
+            $"SELECT pg_advisory_xact_lock({StartupSweepLockKey})", ct);
+
+        var parameters = new List<object>(Defaults.Count * 5);
+        var rows = new List<string>(Defaults.Count);
+        for (var index = 0; index < Defaults.Count; index++)
+        {
+            var definition = Defaults[index];
+            rows.Add($"(@code{index}, @name{index}, @type{index}, @balance{index}, @systemKey{index})");
+            parameters.Add(new NpgsqlParameter($"code{index}", definition.Code));
+            parameters.Add(new NpgsqlParameter($"name{index}", definition.Name));
+            parameters.Add(new NpgsqlParameter($"type{index}", definition.Type.ToString()));
+            parameters.Add(new NpgsqlParameter(
+                $"balance{index}",
+                (definition.Balance ?? NormalBalanceFor(definition.Type)).ToString()));
+            parameters.Add(new NpgsqlParameter($"systemKey{index}", definition.SystemKey));
+        }
+
+        var inserted = await _db.Database.ExecuteSqlRawAsync($$"""
+            INSERT INTO "LedgerAccounts"
+                ("PortfolioId", "Code", "Name", "AccountType", "NormalBalance", "SystemKey", "IsSystem", "IsActive")
+            SELECT portfolio."Id", defaults."Code", defaults."Name", defaults."AccountType",
+                   defaults."NormalBalance", defaults."SystemKey", TRUE, TRUE
+            FROM "Portfolios" AS portfolio
+            CROSS JOIN (VALUES {{string.Join(", ", rows)}})
+                AS defaults("Code", "Name", "AccountType", "NormalBalance", "SystemKey")
+            WHERE portfolio."DeletedAt" IS NULL
+            ON CONFLICT ("PortfolioId", "Code") DO NOTHING
+            """, parameters, ct);
+        await transaction.CommitAsync(ct);
+        return inserted;
     }
 
     public static IReadOnlyList<(string Code, string Name, AccountType Type)> DefaultChart =>
