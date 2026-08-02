@@ -7,7 +7,7 @@
 	import JournalEntryDetail from './JournalEntryDetail.svelte';
 	import LedgerAmount from './LedgerAmount.svelte';
 
-	let { journalEntryPublicId, compact = false }: { journalEntryPublicId: string; compact?: boolean } = $props();
+	let { journalEntryPublicId, compact = false, sourceContext }: { journalEntryPublicId: string; compact?: boolean; sourceContext?: string | null } = $props();
 	const portfolioId = getAuthState().accessEnvelope?.selectedContext.portfolioId ?? 0;
 	let expanded = $state(false);
 	const journalQuery = createQuery(() => ({
@@ -33,7 +33,7 @@
 			<div class="totals"><strong>Totals</strong><span class="values">Debit <LedgerAmount amount={journalQuery.data.totalDebits} currency={journalQuery.data.currency} /> · Credit <LedgerAmount amount={journalQuery.data.totalCredits} currency={journalQuery.data.currency} /></span></div>
 		</div>
 		<p class:balanced={journalQuery.data.isBalanced} class="balance-state">{journalQuery.data.isBalanced ? 'Balanced ✓' : 'Not balanced'}</p>
-		{#if !compact || expanded}<div class="expanded"><JournalEntryDetail entry={journalQuery.data} /></div>{/if}
+		{#if !compact || expanded}<div class="expanded"><JournalEntryDetail entry={journalQuery.data} {sourceContext} /></div>{/if}
 	{/if}
 </section>
 

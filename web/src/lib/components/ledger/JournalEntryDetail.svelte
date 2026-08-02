@@ -3,7 +3,7 @@
 	import { formatDate } from '$lib/utils/date';
 	import LedgerAmount from './LedgerAmount.svelte';
 
-	let { entry }: { entry: JournalDetail } = $props();
+	let { entry, sourceContext }: { entry: JournalDetail; sourceContext?: string | null } = $props();
 	const posted = $derived(new Date(entry.postedAtUtc).toLocaleString());
 	const dimensions = (line: JournalDetail['lines'][number]) => [
 		line.propertyId ? `Property ${line.propertyId}` : null,
@@ -21,7 +21,7 @@
 	</header>
 
 	<dl class="facts">
-		<div><dt>Source</dt><dd>{entry.sourceType} · {entry.sourceBusinessKey}</dd></div>
+		<div><dt>Source</dt><dd>{sourceContext ?? entry.sourceType}</dd></div>
 		<div><dt>Recorded by</dt><dd>{entry.actor ?? 'System'}</dd></div>
 		<div><dt>Entry ID</dt><dd>{entry.publicId}</dd></div>
 		<div><dt>Operation identity</dt><dd>{entry.attemptId}</dd></div>

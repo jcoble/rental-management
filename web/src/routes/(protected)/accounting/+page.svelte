@@ -25,7 +25,6 @@
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
 	import {
-		formatMoneyCategoryLabel,
 		formatMoneyEntryLabel
 	} from '$lib/accounting/money-display';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -51,6 +50,10 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import LedgerAmount from '$lib/components/ledger/LedgerAmount.svelte';
+	import LedgerRowSheet from '$lib/components/ledger/LedgerRowSheet.svelte';
+	import LedgerTypeBadge from '$lib/components/ledger/LedgerTypeBadge.svelte';
+	import { ledgerTypeLabel } from '$lib/components/ledger/labels';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -67,13 +70,6 @@
 	);
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
-	const TENANT_MONEY_CATEGORY_OPTIONS = [
-		{ value: 'RentCharge', label: 'Rent' },
-		{ value: 'DepositCharge', label: 'Security deposit' },
-		{ value: 'LateFeeCharge', label: 'Late fee' },
-		{ value: 'AddendumCharge', label: 'Lease/addendum charge' },
-		{ value: 'ManualCharge', label: 'Manual/other charge' }
-	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	// --- Ledger grid state, persisted in the URL query string -------------------
@@ -84,9 +80,9 @@
 	const DEFAULT_SORT = '-createdAt';
 
 	let transactionSearch = $state(readGridParam(initialParams, 'q'));
-	let transactionKindFilter = $state(readGridParam(initialParams, 'kind'));
+	let transactionTypeFilter = $state(readGridParam(initialParams, 'type'));
 	let transactionStatusFilter = $state(readGridParam(initialParams, 'status'));
-	let transactionCategoryFilter = $state(readGridParam(initialParams, 'category'));
+	let transactionAccountFilter = $state(readGridParam(initialParams, 'account'));
 	let transactionPropertyFilter = $state(readGridParam(initialParams, 'property'));
 	let transactionFromFilter = $state(readGridParam(initialParams, 'from'));
 	let transactionToFilter = $state(readGridParam(initialParams, 'to'));
@@ -96,15 +92,20 @@
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
+	const selectedPropertyQuery = createQuery(() => ({
+		queryKey: ['property', portfolioId, selectedPropertyFilter],
+		queryFn: () => properties.get(selectedPropertyFilter!),
+		enabled: !!selectedPropertyFilter
+	}));
 
 	// Reset to page 1 whenever a filter/search changes — but NOT on the initial mount, so a deep-linked
 	// or restored ?page=3 loads as-is instead of being clobbered back to 1.
 	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedTransactionSearch.value;
-		transactionKindFilter;
+		transactionTypeFilter;
 		transactionStatusFilter;
-		transactionCategoryFilter;
+		transactionAccountFilter;
 		transactionPropertyFilter;
 		transactionFromFilter;
 		transactionToFilter;
@@ -125,9 +126,9 @@
 			{
 				tab: activeTab,
 				q: transactionSearch,
-				kind: transactionKindFilter,
+				type: transactionTypeFilter,
 				status: transactionStatusFilter,
-				category: transactionCategoryFilter,
+				account: transactionAccountFilter,
 				property: transactionPropertyFilter,
 				from: transactionFromFilter,
 				to: transactionToFilter,
@@ -143,9 +144,9 @@
 			'accounting-transactions',
 			portfolioId,
 			debouncedTransactionSearch.value,
-			transactionKindFilter,
+			transactionTypeFilter,
 			transactionStatusFilter,
-			transactionCategoryFilter,
+			transactionAccountFilter,
 			transactionPropertyFilter,
 			transactionFromFilter,
 			transactionToFilter,
@@ -154,9 +155,9 @@
 		],
 		queryFn: () => accounting.transactions({
 			search: debouncedTransactionSearch.value,
-			kind: transactionKindFilter || undefined,
+			displayType: transactionTypeFilter || undefined,
 			status: transactionStatusFilter || undefined,
-			category: transactionCategoryFilter || undefined,
+			accountId: transactionAccountFilter ? Number(transactionAccountFilter) : undefined,
 			propertyId: selectedPropertyFilter,
 			from: transactionFromFilter || undefined,
 			to: transactionToFilter || undefined,
@@ -165,6 +166,20 @@
 			sort: transactionSort,
 		}),
 	}));
+	const chartOfAccountsQuery = createQuery(() => ({
+		queryKey: ['chart-of-accounts', portfolioId, 'Income,Expense'],
+		queryFn: () => accounting.chartOfAccounts({ activeOnly: true, accountTypes: 'Income,Expense', take: 500, sort: 'code' })
+	}));
+	const accountGroups = $derived.by(() => {
+		const rows = chartOfAccountsQuery.data?.items ?? [];
+		return ['Income', 'Expense'].map((accountType) => ({
+			accountType,
+			accounts: rows.filter((account) => account.accountType === accountType)
+		}));
+	});
+	const selectedAccountLabel = $derived(chartOfAccountsQuery.data?.items.find((account) => String(account.id) === transactionAccountFilter)?.name ?? null);
+	const LEDGER_TYPES = ['Charge', 'PaymentReceived', 'Credit', 'Expense', 'Bill', 'BankTransfer', 'LoanPayment', 'OwnerActivity', 'Reversal'];
+	let selectedTransaction = $state<ReconciledAccountingTransaction | null>(null);
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
 	const accountingReportsQuery = createQuery(() => ({
@@ -265,6 +280,9 @@
 	let lastExpenseVendorAutofillId = $state('');
 	let lastExpenseWorkOrderAutofillId = $state('');
 	let transactionPropertyLabel = $state<string | null>(null);
+	$effect(() => {
+		if (selectedPropertyQuery.data?.name) transactionPropertyLabel = selectedPropertyQuery.data.name;
+	});
 	let selectedPropertyLabel = $state<string | null>(null);
 	let selectedVendorLabel = $state<string | null>(null);
 	let selectedUnitLabel = $state<string | null>(null);
@@ -555,7 +573,6 @@
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value || 0);
 	}
-	// Short, compact date for the inline reconciliation chips (e.g. "Jun 3").
 	function shortDate(value: string | null | undefined) {
 		if (!value) return '';
 		return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -582,35 +599,28 @@
 		return !isNaN(c) && !isNaN(u) && u - c > 60_000;
 	}
 
-	// One-tap confirm of a suggested bank match for a ledger row. Optimistic: the row's
-	// suggestedBankMatch is consumed and `reconciled` flips to true so the chip becomes the green
-	// "Cleared" badge immediately; we invalidate accounting-transactions so the server truth (cleared
-	// bank name/date) lands. Never auto-confirmed — only fires when the user taps the chip.
 	let confirmingMatchId = $state<number | null>(null);
 	const confirmBankMatchMutation = createMutation(() => ({
 		mutationFn: (bankTransactionId: number) => accounting.confirmBankMatch(bankTransactionId),
-		onMutate: (bankTransactionId: number) => {
-			confirmingMatchId = bankTransactionId;
-		},
+		onMutate: (bankTransactionId: number) => (confirmingMatchId = bankTransactionId),
 		onSuccess: () => {
 			showSuccess('Matched to your bank — marked cleared.');
 			invalidatePayments();
 			invalidateExpenses();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
-		onSettled: () => {
-			confirmingMatchId = null;
-		}
+		onSettled: () => (confirmingMatchId = null)
 	}));
+
 	const reportYear = $derived(new Date().getFullYear());
 	const transactionRows = $derived(transactionsQuery.data?.items ?? []);
 	const transactionTotalCount = $derived(transactionsQuery.data?.totalCount ?? 0);
 	const transactionStatusOptions = $derived.by(() =>
-		transactionKindFilter === 'Payment'
+		transactionTypeFilter === 'PaymentReceived'
 			? PAYMENT_STATUSES
-			: transactionKindFilter === 'Expense'
+			: transactionTypeFilter === 'Expense' || transactionTypeFilter === 'Bill'
 				? EXPENSE_STATUSES
-				: transactionKindFilter === 'Bank'
+				: transactionTypeFilter === 'BankTransfer'
 					? ['Unmatched', 'Suggested', 'Matched']
 					: [...PAYMENT_STATUSES, ...EXPENSE_STATUSES.filter((status) => !PAYMENT_STATUSES.includes(status)), 'Unmatched', 'Suggested', 'Matched']
 	);
@@ -624,8 +634,8 @@
 
 	const transactionColumns: ColumnDef<ReconciledAccountingTransaction>[] = [
 		{
-			key: 'date',
-			title: 'Date',
+			key: 'effectiveOn',
+			title: 'Effective date',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
@@ -634,7 +644,7 @@
 			// "Entered" = when the row was scanned/created. Default sort so freshly-scanned items
 			// land at the top even when their transaction Date is wrong/old. Tooltip reveals the
 			// edited time when it differs from created.
-			key: 'createdAt',
+			key: 'enteredAtUtc',
 			title: 'Entered',
 			format: 'date',
 			sortable: true,
@@ -642,38 +652,44 @@
 			cell: transactionEnteredCell,
 		},
 		{
-			key: 'kind',
+			key: 'displayType',
 			title: 'Type',
 			sortable: true,
 			mobileRole: 'badge',
 			cell: transactionKindCell,
 		},
 		{
-			key: 'description',
-			title: 'Description',
+			key: 'title',
+			title: 'What happened',
 			sortable: true,
 			mobileRole: 'title',
+			cell: transactionWhatHappenedCell,
 		},
 		{
-			key: 'counterparty',
-			title: 'Paid by / paid to',
+			key: 'paidByOrTo',
+			title: 'Paid by/to',
 			mobileRole: 'subtitle',
-			accessor: (t) => t.counterparty ?? '—',
+			accessor: (t) => t.paidByOrTo ?? '—',
 		},
 		{
-			key: 'amount',
-			title: 'Amount',
-			format: 'currency',
-			sortable: true,
+			key: 'chargeAmount',
+			title: 'Charges',
+			align: 'right',
+			cell: transactionChargeCell,
 			mobileRole: 'metric',
 		},
 		{
-			key: 'category',
-			title: 'Category',
+			key: 'paymentsCredits',
+			title: 'Payments/credits',
+			align: 'right',
+			cell: transactionPaymentCreditCell,
+			mobileRole: 'metric',
+		},
+		{
+			key: 'accountName',
+			title: 'Account',
 			mobileRole: 'meta',
-			accessor: (t) => t.kind === 'Expense'
-				? formatExpenseCategory(t.category)
-				: formatMoneyCategoryLabel(t.category),
+			accessor: (t) => t.accountName ? `${t.accountCode} · ${t.accountName}` : '—',
 		},
 		{
 			key: 'propertyName',
@@ -686,13 +702,6 @@
 			title: 'Status',
 			mobileRole: 'badge',
 			cell: transactionStatusCell,
-		},
-		{
-			key: 'bank',
-			title: 'Bank',
-			mobileRole: 'meta',
-			width: '13rem',
-			cell: transactionBankCell,
 		},
 		{
 			key: 'hasReceipt',
@@ -713,77 +722,33 @@
 </script>
 
 {#snippet transactionEnteredCell(t: AccountingTransaction)}
-	{@const edited = wasEdited(t.createdAt, t.updatedAt)}
 	<span
-		class="inline-flex items-center gap-1"
-		title={`Entered ${fullStamp(t.createdAt)}${edited ? ` · Edited ${fullStamp(t.updatedAt)}` : ''}`}
+		class="inline-flex items-center gap-1 text-xs text-muted-foreground"
+		title={`Entered ${fullStamp(t.enteredAtUtc)}`}
 		data-testid="transaction-entered-{t.kind.toLowerCase()}-{t.id}"
 	>
-		{enteredDate(t.createdAt)}
-		{#if edited}
-			<span class="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">· edited</span>
-		{/if}
+		{enteredDate(t.enteredAtUtc)}
 	</span>
 {/snippet}
 
 {#snippet transactionKindCell(t: AccountingTransaction)}
-	<span class="m3-tone-chip inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'm3-tone--success' : t.kind === 'Bank' ? 'm3-tone--info' : 'm3-tone--warning'}">
-		{formatMoneyEntryLabel(t.kind)}
-	</span>
+	<LedgerTypeBadge type={t.displayType} />
+{/snippet}
+
+{#snippet transactionWhatHappenedCell(t: AccountingTransaction)}
+	<div class="min-w-48"><span class="block font-medium text-foreground">{t.title}</span>{#if t.sourceContext}<span class="block text-xs text-muted-foreground">{t.sourceContext}</span>{/if}</div>
+{/snippet}
+
+{#snippet transactionChargeCell(t: AccountingTransaction)}
+	{#if t.chargeAmount}<LedgerAmount amount={t.chargeAmount} currency="USD" tone="charge" />{:else}<span class="text-muted-foreground">—</span>{/if}
+{/snippet}
+
+{#snippet transactionPaymentCreditCell(t: AccountingTransaction)}
+	{#if t.paymentAmount}<LedgerAmount amount={t.paymentAmount} currency="USD" tone="payment" />{:else if t.creditAmount}<LedgerAmount amount={t.creditAmount} currency="USD" tone="credit" />{:else}<span class="text-muted-foreground">—</span>{/if}
 {/snippet}
 
 {#snippet transactionStatusCell(t: AccountingTransaction)}
 	<StatusBadge status={t.status} />
-{/snippet}
-
-{#snippet transactionBankCell(t: ReconciledAccountingTransaction)}
-	{#if t.kind === 'Bank'}
-		<!-- Bank rows are the source of truth, not reconciled against anything. -->
-		<span class="text-xs text-muted-foreground">—</span>
-	{:else if t.reconciled}
-		<span
-			data-testid="txn-reconciled-{t.id}"
-			class="inline-flex max-w-full items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-medium text-success"
-			title={`Cleared${t.clearedBankName ? ' · ' + t.clearedBankName : ''}${t.clearedAt ? ' · ' + shortDate(t.clearedAt) : ''}`}
-		>
-			<Check class="h-3 w-3 shrink-0" />
-			<span class="truncate">
-				Cleared{t.clearedBankName ? ` · ${t.clearedBankName}` : ''}{t.clearedAt ? ` · ${shortDate(t.clearedAt)}` : ''}
-			</span>
-		</span>
-	{:else if t.suggestedBankMatch}
-		{@const match = t.suggestedBankMatch}
-		<Tooltip.Provider delayDuration={150}>
-			<Tooltip.Root>
-				<Tooltip.Trigger
-					data-testid="txn-match-chip-{t.id}"
-					class="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
-					disabled={confirmingMatchId === match.bankTransactionId}
-					aria-label={`Confirm bank match: ${match.name}, ${money(match.amount)} on ${shortDate(match.date)}`}
-					onclick={(ev: MouseEvent) => {
-						ev.stopPropagation();
-						confirmBankMatchMutation.mutate(match.bankTransactionId);
-					}}
-				>
-					<Sparkles class="h-3 w-3 shrink-0" />
-					{confirmingMatchId === match.bankTransactionId ? 'Confirming…' : 'Match?'}
-				</Tooltip.Trigger>
-				<Tooltip.Content side="top" class="max-w-xs">
-					<div class="space-y-1" data-testid="txn-match-confirm-{t.id}">
-						<p class="text-xs font-semibold">Found a matching bank line</p>
-						<p class="text-xs">
-							{match.name} ·
-							<span class="font-mono tabular-nums">{money(match.amount)}</span>
-							· {shortDate(match.date)}
-						</p>
-						<p class="text-[11px] text-muted-foreground">Tap the chip to confirm — we won't count it twice.</p>
-					</div>
-				</Tooltip.Content>
-			</Tooltip.Root>
-		</Tooltip.Provider>
-	{:else}
-		<span class="text-xs text-muted-foreground">—</span>
-	{/if}
 {/snippet}
 
 {#snippet transactionReceiptCell(t: AccountingTransaction)}
@@ -819,6 +784,12 @@
 
 {#snippet transactionActionsCell(t: AccountingTransaction)}
 	<div class="flex items-center gap-1">
+		{#if t.kind !== 'Bank' && (t as ReconciledAccountingTransaction).reconciled}
+			<span class="inline-flex items-center gap-1 text-xs font-medium text-success" title={`Cleared${(t as ReconciledAccountingTransaction).clearedAt ? ` · ${shortDate((t as ReconciledAccountingTransaction).clearedAt)}` : ''}`}><Check class="h-3 w-3" />Cleared</span>
+		{:else if t.kind !== 'Bank' && (t as ReconciledAccountingTransaction).suggestedBankMatch}
+			{@const match = (t as ReconciledAccountingTransaction).suggestedBankMatch!}
+			<Button variant="outline" size="sm" disabled={confirmingMatchId === match.bankTransactionId} onclick={(ev) => { ev.stopPropagation(); confirmBankMatchMutation.mutate(match.bankTransactionId); }}><Sparkles class="h-3 w-3" />{confirmingMatchId === match.bankTransactionId ? 'Matching…' : 'Match?'}</Button>
+		{/if}
 		{#if t.kind === 'Bank'}
 			<Button
 				data-testid="bank-transaction-open"
@@ -1141,7 +1112,7 @@
 			emptyMessage="No money records found."
 			getRowKey={(t) => `${t.kind}-${t.id}`}
 			getRowTestId={(t) => `transaction-row-${t.kind.toLowerCase()}-${t.id}`}
-			onRowClick={(t) => goto(ledgerHref(t))}
+			onRowClick={(t) => (selectedTransaction = t)}
 			data-testid="transactions-list"
 			pageSize={PAGE_SIZE}
 			page={transactionPage}
@@ -1156,15 +1127,13 @@
 					<div class="sm:col-span-2 [&_input]:h-11">
 						<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
 					</div>
-					<Select.Root type="single" bind:value={transactionKindFilter}>
+					<Select.Root type="single" bind:value={transactionTypeFilter}>
 						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction type" data-testid="transaction-kind-filter">
-							{transactionKindFilter || 'All types'}
+							{transactionTypeFilter ? ledgerTypeLabel(transactionTypeFilter) : 'All types'}
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All types">All types</Select.Item>
-							<Select.Item value="Payment" label="Payments">Payments</Select.Item>
-							<Select.Item value="Expense" label="Expenses">Expenses</Select.Item>
-							<Select.Item value="Bank" label="Bank activity">Bank activity</Select.Item>
+							{#each LEDGER_TYPES as type}<Select.Item value={type} label={ledgerTypeLabel(type)}>{ledgerTypeLabel(type)}</Select.Item>{/each}
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionStatusFilter}>
@@ -1178,14 +1147,14 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Select.Root type="single" bind:value={transactionCategoryFilter}>
-						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction category" data-testid="transaction-category-filter">
-							{transactionCategoryFilter ? formatMoneyCategoryLabel(transactionCategoryFilter) : 'All categories'}
+					<Select.Root type="single" bind:value={transactionAccountFilter}>
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Account or category" data-testid="transaction-account-filter">
+							{selectedAccountLabel ?? 'All accounts'}
 						</Select.Trigger>
 						<Select.Content>
-							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each (transactionKindFilter === 'Payment' ? TENANT_MONEY_CATEGORY_OPTIONS : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : [...TENANT_MONEY_CATEGORY_OPTIONS, ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) }))]) as option}
-								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+							<Select.Item value="" label="All accounts">All accounts</Select.Item>
+							{#each accountGroups as group}
+								<Select.Group><Select.GroupHeading>{group.accountType}</Select.GroupHeading>{#each group.accounts as account}<Select.Item value={String(account.id)} label={`${account.code} · ${account.name}`}>{account.code} · {account.name}</Select.Item>{/each}</Select.Group>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1212,6 +1181,7 @@
 				</div>
 			{/snippet}
 		</DataGrid>
+		{#if selectedTransaction}<LedgerRowSheet transactionRow={selectedTransaction} fullRecordHref={ledgerHref(selectedTransaction)} onClose={() => (selectedTransaction = null)} />{/if}
 	</div>
 		</Tabs.Content>
 
