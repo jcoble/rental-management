@@ -676,6 +676,9 @@ export interface Expense {
 	workOrderTitle?: string;
 	createdAt: string;
 	updatedAt: string;
+	accountId?: number | null;
+	accountName?: string | null;
+	journalEntryPublicId?: string | null;
 	hasReceipt?: boolean;
 	receiptIsImage?: boolean;
 	/** Typed line items loaded from ExpenseLineItems child rows (populated on single GET). */

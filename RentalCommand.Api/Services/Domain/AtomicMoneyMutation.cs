@@ -1130,7 +1130,8 @@ public sealed class AtomicMoneyMutationHandler
         var response = await MoneyResponseProjection.ExpenseDetails(
                 db.Set<Expense>().AsNoTracking().Where(expense =>
                     expense.Id == entityId && expense.PortfolioId == portfolioId),
-                db.Set<StoredFile>().AsNoTracking())
+                db.Set<StoredFile>().AsNoTracking(),
+                db.Set<JournalEntry>().AsNoTracking())
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
     }
@@ -1170,6 +1171,28 @@ public sealed class AtomicMoneyMutationHandler
                 BalanceAfter = payment.BalanceAfter,
                 Status = payment.Status,
                 PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+                AccountId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                        entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Liability)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => (int?)line.LedgerAccountId)
+                    .FirstOrDefault(),
+                AccountName = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                        entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Liability)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => line.LedgerAccount!.Name)
+                    .FirstOrDefault(),
+                JournalEntryPublicId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                        entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                    .OrderBy(entry => entry.Id)
+                    .Select(entry => (Guid?)entry.PublicId)
+                    .FirstOrDefault(),
             })
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
@@ -1222,6 +1245,28 @@ public sealed class AtomicMoneyMutationHandler
                 Memo = distribution.Memo,
                 CreatedAt = distribution.CreatedAt,
                 UpdatedAt = distribution.UpdatedAt,
+                AccountId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == distribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == distribution.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => (int?)line.LedgerAccountId)
+                    .FirstOrDefault(),
+                AccountName = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == distribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == distribution.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => line.LedgerAccount!.Name)
+                    .FirstOrDefault(),
+                JournalEntryPublicId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == distribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == distribution.Id)
+                    .OrderBy(entry => entry.Id)
+                    .Select(entry => (Guid?)entry.PublicId)
+                    .FirstOrDefault(),
             })
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
@@ -1261,6 +1306,28 @@ public sealed class AtomicMoneyMutationHandler
                 Memo = contribution.Memo,
                 CreatedAt = contribution.CreatedAt,
                 UpdatedAt = contribution.UpdatedAt,
+                AccountId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => (int?)line.LedgerAccountId)
+                    .FirstOrDefault(),
+                AccountName = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                    .SelectMany(entry => entry.Lines)
+                    .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                    .OrderBy(line => line.LedgerAccount!.Code)
+                    .Select(line => line.LedgerAccount!.Name)
+                    .FirstOrDefault(),
+                JournalEntryPublicId = db.JournalEntries
+                    .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                        entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                    .OrderBy(entry => entry.Id)
+                    .Select(entry => (Guid?)entry.PublicId)
+                    .FirstOrDefault(),
             })
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);

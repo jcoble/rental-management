@@ -30,6 +30,9 @@ public class OwnerDistributionResponse
     public string? Memo { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public int? AccountId { get; set; }
+    public string? AccountName { get; set; }
+    public Guid? JournalEntryPublicId { get; set; }
 
     public string TestId => $"owner-distribution-{Id}";
 }

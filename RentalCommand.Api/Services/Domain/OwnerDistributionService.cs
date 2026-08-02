@@ -248,7 +248,7 @@ public class OwnerDistributionService : IOwnerDistributionService
         return ordered.ThenByDescending(d => d.Id);
     }
 
-    private IQueryable<OwnerDistributionResponse> ProjectResponse(IQueryable<OwnerDistribution> query)
+    internal IQueryable<OwnerDistributionResponse> ProjectResponse(IQueryable<OwnerDistribution> query)
     {
         return query.Select(d => new OwnerDistributionResponse
         {
@@ -274,6 +274,28 @@ public class OwnerDistributionService : IOwnerDistributionService
             Memo = d.Memo,
             CreatedAt = d.CreatedAt,
             UpdatedAt = d.UpdatedAt,
+            AccountId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == d.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == d.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => (int?)line.LedgerAccountId)
+                .FirstOrDefault(),
+            AccountName = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == d.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == d.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => line.LedgerAccount!.Name)
+                .FirstOrDefault(),
+            JournalEntryPublicId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == d.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerDistribution && entry.SourceId == d.Id)
+                .OrderBy(entry => entry.Id)
+                .Select(entry => (Guid?)entry.PublicId)
+                .FirstOrDefault(),
         });
     }
 

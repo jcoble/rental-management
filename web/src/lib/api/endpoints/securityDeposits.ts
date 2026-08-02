@@ -36,6 +36,9 @@ export interface TenantAccountDeposit {
 	netAdjustments: number;
 	heldBalance: number;
 	status: SecurityDepositStatus;
+	accountId?: number | null;
+	accountName?: string | null;
+	journalEntryPublicId?: string | null;
 }
 
 export interface TenantAccountDepositListParams extends ListParams {
@@ -87,6 +90,9 @@ export interface SecurityDepositMutationResult {
 	tenantLedgerEntryId: number;
 	amount: number;
 	error?: string;
+	accountId?: number | null;
+	accountName?: string | null;
+	journalEntryPublicId?: string | null;
 }
 
 export interface SecurityDepositMutationResponse {

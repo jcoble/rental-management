@@ -28,6 +28,9 @@ public class ExpenseResponse
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public int? AccountId { get; set; }
+    public string? AccountName { get; set; }
+    public Guid? JournalEntryPublicId { get; set; }
 
     /// <summary>Subtotal before tax, tip, and other charges (from scanned receipt).</summary>
     public decimal? Subtotal { get; set; }

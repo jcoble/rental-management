@@ -101,6 +101,9 @@ public sealed class TenantAccountDepositListItemResponse
     public decimal NetAdjustments { get; init; }
     public decimal HeldBalance { get; init; }
     public string Status { get; init; } = string.Empty;
+    public int? AccountId { get; init; }
+    public string? AccountName { get; init; }
+    public Guid? JournalEntryPublicId { get; init; }
 }
 
 /// <summary>One staff-authorized canonical account suitable for account selection and review.</summary>
@@ -409,4 +412,7 @@ public sealed class TenantAccountDepositResponse
     public decimal NetAdjustments { get; init; }
     public decimal HeldBalance { get; init; }
     public string Status { get; init; } = string.Empty;
+    public int? AccountId { get; init; }
+    public string? AccountName { get; init; }
+    public Guid? JournalEntryPublicId { get; init; }
 }

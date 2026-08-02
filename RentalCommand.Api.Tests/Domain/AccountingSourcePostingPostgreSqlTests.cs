@@ -1,11 +1,13 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -45,6 +47,34 @@ public sealed class AccountingSourcePostingPostgreSqlTests
         lines.Should().Equal(
             ("repairs-and-maintenance", 125m, 0m),
             ("operating-cash", 0m, 125m));
+
+        var dto = await new ExpenseService(
+                setup.Db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+            .GetAsync(1, expense.Id);
+        var journal = await setup.Db.JournalEntries.SingleAsync(entry =>
+            entry.SourceType == JournalSourceType.ExpensePayment && entry.SourceId == expense.Id);
+        dto!.JournalEntryPublicId.Should().Be(journal.PublicId);
+        dto.AccountName.Should().Be("Repairs and Maintenance");
+
+        var unposted = new Expense
+        {
+            PortfolioId = 1,
+            Category = ScheduleECategory.Repairs,
+            Description = "Historical unposted expense",
+            Status = ExpenseStatus.Pending,
+            Amount = 25m,
+            IncurredAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(unposted);
+        await setup.Db.SaveChangesAsync();
+        var unpostedDto = await new ExpenseService(
+                setup.Db, Mock.Of<IFileStorage>(), TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+            .GetAsync(1, unposted.Id);
+        unpostedDto!.AccountId.Should().BeNull();
+        unpostedDto.AccountName.Should().BeNull();
+        unpostedDto.JournalEntryPublicId.Should().BeNull();
     }
 
     [Fact]
@@ -227,6 +257,13 @@ public sealed class AccountingSourcePostingPostgreSqlTests
             ("mortgage-interest", 100m, 0m),
             ("mortgage-escrow-asset", 50m, 0m),
             ("operating-cash", 0m, 650m));
+
+        var dto = (await new LoanService(setup.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>())
+            .GetPaymentsAsync(1, loan.Id))!.Single();
+        var journal = await setup.Db.JournalEntries.SingleAsync(entry =>
+            entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id);
+        dto.JournalEntryPublicId.Should().Be(journal.PublicId);
+        dto.AccountName.Should().Be("Mortgage Payable");
     }
 
     [Fact]
@@ -613,6 +650,36 @@ public sealed class AccountingSourcePostingPostgreSqlTests
         lines.Should().Equal(
             new { SystemKey = "operating-cash", DebitAmount = 2_000m, CreditAmount = 0m, OwnerEntityId = (int?)owner.Id },
             new { SystemKey = "owner-contributions", DebitAmount = 0m, CreditAmount = 2_000m, OwnerEntityId = (int?)owner.Id });
+
+        var service = new OwnerContributionService(
+            setup.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
+        var dto = await service.ProjectResponse(
+            setup.Db.OwnerContributions.AsNoTracking().Where(row => row.Id == contribution.Id))
+            .SingleAsync();
+        var journal = await setup.Db.JournalEntries.SingleAsync(entry =>
+            entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id);
+        dto.JournalEntryPublicId.Should().Be(journal.PublicId);
+        dto.AccountName.Should().Be("Owner Contributions");
+
+        var draft = new OwnerContribution
+        {
+            PortfolioId = 1,
+            OwnerEntityId = owner.Id,
+            Date = contribution.Date.AddDays(1),
+            Amount = 50m,
+            Method = DistributionMethod.Cash,
+            Status = OwnerDistributionStatus.Draft,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        setup.Db.Add(draft);
+        await setup.Db.SaveChangesAsync();
+        var draftDto = await service.ProjectResponse(
+            setup.Db.OwnerContributions.AsNoTracking().Where(row => row.Id == draft.Id))
+            .SingleAsync();
+        draftDto.AccountId.Should().BeNull();
+        draftDto.AccountName.Should().BeNull();
+        draftDto.JournalEntryPublicId.Should().BeNull();
     }
 
     [Fact]

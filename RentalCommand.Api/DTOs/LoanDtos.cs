@@ -76,6 +76,9 @@ public class LoanPaymentResponse
     public decimal BalanceAfter { get; set; }
     public LoanPaymentStatus Status { get; set; }
     public bool PaymentDoesNotCoverInterest { get; set; }
+    public int? AccountId { get; set; }
+    public string? AccountName { get; set; }
+    public Guid? JournalEntryPublicId { get; set; }
 
     public static LoanPaymentResponse FromEntity(LoanPayment e) => new()
     {

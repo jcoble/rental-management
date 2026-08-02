@@ -200,6 +200,9 @@ export interface OwnerContributionResponse {
 	memo: string | null;
 	createdAt: string;
 	updatedAt: string;
+	accountId: number | null;
+	accountName: string | null;
+	journalEntryPublicId: string | null;
 }
 
 /**

@@ -498,6 +498,9 @@ public sealed class TenantReceiptSimulationClockTests : IAsyncLifetime
         var afterWallClock = DateTime.UtcNow.AddSeconds(5);
 
         outcome.Value.Applied.Should().BeTrue();
+        outcome.Value.AccountId.Should().BeGreaterThan(0);
+        outcome.Value.AccountName.Should().Be("Security Deposit Trust Cash");
+        outcome.Value.JournalEntryPublicId.Should().NotBeNull();
         _ctx.Db.ChangeTracker.Clear();
         var outboxKey = OutboxIdempotency.Create("tenant-money", command.DeliveryIdempotencyKey);
         var row = await (

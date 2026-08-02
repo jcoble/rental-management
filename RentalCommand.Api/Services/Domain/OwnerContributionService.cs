@@ -132,7 +132,7 @@ public sealed class OwnerContributionService : IOwnerContributionService
                   "Atomic owner-contribution receipt did not contain a response snapshot.")
             : null;
 
-    private static async Task<AccountingPage<OwnerContributionResponse>> BuildPageAsync(
+    private async Task<AccountingPage<OwnerContributionResponse>> BuildPageAsync(
         IQueryable<OwnerContribution> filtered,
         OwnerContributionListQuery query,
         CancellationToken ct)
@@ -207,7 +207,7 @@ public sealed class OwnerContributionService : IOwnerContributionService
         return ordered.ThenByDescending(row => row.Id);
     }
 
-    private static IQueryable<OwnerContributionResponse> ProjectResponse(
+    internal IQueryable<OwnerContributionResponse> ProjectResponse(
         IQueryable<OwnerContribution> query) =>
         query.Select(contribution => new OwnerContributionResponse
         {
@@ -233,5 +233,27 @@ public sealed class OwnerContributionService : IOwnerContributionService
             Memo = contribution.Memo,
             CreatedAt = contribution.CreatedAt,
             UpdatedAt = contribution.UpdatedAt,
+            AccountId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => (int?)line.LedgerAccountId)
+                .FirstOrDefault(),
+            AccountName = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Equity)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => line.LedgerAccount!.Name)
+                .FirstOrDefault(),
+            JournalEntryPublicId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == contribution.PortfolioId &&
+                    entry.SourceType == JournalSourceType.OwnerContribution && entry.SourceId == contribution.Id)
+                .OrderBy(entry => entry.Id)
+                .Select(entry => (Guid?)entry.PublicId)
+                .FirstOrDefault(),
         });
 }
