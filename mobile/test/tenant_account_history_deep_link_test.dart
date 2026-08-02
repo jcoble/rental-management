@@ -21,6 +21,9 @@ void main() {
                 const FormatException('unrelated account picker parser failed'),
               ),
             ),
+            tenantPortalAccountProvider.overrideWith(
+              (ref, tenantAccountId) async => _account8(),
+            ),
             tenantPortalAccountHistoryProvider.overrideWith((
               ref,
               request,
@@ -81,6 +84,24 @@ void main() {
     );
   });
 }
+
+PortalTenantAccount _account8() => PortalTenantAccount.fromJson({
+  'tenantAccountId': 8,
+  'leaseManagementId': 8,
+  'propertyName': 'Maple Street',
+  'unitNumber': '2B',
+  'accountNumber': 'TA-8',
+  'relationshipNumber': 'LM-8',
+  'lifecycle': 'Occupied',
+  'currency': 'USD',
+  'receivableBalance': 1650,
+  'unappliedCredit': 0,
+  'pastDueAmount': 1650,
+  'pastDueCount': 1,
+  'nextDueOn': '2027-02-01',
+  'nextDueAmount': 1650,
+  'condition': 'PastDue',
+});
 
 PortalTenantAccountHistory _history872() => PortalTenantAccountHistory(
   tenantAccountId: 8,
