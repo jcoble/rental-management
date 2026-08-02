@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/presentation/plain_english_labels.dart';
+import '../money/widgets/ledger_type_badge.dart';
 import 'tenant_portal_repository.dart';
 
 /// Tenant-facing account history. All period calculations, ordering, balances,
@@ -30,7 +30,6 @@ class _TenantAccountHistoryScreenState
   int? _selectedAccountId;
   int _accountSkip = 0;
   int _skip = 0;
-  int? _payingEntryId;
   bool _autopayBusy = false;
   bool _focusedEntryScrolled = false;
   final GlobalKey _focusedEntryKey = GlobalKey();
@@ -42,35 +41,6 @@ class _TenantAccountHistoryScreenState
     _selectedAccountId = widget.initialTenantAccountId;
     if (widget.initialTenantLedgerEntryId != null) {
       _period = TenantAccountHistoryPeriod.all;
-    }
-  }
-
-  Future<void> _payNow(
-    int tenantAccountId,
-    PortalTenantAccountHistoryItem entry,
-  ) async {
-    setState(() => _payingEntryId = entry.tenantLedgerEntryId);
-    try {
-      final url = await ref
-          .read(tenantPortalRepositoryProvider)
-          .payCheckout(tenantAccountId, entry.tenantLedgerEntryId);
-      if (url.isNotEmpty) {
-        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-      }
-    } on ApiException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              error.statusCode == 503
-                  ? "Online payments aren't set up yet."
-                  : error.message,
-            ),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _payingEntryId = null);
     }
   }
 
@@ -177,6 +147,16 @@ class _TenantAccountHistoryScreenState
       focusedEntryId: widget.initialTenantLedgerEntryId,
     );
     final history = ref.watch(tenantPortalAccountHistoryProvider(request));
+    final range = _portalRange(_period);
+    final ledgerRequest = (
+      tenantAccountId: accountId,
+      from: range.$1,
+      to: range.$2,
+    );
+    final ledger = ref.watch(tenantPortalLedgerProvider(ledgerRequest));
+    final monthSummaries = ref.watch(
+      tenantPortalMonthSummaryProvider(ledgerRequest),
+    );
     final autopay = ref.watch(tenantAutopayStatusProvider(accountId));
 
     return Scaffold(
@@ -185,6 +165,8 @@ class _TenantAccountHistoryScreenState
         onRefresh: () async {
           ref.invalidate(tenantPortalAccountsPageProvider(accountRequest));
           ref.invalidate(tenantPortalAccountHistoryProvider(request));
+          ref.invalidate(tenantPortalLedgerProvider(ledgerRequest));
+          ref.invalidate(tenantPortalMonthSummaryProvider(ledgerRequest));
           ref.invalidate(tenantAutopayStatusProvider(accountId));
         },
         child: history.when(
@@ -324,37 +306,45 @@ class _TenantAccountHistoryScreenState
                   ),
                 ),
                 const Divider(height: 32),
-                _BalanceLine(
-                  key: const Key('account-history-beginning-balance'),
-                  label: 'Beginning balance',
-                  value: _balanceMoney(page.beginningBalance, page.currency),
-                ),
-                const Divider(height: 1),
-                for (final entry in page.items) ...[
-                  _HistoryRow(
-                    key: entry.isFocused ? _focusedEntryKey : null,
-                    entry: entry,
-                    currency: page.currency,
-                    paying: _payingEntryId == entry.tenantLedgerEntryId,
-                    onPay: entry.payable
-                        ? () => _payNow(accountId, entry)
-                        : null,
-                  ),
-                  const Divider(height: 1),
-                ],
-                if (page.items.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 32),
-                    child: Text(
-                      'No account activity in this period.',
-                      key: Key('account-history-empty'),
-                      textAlign: TextAlign.center,
+                ledger.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) =>
+                      Text("Couldn't load account activity: $error"),
+                  data: (rows) => monthSummaries.when(
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (error, _) =>
+                        Text("Couldn't load monthly balances: $error"),
+                    data: (summaries) => Column(
+                      children: [
+                        for (final summary in summaries)
+                          _PortalMonthGroup(
+                            summary: summary,
+                            rows: rows
+                                .where(
+                                  (row) =>
+                                      row.effectiveOn.year == summary.year &&
+                                      row.effectiveOn.month == summary.month,
+                                )
+                                .toList(growable: false),
+                            onTap: (row) => Navigator.of(context).push<void>(
+                              MaterialPageRoute(
+                                builder: (_) => _PortalLedgerDetailScreen(
+                                  tenantAccountId: accountId,
+                                  entryId: row.tenantLedgerEntryId,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (summaries.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 32),
+                            child: Text('No account activity in this period.'),
+                          ),
+                      ],
                     ),
                   ),
-                _BalanceLine(
-                  key: const Key('account-history-closing-balance'),
-                  label: 'Closing balance',
-                  value: _balanceMoney(page.closingBalance, page.currency),
                 ),
                 if (page.totalCount > _pageSize) ...[
                   const SizedBox(height: 16),
@@ -396,133 +386,212 @@ class _TenantAccountHistoryScreenState
   }
 }
 
-class _HistoryRow extends StatelessWidget {
-  const _HistoryRow({
-    super.key,
-    required this.entry,
-    required this.currency,
-    required this.paying,
-    this.onPay,
+(String, String) _portalRange(TenantAccountHistoryPeriod period) {
+  final now = DateTime.now().toUtc();
+  final from = switch (period) {
+    TenantAccountHistoryPeriod.currentMonth => DateTime.utc(
+      now.year,
+      now.month,
+      1,
+    ),
+    TenantAccountHistoryPeriod.previousMonth => DateTime.utc(
+      now.year,
+      now.month - 1,
+      1,
+    ),
+    TenantAccountHistoryPeriod.last3Months => DateTime.utc(
+      now.year,
+      now.month - 2,
+      1,
+    ),
+    TenantAccountHistoryPeriod.thisYear => DateTime.utc(now.year, 1, 1),
+    TenantAccountHistoryPeriod.all => DateTime.utc(2000, 1, 1),
+  };
+  final to = period == TenantAccountHistoryPeriod.previousMonth
+      ? DateTime.utc(now.year, now.month, 0)
+      : DateTime.utc(now.year, now.month + 1, 0);
+  String date(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+  return (date(from), date(to));
+}
+
+class _PortalMonthGroup extends StatelessWidget {
+  const _PortalMonthGroup({
+    required this.summary,
+    required this.rows,
+    required this.onTap,
   });
-
-  final PortalTenantAccountHistoryItem entry;
-  final String currency;
-  final bool paying;
-  final VoidCallback? onPay;
-
+  final PortalTenantMonthSummary summary;
+  final List<PortalTenantLedgerRow> rows;
+  final ValueChanged<PortalTenantLedgerRow> onTap;
   @override
-  Widget build(BuildContext context) {
-    final description = entry.reversesEntryId != null
-        ? '${entry.description.isEmpty ? 'Correction' : entry.description} · Reversal'
-        : entry.reversedByEntryId != null
-        ? '${entry.description} · Reversed'
-        : entry.description.isEmpty
-        ? tenantLedgerEntryLabel(entry.entryType)
-        : entry.description;
-
-    return Semantics(
-      selected: entry.isFocused,
-      child: DecoratedBox(
-        key: Key('account-history-row-${entry.tenantLedgerEntryId}'),
-        decoration: BoxDecoration(
-          color: entry.isFocused
-              ? Theme.of(context).colorScheme.primaryContainer.withAlpha(80)
-              : null,
+  Widget build(BuildContext context) => Card.outlined(
+    child: Column(
+      children: [
+        ListTile(
+          title: Text('${_monthNames[summary.month - 1]} ${summary.year}'),
+          subtitle: Text(
+            'Opening amount owed ${_balanceMoney(summary.openingBalance, summary.currency)}',
+          ),
         ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _shortDate(entry.effectiveOn),
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                    Text(
-                      entry.displayType,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+        for (final row in rows)
+          ListTile(
+            onTap: () => onTap(row),
+            leading: LedgerTypeBadge(type: row.type),
+            title: Text(row.description),
+            subtitle: Text(
+              'Effective ${_shortDate(row.effectiveOn)} · Entered ${_shortDate(row.postedAtUtc)}',
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  _signedMoney(
+                    row.chargeAmount != 0
+                        ? row.chargeAmount
+                        : row.paymentAmount != 0
+                        ? -row.paymentAmount
+                        : -row.creditAmount,
+                    row.currency,
+                  ),
                 ),
+                Text(
+                  'Owed ${_balanceMoney(row.runningAmountOwed, row.currency)}',
+                ),
+              ],
+            ),
+          ),
+        const Divider(),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              _PortalTotal(
+                label: 'Charges',
+                value: _money(summary.chargeAmount, summary.currency),
               ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    _signedMoney(entry.signedAmount, currency),
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: entry.signedAmount < 0
-                          ? Theme.of(context).colorScheme.tertiary
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _balanceMoney(entry.runningBalance, currency),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  if (onPay != null)
-                    TextButton(
-                      key: Key(
-                        'account-history-pay-${entry.tenantLedgerEntryId}',
-                      ),
-                      onPressed: paying ? null : onPay,
-                      child: Text(paying ? 'Opening…' : 'Pay now'),
-                    ),
-                ],
+              _PortalTotal(
+                label: 'Payments',
+                value: _money(summary.paymentAmount, summary.currency),
+              ),
+              _PortalTotal(
+                label: 'Credits',
+                value: _money(summary.creditAmount, summary.currency),
+              ),
+              _PortalTotal(
+                label: 'Closing amount owed',
+                value: _balanceMoney(summary.closingBalance, summary.currency),
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
+      ],
+    ),
+  );
 }
 
-class _BalanceLine extends StatelessWidget {
-  const _BalanceLine({super.key, required this.label, required this.value});
-
-  final String label;
-  final String value;
-
+class _PortalTotal extends StatelessWidget {
+  const _PortalTotal({required this.label, required this.value});
+  final String label, value;
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-        ],
+  Widget build(BuildContext context) => Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [Text(label), Text(value)],
+  );
+}
+
+class _PortalLedgerDetailScreen extends ConsumerWidget {
+  const _PortalLedgerDetailScreen({
+    required this.tenantAccountId,
+    required this.entryId,
+  });
+  final int tenantAccountId, entryId;
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final row = ref.watch(
+      tenantPortalLedgerEntryProvider((
+        tenantAccountId: tenantAccountId,
+        entryId: entryId,
+      )),
+    );
+    return Scaffold(
+      appBar: AppBar(title: const Text('Money details')),
+      body: row.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) =>
+            Center(child: Text("Couldn't load money details: $error")),
+        data: (entry) => ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            LedgerTypeBadge(type: entry.type),
+            const SizedBox(height: 12),
+            Text(
+              entry.description,
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            ListTile(
+              title: const Text('Effective date'),
+              subtitle: Text(_shortDate(entry.effectiveOn)),
+            ),
+            ListTile(
+              title: const Text('Entered date'),
+              subtitle: Text(_shortDate(entry.postedAtUtc)),
+            ),
+            if (entry.paymentMethod != null)
+              ListTile(
+                title: const Text('Payment method'),
+                subtitle: Text(entry.paymentMethod!),
+              ),
+            if (entry.reference != null)
+              ListTile(
+                title: const Text('Receipt reference'),
+                subtitle: Text(entry.reference!),
+              ),
+            if (entry.sourceDocumentContext != null)
+              ListTile(
+                title: const Text('Receipt or document'),
+                subtitle: Text(entry.sourceDocumentContext!),
+              ),
+            if (entry.allocations.isNotEmpty) ...[
+              Text(
+                'Applied to',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              for (final allocation in entry.allocations)
+                ListTile(
+                  title: Text(allocation.targetDescription),
+                  subtitle: Text(_shortDate(allocation.effectiveOn)),
+                  trailing: Text(_money(allocation.amount, entry.currency)),
+                ),
+            ],
+            ListTile(
+              title: const Text('Amount owed after this item'),
+              trailing: Text(
+                _balanceMoney(entry.runningAmountOwed, entry.currency),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
+
+const _monthNames = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 class _AccountPicker extends StatelessWidget {
   const _AccountPicker({

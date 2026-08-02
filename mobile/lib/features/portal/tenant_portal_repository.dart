@@ -279,6 +279,119 @@ enum TenantAccountHistoryPeriod {
   final String label;
 }
 
+class PortalTenantLedgerAllocationRef {
+  const PortalTenantLedgerAllocationRef({
+    required this.targetDescription,
+    required this.amount,
+    required this.effectiveOn,
+  });
+  final String targetDescription;
+  final double amount;
+  final DateTime effectiveOn;
+  factory PortalTenantLedgerAllocationRef.fromJson(Map<String, dynamic> json) =>
+      PortalTenantLedgerAllocationRef(
+        targetDescription: json['targetDescription'] as String? ?? '',
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+        effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      );
+}
+
+class PortalTenantLedgerRow {
+  const PortalTenantLedgerRow({
+    required this.tenantLedgerEntryId,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.type,
+    required this.description,
+    required this.chargeAmount,
+    required this.paymentAmount,
+    required this.creditAmount,
+    required this.runningAmountOwed,
+    required this.openAmount,
+    required this.status,
+    required this.currency,
+    required this.allocations,
+    this.dueOn,
+    this.paymentMethod,
+    this.reference,
+    this.sourceDocumentContext,
+    this.reversesEntryId,
+    this.replacedByEntryId,
+  });
+  final int tenantLedgerEntryId;
+  final DateTime effectiveOn, postedAtUtc;
+  final DateTime? dueOn;
+  final String type, description, status, currency;
+  final double chargeAmount,
+      paymentAmount,
+      creditAmount,
+      runningAmountOwed,
+      openAmount;
+  final String? paymentMethod, reference, sourceDocumentContext;
+  final int? reversesEntryId, replacedByEntryId;
+  final List<PortalTenantLedgerAllocationRef> allocations;
+  factory PortalTenantLedgerRow.fromJson(Map<String, dynamic> json) =>
+      PortalTenantLedgerRow(
+        tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+        effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+        postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+        dueOn: json['dueOn'] == null
+            ? null
+            : DateTime.parse(json['dueOn'] as String),
+        type: json['type'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        status: json['status'] as String? ?? '',
+        currency: json['currency'] as String? ?? 'USD',
+        chargeAmount: (json['chargeAmount'] as num?)?.toDouble() ?? 0,
+        paymentAmount: (json['paymentAmount'] as num?)?.toDouble() ?? 0,
+        creditAmount: (json['creditAmount'] as num?)?.toDouble() ?? 0,
+        runningAmountOwed: (json['runningAmountOwed'] as num?)?.toDouble() ?? 0,
+        openAmount: (json['openAmount'] as num?)?.toDouble() ?? 0,
+        paymentMethod: json['paymentMethod'] as String?,
+        reference: json['reference'] as String?,
+        sourceDocumentContext: json['sourceDocumentContext'] as String?,
+        reversesEntryId: (json['reversesEntryId'] as num?)?.toInt(),
+        replacedByEntryId: (json['replacedByEntryId'] as num?)?.toInt(),
+        allocations: ((json['allocations'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(PortalTenantLedgerAllocationRef.fromJson)
+            .toList(growable: false),
+      );
+}
+
+class PortalTenantMonthSummary {
+  const PortalTenantMonthSummary({
+    required this.year,
+    required this.month,
+    required this.currency,
+    required this.openingBalance,
+    required this.chargeAmount,
+    required this.paymentAmount,
+    required this.creditAmount,
+    required this.closingBalance,
+  });
+  final int year, month;
+  final String currency;
+  final double openingBalance,
+      chargeAmount,
+      paymentAmount,
+      creditAmount,
+      closingBalance;
+  factory PortalTenantMonthSummary.fromJson(Map<String, dynamic> json) =>
+      PortalTenantMonthSummary(
+        year: (json['year'] as num).toInt(),
+        month: (json['month'] as num).toInt(),
+        currency: json['currency'] as String? ?? 'USD',
+        openingBalance: (json['openingBalance'] as num?)?.toDouble() ?? 0,
+        chargeAmount: (json['chargeAmount'] as num?)?.toDouble() ?? 0,
+        paymentAmount: (json['paymentAmount'] as num?)?.toDouble() ?? 0,
+        creditAmount: (json['creditAmount'] as num?)?.toDouble() ?? 0,
+        closingBalance: (json['closingBalance'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+typedef PortalLedgerRequest = ({int tenantAccountId, String from, String to});
+
 class PortalTenantAccountHistoryItem {
   const PortalTenantAccountHistoryItem({
     required this.tenantLedgerEntryId,
@@ -685,6 +798,59 @@ class TenantPortalRepository {
     }
   }
 
+  Future<List<PortalTenantLedgerRow>> tenantAccountLedger(
+    PortalLedgerRequest request,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/portal/tenant-accounts/${request.tenantAccountId}/ledger',
+        queryParameters: {
+          'from': request.from,
+          'to': request.to,
+          'skip': 0,
+          'take': 200,
+        },
+      );
+      return ((response.data?['items'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(PortalTenantLedgerRow.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<PortalTenantMonthSummary>> tenantAccountMonthSummary(
+    PortalLedgerRequest request,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/portal/tenant-accounts/${request.tenantAccountId}/month-summary',
+        queryParameters: {'from': request.from, 'to': request.to},
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(PortalTenantMonthSummary.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PortalTenantLedgerRow> tenantAccountLedgerEntry(
+    int tenantAccountId,
+    int entryId,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/portal/tenant-accounts/$tenantAccountId/ledger/$entryId',
+      );
+      return PortalTenantLedgerRow.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<PortalTenantAccountDeposit> tenantAccountDeposit(
     int tenantAccountId,
   ) async {
@@ -1034,6 +1200,25 @@ final tenantPortalAccountHistoryProvider = FutureProvider.autoDispose
             focusedEntryId: request.focusedEntryId,
           );
     });
+
+final tenantPortalLedgerProvider = FutureProvider.autoDispose
+    .family<List<PortalTenantLedgerRow>, PortalLedgerRequest>(
+      (ref, request) => ref
+          .watch(tenantPortalRepositoryProvider)
+          .tenantAccountLedger(request),
+    );
+final tenantPortalMonthSummaryProvider = FutureProvider.autoDispose
+    .family<List<PortalTenantMonthSummary>, PortalLedgerRequest>(
+      (ref, request) => ref
+          .watch(tenantPortalRepositoryProvider)
+          .tenantAccountMonthSummary(request),
+    );
+final tenantPortalLedgerEntryProvider = FutureProvider.autoDispose
+    .family<PortalTenantLedgerRow, ({int tenantAccountId, int entryId})>(
+      (ref, request) => ref
+          .watch(tenantPortalRepositoryProvider)
+          .tenantAccountLedgerEntry(request.tenantAccountId, request.entryId),
+    );
 
 /// The tenant's own work order + its status timeline, keyed by work-order id.
 final tenantWorkOrderDetailProvider = FutureProvider.autoDispose
