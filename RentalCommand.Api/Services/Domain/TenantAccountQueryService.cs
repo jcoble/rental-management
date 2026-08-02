@@ -1000,6 +1000,66 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             NetAdjustments = balance.NetAdjustments,
             HeldBalance = balance.HeldBalance,
             Status = balance.DepositStatus,
+            JournalEntryPublicId = _db.JournalEntries.AsNoTracking()
+                .Where(journal => journal.PortfolioId == deposit.PortfolioId &&
+                    _db.SecurityDepositEntries.AsNoTracking().Any(operation =>
+                        operation.PortfolioId == deposit.PortfolioId &&
+                        operation.SecurityDepositAccountId == deposit.Id &&
+                        ((journal.SourceType == JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.TenantLedgerEntryId) ||
+                         (journal.SourceType != JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.Id &&
+                          (journal.SourceType == JournalSourceType.SecurityDepositReceipt ||
+                           journal.SourceType == JournalSourceType.SecurityDepositRefund ||
+                           journal.SourceType == JournalSourceType.SecurityDepositApplication)))))
+                .OrderByDescending(journal => journal.PostedAtUtc)
+                .ThenByDescending(journal => journal.Id)
+                .Select(journal => (Guid?)journal.PublicId)
+                .FirstOrDefault(),
+            AccountId = _db.JournalEntries.AsNoTracking()
+                .Where(journal => journal.PortfolioId == deposit.PortfolioId &&
+                    _db.SecurityDepositEntries.AsNoTracking().Any(operation =>
+                        operation.PortfolioId == deposit.PortfolioId &&
+                        operation.SecurityDepositAccountId == deposit.Id &&
+                        ((journal.SourceType == JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.TenantLedgerEntryId) ||
+                         (journal.SourceType != JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.Id &&
+                          (journal.SourceType == JournalSourceType.SecurityDepositReceipt ||
+                           journal.SourceType == JournalSourceType.SecurityDepositRefund ||
+                           journal.SourceType == JournalSourceType.SecurityDepositApplication)))))
+                .OrderByDescending(journal => journal.PostedAtUtc)
+                .ThenByDescending(journal => journal.Id)
+                .SelectMany(journal => journal.Lines
+                    .Where(line => line.LedgerAccount!.AccountType ==
+                        (journal.SourceType == JournalSourceType.TenantReceipt
+                            ? AccountType.Asset
+                            : AccountType.Liability))
+                    .OrderBy(line => line.LedgerAccount!.Code))
+                .Select(line => (int?)line.LedgerAccountId)
+                .FirstOrDefault(),
+            AccountName = _db.JournalEntries.AsNoTracking()
+                .Where(journal => journal.PortfolioId == deposit.PortfolioId &&
+                    _db.SecurityDepositEntries.AsNoTracking().Any(operation =>
+                        operation.PortfolioId == deposit.PortfolioId &&
+                        operation.SecurityDepositAccountId == deposit.Id &&
+                        ((journal.SourceType == JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.TenantLedgerEntryId) ||
+                         (journal.SourceType != JournalSourceType.TenantReceipt &&
+                          journal.SourceId == operation.Id &&
+                          (journal.SourceType == JournalSourceType.SecurityDepositReceipt ||
+                           journal.SourceType == JournalSourceType.SecurityDepositRefund ||
+                           journal.SourceType == JournalSourceType.SecurityDepositApplication)))))
+                .OrderByDescending(journal => journal.PostedAtUtc)
+                .ThenByDescending(journal => journal.Id)
+                .SelectMany(journal => journal.Lines
+                    .Where(line => line.LedgerAccount!.AccountType ==
+                        (journal.SourceType == JournalSourceType.TenantReceipt
+                            ? AccountType.Asset
+                            : AccountType.Liability))
+                    .OrderBy(line => line.LedgerAccount!.Code))
+                .Select(line => line.LedgerAccount!.Name)
+                .FirstOrDefault(),
         };
     }
 

@@ -273,7 +273,8 @@ public class ExpenseService : IExpenseService
     {
         var response = await MoneyResponseProjection.ExpenseDetails(
                 expenses.Where(expense => expense.Id == id && expense.PortfolioId == portfolioId),
-                _db.StoredFiles.AsNoTracking())
+                _db.StoredFiles.AsNoTracking(),
+                _db.JournalEntries.AsNoTracking())
             .FirstOrDefaultAsync(ct);
 
         if (response == null)

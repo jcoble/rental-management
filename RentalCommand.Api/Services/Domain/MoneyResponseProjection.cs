@@ -1,5 +1,6 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -12,7 +13,8 @@ internal static class MoneyResponseProjection
 {
     public static IQueryable<ExpenseResponse> ExpenseDetails(
         IQueryable<Expense> expenses,
-        IQueryable<StoredFile> files)
+        IQueryable<StoredFile> files,
+        IQueryable<JournalEntry> journals)
     {
         return expenses.Select(expense => new ExpenseResponse
         {
@@ -44,6 +46,36 @@ internal static class MoneyResponseProjection
             PropertyName = expense.Property == null ? null : expense.Property.Name,
             UnitNumber = expense.Unit == null ? null : expense.Unit.UnitNumber,
             VendorName = expense.Vendor == null ? null : expense.Vendor.Name,
+            AccountId = journals
+                .Where(entry => entry.PortfolioId == expense.PortfolioId && entry.SourceId == expense.Id &&
+                    (entry.SourceType == JournalSourceType.BillIncurred ||
+                     entry.SourceType == JournalSourceType.ExpensePayment))
+                .OrderBy(entry => entry.SourceType == JournalSourceType.BillIncurred ? 0 : 1)
+                .ThenBy(entry => entry.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Expense)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => (int?)line.LedgerAccountId)
+                .FirstOrDefault(),
+            AccountName = journals
+                .Where(entry => entry.PortfolioId == expense.PortfolioId && entry.SourceId == expense.Id &&
+                    (entry.SourceType == JournalSourceType.BillIncurred ||
+                     entry.SourceType == JournalSourceType.ExpensePayment))
+                .OrderBy(entry => entry.SourceType == JournalSourceType.BillIncurred ? 0 : 1)
+                .ThenBy(entry => entry.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Expense)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => line.LedgerAccount!.Name)
+                .FirstOrDefault(),
+            JournalEntryPublicId = journals
+                .Where(entry => entry.PortfolioId == expense.PortfolioId && entry.SourceId == expense.Id &&
+                    (entry.SourceType == JournalSourceType.BillIncurred ||
+                     entry.SourceType == JournalSourceType.ExpensePayment))
+                .OrderBy(entry => entry.SourceType == JournalSourceType.BillIncurred ? 0 : 1)
+                .ThenBy(entry => entry.Id)
+                .Select(entry => (Guid?)entry.PublicId)
+                .FirstOrDefault(),
             AllocationTotal = expense.Allocations
                 .Select(allocation => (decimal?)allocation.Amount)
                 .Sum() ?? 0m,

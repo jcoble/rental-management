@@ -266,7 +266,10 @@ public sealed record SecurityDepositMutationResult(
     long SecurityDepositEntryId,
     long? TenantLedgerEntryId,
     decimal Amount,
-    string? Error);
+    string? Error,
+    int? AccountId = null,
+    string? AccountName = null,
+    Guid? JournalEntryPublicId = null);
 
 /// <summary>
 /// Reconstructs a portfolio's exact historical security-deposit opening position from its

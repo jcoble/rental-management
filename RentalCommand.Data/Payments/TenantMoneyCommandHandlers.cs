@@ -1649,9 +1649,11 @@ public sealed class FundSecurityDepositHandler
             command.BusinessKey, businessNowUtc, receipt.Id, command.SourceStoredFileId);
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
-        await TenantAccountingPosting.PostTenantReceiptAsync(
+        var journal = await TenantAccountingPosting.PostTenantReceiptAsync(
             _db, context, receipt, command.ActorUserId,
             "security-deposit-trust-cash", ct);
+        var journalLink = await TenantMoneyCommandSupport.JournalLinkAsync(
+            _db, journal, AccountType.Asset, ct);
         TenantMoneyCommandSupport.StageMutation(context, command, businessNowUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit funded",
             new
@@ -1663,7 +1665,8 @@ public sealed class FundSecurityDepositHandler
                 allocation.AllocatedAmount,
             });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
-            command.SecurityDepositAccountId, deposit.Id, receipt.Id, deposit.Amount, null);
+            command.SecurityDepositAccountId, deposit.Id, receipt.Id, deposit.Amount, null,
+            journalLink.AccountId, journalLink.AccountName, journal.PublicId);
     }
 
     public Task AuthorizeReplayAsync(FundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -1731,13 +1734,16 @@ public sealed class DeductSecurityDepositHandler
             command.BusinessKey, times.WallClockUtc, credit.Id, command.SourceStoredFileId);
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
-        await TenantAccountingPosting.PostSecurityDepositApplicationAsync(
+        var journal = await TenantAccountingPosting.PostSecurityDepositApplicationAsync(
             _db, context, deposit, command.ActorUserId, ct);
+        var journalLink = await TenantMoneyCommandSupport.JournalLinkAsync(
+            _db, journal, AccountType.Liability, ct);
         TenantMoneyCommandSupport.StageMutation(context, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit deduction posted",
             new { deposit.Amount, command.Reason, ChargeEntryId = charge.Id, CreditEntryId = credit.Id });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
-            command.SecurityDepositAccountId, deposit.Id, credit.Id, deposit.Amount, null);
+            command.SecurityDepositAccountId, deposit.Id, credit.Id, deposit.Amount, null,
+            journalLink.AccountId, journalLink.AccountName, journal.PublicId);
     }
 
     public Task AuthorizeReplayAsync(DeductSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -1782,13 +1788,16 @@ public sealed class RefundSecurityDepositHandler
             payoutExternalReference: TenantMoneyCommandSupport.Clean(command.ExternalReference));
         _db.Add(deposit);
         await context.FlushBusinessAsync(ct);
-        await TenantAccountingPosting.PostSecurityDepositRefundAsync(
+        var journal = await TenantAccountingPosting.PostSecurityDepositRefundAsync(
             _db, context, deposit, command.ActorUserId, ct);
+        var journalLink = await TenantMoneyCommandSupport.JournalLinkAsync(
+            _db, journal, AccountType.Liability, ct);
         TenantMoneyCommandSupport.StageMutation(context, command, times.WallClockUtc,
             nameof(SecurityDepositEntry), deposit.Id, "Security deposit refund posted",
             new { deposit.Amount, deposit.EffectiveOn, deposit.PayoutExternalReference });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
-            command.SecurityDepositAccountId, deposit.Id, null, amount, null);
+            command.SecurityDepositAccountId, deposit.Id, null, amount, null,
+            journalLink.AccountId, journalLink.AccountName, journal.PublicId);
     }
 
     public Task AuthorizeReplayAsync(RefundSecurityDepositCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -1931,7 +1940,7 @@ public sealed class ReverseSecurityDepositEntryHandler
         depositReversal.ReversesEntryId = target.EntryId;
         _db.Add(depositReversal);
         await context.FlushBusinessAsync(ct);
-        await TenantAccountingPosting.PostSecurityDepositReversalAsync(
+        var journal = await TenantAccountingPosting.PostSecurityDepositReversalAsync(
             _db, context, depositReversal, new SecurityDepositEntry
             {
                 Id = target.EntryId,
@@ -1943,6 +1952,8 @@ public sealed class ReverseSecurityDepositEntryHandler
                 Currency = target.Currency,
                 TenantLedgerEntryId = target.TenantLedgerEntryId,
             }, command.ActorUserId, ct);
+        var journalLink = await TenantMoneyCommandSupport.JournalLinkAsync(
+            _db, journal, AccountType.Liability, ct);
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(SecurityDepositEntry),
             depositReversal.Id, "Security deposit entry reversed", new
@@ -1959,7 +1970,8 @@ public sealed class ReverseSecurityDepositEntryHandler
             });
         return new SecurityDepositMutationResult(true, true, command.TenantAccountId,
             command.SecurityDepositAccountId, depositReversal.Id, ledgerReversal?.Id,
-            depositReversal.Amount, null);
+            depositReversal.Amount, null, journalLink.AccountId, journalLink.AccountName,
+            journal.PublicId);
     }
 
     public Task AuthorizeReplayAsync(ReverseSecurityDepositEntryCommand command, IAtomicCommandContext context, CancellationToken ct) =>
@@ -1968,6 +1980,23 @@ public sealed class ReverseSecurityDepositEntryHandler
 
 internal static class TenantMoneyCommandSupport
 {
+    internal sealed record JournalLink(int AccountId, string AccountName);
+
+    internal static async Task<JournalLink> JournalLinkAsync(
+        RentalCommandDbContext db,
+        JournalEntry journal,
+        AccountType preferredAccountType,
+        CancellationToken ct)
+    {
+        var accountIds = journal.Lines.Select(line => line.LedgerAccountId).ToArray();
+        return await db.LedgerAccounts
+            .Where(account => account.PortfolioId == journal.PortfolioId &&
+                accountIds.Contains(account.Id) && account.AccountType == preferredAccountType)
+            .OrderBy(account => account.Code)
+            .Select(account => new JournalLink(account.Id, account.Name))
+            .FirstAsync(ct);
+    }
+
     internal static IQueryable<TenantAccount> AuthorizedAccounts(
         ITenantMoneyCommand command, RentalCommandDbContext db, DateTime securityNowUtc)
     {

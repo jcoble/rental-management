@@ -28,6 +28,9 @@ export interface OwnerDistribution {
 	memo?: string | null;
 	createdAt: string;
 	updatedAt: string;
+	accountId?: number | null;
+	accountName?: string | null;
+	journalEntryPublicId?: string | null;
 	testId: string;
 }
 

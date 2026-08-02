@@ -63,6 +63,9 @@ export interface LoanPayment {
   status: LoanPaymentStatus;
   /** True when the scheduled P&I did not cover the period's interest (flagged). */
   paymentDoesNotCoverInterest: boolean;
+  accountId?: number | null;
+  accountName?: string | null;
+  journalEntryPublicId?: string | null;
 }
 
 export interface LoanPaymentListParams {

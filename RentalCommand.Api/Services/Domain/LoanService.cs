@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Money;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -225,7 +226,7 @@ public class LoanService : ILoanService
             .ToListAsync(ct);
     }
 
-    private static IQueryable<LoanPaymentResponse> BuildPaymentQuery(
+    private IQueryable<LoanPaymentResponse> BuildPaymentQuery(
         IQueryable<LoanPaymentEffectiveRow> payments,
         LoanPaymentQuery? query)
     {
@@ -261,6 +262,28 @@ public class LoanService : ILoanService
             BalanceAfter = payment.BalanceAfter,
             Status = payment.Status,
             PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+            AccountId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                    entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Liability)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => (int?)line.LedgerAccountId)
+                .FirstOrDefault(),
+            AccountName = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                    entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                .SelectMany(entry => entry.Lines)
+                .Where(line => line.LedgerAccount!.AccountType == AccountType.Liability)
+                .OrderBy(line => line.LedgerAccount!.Code)
+                .Select(line => line.LedgerAccount!.Name)
+                .FirstOrDefault(),
+            JournalEntryPublicId = _db.JournalEntries
+                .Where(entry => entry.PortfolioId == payment.PortfolioId &&
+                    entry.SourceType == JournalSourceType.LoanPayment && entry.SourceId == payment.Id)
+                .OrderBy(entry => entry.Id)
+                .Select(entry => (Guid?)entry.PublicId)
+                .FirstOrDefault(),
         });
     }
 }
