@@ -157,6 +157,7 @@ export interface JournalDetailLine {
 	accountId: number;
 	accountCode: string;
 	accountName: string;
+	normalBalance: NormalBalance;
 	debitAmount: number;
 	creditAmount: number;
 	memo: string | null;

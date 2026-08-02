@@ -271,6 +271,7 @@ public sealed class JournalDetailLine
     public int AccountId { get; init; }
     public string AccountCode { get; init; } = string.Empty;
     public string AccountName { get; init; } = string.Empty;
+    public NormalBalance NormalBalance { get; init; }
     public decimal DebitAmount { get; init; }
     public decimal CreditAmount { get; init; }
     public string? Memo { get; init; }

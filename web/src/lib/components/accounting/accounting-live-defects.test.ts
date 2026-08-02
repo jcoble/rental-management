@@ -18,4 +18,10 @@ describe('live accounting defect regressions', () => {
 		assert.match(portfolios, /idempotentMutation\(`portfolio:onboarding-choice:\$\{mode\}`/);
 		assert.match(portfolios, /headers: \{ 'Idempotency-Key': operationKey \}/);
 	});
+
+	it('settles the shared journal drawer when journal detail succeeds even if chart lookup is pending', () => {
+		const drawer = source('./JournalDetailDrawer.svelte');
+		assert.match(drawer, /const isLoading = \$derived\(journalQuery\.isLoading\)/);
+		assert.doesNotMatch(drawer, /journalQuery\.isLoading \|\| chartQuery\.isLoading/);
+	});
 });

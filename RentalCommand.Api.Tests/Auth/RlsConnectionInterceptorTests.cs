@@ -9,6 +9,22 @@ namespace RentalCommand.Api.Tests.Auth;
 public sealed class RlsConnectionInterceptorTests
 {
     [Fact]
+    public void ResolveSessionState_BindsAndClearsTheScopedStartupSeedIdentity()
+    {
+        using (DemoSeedStartupScope.Begin("portfolio:1:startup:abc123"))
+        {
+            var state = RlsConnectionInterceptor.ResolveSessionState(httpContext: null);
+
+            state.DemoSeedIdempotencyKey.Should().Be("portfolio:1:startup:abc123");
+            RlsConnectionInterceptor.BuildSql(state).Should().Contain(
+                "set_config('app.demo_seed_idempotency_key', 'portfolio:1:startup:abc123', false)");
+        }
+
+        RlsConnectionInterceptor.ResolveSessionState(httpContext: null)
+            .DemoSeedIdempotencyKey.Should().BeNull();
+    }
+
+    [Fact]
     public void ResolveSessionState_UsesValidatedTokenOnlyForPublicApplicationRoute()
     {
         var http = new DefaultHttpContext();
