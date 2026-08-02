@@ -31,6 +31,9 @@ class TenantAccountDeposit {
     required this.createdAtUtc,
     required this.effectiveNowUtc,
     required this.businessDate,
+    this.accountId,
+    this.accountName,
+    this.journalEntryPublicId,
   });
 
   final int securityDepositAccountId;
@@ -56,6 +59,8 @@ class TenantAccountDeposit {
   final DateTime createdAtUtc;
   final DateTime effectiveNowUtc;
   final String businessDate;
+  final int? accountId;
+  final String? accountName, journalEntryPublicId;
 
   factory TenantAccountDeposit.fromJson(
     Map<String, dynamic> json,
@@ -87,6 +92,9 @@ class TenantAccountDeposit {
         DateTime.tryParse(json['effectiveNowUtc'] as String? ?? '') ??
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
     businessDate: json['businessDate'] as String? ?? '',
+    accountId: (json['accountId'] as num?)?.toInt(),
+    accountName: json['accountName'] as String?,
+    journalEntryPublicId: json['journalEntryPublicId'] as String?,
   );
 }
 

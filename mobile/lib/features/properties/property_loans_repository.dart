@@ -97,6 +97,9 @@ class LoanPayment {
     required this.balanceAfter,
     required this.status,
     required this.paymentDoesNotCoverInterest,
+    this.accountId,
+    this.accountName,
+    this.journalEntryPublicId,
   });
 
   final int id;
@@ -111,6 +114,8 @@ class LoanPayment {
   final double balanceAfter;
   final String status;
   final bool paymentDoesNotCoverInterest;
+  final int? accountId;
+  final String? accountName, journalEntryPublicId;
 
   factory LoanPayment.fromJson(Map<String, dynamic> json) {
     return LoanPayment(
@@ -128,6 +133,9 @@ class LoanPayment {
       status: json['status'] as String? ?? 'Scheduled',
       paymentDoesNotCoverInterest:
           json['paymentDoesNotCoverInterest'] as bool? ?? false,
+      accountId: (json['accountId'] as num?)?.toInt(),
+      accountName: json['accountName'] as String?,
+      journalEntryPublicId: json['journalEntryPublicId'] as String?,
     );
   }
 }

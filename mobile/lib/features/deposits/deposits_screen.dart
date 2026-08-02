@@ -5,11 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
+import '../accounting/accounting_repository.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../money/widgets/accounting_impact_block.dart';
+import '../money/widgets/journal_entry_screen.dart';
 import 'deposits_repository.dart';
 
 String _fmtCurrency(double amount, [String currency = 'USD']) {
@@ -490,6 +496,16 @@ class _DepositDetailSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final auth = ref.watch(authControllerProvider);
+    final canSeeAccounting =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.balances.read',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final journalId = canSeeAccounting ? account.journalEntryPublicId : null;
     final canDispose = account.heldBalance > 0;
     final canFund = const {'NotFunded', 'Held'}.contains(account.status);
     return _SheetFrame(
@@ -530,6 +546,12 @@ class _DepositDetailSheet extends ConsumerWidget {
             label: 'Created',
             value: _fmtDate(account.createdAtUtc.toLocal()),
           ),
+          if (canSeeAccounting && account.accountName != null)
+            _InfoRow(label: 'Account', value: account.accountName!),
+          if (journalId != null) ...[
+            const SizedBox(height: 16),
+            _DepositAccountingImpact(journalId: journalId),
+          ],
           const SizedBox(height: 20),
           if (canFund) ...[
             FilledButton.icon(
@@ -559,6 +581,29 @@ class _DepositDetailSheet extends ConsumerWidget {
             label: const Text('Move-out statement (PDF)'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DepositAccountingImpact extends ConsumerWidget {
+  const _DepositAccountingImpact({required this.journalId});
+
+  final String journalId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final journal = ref.watch(journalEntryProvider(journalId));
+    return journal.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (_, _) => const SizedBox.shrink(),
+      data: (value) => AccountingImpactBlock(
+        journal: value,
+        onOpenJournal: () => Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => JournalEntryScreen(publicId: journalId),
+          ),
+        ),
       ),
     );
   }

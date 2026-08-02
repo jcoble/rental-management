@@ -148,6 +148,9 @@ class OwnerDistribution {
     this.propertyId,
     this.propertyName,
     this.memo,
+    this.accountId,
+    this.accountName,
+    this.journalEntryPublicId,
   });
 
   final int id;
@@ -159,6 +162,8 @@ class OwnerDistribution {
   final double amount;
   final DistributionMethod method;
   final String? memo;
+  final int? accountId;
+  final String? accountName, journalEntryPublicId;
 
   factory OwnerDistribution.fromJson(Map<String, dynamic> json) {
     return OwnerDistribution(
@@ -173,6 +178,9 @@ class OwnerDistribution {
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       method: DistributionMethod.fromJson(json['method']),
       memo: json['memo'] as String?,
+      accountId: (json['accountId'] as num?)?.toInt(),
+      accountName: json['accountName'] as String?,
+      journalEntryPublicId: json['journalEntryPublicId'] as String?,
     );
   }
 }
@@ -646,10 +654,7 @@ class MonthlyReportsNotifier extends Notifier<MonthlyReportsState> {
     final nextSkip = current.skip + (pageDelta * current.take);
     final updatedPaging = current.copyWith(skip: nextSkip < 0 ? 0 : nextSkip);
     state = state.copyWith(
-      pagingByReportKey: {
-        ...state.pagingByReportKey,
-        reportKey: updatedPaging,
-      },
+      pagingByReportKey: {...state.pagingByReportKey, reportKey: updatedPaging},
     );
     return load(month: state.month);
   }
