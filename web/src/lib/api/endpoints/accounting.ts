@@ -243,8 +243,12 @@ export const accounting = {
 	chartOfAccounts: (params: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'> & {
 		activeOnly?: boolean;
 		accountTypes?: string;
-	} = {}) =>
-		api.get<AccountingPage<ChartOfAccountsRow>>(`/accounting/chart-of-accounts${buildListQuery(params)}`),
+	} = {}) => {
+		const { activeOnly, accountTypes, ...list } = params;
+		return api.get<AccountingPage<ChartOfAccountsRow>>(
+			`/accounting/chart-of-accounts${buildListQuery(list, { activeOnly: activeOnly === undefined ? undefined : String(activeOnly), accountTypes })}`
+		);
+	},
 	createChartOfAccounts: (body: CreateChartOfAccountsRequest) =>
 		api.post<ChartOfAccountsRow>('/accounting/chart-of-accounts', body),
 	patchChartOfAccounts: (id: number, body: PatchChartOfAccountsRequest) =>
