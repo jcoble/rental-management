@@ -45,6 +45,19 @@
 		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0
 	}));
 	const receipt = $derived(paymentQuery.data);
+	const entryKind = $derived.by(() => {
+		if (!receipt) return 'payment';
+		if (['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'DepositCharge', 'ManualCharge', 'OpeningBalance'].includes(receipt.entryType)) return 'charge';
+		if (['Credit', 'Adjustment', 'Refund', 'Reversal'].includes(receipt.entryType)) return 'credit';
+		return 'payment';
+	});
+	const detailCopy = $derived(
+		entryKind === 'charge'
+			? { title: 'Charge detail', intro: 'This charge stays in the account history so the amount owed remains traceable.', amountLabel: 'Charged', cardTitle: 'Charge', recordLabel: 'Charge record', sourceType: 'TenantCharge' as const }
+			: entryKind === 'credit'
+				? { title: 'Credit detail', intro: 'This credit stays in the account history so the balance change remains traceable.', amountLabel: 'Credited', cardTitle: 'Credit', recordLabel: 'Credit record', sourceType: 'TenantConcession' as const }
+				: { title: 'Payment receipt', intro: 'This receipt stays in your records. If something is wrong, record a correction so the history remains complete.', amountLabel: 'Received', cardTitle: 'Receipt', recordLabel: 'Payment record', sourceType: 'TenantReceipt' as const }
+	);
 	const correctionAllowed = $derived(
 		canCorrectPayment(currentCapabilities(), receipt?.entryType)
 	);
@@ -113,33 +126,31 @@
 	}));
 </script>
 
-<svelte:head>
-	<title>Receipt - Rental Command</title>
-</svelte:head>
+<svelte:head><title>{detailCopy.title} - Rental Command</title></svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="payment-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold">Payment receipt</h1>
-			<p class="text-sm text-muted-foreground">This receipt stays in your records. If something is wrong, record a correction so the history remains complete.</p>
+			<h1 class="text-2xl font-bold" data-testid="tenant-entry-detail-title">{detailCopy.title}</h1>
+			<p class="text-sm text-muted-foreground">{detailCopy.intro}</p>
 		</div>
 		<Button variant="ghost" size="sm" href="/docs/recording-payments" data-testid="payment-detail-help-link">How this works</Button>
 	</div>
 
 	{#if paymentQuery.isLoading}
-		<LoadingState label="Loading payment receipt" testid="payment-detail-loading" />
+		<LoadingState label="Loading account entry" testid="payment-detail-loading" />
 	{:else if paymentQuery.isError}
 		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="payment-detail-error">
-			<p class="font-medium text-destructive">Could not load this receipt.</p>
-			<p class="mt-1 text-sm text-muted-foreground">Try again. The receipt has not been reported as missing.</p>
+			<p class="font-medium text-destructive">Could not load this account entry.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The entry has not been reported as missing.</p>
 			<Button class="mt-4" variant="outline" onclick={() => paymentQuery.refetch()}>Try again</Button>
 		</div>
 	{:else if !receipt}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground" data-testid="payment-detail-not-found">Receipt not found.</div>
+		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground" data-testid="payment-detail-not-found">Account entry not found.</div>
 	{:else}
 		<HeroCard tone="success" testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
 			<div>
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Received</p>
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{detailCopy.amountLabel}</p>
 				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{money(receipt.amount, receipt.currency)}</p>
 				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.effectiveOn)} · {formatResidentName(receipt.tenantName)}</p>
 			</div>
@@ -195,12 +206,14 @@
 		{/if}
 
 		<div class="grid gap-6 lg:grid-cols-2">
-			<DetailCard title="Receipt" icon={Receipt} accent="success" testid="payment-card-receipt">
+			<DetailCard title={detailCopy.cardTitle} icon={Receipt} accent="success" testid="payment-card-receipt">
 				<dl class="grid gap-4 sm:grid-cols-2">
 					<div><dt class="text-xs text-muted-foreground">Date received</dt><dd class="font-medium">{formatDateOnly(receipt.effectiveOn)}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Payment method</dt><dd class="font-medium">{receipt.providerAttempt?.paymentMethodSummary || 'Not specified'}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Reference</dt><dd class="font-medium">{receipt.providerAttempt?.providerReference || '—'}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Payer</dt><dd class="font-medium">{receipt.providerAttempt?.payerName || receipt.tenantName || '—'}</dd></div>
+					{#if entryKind === 'payment'}
+						<div><dt class="text-xs text-muted-foreground">Payment method</dt><dd class="font-medium">{receipt.providerAttempt?.paymentMethodSummary || 'Not specified'}</dd></div>
+						<div><dt class="text-xs text-muted-foreground">Reference</dt><dd class="font-medium">{receipt.providerAttempt?.providerReference || '—'}</dd></div>
+						<div><dt class="text-xs text-muted-foreground">Payer</dt><dd class="font-medium">{receipt.providerAttempt?.payerName || receipt.tenantName || '—'}</dd></div>
+					{/if}
 					{#if receipt.providerAttempt?.checkNumber}<div><dt class="text-xs text-muted-foreground">Check number</dt><dd class="font-medium">{receipt.providerAttempt.checkNumber}</dd></div>{/if}
 					{#if receipt.providerAttempt?.bankName}<div><dt class="text-xs text-muted-foreground">Bank</dt><dd class="font-medium">{receipt.providerAttempt.bankName}</dd></div>{/if}
 					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Description</dt><dd class="font-medium">{receipt.description}</dd></div>
@@ -227,12 +240,12 @@
 				<dl class="grid gap-3 border-t border-border px-4 py-3 text-sm sm:grid-cols-3">
 					<div><dt class="text-xs text-muted-foreground">Rental account reference</dt><dd class="font-mono">{receipt.accountNumber}</dd></div>
 					<div><dt class="text-xs text-muted-foreground">Rental reference</dt><dd class="font-mono">{receipt.relationshipNumber}</dd></div>
-					<div><dt class="text-xs text-muted-foreground">Payment record</dt><dd class="font-mono">#{receipt.tenantLedgerEntryId}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">{detailCopy.recordLabel}</dt><dd class="font-mono">#{receipt.tenantLedgerEntryId}</dd></div>
 				</dl>
 			</details>
 		</div>
 
-		<AccountingImpactCard sourceType="TenantReceipt" sourceId={tenantLedgerEntryId} />
+		<AccountingImpactCard sourceType={detailCopy.sourceType} sourceId={tenantLedgerEntryId} />
 
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
 			<h2 class="mb-1 text-base font-semibold">History</h2>

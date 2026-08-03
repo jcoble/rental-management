@@ -103,6 +103,11 @@
 				{/each}
 			</div>
 		</section>
+	{:else if !sourceJournalsQuery.isError}
+		<section class="rounded-xl border border-border bg-card p-4" data-testid="accounting-impact-empty">
+			<h2 class="text-sm font-semibold">{title}</h2>
+			<p class="mt-2 text-sm text-muted-foreground">No accounting entry — recorded before accounting was enabled.</p>
+		</section>
 	{/if}
 
 	<JournalDetailDrawer bind:journalPublicId={selectedJournalPublicId} />
