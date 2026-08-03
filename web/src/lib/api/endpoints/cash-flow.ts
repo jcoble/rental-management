@@ -15,12 +15,17 @@ export interface PropertyCashFlow {
 	noi: number;
 	debtService: number;
 	cashFlow: number;
+	operatingExpenseDetails?: CashFlowDetailRow[];
+	debtServiceDetails?: CashFlowDetailRow[];
 }
+export interface CashFlowDetailRow { label: string; amount: number; }
+export interface MonthlyCashFlow { month: string; income: number; operatingExpenses: number; debtService: number; cashFlow: number; }
 
 export interface CashFlowSummaryResponse {
 	from: string;
 	to: string;
 	properties: PropertyCashFlow[];
+	months?: MonthlyCashFlow[];
 	totalIncome: number;
 	totalOperatingExpenses: number;
 	totalNoi: number;

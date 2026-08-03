@@ -193,6 +193,11 @@
 				sort: sort as ApiGeneralLedgerSort
 			})
 	}));
+	const balancesQuery = createQuery(() => ({
+		queryKey: ['accounting-company-balances', portfolioId],
+		enabled: active && authState.isAuthenticated && selectedAccountId == null,
+		queryFn: () => accountingBooks.trialBalance()
+	}));
 
 	function errorStatus(error: unknown): number | undefined {
 		if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
@@ -427,6 +432,18 @@
 				<Info class="mt-0.5 size-4 shrink-0 text-primary" />
 				<p>Choose one category or account to see its running balance. Every account has its own balance, so there is no single running balance for the entire general ledger.</p>
 			</div>
+			<section class="overflow-hidden rounded-xl border border-border bg-card" data-testid="company-wide-balances">
+				<header class="border-b px-4 py-3"><h3 class="font-semibold">Whole-business account balances</h3><p class="text-sm text-muted-foreground">Every category across the portfolio. Debits equal credits overall; open the <a class="underline" href="/accounting/trial-balance">trial balance</a> for the accounting proof.</p></header>
+				{#if balancesQuery.isLoading}<p class="p-4 text-sm text-muted-foreground">Loading balances…</p>{:else}
+					<div class="divide-y" data-testid="company-balance-groups">
+						{#each ['Asset', 'Liability', 'Equity', 'Income', 'Expense'] as type}
+							{@const typeRows = (balancesQuery.data?.rows ?? []).filter((row) => row.accountType === type)}
+							{#if typeRows.length}<div class="p-4" data-testid={`company-balance-type-${type}`}><div class="mb-2 flex justify-between font-semibold"><span>{type}</span><span class="font-mono">{formatAccountingCurrency(typeRows[0].typeSubtotal)}</span></div>{#each typeRows as row}<button class="flex w-full justify-between rounded px-2 py-1 text-left text-sm hover:bg-muted" onclick={() => (selectedAccountId = row.accountId)}><span>{advanced ? `${row.accountCode} · ` : ''}{row.accountName}</span><span class="font-mono">{formatAccountingCurrency(row.debitBalance - row.creditBalance)}</span></button>{/each}</div>{/if}
+						{/each}
+					</div>
+					<p class="border-t px-4 py-3 text-sm font-medium" data-testid="company-trial-balance-note">Debits {formatAccountingCurrency(balancesQuery.data?.totalDebits)} · Credits {formatAccountingCurrency(balancesQuery.data?.totalCredits)} · {balancesQuery.data?.isBalanced ? 'Balanced' : 'Review needed'}</p>
+				{/if}
+			</section>
 		{/if}
 
 		{#if ledgerQuery.isError}
@@ -434,7 +451,7 @@
 				<p class="text-sm text-destructive">The general ledger could not be loaded.</p>
 				<Button variant="outline" size="sm" onclick={() => ledgerQuery.refetch()}>Try again</Button>
 			</div>
-		{:else}
+		{:else if hasAccount}
 			<DataGrid
 				data={rows}
 				columns={ledgerColumns}

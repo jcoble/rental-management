@@ -245,6 +245,11 @@ export function cashFlowPropertyDetails(property: PropertyCashFlow): CashFlowPro
 	];
 }
 
+export function buildServerCashFlowChartPoints(response: CashFlowSummaryResponse): CashFlowChartPoint[] {
+	return (response.months ?? []).map((month) => ({ key: month.month, label: month.month, income: month.income,
+		operatingExpenses: month.operatingExpenses, debtService: month.debtService, cashFlow: month.cashFlow }));
+}
+
 /** Keep chart points as a direct projection of one server response per month. */
 export function buildCashFlowChartPoints(
 	monthlyResponses: readonly CashFlowMonthlyResponse[]

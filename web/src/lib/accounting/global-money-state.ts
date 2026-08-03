@@ -1,4 +1,4 @@
-export const MONEY_TABS = ['overview', 'cash-flow', 'activity', 'general-ledger', 'reports'] as const;
+export const MONEY_TABS = ['overview', 'cash-flow', 'activity', 'rent-payments', 'general-ledger', 'reports'] as const;
 
 export type MoneyTab = (typeof MONEY_TABS)[number];
 
@@ -21,6 +21,7 @@ const TAB_ALIASES: Record<string, MoneyTab> = {
 	'general-ledger': 'general-ledger',
 	'general-leger': 'general-ledger',
 	ledger: 'activity',
+	'rent-payments': 'rent-payments',
 	overview: 'overview',
 	reports: 'reports',
 	// Keep the previous visible-tab names useful for old saved links.

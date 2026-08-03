@@ -79,8 +79,7 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
 
         foreach (var sql in new[] { activitySql, chargeSql, depositSql })
         {
-            sql.Should().Contain("AuthSessions");
-            sql.Should().Contain("MembershipRoleAssignments");
+            sql.Should().Contain("rc_api_effective_capability_scopes");
             sql.Should().Contain("ORDER BY");
             sql.Should().Contain("LIMIT");
             sql.Should().Contain("OFFSET");
@@ -154,8 +153,7 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
         unitExpensePage.Items.Should().BeEmpty();
         unitExpenseCommands.Should().HaveCount(2);
         unitExpenseCommands[0].Should().ContainEquivalentOf("count(*)");
-        unitExpenseCommands[1].Should().Contain("AuthSessions");
-        unitExpenseCommands[1].Should().Contain("RoleProfileCapabilities");
+        unitExpenseCommands[1].Should().Contain("rc_api_effective_capability_scopes");
         unitExpenseCommands[1].Should().Contain("UnitId");
         unitExpenseCommands[1].Should().ContainEquivalentOf("sum(");
         unitExpenseCommands[1].Should().Contain("ORDER BY");
@@ -183,8 +181,7 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
         propertyExpensePage.Items.Should().BeEmpty();
         propertyExpenseCommands.Should().HaveCount(2);
         propertyExpenseCommands[0].Should().ContainEquivalentOf("count(*)");
-        propertyExpenseCommands[1].Should().Contain("AuthSessions");
-        propertyExpenseCommands[1].Should().Contain("RoleProfileCapabilities");
+        propertyExpenseCommands[1].Should().Contain("rc_api_effective_capability_scopes");
         propertyExpenseCommands[1].Should().Contain("PropertyId");
         propertyExpenseCommands[1].Should().Contain("OperationalScope");
         propertyExpenseCommands[1].Should().ContainEquivalentOf("sum(");
@@ -209,8 +206,7 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
         financingPage.Items.Should().BeEmpty();
         financingCommands.Should().HaveCount(2);
         financingCommands[0].Should().ContainEquivalentOf("count(*)");
-        financingCommands[1].Should().Contain("AuthSessions");
-        financingCommands[1].Should().Contain("RoleProfileCapabilities");
+        financingCommands[1].Should().Contain("rc_api_effective_capability_scopes");
         financingCommands[1].Should().Contain("Properties");
         financingCommands[1].Should().Contain("PropertyId");
         financingCommands[1].Should().Contain("ORDER BY");
@@ -451,9 +447,7 @@ public sealed class UnitMoneyPostgreSqlTests : IAsyncLifetime
 
         projectedEntries.Should().BeEmpty();
         commands.Should().ContainSingle();
-        commands[0].Should().Contain("AuthSessions");
-        commands[0].Should().Contain("RoleProfileCapabilities");
-        commands[0].Should().Contain("MembershipRoleAssignmentProperties");
+        commands[0].Should().Contain("rc_api_effective_capability_scopes");
         commands[0].Should().Contain("TenantAccounts");
         commands[0].Should().Contain("TenantLedgerEntries");
     }

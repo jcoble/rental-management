@@ -202,6 +202,7 @@ export interface TrialBalanceRow {
 	accountType: AccountType;
 	debitBalance: number;
 	creditBalance: number;
+	typeSubtotal: number;
 	currency: string;
 }
 

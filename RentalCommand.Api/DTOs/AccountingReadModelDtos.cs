@@ -310,6 +310,7 @@ public sealed class TrialBalanceRow
     public AccountType AccountType { get; init; }
     public decimal DebitBalance { get; init; }
     public decimal CreditBalance { get; init; }
+    public decimal TypeSubtotal { get; init; }
     public string Currency { get; init; } = string.Empty;
 }
 
