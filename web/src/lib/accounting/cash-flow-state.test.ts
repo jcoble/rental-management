@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import type { PropertyCashFlow } from '$lib/api/endpoints/cash-flow';
 import {
 	buildCashFlowChartPoints,
+	buildServerCashFlowChartPoints,
 	buildCashFlowMonthlyRanges,
 	cashFlowBarPercent,
 	cashFlowChartScale,
@@ -108,6 +109,15 @@ describe('cash-flow chart projection', () => {
 		totalDebtService: 8000,
 		totalCashFlow: 8240
 	};
+
+	it('uses the same server monthly figures as the table totals', () => {
+		const withMonths = { ...response, months: [{ month: '2027-02', income: 24100, operatingExpenses: 7860, debtService: 8000, cashFlow: 8240 }] };
+		const [point] = buildServerCashFlowChartPoints(withMonths);
+		assert.equal(point.income, withMonths.totalIncome);
+		assert.equal(point.operatingExpenses, withMonths.totalOperatingExpenses);
+		assert.equal(point.debtService, withMonths.totalDebtService);
+		assert.equal(point.cashFlow, withMonths.totalCashFlow);
+	});
 
 	it('projects each monthly response without recomputing its totals', () => {
 		assert.deepEqual(

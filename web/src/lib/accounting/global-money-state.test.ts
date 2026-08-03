@@ -16,6 +16,7 @@ describe('global money tab compatibility', () => {
 		assert.equal(normalizeMoneyTab('ledger'), 'activity');
 		assert.equal(normalizeMoneyTab('general-ledger'), 'general-ledger');
 		assert.equal(normalizeMoneyTab('cash-flow'), 'cash-flow');
+		assert.equal(normalizeMoneyTab('rent-payments'), 'rent-payments');
 		assert.equal(normalizeMoneyTab('overview'), 'overview');
 		assert.equal(normalizeMoneyTab('reports'), 'reports');
 		assert.equal(normalizeMoneyTab('unknown'), 'overview');

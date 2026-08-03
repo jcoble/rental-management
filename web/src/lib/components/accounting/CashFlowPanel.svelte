@@ -9,7 +9,7 @@
 		formatAccountingDate
 	} from '$lib/accounting/accounting-display';
 	import {
-		buildCashFlowChartPoints,
+		buildServerCashFlowChartPoints,
 		buildCashFlowMonthlyRanges,
 		cashFlowBarPercent,
 		cashFlowChartScale,
@@ -52,7 +52,6 @@
 	const selectedRange = $derived<CashFlowRange | null>(
 		resolveCashFlowRange(selectedPreset, reportDate, { from: customFrom, to: customTo })
 	);
-	const monthlyRanges = $derived(buildCashFlowMonthlyRanges(selectedRange));
 
 	const summaryQuery = createQuery(() => ({
 		queryKey: [
@@ -69,44 +68,18 @@
 		}
 	}));
 
-	const monthlyQuery = createQuery(() => ({
-		queryKey: [
-			'accounting-cash-flow-monthly',
-			activePortfolioId,
-			selectedRange?.from ?? '',
-			selectedRange?.to ?? ''
-		],
-		enabled:
-			authState.isAuthenticated &&
-			activePortfolioId > 0 &&
-			monthlyRanges.length > 1 &&
-			!summaryQuery.isError,
-		queryFn: async (): Promise<CashFlowMonthlyResponse[]> =>
-			Promise.all(
-				monthlyRanges.map(async (range) => ({
-					range,
-					response: await cashFlow.get(range)
-				}))
-			)
-	}));
 
 	const response = $derived(summaryQuery.data);
 	const properties = $derived(
 		sortCashFlowProperties(response?.properties ?? [], sortKey, sortDirection)
 	);
-	const monthlyResponses = $derived.by<CashFlowMonthlyResponse[]>(() => {
-		if (monthlyRanges.length === 1 && response) {
-			return [{ range: monthlyRanges[0], response }];
-		}
-		return monthlyQuery.data ?? [];
-	});
-	const chartPoints = $derived(buildCashFlowChartPoints(monthlyResponses));
+	const chartPoints = $derived(response ? buildServerCashFlowChartPoints(response) : []);
 	const chartScale = $derived(cashFlowChartScale(chartPoints));
 	const loading = $derived(authState.isLoading || summaryQuery.isLoading);
-	const monthlyLoading = $derived(monthlyRanges.length > 1 && monthlyQuery.isLoading);
+	const monthlyLoading = $derived(summaryQuery.isLoading);
 	const unauthorized = $derived(
 		!authState.isLoading &&
-		(!authState.isAuthenticated || isAuthorizationError(summaryQuery.error) || isAuthorizationError(monthlyQuery.error))
+		(!authState.isAuthenticated || isAuthorizationError(summaryQuery.error))
 	);
 	const periodLabel = $derived(
 		response
@@ -304,14 +277,6 @@
 							</div>
 						{/each}
 					</div>
-				{:else if monthlyQuery.isError && monthlyRanges.length > 1}
-					<div class="p-5" data-testid="cash-flow-monthly-error" role="alert">
-						<p class="text-sm font-medium">Monthly detail could not load.</p>
-						<p class="mt-1 text-sm text-muted-foreground">The headline and property totals are still available for this period.</p>
-						<Button class="mt-4" variant="outline" size="sm" onclick={() => void monthlyQuery.refetch()}>
-							<RefreshCw class="size-4" /> Try monthly detail again
-						</Button>
-					</div>
 				{:else if chartPoints.length === 0}
 					<div class="p-5 text-sm text-muted-foreground" data-testid="cash-flow-monthly-empty">No monthly activity for these filters yet.</div>
 				{:else}
@@ -407,7 +372,10 @@
 												</div>
 											{/each}
 										</div>
-										<p class="mt-3 text-xs text-muted-foreground">The cash-flow service currently returns period totals for each property; category and individual loan rows are not included in this response.</p>
+										<div class="mt-3 grid gap-3 sm:grid-cols-2">
+											<div><p class="mb-1 text-xs font-semibold">Operating costs by category</p>{#each property.operatingExpenseDetails ?? [] as detail}<div class="flex justify-between text-sm"><span>{detail.label}</span><span class="font-mono">{formatOutflow(detail.amount)}</span></div>{/each}</div>
+											<div><p class="mb-1 text-xs font-semibold">Loan payments</p>{#each property.debtServiceDetails ?? [] as detail}<div class="flex justify-between text-sm"><span>{detail.label}</span><span class="font-mono">{formatOutflow(detail.amount)}</span></div>{/each}</div>
+										</div>
 									</Table.Cell>
 								</Table.Row>
 							{/if}

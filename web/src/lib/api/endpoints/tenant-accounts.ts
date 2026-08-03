@@ -55,6 +55,9 @@ export interface TenantLedgerEntry {
 }
 
 export interface TenantLedgerEntryGlobal extends TenantLedgerEntry {
+	filteredTotalCount: number;
+	monthCharges: number;
+	monthPaymentsAndCredits: number;
 	propertyId: number;
 	propertyName: string;
 	unitId: number;
@@ -147,6 +150,8 @@ export interface ListParams {
 
 export interface EntryListParams extends ListParams {
 	tenantAccountId?: number;
+	propertyId?: number;
+	unitId?: number;
 	entryType?: string;
 	direction?: string;
 }

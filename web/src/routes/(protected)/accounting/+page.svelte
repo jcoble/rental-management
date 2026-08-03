@@ -57,6 +57,7 @@
 	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
 	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
 	import CashFlowPanel from '$lib/components/accounting/CashFlowPanel.svelte';
+	import PortfolioLeaseLedgerPanel from '$lib/components/accounting/PortfolioLeaseLedgerPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -64,6 +65,7 @@
 		{ value: 'overview', label: 'Overview' },
 		{ value: 'cash-flow', label: 'Cash flow' },
 		{ value: 'activity', label: 'Activity' },
+		{ value: 'rent-payments', label: 'Rent & payments' },
 		{ value: 'general-ledger', label: 'General ledger' },
 		{ value: 'reports', label: 'Reports' },
 	];
@@ -1176,6 +1178,7 @@
 		</DataGrid>
 	</div>
 		</Tabs.Content>
+		<Tabs.Content value="rent-payments"><PortfolioLeaseLedgerPanel /></Tabs.Content>
 
 		<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
 		<Tabs.Content value="overview">

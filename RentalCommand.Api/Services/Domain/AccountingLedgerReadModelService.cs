@@ -467,23 +467,17 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default)
     {
         var lines = FilterStatementLines(scope, query, from: null, query.To);
-        var balances = lines
-            .GroupBy(line => new
+        var balances = _db.LedgerAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == scope.PortfolioId)
+            .Select(account => new
             {
-                line.LedgerAccountId,
-                line.LedgerAccount!.Code,
-                line.LedgerAccount.Name,
-                line.LedgerAccount.AccountType,
-                line.JournalEntry!.Currency,
-            })
-            .Select(group => new
-            {
-                group.Key.LedgerAccountId,
-                group.Key.Code,
-                group.Key.Name,
-                group.Key.AccountType,
-                group.Key.Currency,
-                Net = group.Sum(line => line.DebitAmount - line.CreditAmount),
+                LedgerAccountId = account.Id,
+                account.Code,
+                account.Name,
+                account.AccountType,
+                Currency = "USD",
+                Net = lines.Where(line => line.LedgerAccountId == account.Id)
+                    .Sum(line => (decimal?)(line.DebitAmount - line.CreditAmount)) ?? 0m,
             });
         var rows = await balances.Select(balance => new TrialBalanceRow
             {
@@ -493,6 +487,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 AccountType = balance.AccountType,
                 DebitBalance = balance.Net >= 0m ? balance.Net : 0m,
                 CreditBalance = balance.Net < 0m ? -balance.Net : 0m,
+                TypeSubtotal = balances.Where(other => other.AccountType == balance.AccountType)
+                    .Sum(other => other.Net),
                 Currency = balance.Currency,
             })
             .OrderBy(row => row.AccountCode)
