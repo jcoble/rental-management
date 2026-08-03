@@ -9,21 +9,21 @@ const depositDetail = readFileSync(
 );
 
 describe('source-detail accounting impact contracts', () => {
-	it('uses the tenant receipt source identity below the payment detail fields', () => {
+	it('uses the entry-type accounting source identity below the tenant entry detail fields', () => {
 		assert.match(
 			paymentDetail,
 			/import AccountingImpactCard from '\$lib\/components\/accounting\/AccountingImpactCard\.svelte';/
 		);
 		assert.match(
 			paymentDetail,
-			/<AccountingImpactCard sourceType="TenantReceipt" sourceId=\{tenantLedgerEntryId\} \/>/
+			/<AccountingImpactCard sourceType=\{detailCopy\.sourceType\} sourceId=\{tenantLedgerEntryId\} \/>/
 		);
 		assert.ok(
-			paymentDetail.indexOf('<AccountingImpactCard sourceType="TenantReceipt"') >
+			paymentDetail.indexOf('<AccountingImpactCard sourceType={detailCopy.sourceType}') >
 				paymentDetail.indexOf('data-testid="payment-technical-details"')
 		);
 		assert.ok(
-			paymentDetail.indexOf('<AccountingImpactCard sourceType="TenantReceipt"') <
+			paymentDetail.indexOf('<AccountingImpactCard sourceType={detailCopy.sourceType}') <
 				paymentDetail.indexOf('data-testid="payment-history-section"')
 		);
 	});

@@ -54,6 +54,15 @@ describe('tenant account history contract', () => {
 		assert.doesNotMatch(page, /\.sort\(|\.filter\(/);
 	});
 
+	test('groups account history by month with server-owned month-end balances and contextual help', () => {
+		assert.match(page, /portal-history-month-/);
+		assert.match(page, /monthLabel\(entry\.effectiveOn\)/);
+		assert.match(page, /Month-end balance/);
+		assert.match(page, /entry\.runningBalance/);
+		assert.match(page, /ACCOUNTING_HELP\.tenantLedger/);
+		assert.match(page, /portal-account-history-help/);
+	});
+
 	test('provides loading, empty, error, retry, pagination, and focused-entry states', () => {
 		for (const contract of [
 			'portal-payment-accounts-loading',

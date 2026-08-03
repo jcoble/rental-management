@@ -24,4 +24,16 @@ describe('live accounting defect regressions', () => {
 		assert.match(drawer, /const isLoading = \$derived\(journalQuery\.isLoading\)/);
 		assert.doesNotMatch(drawer, /journalQuery\.isLoading \|\| chartQuery\.isLoading/);
 	});
+
+	it('renders an explicit unavailable state for unauthorized general-ledger reads', () => {
+		const panel = source('./GeneralLedgerPanel.svelte');
+		assert.match(panel, /general-ledger-unavailable/);
+		assert.match(panel, /General ledger not available/);
+	});
+
+	it('keeps a visible accounting-impact explanation for pre-accounting records', () => {
+		const impact = source('./AccountingImpactCard.svelte');
+		assert.match(impact, /accounting-impact-empty/);
+		assert.match(impact, /No accounting entry — recorded before accounting was enabled/);
+	});
 });

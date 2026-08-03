@@ -367,6 +367,108 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
+    public async Task StartupSweep_BackfillsOperationalReceivableAndDepositOnce_AndMoneyPositionMatches()
+    {
+        await using var setup = await _fixture.CreateContextAsync();
+        var seed = new ChartOfAccountsSeedService(setup.Db);
+        await seed.SeedAllWithLockAsync();
+        var scope = setup.Db.SeedAdministratorScope(
+            1, nameof(StartupSweep_BackfillsOperationalReceivableAndDepositOnce_AndMoneyPositionMatches));
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = 1, Name = "Opening journal property", AddressLine1 = "1 Opening Way",
+            City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = 1, Property = property, UnitNumber = "1", MarketRent = 3_500m,
+            CreatedAt = now, UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = 1, Property = property, Unit = unit, RelationshipNumber = "OPENING-JOURNAL",
+            PossessionGivenAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now,
+            CreatedByUserId = scope.UserId, RowVersion = Guid.NewGuid(),
+        };
+        var tenantAccount = new TenantAccount
+        {
+            PortfolioId = 1, LeaseManagement = relationship, AccountNumber = "OPENING-JOURNAL",
+            Currency = "USD", OpenedAtUtc = now, CreatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        var source = LegalDocumentSourceVersionTestData.BuiltIn(
+            1, scope.UserId, now, "opening-journal-backfill");
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = 1, LeaseManagement = relationship,
+            VersionNumber = 1, AgreementNumber = "OPENING-JOURNAL", ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm, TermStartOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)), GoverningFromOn = DateOnly.FromDateTime(now.AddMonths(-1)),
+            BaseRentAmount = 3_500m, RentDueDay = 1, SecurityDepositObligation = 900m,
+            Currency = "USD", TermsSchemaVersion = 1, TermsPayload = "{}", DocumentSourceVersion = source,
+            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = 1, TenantAccount = tenantAccount, OriginatingAgreement = agreement,
+            Currency = "USD", CreatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        setup.Db.AddRange(property, unit, relationship, tenantAccount, source, agreement, depositAccount);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.TenantLedgerEntries.AddRange(
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = 1, TenantAccountId = tenantAccount.Id,
+                EntryType = TenantLedgerEntryType.ManualCharge, Direction = TenantLedgerDirection.Debit,
+                Amount = 3_500m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(now.AddDays(-2)),
+                DueOn = DateOnly.FromDateTime(now.AddDays(-2)),
+                PostedAtUtc = now, Description = "Historical rent", BusinessKey = "opening-journal:charge",
+                CreatedByUserId = scope.UserId,
+            },
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(), PortfolioId = 1, TenantAccountId = tenantAccount.Id,
+                EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
+                Amount = 215.52m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(now.AddDays(-1)),
+                PostedAtUtc = now, Description = "Historical payment", BusinessKey = "opening-journal:payment",
+                CreatedByUserId = scope.UserId,
+            });
+        setup.Db.SecurityDepositEntries.Add(new SecurityDepositEntry
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = 1, SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
+            Amount = 900m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(now.AddDays(-1)),
+            PostedAtUtc = now, BusinessKey = "opening-journal:deposit", Description = "Historical deposit",
+            LeaseAgreementId = agreement.Id, CreatedByUserId = scope.UserId,
+        });
+        await setup.Db.SaveChangesAsync();
+
+        (await seed.SeedAllWithLockAsync()).Should().Be(0, "the chart was already present");
+        (await seed.SeedAllWithLockAsync()).Should().Be(0, "the opening pass is idempotent");
+
+        var openings = await setup.Db.JournalEntries.AsNoTracking()
+            .Include(entry => entry.Lines).ThenInclude(line => line.LedgerAccount)
+            .Where(entry => entry.PortfolioId == 1
+                && entry.SourceType == JournalSourceType.OpeningBalance
+                && entry.SourceBusinessKey.StartsWith("opening-balance:portfolio:1:"))
+            .ToListAsync();
+        openings.Should().HaveCount(2);
+        openings.Should().OnlyContain(entry => entry.Lines.Count == 2);
+        openings.SelectMany(entry => entry.Lines)
+            .Where(line => line.LedgerAccount!.SystemKey == "tenant-accounts-receivable")
+            .Should().ContainSingle().Which.DebitAmount.Should().Be(3_284.48m);
+        openings.SelectMany(entry => entry.Lines)
+            .Where(line => line.LedgerAccount!.SystemKey == "tenant-security-deposits-payable")
+            .Should().ContainSingle().Which.CreditAmount.Should().Be(900m);
+
+        await setup.ActivateApiScopeAsync(scope);
+        var position = await new AccountingLedgerReadModelService(setup.Db).GetMoneyPositionAsync(
+            scope, new MoneyPositionQuery { To = DateOnly.FromDateTime(now) });
+        position.RentStillOwed.Should().Be(3_284.48m);
+        position.TenantDepositsHeld.Should().Be(900m);
+    }
+
+    [Fact]
     public async Task SourceJournalsAndJournalDetail_ReturnAuthorizedSourceDocumentLinks()
     {
         await using var setup = await _fixture.CreateContextAsync();

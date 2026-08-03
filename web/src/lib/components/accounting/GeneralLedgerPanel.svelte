@@ -327,7 +327,12 @@
 	<span>{formatAccountingCurrency(row.runningBalance, row.currency)}</span>
 {/snippet}
 
-{#if !unauthorized}
+{#if unauthorized}
+	<section class={['rounded-xl border border-border bg-card p-6 text-center', className]} data-testid="general-ledger-unavailable">
+		<h2 class="font-semibold">General ledger not available</h2>
+		<p class="mt-1 text-sm text-muted-foreground">You do not have access to the general ledger for this workspace.</p>
+	</section>
+{:else}
 	<section class={['space-y-4', className]} data-testid={testid}>
 		<div class="rounded-xl border border-border bg-card p-4">
 				<div class="mb-3 flex items-center gap-1.5">
