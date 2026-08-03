@@ -8,7 +8,11 @@
 		formatAccountingCurrency,
 		formatAccountingDate,
 		formatJournalPostingLabel,
-		formatSourceTypeLabel
+		formatJournalLineSide,
+		formatSimpleJournalLineLabel,
+		formatSourceTypeLabel,
+		getJournalLineEntry,
+		type JournalLineDisplayInput
 	} from '$lib/accounting/accounting-display';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
@@ -54,6 +58,16 @@
 	function openJournal(publicId: string): void {
 		selectedJournalPublicId = publicId;
 	}
+
+	function lineInput(line: (typeof journals)[number]['lines'][number]): JournalLineDisplayInput {
+		return {
+			accountName: line.accountName,
+			accountCode: line.accountCode,
+			debitAmount: line.debitAmount,
+			creditAmount: line.creditAmount,
+			normalBalance: line.normalBalance
+		};
+	}
 </script>
 
 {#if !unauthorized && sourceId > 0}
@@ -89,6 +103,16 @@
 								</p>
 							</div>
 							<p class="shrink-0 font-medium tabular-nums">{formatAccountingCurrency(journal.totalDebits)}</p>
+						</div>
+						<div class="mt-3 divide-y divide-border rounded-lg border border-border/70">
+							{#each journal.lines as line (line.id)}
+								{@const input = lineInput(line)}
+								{@const entry = getJournalLineEntry(input)}
+								<div class="flex items-start justify-between gap-4 px-3 py-2 text-sm">
+									<span>{advanced ? `${line.accountCode} ${line.accountName} · ${formatJournalLineSide(entry.side)}` : formatSimpleJournalLineLabel(input)}</span>
+									<span class="shrink-0 font-medium tabular-nums">{formatAccountingCurrency(entry.amount)}</span>
+								</div>
+							{/each}
 						</div>
 						<Button
 							variant="link"

@@ -13,6 +13,7 @@
 		"check:native": "svelte-kit sync && tsc --noEmit -p ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test:unit": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+		"test": "pnpm test:unit",
 		"test:e2e": "playwright test",
 		"test:e2e:list": "playwright test --list"
 	},

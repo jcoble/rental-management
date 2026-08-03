@@ -528,6 +528,8 @@ public sealed class AccountingReadModelPostgreSqlTests
             TotalCredits = 45m,
             IsReversal = false,
         });
+        sources.Single().Lines.Should().HaveCount(2);
+        sources.Single().Lines.Should().OnlyContain(line => line.DebitAmount > 0m || line.CreditAmount > 0m);
         detail.Should().NotBeNull();
         detail!.DocumentIds.Should().Equal(file.Id);
     }

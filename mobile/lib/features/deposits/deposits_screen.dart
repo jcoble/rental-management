@@ -10,6 +10,8 @@ import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
 import 'deposits_repository.dart';
 
 String _fmtCurrency(double amount, [String currency = 'USD']) {
@@ -529,6 +531,11 @@ class _DepositDetailSheet extends ConsumerWidget {
           _InfoRow(
             label: 'Created',
             value: _fmtDate(account.createdAtUtc.toLocal()),
+          ),
+          const SizedBox(height: 20),
+          AccountingImpactCard(
+            sourceType: JournalSourceType.securityDepositReceipt,
+            sourceId: account.securityDepositAccountId,
           ),
           const SizedBox(height: 20),
           if (canFund) ...[

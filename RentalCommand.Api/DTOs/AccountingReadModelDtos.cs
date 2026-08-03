@@ -126,12 +126,9 @@ public sealed class ChartOfAccountsRow
 
 public sealed class CreateChartOfAccountsRequest
 {
-    public string Code { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
-    public AccountType AccountType { get; init; }
-    public NormalBalance NormalBalance { get; init; }
+    public string? CategoryKind { get; init; }
     public int? ParentAccountId { get; init; }
-    public string? SystemKey { get; init; }
     public ScheduleECategory? ScheduleECategory { get; init; }
     public bool IsActive { get; init; } = true;
 }
@@ -292,6 +289,7 @@ public sealed class SourceJournalSummary
     public decimal TotalCredits { get; init; }
     public bool IsReversal { get; init; }
     public Guid? ReversesPublicId { get; init; }
+    public IReadOnlyList<JournalDetailLine> Lines { get; init; } = [];
 }
 
 public sealed class BankReconciliationEvidence

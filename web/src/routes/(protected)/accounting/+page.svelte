@@ -57,6 +57,7 @@
 	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
 	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
 	import CashFlowPanel from '$lib/components/accounting/CashFlowPanel.svelte';
+	import ReportsCatalog from '$lib/components/accounting/ReportsCatalog.svelte';
 	import PortfolioLeaseLedgerPanel from '$lib/components/accounting/PortfolioLeaseLedgerPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -890,6 +891,8 @@
 		<!-- ───────────────────────── REPORTS ───────────────────────── -->
 		<Tabs.Content value="reports">
 		<div data-testid="accounting-reports">
+			<ReportsCatalog />
+			<div class="hidden" aria-hidden="true">
 		<div class="mb-3 flex items-center justify-between">
 			<div>
 				<div class="flex items-center gap-1.5">
@@ -1066,6 +1069,7 @@
 				</details>
 			</div>
 		{/if}
+		</div>
 		</div>
 
 		</Tabs.Content>

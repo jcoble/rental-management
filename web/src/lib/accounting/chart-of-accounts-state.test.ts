@@ -78,22 +78,16 @@ describe('chart of accounts state', () => {
     };
 
     assert.deepEqual(buildCreateCategoryRequest('Expense', draft), {
-      code: '',
       name: 'Landscaping',
-      accountType: 'Expense',
-      normalBalance: 'Debit',
+      categoryKind: 'expense',
       parentAccountId: 17,
-      systemKey: null,
       scheduleECategory: 'CleaningMaintenance',
       isActive: true,
     });
     assert.deepEqual(buildCreateCategoryRequest('Income', draft), {
-      code: '',
       name: 'Landscaping',
-      accountType: 'Income',
-      normalBalance: 'Credit',
+      categoryKind: 'income',
       parentAccountId: 17,
-      systemKey: null,
       scheduleECategory: null,
       isActive: true,
     });
