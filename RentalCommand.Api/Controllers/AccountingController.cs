@@ -78,8 +78,10 @@ public class AccountingController : ManagementControllerBase
         var command = new CreateLedgerAccountCommand(
             active.PortfolioId, active.UserId, active.SessionId,
             active.AccessContextId, active.AccessRevision,
-            request.Code, request.Name, request.AccountType, request.NormalBalance,
-            request.ParentAccountId, request.SystemKey, request.ScheduleECategory,
+            string.Empty, request.Name,
+            string.Equals(request.CategoryKind, "expense", StringComparison.OrdinalIgnoreCase)
+                || request.ScheduleECategory.HasValue ? AccountType.Expense : AccountType.Income,
+            null, request.ParentAccountId, null, request.ScheduleECategory,
             request.IsActive, operationKey);
         try
         {

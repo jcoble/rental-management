@@ -3,7 +3,7 @@
 	import { accounting, downloadOwnerStatementCsv } from '$lib/api/endpoints/accounting';
 	import { owners as ownersApi } from '$lib/api/endpoints/owners';
 	import {
-		ownerDistributions,
+		ownerDistributions, ownerContributions,
 		type ApproveOwnerDistributionRequest,
 		type CreateOwnerDistributionRequest,
 		type DistributionMethod,
@@ -26,6 +26,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 
@@ -38,6 +39,8 @@
 	];
 
 	const queryClient = useQueryClient();
+	let selectedDistributionId = $state<number | null>(null);
+	let selectedContributionId = $state<number | null>(null);
 	const portfolioId = $derived(getCurrentPortfolioId());
 	let yearOptions = $state(ownerStatementYearOptions());
 	let selectedYear = $state(String(currentOwnerStatementYear()));
@@ -82,6 +85,12 @@
 		enabled: !!portfolioId && selectedOwnerId !== null
 	}));
 	const distributions = $derived((distributionQuery.data as OwnerDistribution[] | undefined) ?? []);
+	const contributionQuery = createQuery(() => ({
+		queryKey: ['owner-contributions', portfolioId, selectedOwnerId, selectedYear],
+		queryFn: () => ownerContributions.list({ ownerEntityId: selectedOwnerId!, year: Number(selectedYear), sort: '-date', take: 200 }),
+		enabled: !!portfolioId && selectedOwnerId !== null
+	}));
+	const contributions = $derived((contributionQuery.data as OwnerDistribution[] | undefined) ?? []);
 	const canCreateDistribution = $derived(hasCapability('money.disbursements.manage'));
 	const canDeleteDistribution = $derived(
 		canCreateDistribution && hasCapability('money.reconciliation.destructive')
@@ -537,7 +546,11 @@
 							</Card.Header>
 							<Card.Content class="p-0">
 								{#if distributionQuery.isLoading}
-									<LoadingState label="Loading payments to owner" variant="spinner" testid="owner-distributions-loading" />
+									<div class="space-y-2 p-4" role="status" aria-label="Loading payments to owner" data-testid="owner-distributions-loading">
+										<div class="h-10 animate-pulse rounded bg-muted"></div>
+										<div class="h-10 animate-pulse rounded bg-muted"></div>
+										<div class="h-10 animate-pulse rounded bg-muted"></div>
+									</div>
 								{:else if distributionQuery.isError}
 									<div class="flex flex-wrap items-center gap-3 p-4" role="alert" data-testid="owner-distributions-error">
 										<p class="text-sm text-destructive">Could not load payments to this owner.</p>
@@ -561,7 +574,7 @@
 											</thead>
 											<tbody>
 												{#each distributions as distribution (distribution.id)}
-													<tr class="border-b border-border/50 last:border-0 hover:bg-muted/30" data-testid="owner-distribution-row-{distribution.id}">
+											<tr class="cursor-pointer border-b border-border/50 last:border-0 hover:bg-muted/30" onclick={() => (selectedDistributionId = selectedDistributionId === distribution.id ? null : distribution.id)} data-testid="owner-distribution-row-{distribution.id}">
 														<td class="px-4 py-3 whitespace-nowrap">{formatDate(distribution.date)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
 														<td class="px-4 py-3 whitespace-nowrap">
@@ -632,12 +645,29 @@
 																			</Button>
 																		{/if}
 																	</div>
-														</td>
-													</tr>
-												{/each}
+																</td>
+															</tr>
+															{#if selectedDistributionId === distribution.id}
+																<tr><td colspan="7" class="bg-muted/20 p-4"><AccountingImpactCard sourceType="OwnerDistribution" sourceId={distribution.id} /></td></tr>
+															{/if}
+														{/each}
 											</tbody>
 										</table>
 									</div>
+								{/if}
+							</Card.Content>
+						</Card.Root>
+						<Card.Root class="gap-0 py-0" data-testid="owner-contribution-list-card">
+							<Card.Header class="border-b border-border px-4 py-3"><Card.Title class="text-base font-semibold">Owner contributions</Card.Title></Card.Header>
+							<Card.Content class="p-4">
+								{#if contributionQuery.isLoading}
+									<div class="space-y-2" role="status" aria-label="Loading owner contributions"><div class="h-10 animate-pulse rounded bg-muted"></div><div class="h-10 animate-pulse rounded bg-muted"></div></div>
+								{:else if contributions.length === 0}<p class="text-sm text-muted-foreground">No owner contributions recorded for {selectedYear}.</p>
+								{:else}
+									<div class="space-y-2">{#each contributions as contribution (contribution.id)}
+										<button type="button" class="flex w-full justify-between rounded-lg border p-3 text-left" onclick={() => (selectedContributionId = selectedContributionId === contribution.id ? null : contribution.id)}><span>{formatDate(contribution.date)} · {contribution.propertyName ?? 'Portfolio'}</span><span class="font-mono">{money(contribution.amount)}</span></button>
+										{#if selectedContributionId === contribution.id}<AccountingImpactCard sourceType="OwnerContribution" sourceId={contribution.id} />{/if}
+									{/each}</div>
 								{/if}
 							</Card.Content>
 						</Card.Root>

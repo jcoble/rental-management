@@ -66,12 +66,9 @@ export interface ChartOfAccountsRow {
 }
 
 export interface CreateChartOfAccountsRequest {
-	code: string;
 	name: string;
-	accountType: AccountType;
-	normalBalance: NormalBalance;
+	categoryKind: 'income' | 'expense';
 	parentAccountId?: number | null;
-	systemKey?: string | null;
 	scheduleECategory?: ScheduleECategory | null;
 	isActive?: boolean;
 }
@@ -189,6 +186,7 @@ export interface SourceJournalSummary {
 	totalCredits: number;
 	isReversal: boolean;
 	reversesPublicId: string | null;
+	lines: JournalDetailLine[];
 }
 
 export interface TrialBalanceParams {

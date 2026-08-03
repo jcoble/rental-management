@@ -2,7 +2,6 @@ import type {
   AccountType,
   ChartOfAccountsRow,
   CreateChartOfAccountsRequest,
-  NormalBalance,
   PatchChartOfAccountsRequest,
   ScheduleECategory,
 } from '$lib/api/endpoints/accounting-books';
@@ -99,15 +98,10 @@ export function buildCreateCategoryRequest(
   kind: CategoryKind,
   draft: CategoryDraft,
 ): CreateChartOfAccountsRequest {
-  const normalBalance: NormalBalance = kind === 'Expense' ? 'Debit' : 'Credit';
-
   return {
-    code: '',
     name: draft.name.trim(),
-    accountType: kind,
-    normalBalance,
+    categoryKind: kind.toLowerCase() as 'income' | 'expense',
     parentAccountId: draft.parentAccountId,
-    systemKey: null,
     scheduleECategory: kind === 'Expense' ? draft.scheduleECategory : null,
     isActive: true,
   };

@@ -10,6 +10,18 @@ namespace RentalCommand.Api.Tests;
 public sealed class AccountingApiContractFreezeTests
 {
     [Fact]
+    public void Create_chart_of_accounts_accepts_only_simple_category_fields()
+    {
+        typeof(CreateChartOfAccountsRequest).GetProperties().Select(property => property.Name)
+            .Should().BeEquivalentTo(
+                nameof(CreateChartOfAccountsRequest.Name),
+                nameof(CreateChartOfAccountsRequest.CategoryKind),
+                nameof(CreateChartOfAccountsRequest.ParentAccountId),
+                nameof(CreateChartOfAccountsRequest.ScheduleECategory),
+                nameof(CreateChartOfAccountsRequest.IsActive));
+    }
+
+    [Fact]
     public void Accounting_routes_match_the_frozen_v1_surface()
     {
         var routes = typeof(AccountingController)

@@ -324,6 +324,24 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 ReversesPublicId = entry.ReversedJournalEntry == null
                     ? null
                     : entry.ReversedJournalEntry.PublicId,
+                Lines = entry.Lines
+                    .OrderBy(line => line.Id)
+                    .Select(line => new JournalDetailLine
+                    {
+                        Id = line.Id,
+                        AccountId = line.LedgerAccountId,
+                        AccountCode = line.LedgerAccount.Code,
+                        AccountName = line.LedgerAccount.Name,
+                        NormalBalance = line.LedgerAccount.NormalBalance,
+                        DebitAmount = line.DebitAmount,
+                        CreditAmount = line.CreditAmount,
+                        Memo = line.Memo,
+                        PropertyId = line.PropertyId,
+                        UnitId = line.UnitId,
+                        TenantAccountId = line.TenantAccountId,
+                        OwnerEntityId = line.OwnerEntityId,
+                    })
+                    .ToList(),
             })
             .ToListAsync(ct);
     }

@@ -73,6 +73,10 @@
 		return `/accounting?${query.toString()}`;
 	}
 
+	function documentHref(documentId: number): string {
+		return `/document-file/${documentId}`;
+	}
+
 	function bankEvidenceLabel(detail: NonNullable<typeof journalQuery.data>): string {
 		const evidence = detail.bankReconciliationEvidence;
 		if (!evidence) return '—';
@@ -175,7 +179,7 @@
 								{#if detail.documentIds.length === 0}
 									—
 								{:else}
-									{#each detail.documentIds as documentId, index}{index ? ', ' : ''}Document #{documentId}{/each}
+									{#each detail.documentIds as documentId, index}{index ? ', ' : ''}<a class="font-medium text-primary underline-offset-4 hover:underline" href={documentHref(documentId)} target="_blank" rel="noreferrer">Document #{documentId}</a>{/each}
 								{/if}
 							</span>
 							<span class="text-muted-foreground">Entered by</span>
@@ -197,7 +201,10 @@
 										{detail.reversesJournalEntryPublicId}
 									</Button>
 								{:else if detail.reversalPublicIds.length > 0}
-									Reversed by {detail.reversalPublicIds.join(', ')}
+									Reversed by
+									{#each detail.reversalPublicIds as reversalPublicId, index}
+										{index ? ', ' : ''}<Button variant="link" size="sm" class="h-auto px-1 py-0" onclick={() => (journalPublicId = reversalPublicId)}>{reversalPublicId}</Button>
+									{/each}
 								{:else}
 									—
 								{/if}
