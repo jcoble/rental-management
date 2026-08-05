@@ -100,14 +100,21 @@ public class DemoDataSeeder
 
         await SeedOneAsync(1);
 
-        var otherDemoPortfolioIds = await _db.LeaseManagements
-            .AsNoTracking()
-            .Where(relationship => relationship.PortfolioId != 1
-                && EF.Functions.Like(relationship.RelationshipNumber, "DEMO-LM-%"))
-            .Select(relationship => relationship.PortfolioId)
-            .Distinct()
-            .OrderBy(portfolioId => portfolioId)
-            .ToListAsync(ct);
+        var otherDemoPortfolioIds = _db.Database.IsNpgsql()
+            ? await _db.QuerySqlAsync<int>($$"""
+                SELECT discovery."Value"
+                FROM public.rc_demo_seed_portfolio_ids() AS discovery
+                WHERE discovery."Value" <> 1
+                ORDER BY discovery."Value"
+                """, ct)
+            : await _db.LeaseManagements
+                .AsNoTracking()
+                .Where(relationship => relationship.PortfolioId != 1
+                    && EF.Functions.Like(relationship.RelationshipNumber, "DEMO-LM-%"))
+                .Select(relationship => relationship.PortfolioId)
+                .Distinct()
+                .OrderBy(portfolioId => portfolioId)
+                .ToListAsync(ct);
 
         foreach (var portfolioId in otherDemoPortfolioIds)
         {

@@ -596,6 +596,48 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void DemoSeedPortfolioDiscoveryFunction_IsStableApiOnlyAndForwardOnly()
+    {
+        var migration = new AddDemoSeedPortfolioDiscoveryFunction();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddDemoSeedPortfolioDiscoveryFunction).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var migrationSql = Regex.Replace(
+            string.Join(
+                Environment.NewLine,
+                upBuilder.Operations.OfType<SqlOperation>().Select(operation => operation.Sql)),
+            @"\s+",
+            " ");
+
+        migrationSql.Should().Contain(
+            "CREATE OR REPLACE FUNCTION public.rc_demo_seed_portfolio_ids()");
+        migrationSql.Should().Contain("RETURNS TABLE (\"Value\" integer)");
+        migrationSql.Should().Contain("LANGUAGE sql STABLE SECURITY DEFINER");
+        migrationSql.Should().Contain("SET search_path = pg_catalog, public");
+        migrationSql.Should().Contain(
+            "SELECT DISTINCT relationship.\"PortfolioId\" AS \"Value\" FROM public.\"LeaseManagements\" AS relationship WHERE relationship.\"RelationshipNumber\" LIKE 'DEMO-LM-%'");
+        migrationSql.Should().Contain(
+            "ALTER FUNCTION public.rc_demo_seed_portfolio_ids() OWNER TO rentalcommand_rls_authority;");
+        migrationSql.Should().Contain(
+            "REVOKE ALL ON FUNCTION public.rc_demo_seed_portfolio_ids() FROM PUBLIC;");
+        migrationSql.Should().Contain(
+            "REVOKE ALL ON FUNCTION public.rc_demo_seed_portfolio_ids() FROM rentalcommand_engine;");
+        migrationSql.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION public.rc_demo_seed_portfolio_ids() TO rentalcommand_api;");
+        migrationSql.Should().NotContain(
+            "GRANT EXECUTE ON FUNCTION public.rc_demo_seed_portfolio_ids() TO rentalcommand_engine;");
+        migrationSql.Should().NotContain("DROP FUNCTION");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddDemoSeedPortfolioDiscoveryFunction).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        downBuilder.Operations.Should().BeEmpty(
+            "the additive discovery function remains installed during a partial rollback");
+    }
+
+    [Fact]
     public void ExpenseAllocations_AreSecuredByTheirPostBaselineContract()
     {
         var createSql = string.Join(
