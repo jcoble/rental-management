@@ -31,7 +31,7 @@
 	}: {
 		leaseManagementId: number;
 		propertyId: number;
-		baseAgreement: LeaseAgreementSummary;
+		baseAgreement: Pick<LeaseAgreementSummary, 'leaseAgreementId' | 'agreementNumber'>;
 		onclose: () => void;
 		oncreated: (result: LeaseAddendumDraftMutationResponse) => void;
 	} = $props();

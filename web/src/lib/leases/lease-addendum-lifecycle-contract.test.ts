@@ -80,4 +80,15 @@ describe('canonical lease addendum lifecycle hub', () => {
 		assert.match(correctionDialogSource, /leaseAddendums\.correctDraft/);
 		assert.match(detailPageSource, /editAddendumId = result\.leaseAddendumId/);
 	});
+
+	it('starts a new addendum draft from the card header with the loaded governing agreement', () => {
+		assert.match(detailPageSource, /const governingAgreement/);
+		assert.match(detailPageSource, /summary\.leaseAgreementId && summary\.agreementNumber/);
+		assert.match(detailPageSource, /> New draft</);
+		assert.match(detailPageSource, /createAddendumBase = governingAgreement/);
+		assert.match(
+			detailPageSource,
+			/<AddendumCreateDialog[\s\S]*baseAgreement=\{createAddendumBase\}/
+		);
+	});
 });

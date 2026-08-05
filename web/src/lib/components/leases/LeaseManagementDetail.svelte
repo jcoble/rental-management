@@ -30,14 +30,16 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { CalendarClock, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
+	import { CalendarClock, Eye, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { money } from '$lib/components/unit/money';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
 
 	type SuccessorType = 'Correction' | 'Restatement' | 'Renewal' | 'MonthToMonth';
 	type SuccessorSelection = { source: LeaseAgreementSummary; changeType: SuccessorType };
+	type AddendumBaseAgreement = Pick<LeaseAgreementSummary, 'leaseAgreementId' | 'agreementNumber'>;
 
 	const AGREEMENT_PAGE_SIZE = 10;
 	const ADDENDUM_PAGE_SIZE = 10;
@@ -52,7 +54,7 @@
 	let issuedRecoverySource = $state<LeaseAgreementSummary | null>(null);
 	let addendumSkip = $state(0);
 	let editAddendumId = $state<number | null>(null);
-	let createAddendumBase = $state<LeaseAgreementSummary | null>(null);
+	let createAddendumBase = $state<AddendumBaseAgreement | null>(null);
 	let correctionAddendum = $state<LeaseAddendumHistoryItem | null>(null);
 	let endingDispositionOpen = $state(false);
 	type HouseholdAction = { mode: 'add' | 'change' | 'end' | 'grant' | 'revoke'; party?: LeaseManagementParty; access?: ReturnPossessionActiveTenantUserAccess };
@@ -261,6 +263,7 @@
 {:else}
 	{@const detail = relationshipQuery.data}
 	{@const summary = detail.summary}
+	{@const governingAgreement = summary.leaseAgreementId && summary.agreementNumber ? { leaseAgreementId: summary.leaseAgreementId, agreementNumber: summary.agreementNumber } : null}
 	<div class="space-y-6">
 		<PageHeader
 			title={summary.primaryTenantName ?? 'Tenant & lease'}
@@ -280,61 +283,90 @@
 			</div>
 		{/if}
 
-		<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-			<Card>
-				<CardHeader><CardTitle class="text-base">Relationship</CardTitle></CardHeader>
-				<CardContent class="space-y-2">
-					<StatusBadge status={summary.lifecycle} />
-					<p class="text-sm text-muted-foreground">
-						{summary.possessionGivenAtUtc
-							? `Possession given ${new Date(summary.possessionGivenAtUtc).toLocaleDateString()}`
-							: summary.plannedPossessionAtUtc
-								? `Possession planned ${formatDateOnly(summary.plannedPossessionAtUtc)}`
-								: 'Possession not yet scheduled'}
-					</p>
-				</CardContent>
-			</Card>
-			<Card>
-				<CardHeader><CardTitle class="text-base">Governing agreement</CardTitle></CardHeader>
-				<CardContent>
-					<p class="font-medium">{summary.agreementNumber ?? 'No governing agreement'}</p>
-					<p class="text-sm text-muted-foreground">
-						{summary.agreementStatus ?? 'Not issued'}{summary.termEndOn ? ` · ends ${summary.termEndOn}` : ''}
-					</p>
-					{#if summary.upcomingLeaseAgreementId}
-						<p class="mt-1 text-xs text-primary">
-							Upcoming: {summary.upcomingAgreementNumber ?? `agreement #${summary.upcomingLeaseAgreementId}`}
-							{summary.upcomingTermStartOn ? ` from ${summary.upcomingTermStartOn}` : ''}
-							{summary.upcomingAgreementStatus ? ` · ${summary.upcomingAgreementStatus}` : ''}
-						</p>
-					{/if}
-				</CardContent>
-			</Card>
-			<Card>
-				<CardHeader><CardTitle class="text-base">Tenant account</CardTitle></CardHeader>
-				<CardContent>
-					<p class="font-medium">{summary.tenantAccountId ? `Account #${summary.tenantAccountId}` : 'Not opened'}</p>
-					<p class="text-sm text-muted-foreground">Continues across renewals and corrections</p>
-				</CardContent>
-			</Card>
-			<Card>
-				<CardHeader><CardTitle class="text-base">Ending plan</CardTitle></CardHeader>
-				<CardContent class="space-y-2">
-					<p class="font-medium">{endingDispositionLabel(summary.endingDisposition)}</p>
-					{#if summary.endingDispositionDecidedAtUtc}
-						<p class="text-xs text-muted-foreground">Decided {new Date(summary.endingDispositionDecidedAtUtc).toLocaleDateString()}</p>
-					{/if}
-					{#if summary.plannedMoveOutAtUtc}
-						<p class="text-sm text-muted-foreground">Move-out planned {formatDateOnly(summary.plannedMoveOutAtUtc)}</p>
-					{/if}
-					{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
-						<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
-							<CalendarClock class="h-4 w-4" /> Record decision
-						</Button>
-					{/if}
-				</CardContent>
-			</Card>
-		</div>
+			<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+				<Card class="md:col-span-2 xl:col-span-3">
+					<CardHeader><CardTitle class="text-base">Lease at a glance</CardTitle></CardHeader>
+					<CardContent class="space-y-4">
+						<dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Current status</dt>
+								<dd><StatusBadge status={summary.lifecycle} /></dd>
+							</div>
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Current agreement</dt>
+								<dd class="font-medium">{summary.agreementNumber ?? 'Not issued'}</dd>
+							</div>
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Agreement status</dt>
+								<dd class="font-medium">{summary.agreementStatus ?? 'No governing agreement'}</dd>
+							</div>
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Term</dt>
+								<dd class="font-medium">
+									{summary.termStartOn
+										? `${formatDateOnly(summary.termStartOn)} – ${summary.termEndOn ? formatDateOnly(summary.termEndOn) : 'Month-to-month'}`
+										: 'Not set'}
+								</dd>
+							</div>
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Base rent</dt>
+								<dd class="font-medium">{summary.baseRentAmount == null ? 'Not set' : `${money(summary.baseRentAmount)} per month`}</dd>
+							</div>
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Possession</dt>
+								<dd class="font-medium">
+									{summary.possessionGivenAtUtc
+										? `Given ${new Date(summary.possessionGivenAtUtc).toLocaleDateString()}`
+										: summary.plannedPossessionAtUtc
+											? `Planned ${formatDateOnly(summary.plannedPossessionAtUtc)}`
+											: 'Not yet scheduled'}
+								</dd>
+							</div>
+							{#if summary.upcomingLeaseAgreementId}
+								<div class="space-y-1">
+									<dt class="text-xs font-medium text-muted-foreground">Upcoming agreement</dt>
+									<dd class="font-medium">
+										{summary.upcomingAgreementNumber ?? `Agreement #${summary.upcomingLeaseAgreementId}`}
+										{summary.upcomingTermStartOn ? ` · starts ${formatDateOnly(summary.upcomingTermStartOn)}` : ''}
+										{summary.upcomingAgreementStatus ? ` · ${summary.upcomingAgreementStatus}` : ''}
+									</dd>
+								</div>
+							{/if}
+							<div class="space-y-1">
+								<dt class="text-xs font-medium text-muted-foreground">Ending plan</dt>
+								<dd class="font-medium">{endingDispositionLabel(summary.endingDisposition)}</dd>
+							</div>
+							{#if summary.endingDispositionDecidedAtUtc}
+								<div class="space-y-1">
+									<dt class="text-xs font-medium text-muted-foreground">Decision recorded</dt>
+									<dd class="font-medium">{new Date(summary.endingDispositionDecidedAtUtc).toLocaleDateString()}</dd>
+								</div>
+							{/if}
+							{#if summary.plannedMoveOutAtUtc}
+								<div class="space-y-1">
+									<dt class="text-xs font-medium text-muted-foreground">Planned move-out</dt>
+									<dd class="font-medium">{formatDateOnly(summary.plannedMoveOutAtUtc)}</dd>
+								</div>
+							{/if}
+						</dl>
+						{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
+							<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
+								<CalendarClock class="h-4 w-4" /> Record decision
+							</Button>
+						{/if}
+					</CardContent>
+				</Card>
+				<Card class="md:col-span-2 xl:col-span-1">
+					<CardHeader><CardTitle class="text-base">Tenant account</CardTitle></CardHeader>
+					<CardContent class="space-y-3">
+						<p class="font-medium">{summary.tenantAccountId ? `Account #${summary.tenantAccountId}` : 'Not opened'}</p>
+						<p class="text-sm text-muted-foreground">Continues across renewals and corrections</p>
+						{#if summary.tenantAccountId}
+							<Button href={`/units/${summary.unitId}?tab=money&view=tenant-account&tenantAccount=${summary.tenantAccountId}`} variant="outline" size="sm">View tenant account</Button>
+						{/if}
+					</CardContent>
+				</Card>
+			</div>
 
 		<PossessionActions {summary} canManage={canManageHousehold} onchanged={refreshLease} />
 
@@ -376,7 +408,7 @@
 									<p class="text-sm text-muted-foreground">{party.email ?? party.phone ?? 'No contact information'}</p>
 									<p class="text-xs text-muted-foreground">{party.isCurrent ? `Effective since ${party.effectiveFrom}` : `Scheduled for ${party.effectiveFrom}`} · Login {loginStatus(access)}</p>
 								</div>
-								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke login</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create login</Button>{/if}{/if}</div>
+								<div class="flex flex-wrap items-center gap-2"><StatusBadge status={party.role} />{#if canManageHousehold}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'change', party })}>Change role</Button><Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'end', party })}>End membership</Button>{#if access}<Button size="sm" variant="outline" onclick={() => (householdAction = { mode: 'revoke', party, access })}>Revoke resident login</Button>{:else}<Button size="sm" variant="outline" disabled={!canGrantAccess(party)} title={party.email ? 'Create relationship-scoped resident login' : 'Add an email to this person first'} onclick={() => (householdAction = { mode: 'grant', party })}>Create resident login</Button>{/if}{/if}</div>
 							</div>
 							{/if}
 						{/each}
@@ -429,10 +461,11 @@
 									</div>
 									<div class="flex flex-wrap gap-2">
 										{#if canPrepareAgreements && agreement.agreementStatus === 'Draft'}
-											<Button size="sm" class="gap-2" onclick={() => openAgreementDraft(agreement)}><FilePenLine class="h-4 w-4" /> Edit draft</Button>
-										{/if}
-										{#if agreement.hasSourceScan}
-											<Button size="sm" variant="outline" class="gap-2" onclick={() => downloadSourceScan(agreement)}><ScanLine class="h-4 w-4" /> Source scan</Button>
+											<Button size="sm" class="gap-2" onclick={() => agreement.hasSourceScan ? downloadSourceScan(agreement) : openAgreementDraft(agreement)}>
+												{#if agreement.hasSourceScan}<Eye class="h-4 w-4" /> View draft{:else}<FilePenLine class="h-4 w-4" /> Edit draft{/if}
+											</Button>
+										{:else if agreement.hasSourceScan}
+											<Button size="sm" variant="outline" class="gap-2" onclick={() => downloadSourceScan(agreement)}><ScanLine class="h-4 w-4" /> {agreement.agreementStatus === 'Draft' ? 'View draft' : 'Source scan'}</Button>
 										{/if}
 										{#if issuedArtifact}
 											<Button size="sm" variant="outline" onclick={() => (signatureProgressAgreementId = signatureProgressAgreementId === agreement.leaseAgreementId ? null : agreement.leaseAgreementId)}>
@@ -464,10 +497,10 @@
 									<div class="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
 										<span class="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create next draft</span>
 										<Button size="sm" onclick={() => (createAddendumBase = agreement)}><FilePlus2 class="mr-1 h-4 w-4" /> Addendum</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Correction' })}>Correct</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Restatement' })}>Restate</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Renewal' })}>Renew</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'MonthToMonth' })}>Month-to-month</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Correction' })}>Create correction</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Restatement' })}>Create restatement</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Renewal' })}>Create renewal</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'MonthToMonth' })}>Create month-to-month</Button>
 									</div>
 								{/if}
 							</div>
@@ -486,8 +519,12 @@
 
 		<Card>
 			<CardHeader>
-				<CardTitle>Addendum versions</CardTitle>
-				<p class="text-sm text-muted-foreground">Server-paged draft, signature, correction-series, financial-effect, and immutable artifact history.</p>
+				<div class="flex flex-wrap items-start justify-between gap-3">
+					<div><CardTitle>Addendum versions</CardTitle><p class="mt-1 text-sm text-muted-foreground">Server-paged draft, signature, correction-series, financial-effect, and immutable artifact history.</p></div>
+					{#if canPrepareAgreements}
+						<Button size="sm" class="gap-2" disabled={!governingAgreement} title={governingAgreement ? `Create an addendum to ${governingAgreement.agreementNumber}` : 'A governing agreement is required'} onclick={() => { if (governingAgreement) createAddendumBase = governingAgreement; }}><FilePlus2 class="h-4 w-4" /> New draft</Button>
+					{/if}
+				</div>
 			</CardHeader>
 			<CardContent class="space-y-4">
 				{#if addendaQuery.isLoading}

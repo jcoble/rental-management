@@ -81,11 +81,11 @@
 			);
 		},
 		onSuccess: async () => {
-			showSuccess('Lease ending decision recorded.');
+			showSuccess('Lease ending plan recorded.');
 			await onrecorded();
 			onclose();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Ending decision could not be recorded.'))
+		onError: (error) => showError(apiErrorMessage(error, 'Ending plan could not be recorded.'))
 	}));
 
 	function submit() {
@@ -96,7 +96,7 @@
 <Dialog.Root open onOpenChange={(open) => { if (!open && !mutation.isPending) onclose(); }}>
 	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Plan what happens when this lease ends</Dialog.Title>
+			<Dialog.Title>Record lease ending plan</Dialog.Title>
 			<Dialog.Description>Choose whether the tenants will renew, continue month to month, or move out. This plan does not change the signed lease.</Dialog.Description>
 		</Dialog.Header>
 
@@ -105,9 +105,9 @@
 				<span class="font-medium">Decision</span>
 				<SimpleSelect bind:value={disposition} options={[
 					{ value: 'Undecided', label: 'Not decided yet' },
-					{ value: 'OfferRenewal', label: 'Offer a new fixed-term lease' },
+					{ value: 'OfferRenewal', label: 'Renew / continue with a new fixed term' },
 					{ value: 'OfferMonthToMonth', label: 'Continue month to month' },
-					{ value: 'NonRenewalMoveOut', label: 'Plan a move-out' }
+					{ value: 'NonRenewalMoveOut', label: 'Move out / end the relationship' }
 				]} />
 			</label>
 
@@ -144,7 +144,7 @@
 			<Button variant="outline" onclick={onclose} disabled={mutation.isPending}>Cancel</Button>
 			<Button onclick={submit} disabled={mutation.isPending}>
 				{#if mutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
-				Record decision
+				Record ending plan
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
