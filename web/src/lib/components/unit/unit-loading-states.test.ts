@@ -11,7 +11,7 @@ const sources = [
 	'./tabs/RentTab.svelte',
 	'./tabs/TimelineTab.svelte',
 	'../../../routes/(protected)/units/[id]/+page.svelte',
-	'../../../routes/(protected)/leases/[id]/+page.svelte',
+	'../leases/LeaseManagementDetail.svelte',
 ].map((path) => ({
 	path,
 	source: readFileSync(new URL(path, import.meta.url), 'utf8'),
