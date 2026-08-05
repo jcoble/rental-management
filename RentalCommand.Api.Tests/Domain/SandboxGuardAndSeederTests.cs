@@ -27,8 +27,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Sandbox guard + parameterized seeder coverage:
 ///   * <see cref="SandboxGuard"/> — the Stripe money-moving guard: true only for a sandbox portfolio;
 ///     false for live/unknown/null.
-///   * <see cref="DemoDataSeeder.SeedPortfolioAsync"/> — seeds an ARBITRARY portfolio id and never
-///     touches the sandbox flag, so the existing dev/e2e portfolio stays Live.
+///   * <see cref="DemoDataSeeder.SeedPortfolioAsync"/> — seeds a fresh arbitrary portfolio id,
+///     reconciles only recognized DEMO-LM facts, and never touches the sandbox flag.
 ///   * Stripe checkout is suppressed (NotEnabled, no Stripe call) while a portfolio is sandbox.
 /// </summary>
 [Collection(MigratedPostgreSqlCollection.Name)]
@@ -242,6 +242,40 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         noAgreementDemo.Agreements.Should().NotContain(agreement =>
             agreement.FullyExecutedAtUtc != null && agreement.ExecutedArtifactId != null);
 
+        var possessionWithoutGoverningAgreement = await (
+            from lifecycle in _ctx.Db.LeaseManagementLifecycleProjections
+            join relationship in _ctx.Db.LeaseManagements
+                on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                equals new { relationship.PortfolioId, relationship.Id }
+            where lifecycle.PortfolioId == 2
+                && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
+                && lifecycle.HasPossessionWithoutGoverningAgreement
+            select relationship.RelationshipNumber)
+            .ToListAsync();
+        possessionWithoutGoverningAgreement.Should().Equal("DEMO-LM-ACTIVE-017");
+
+        var unintendedCurrentAgreementGaps = await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+            agreement.PortfolioId == 2
+            && agreement.LeaseManagement!.RelationshipNumber.StartsWith("DEMO-LM-ACTIVE-")
+            && agreement.LeaseManagement.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+            && agreement.LeaseManagement.PossessionGivenAtUtc != null
+            && agreement.LeaseManagement.PossessionReturnedAtUtc == null
+            && agreement.BaseRentAmount > 0
+            && (agreement.IssuedArtifactId == null
+                || agreement.ExecutedArtifactId == null
+                || agreement.FullyExecutedAtUtc == null));
+        unintendedCurrentAgreementGaps.Should().Be(0,
+            "every non-exception current demo relationship with scheduled rent terms must have immutable executed evidence");
+
+        var scheduledRentSourcesWithoutExecutedArtifacts = await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+            agreement.PortfolioId == 2
+            && agreement.LeaseManagement!.RelationshipNumber.StartsWith("DEMO-LM-ACTIVE-")
+            && agreement.LeaseManagement.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+            && agreement.BaseRentAmount > 0
+            && agreement.FullyExecutedAtUtc != null
+            && agreement.ExecutedArtifactId == null);
+        scheduledRentSourcesWithoutExecutedArtifacts.Should().Be(0);
+
         var contradictoryCurrentRelationships = await _ctx.Db.LeaseManagements.CountAsync(relationship =>
             relationship.PortfolioId == 2
             && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
@@ -294,6 +328,40 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
         (await _ctx.Db.OutboxMessages.CountAsync(message =>
             message.IdempotencyKey == "demo-seed/1/seed-idempotency")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_PopulatedNonDemoPortfolioIsRejectedWithoutMutation()
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            PortfolioId = 1,
+            Name = "Existing live property",
+            AddressLine1 = "1 Existing Way",
+            City = "Town",
+            State = "ST",
+            PostalCode = "00000",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        var receiptCount = await _ctx.Db.AtomicCommandReceipts.CountAsync();
+        var outboxCount = await _ctx.Db.OutboxMessages.CountAsync();
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "reject-populated-nondemo", CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*populated non-demo portfolio*");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.Properties.CountAsync(property => property.PortfolioId == 1)).Should().Be(1);
+        (await _ctx.Db.LeaseManagements.CountAsync(relationship =>
+            relationship.PortfolioId == 1
+            && relationship.RelationshipNumber.StartsWith("DEMO-LM-"))).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(receiptCount);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(outboxCount);
     }
 
     [Fact]
@@ -374,19 +442,25 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, "seed-second-upload-retry", CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<IOException>();
 
-        var firstAdmissions = legalDocuments.AdmissionsByPurpose.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var firstAdmissions = legalDocuments.AdmissionsByOperationId
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
         firstAdmissions.Should().HaveCount(2);
+        var firstIssuedAdmission = legalDocuments.AdmissionsByPurpose["demo-legal-issued"];
+        var firstExecutedAdmission = legalDocuments.AdmissionsByPurpose["demo-legal-executed"];
         (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
         (await _ctx.Db.LegalDocumentArtifacts.CountAsync()).Should().Be(0);
-        legalDocuments.StoredBytes.Should().ContainKey(firstAdmissions["demo-legal-issued"].StoragePath);
-        legalDocuments.StoredBytes.Should().NotContainKey(firstAdmissions["demo-legal-executed"].StoragePath);
+        legalDocuments.StoredBytes.Should().ContainKey(firstIssuedAdmission.StoragePath);
+        legalDocuments.StoredBytes.Should().NotContainKey(firstExecutedAdmission.StoragePath);
 
         legalDocuments.FailUploadAttempt = null;
         await seeder.SeedPortfolioAsync(
             1, "seed-second-upload-retry", CancellationToken.None);
 
-        legalDocuments.AdmissionsByPurpose.Should().BeEquivalentTo(firstAdmissions);
-        (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
+        foreach (var (operationId, firstAdmission) in firstAdmissions)
+        {
+            legalDocuments.AdmissionsByOperationId.Should().ContainKey(operationId)
+                .WhoseValue.Should().BeEquivalentTo(firstAdmission);
+        }
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
 
@@ -738,29 +812,38 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         DemoLegalTestDependencies legalDocuments)
     {
         db.ChangeTracker.Clear();
-        var agreement = await db.LeaseAgreements
+        var agreements = await db.LeaseAgreements
             .Include(candidate => candidate.IssuedArtifact)
             .Include(candidate => candidate.ExecutedArtifact)
-            .SingleAsync(candidate => candidate.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1");
-        agreement.IssuedArtifact.Should().NotBeNull();
-        agreement.ExecutedArtifact.Should().NotBeNull();
-        agreement.FullyExecutedAtUtc.Should().NotBeNull();
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .ToListAsync();
+        agreements.Should().NotBeEmpty();
 
-        var artifacts = new[] { agreement.IssuedArtifact!, agreement.ExecutedArtifact! };
-        foreach (var artifact in artifacts)
+        foreach (var agreement in agreements)
         {
-            var bytes = legalDocuments.StoredBytes[artifact.StorageKey];
-            bytes.Should().StartWith(Encoding.ASCII.GetBytes("%PDF"));
-            artifact.ByteLength.Should().Be(bytes.LongLength);
-            artifact.ContentSha256.Should().Be(
-                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+            agreement.IssuedArtifact.Should().NotBeNull();
+            agreement.ExecutedArtifact.Should().NotBeNull();
+            agreement.FullyExecutedAtUtc.Should().NotBeNull();
+
+            foreach (var artifact in new[] { agreement.IssuedArtifact!, agreement.ExecutedArtifact! })
+            {
+                var bytes = legalDocuments.StoredBytes[artifact.StorageKey];
+                bytes.Should().StartWith(Encoding.ASCII.GetBytes("%PDF"));
+                artifact.ByteLength.Should().Be(bytes.LongLength);
+                artifact.ContentSha256.Should().Be(
+                    Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+            }
         }
 
-        (await db.StoredFiles.CountAsync()).Should().Be(2);
-        (await db.LegalDocumentArtifacts.CountAsync()).Should().Be(2);
-        (await db.PendingFileUploads.CountAsync()).Should().Be(2);
+        var expectedArtifactCount = agreements.Count * 2;
+        (await db.StoredFiles.CountAsync()).Should().Be(expectedArtifactCount);
+        (await db.LegalDocumentArtifacts.CountAsync()).Should().Be(expectedArtifactCount);
+        (await db.PendingFileUploads.CountAsync()).Should().Be(expectedArtifactCount);
         (await db.PendingFileUploads.CountAsync(upload =>
-            upload.State == PendingFileUploadState.Finalized && upload.StoredFileId != null)).Should().Be(2);
+            upload.State == PendingFileUploadState.Finalized && upload.StoredFileId != null))
+            .Should().Be(expectedArtifactCount);
     }
 }
 
@@ -815,6 +898,8 @@ internal sealed class DemoLegalTestDependencies :
     public int? FailUploadAttempt { get; set; }
     public IReadOnlyDictionary<string, byte[]> StoredBytes => _stored;
     public Dictionary<string, PendingFileUploadAdmission> AdmissionsByPurpose { get; } =
+        new(StringComparer.Ordinal);
+    public Dictionary<string, PendingFileUploadAdmission> AdmissionsByOperationId { get; } =
         new(StringComparer.Ordinal);
     public Dictionary<string, string> OperationIdsByPurpose { get; } =
         new(StringComparer.Ordinal);
@@ -897,6 +982,7 @@ internal sealed class DemoLegalTestDependencies :
             existing.Id, existing.StoragePath, existing.State, existing.StoredFileId,
             existing.RequestFingerprint);
         AdmissionsByPurpose[purpose] = admission;
+        AdmissionsByOperationId[clientOperationId] = admission;
         return admission;
     }
 
