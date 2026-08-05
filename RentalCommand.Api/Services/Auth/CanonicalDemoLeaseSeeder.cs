@@ -393,9 +393,10 @@ internal static class CanonicalDemoLeaseSeeder
             from candidateAgreement in db.LeaseAgreements.AsNoTracking()
             where candidateAgreement.PortfolioId == portfolioId
                 && candidateAgreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
-                && (candidateAgreement.IssuedArtifactId == null
-                    || candidateAgreement.ExecutedArtifactId == null
-                    || candidateAgreement.FullyExecutedAtUtc == null)
+                // Demo backfill owns only fully unbound drafts; real e-sign bindings must finish there.
+                && candidateAgreement.IssuedArtifactId == null
+                && candidateAgreement.ExecutedArtifactId == null
+                && candidateAgreement.FullyExecutedAtUtc == null
             join relationship in db.LeaseManagements.AsNoTracking()
                 on new { candidateAgreement.PortfolioId, Id = candidateAgreement.LeaseManagementId }
                 equals new { relationship.PortfolioId, relationship.Id }
