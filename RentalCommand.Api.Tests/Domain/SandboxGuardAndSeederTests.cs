@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
@@ -36,6 +37,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<ServiceProvider> _atomicProviders = [];
+    private readonly DemoPortfolioDiscoveryCommandInterceptor _demoPortfolioDiscovery = new();
     private MigratedPostgreSqlTestContext _ctx = null!;
 
     public SandboxGuardAndSeederTests(MigratedPostgreSqlFixture fixture) =>
@@ -44,7 +46,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var now = DateTime.UtcNow;
-        _ctx = await _fixture.CreateContextAsync();
+        _ctx = await _fixture.CreateContextAsync([_demoPortfolioDiscovery]);
         _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
         {
             UserId = 1,
@@ -447,6 +449,8 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         var (startupSeeder, _) = BuildSeeder(_ctx.Db);
         await FluentActions.Awaiting(() => startupSeeder.SeedAsync(CancellationToken.None))
             .Should().NotThrowAsync();
+        _demoPortfolioDiscovery.UsedFunction.Should().BeTrue(
+            "Npgsql startup discovery must use the RLS-safe database function");
 
         _ctx.Db.ChangeTracker.Clear();
         foreach (var portfolioId in new[] { 1, 2 })
@@ -1136,6 +1140,40 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         agreement.FullyExecutedAtUtc = null;
         await db.SaveChangesAsync();
         return artifact;
+    }
+}
+
+internal sealed class DemoPortfolioDiscoveryCommandInterceptor : DbCommandInterceptor
+{
+    public bool UsedFunction { get; private set; }
+
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        Record(command);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        Record(command);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    private void Record(DbCommand command)
+    {
+        if (command.CommandText.Contains(
+                "public.rc_demo_seed_portfolio_ids()",
+                StringComparison.Ordinal))
+        {
+            UsedFunction = true;
+        }
     }
 }
 
