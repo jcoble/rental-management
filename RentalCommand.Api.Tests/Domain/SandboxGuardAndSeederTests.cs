@@ -502,7 +502,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, "seed-before-reconciliation", CancellationToken.None);
         var relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
             candidate.RelationshipNumber == "DEMO-LM-ACTIVE-017");
-        relationship.PlannedMoveOutAtUtc = DateTime.UtcNow.AddMonths(1);
+        var plannedMoveOutAtUtc = DateTime.UtcNow.Date.AddMonths(1).AddHours(16);
+        relationship.PlannedMoveOutAtUtc = plannedMoveOutAtUtc;
+        relationship.PossessionAgreementExceptionReason = null;
+        relationship.PossessionAgreementExceptionAuthorizedByUserId = null;
         await _ctx.Db.SaveChangesAsync();
 
         await seeder.SeedPortfolioAsync(
@@ -511,10 +514,11 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _ctx.Db.ChangeTracker.Clear();
         relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
             candidate.RelationshipNumber == "DEMO-LM-ACTIVE-017");
-        relationship.PlannedMoveOutAtUtc.Should().BeNull();
+        relationship.PlannedMoveOutAtUtc.Should().Be(plannedMoveOutAtUtc);
         relationship.EndingDispositionDecidedAtUtc.Should().BeNull();
         relationship.EndingDispositionDecidedByUserId.Should().BeNull();
         relationship.PossessionAgreementExceptionReason.Should().NotBeNullOrWhiteSpace();
+        relationship.PossessionAgreementExceptionAuthorizedByUserId.Should().NotBeNull();
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "sandbox.demo-seed"
             && (receipt.IdempotencyKey == "portfolio:1:seed-before-reconciliation"
@@ -523,6 +527,43 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             message.IdempotencyKey == "demo-seed/1/seed-before-reconciliation"
             || message.IdempotencyKey == "demo-seed/1/reconcile-existing-demo-facts")).Should().Be(2);
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_ReconcilePreservesPendingMoveOutAndUnchangedRowVersion()
+    {
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-before-live-move-out", CancellationToken.None);
+
+        var relationship = await _ctx.Db.LeaseManagements
+            .Where(candidate =>
+                candidate.RelationshipNumber.StartsWith("DEMO-LM-")
+                && candidate.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && candidate.PossessionGivenAtUtc != null
+                && candidate.PossessionReturnedAtUtc == null
+                && candidate.EndingDisposition == LeaseManagementEndingDisposition.Undecided
+                && candidate.TenantAccount != null
+                && candidate.TenantAccount.ClosedAtUtc == null)
+            .OrderBy(candidate => candidate.RelationshipNumber)
+            .FirstAsync();
+        relationship.PlannedMoveOutAtUtc = DateTime.UtcNow.Date.AddMonths(1).AddHours(17);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.ChangeTracker.Clear();
+        relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
+            candidate.Id == relationship.Id);
+        var plannedMoveOutAtUtc = relationship.PlannedMoveOutAtUtc;
+        var rowVersion = relationship.RowVersion;
+
+        await seeder.SeedPortfolioAsync(
+            1, "reconcile-after-live-move-out", CancellationToken.None);
+
+        _ctx.Db.ChangeTracker.Clear();
+        relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
+            candidate.Id == relationship.Id);
+        relationship.PlannedMoveOutAtUtc.Should().Be(plannedMoveOutAtUtc);
+        relationship.RowVersion.Should().Be(rowVersion);
     }
 
     // -----------------------------------------------------------------------
