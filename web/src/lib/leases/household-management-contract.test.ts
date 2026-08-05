@@ -41,4 +41,12 @@ describe('relationship-scoped household management', () => {
 		assert.match(dialog, /passwordless resident account/);
 		assert.doesNotMatch(dialog, /name="password"|type="password"|temporary password/i);
 	});
+
+	it('uses explicit household membership and resident-login action labels', () => {
+		assert.match(page, />Add person</);
+		assert.match(page, />End membership</);
+		assert.match(page, />Create resident login</);
+		assert.match(page, />Revoke resident login</);
+		assert.doesNotMatch(page, />End<|>Create login<|>Revoke login</);
+	});
 });
