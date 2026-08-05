@@ -24,23 +24,13 @@ public static class DemoSeedPersistence
     {
         await db.ExecuteAtomicSqlMutationAsync<int>(context, $$"""
             UPDATE "LeaseManagements" AS relationship
-            SET "PlannedMoveOutAtUtc" = NULL,
-                "EndingDispositionDecidedAtUtc" = NULL,
-                "EndingDispositionDecidedByUserId" = NULL,
-                "UpdatedAtUtc" = {{updatedAtUtc}},
+            SET "UpdatedAtUtc" = {{updatedAtUtc}},
                 "RowVersion" = {{rowVersion}},
                 "PossessionAgreementExceptionReason" =
-                    CASE WHEN relationship."RelationshipNumber" = 'DEMO-LM-ACTIVE-017'
-                         THEN 'Demo imported possession is intentionally retained without a governing Agreement.'
-                         ELSE relationship."PossessionAgreementExceptionReason"
-                    END,
-                "PossessionAgreementExceptionAuthorizedByUserId" =
-                    CASE WHEN relationship."RelationshipNumber" = 'DEMO-LM-ACTIVE-017'
-                         THEN {{actorUserId}}
-                         ELSE relationship."PossessionAgreementExceptionAuthorizedByUserId"
-                    END
+                    'Demo imported possession is intentionally retained without a governing Agreement.',
+                "PossessionAgreementExceptionAuthorizedByUserId" = {{actorUserId}}
             WHERE relationship."PortfolioId" = {{portfolioId}}
-              AND starts_with(relationship."RelationshipNumber", 'DEMO-LM-')
+              AND relationship."RelationshipNumber" = 'DEMO-LM-ACTIVE-017'
               AND relationship."PossessionGivenAtUtc" IS NOT NULL
               AND relationship."PossessionReturnedAtUtc" IS NULL
               AND relationship."EndingDisposition" = 'Undecided'
@@ -50,6 +40,10 @@ public static class DemoSeedPersistence
                   WHERE account."PortfolioId" = {{portfolioId}}
                     AND account."LeaseManagementId" = relationship."Id"
                     AND account."ClosedAtUtc" IS NULL)
+              AND (relationship."PossessionAgreementExceptionReason" IS DISTINCT FROM
+                       'Demo imported possession is intentionally retained without a governing Agreement.'
+                   OR relationship."PossessionAgreementExceptionAuthorizedByUserId" IS DISTINCT FROM
+                       {{actorUserId}})
             RETURNING 1 AS "Value"
             """,
             [new AtomicSqlMutationTarget(
