@@ -543,6 +543,100 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BuildLegalDocumentIntents_PartiallyBoundAgreementIsExcluded()
+    {
+        var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
+        legalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => seeder.SeedPortfolioAsync(
+                1, "prepare-partially-bound-candidate", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var agreement = await _ctx.Db.LeaseAgreements
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .FirstAsync();
+        var issuedArtifact = await BindRealIssuedArtifactAsync(_ctx.Db, agreement);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var actorUserId = await _ctx.Db.Users.OrderBy(user => user.Id).Select(user => user.Id).FirstAsync();
+        var intents = await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentsAsync(
+            _ctx.Db, 1, actorUserId, CancellationToken.None);
+
+        intents.Should().NotContain(intent => intent.AgreementId == agreement.Id);
+        intents.Should().Contain(intent => intent.AgreementId != agreement.Id,
+            "fully unbound demo drafts still need deterministic legal-document backfill");
+        var preservedAgreement = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == agreement.Id);
+        preservedAgreement.IssuedArtifactId.Should().Be(issuedArtifact.Id);
+        preservedAgreement.ExecutedArtifactId.Should().BeNull();
+        preservedAgreement.FullyExecutedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_ReconcileFinalizesUnboundDraftsAndPreservesPartiallyBoundAgreement()
+    {
+        var (preparationSeeder, preparationLegalDocuments) = BuildSeeder(_ctx.Db);
+        preparationLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => preparationSeeder.SeedPortfolioAsync(
+                1, "prepare-mixed-legal-reconcile", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var partiallyBoundAgreementId = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .Select(candidate => candidate.Id)
+            .FirstAsync();
+        var unboundAgreementIds = await _ctx.Db.LeaseAgreements
+            .Where(candidate => candidate.PortfolioId == 1
+                && candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && candidate.Id != partiallyBoundAgreementId
+                && candidate.IssuedArtifactId == null
+                && candidate.ExecutedArtifactId == null
+                && candidate.FullyExecutedAtUtc == null)
+            .Select(candidate => candidate.Id)
+            .ToListAsync();
+        unboundAgreementIds.Should().NotBeEmpty();
+
+        var (reconcileSeeder, reconcileLegalDocuments) = BuildSeeder(_ctx.Db);
+        LegalDocumentArtifact? issuedArtifact = null;
+        DateTime? issuedAtUtc = null;
+        reconcileLegalDocuments.BeforeUploadAttemptAsync = async attempt =>
+        {
+            if (attempt != 2)
+            {
+                return;
+            }
+
+            var agreement = await _ctx.Db.LeaseAgreements
+                .SingleAsync(candidate => candidate.Id == partiallyBoundAgreementId);
+            issuedArtifact = await BindRealIssuedArtifactAsync(_ctx.Db, agreement);
+            issuedAtUtc = agreement.IssuedAtUtc;
+            _ctx.Db.ChangeTracker.Clear();
+        };
+        var reconcile = () => reconcileSeeder.SeedPortfolioAsync(
+            1, "reconcile-mixed-legal-bindings", CancellationToken.None);
+
+        await reconcile.Should().NotThrowAsync();
+
+        issuedArtifact.Should().NotBeNull();
+        _ctx.Db.ChangeTracker.Clear();
+        var preservedAgreement = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == partiallyBoundAgreementId);
+        preservedAgreement.IssuedArtifactId.Should().Be(issuedArtifact!.Id);
+        preservedAgreement.IssuedAtUtc.Should().Be(issuedAtUtc);
+        preservedAgreement.ExecutedArtifactId.Should().BeNull();
+        preservedAgreement.FullyExecutedAtUtc.Should().BeNull();
+        (await _ctx.Db.LeaseAgreements.CountAsync(candidate =>
+            unboundAgreementIds.Contains(candidate.Id)
+            && candidate.IssuedArtifactId != null
+            && candidate.ExecutedArtifactId != null
+            && candidate.FullyExecutedAtUtc != null)).Should().Be(unboundAgreementIds.Count);
+    }
+
+    [Fact]
     public async Task SeedPortfolio_SecondUploadFailure_ReusesAdmissionsAndPathsWithoutDuplicates()
     {
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
@@ -996,6 +1090,53 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             upload.State == PendingFileUploadState.Finalized && upload.StoredFileId != null))
             .Should().Be(expectedArtifactCount);
     }
+
+    private static async Task<LegalDocumentArtifact> BindRealIssuedArtifactAsync(
+        RentalCommandDbContext db,
+        LeaseAgreement agreement)
+    {
+        var issuedAtUtc = DateTime.UtcNow;
+        var fileName = $"real-issued-{agreement.Id}.pdf";
+        var storedFile = new StoredFile
+        {
+            PortfolioId = agreement.PortfolioId,
+            FileName = fileName,
+            FilePath = $"real-esign/{agreement.PortfolioId}/{Guid.NewGuid():N}/{fileName}",
+            ContentType = "application/pdf",
+            FileSize = 1024,
+            ContentSha256 = new string('a', 64),
+            EntityType = nameof(LeaseAgreement),
+            EntityId = agreement.Id,
+            UploadedAt = issuedAtUtc,
+        };
+        db.StoredFiles.Add(storedFile);
+        await db.SaveChangesAsync();
+
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = agreement.PortfolioId,
+            StoredFileId = storedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = storedFile.FilePath,
+            FileName = storedFile.FileName,
+            ContentType = storedFile.ContentType,
+            ByteLength = storedFile.FileSize,
+            ContentSha256 = storedFile.ContentSha256,
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = issuedAtUtc,
+            CreatedByUserId = 1,
+        };
+        db.LegalDocumentArtifacts.Add(artifact);
+        await db.SaveChangesAsync();
+
+        agreement.IssuedArtifactId = artifact.Id;
+        agreement.IssuedAtUtc = issuedAtUtc;
+        agreement.ExecutedArtifactId = null;
+        agreement.FullyExecutedAtUtc = null;
+        await db.SaveChangesAsync();
+        return artifact;
+    }
 }
 
 internal sealed class InjectedFinalizationException : Exception;
@@ -1047,6 +1188,7 @@ internal sealed class DemoLegalTestDependencies :
     private int _uploadAttempt;
 
     public int? FailUploadAttempt { get; set; }
+    public Func<int, Task>? BeforeUploadAttemptAsync { get; set; }
     public IReadOnlyDictionary<string, byte[]> StoredBytes => _stored;
     public Dictionary<string, PendingFileUploadAdmission> AdmissionsByPurpose { get; } =
         new(StringComparer.Ordinal);
@@ -1150,6 +1292,8 @@ internal sealed class DemoLegalTestDependencies :
     {
         EnsureOutsideInfrastructure();
         _uploadAttempt++;
+        if (BeforeUploadAttemptAsync is not null)
+            await BeforeUploadAttemptAsync(_uploadAttempt);
         if (FailUploadAttempt == _uploadAttempt)
             throw new IOException($"Injected failure for upload attempt {_uploadAttempt}.");
         using var buffer = new MemoryStream();

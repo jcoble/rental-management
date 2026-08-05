@@ -178,20 +178,39 @@ public class DemoDataSeeder
         var legalIntents = await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentsAsync(
             _db, portfolioId, actorUserId, ct);
         _db.ChangeTracker.Clear();
+        var finalizedCount = 0;
+        var skippedCount = 0;
 
         foreach (var legalIntent in legalIntents)
         {
             var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
             var finalizeCommand = ToFinalizeCommand(prepared);
-            await _atomic.ExecuteAsync(
+            var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity(
                     "sandbox.demo-legal-finalize",
                     $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1"),
                 finalizeCommand,
                 DemoLegalDocumentFinalizeCommandHandler.ResultCodec,
                 ct);
+            if (outcome.Value.Skipped)
+            {
+                skippedCount++;
+                _logger.LogWarning(
+                    "Skipped demo legal-document finalization for agreement {AgreementNumber} because it is already bound to different artifacts.",
+                    legalIntent.RenderData.AgreementNumber);
+            }
+            else
+            {
+                finalizedCount++;
+            }
             _db.ChangeTracker.Clear();
         }
+
+        _logger.LogInformation(
+            "Demo legal-document reconciliation completed for portfolio {PortfolioId}: {FinalizedCount} finalized, {SkippedCount} skipped.",
+            portfolioId,
+            finalizedCount,
+            skippedCount);
     }
 
     internal static async Task<SeedDemoPortfolioResult> SeedPortfolioCoreAsync(
@@ -1271,7 +1290,13 @@ public class DemoDataSeeder
         if (agreement.IssuedArtifactId is not null && agreement.IssuedArtifactId != issuedArtifact.Id
             || agreement.ExecutedArtifactId is not null && agreement.ExecutedArtifactId != executedArtifact.Id)
         {
-            throw new InvalidOperationException("The deterministic demo Agreement is already bound to different artifacts.");
+            return new FinalizeDemoLegalDocumentResult(
+                command.PortfolioId,
+                command.AgreementId,
+                issuedArtifact.Id,
+                executedArtifact.Id,
+                AlreadyFinalized: false,
+                Skipped: true);
         }
 
         agreement.IssuedArtifactId = issuedArtifact.Id;
@@ -1314,7 +1339,8 @@ public class DemoDataSeeder
             command.AgreementId,
             issuedArtifact.Id,
             executedArtifact.Id,
-            alreadyFinalized);
+            alreadyFinalized,
+            Skipped: false);
     }
 
     private static async Task<IReadOnlyDictionary<Guid, PendingFileUpload>> LockPendingUploadsAsync(
@@ -1581,7 +1607,7 @@ public sealed class DemoLegalDocumentFinalizeCommandHandler
     public DemoLegalDocumentFinalizeCommandHandler(RentalCommandDbContext db) => _db = db;
 
     internal static readonly AtomicJsonResultCodec<FinalizeDemoLegalDocumentResult> ResultCodec =
-        new("demo-legal-document-finalize-result:v1");
+        new("demo-legal-document-finalize-result:v2");
 
     public async Task<FinalizeDemoLegalDocumentResult> HandleAsync(
         FinalizeDemoLegalDocumentCommand command,
