@@ -41,4 +41,19 @@ describe('Unit Tenant & lease surface', () => {
 	it('passes the unit dashboard into the listing tab so occupied units can link back to Tenant & lease', () => {
 		assert.match(unitPageSource, /<ListingTab \{dashboard\} \/>/);
 	});
+
+	it('renders the selected lease management detail inside the Agreement view', () => {
+		assert.match(unitPageSource, /page\.url\.searchParams\.get\('leaseManagement'\)/);
+		assert.match(unitPageSource, /\{#if selectedLeaseManagementId\}/);
+		assert.match(
+			unitPageSource,
+			/<LeaseManagementDetail leaseManagementId=\{selectedLeaseManagementId\} \/>/,
+		);
+	});
+
+	it('returns from lease management detail to the relationship list without losing tab context', () => {
+		assert.match(unitPageSource, /params\.delete\('leaseManagement'\)/);
+		assert.match(unitPageSource, /href=\{leaseRelationshipListHref\}/);
+		assert.match(unitPageSource, /\/> Back to tenant relationships/);
+	});
 });
