@@ -19,6 +19,7 @@
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
+	import LeaseManagementDetail from '$lib/components/leases/LeaseManagementDetail.svelte';
 	import ResidentsTab from '$lib/components/unit/tabs/ResidentsTab.svelte';
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import LedgerTab from '$lib/components/unit/tabs/LedgerTab.svelte';
@@ -48,6 +49,18 @@
 	));
 	const activeTab = $derived(activeDestination.tab);
 	const activeView = $derived(activeDestination.view);
+	const selectedLeaseManagementId = $derived.by(() => {
+		const rawValue = page.url.searchParams.get('leaseManagement');
+		if (!rawValue) return null;
+		const value = Number(rawValue);
+		return Number.isInteger(value) && value > 0 ? value : null;
+	});
+	const leaseRelationshipListHref = $derived.by(() => {
+		const params = new URLSearchParams(page.url.searchParams);
+		params.delete('leaseManagement');
+		const query = params.toString();
+		return `${page.url.pathname}${query ? `?${query}` : ''}`;
+	});
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
 	let moveInDepositEffectiveOn = $state(new Date().toISOString().slice(0, 10));
@@ -402,6 +415,14 @@
 								class="scroll-mt-4 outline-none"
 								data-testid="unit-agreement-section"
 							>
+								{#if selectedLeaseManagementId}
+									<div class="mb-4">
+										<Button href={leaseRelationshipListHref} variant="outline" size="sm" class="gap-2">
+											<ArrowLeft class="h-4 w-4" /> Back to tenant relationships
+										</Button>
+									</div>
+									<LeaseManagementDetail leaseManagementId={selectedLeaseManagementId} />
+								{:else}
 								<LeaseTab
 									{dashboard}
 									onScan={() => goScan({
@@ -409,6 +430,7 @@
 										returnTo: `/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements`
 									})}
 								/>
+								{/if}
 							</section>
 							{/if}
 						</div>
