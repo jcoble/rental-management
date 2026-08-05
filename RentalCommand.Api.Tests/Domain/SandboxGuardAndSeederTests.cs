@@ -365,6 +365,116 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SeedAsync_ReconcilesEveryDemoPortfolio_AndSkipsPopulatedNonDemoPortfolio()
+    {
+        var now = DateTime.UtcNow;
+        var demoPortfolio = new Portfolio
+        {
+            Id = 2,
+            Name = "Second demo portfolio",
+            ManagementCompanyName = "Second Demo Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var nonDemoPortfolio = new Portfolio
+        {
+            Id = 3,
+            Name = "Existing live portfolio",
+            ManagementCompanyName = "Existing Live Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Portfolios.AddRange(demoPortfolio, nonDemoPortfolio);
+        _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+        {
+            UserId = 1,
+            Portfolio = demoPortfolio,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            Membership = new WorkspaceMembership
+            {
+                PortfolioId = 2,
+                Status = WorkspaceMembershipStatus.Active,
+                DefaultExperience = WorkspaceExperience.Management,
+                EffectiveFromUtc = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            },
+        });
+        _ctx.Db.Properties.Add(new Property
+        {
+            Portfolio = nonDemoPortfolio,
+            Name = "Existing live property",
+            AddressLine1 = "3 Existing Way",
+            City = "Town",
+            State = "ST",
+            PostalCode = "00003",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var (firstPreparationSeeder, firstLegalDocuments) = BuildSeeder(_ctx.Db);
+        firstLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => firstPreparationSeeder.SeedPortfolioAsync(
+                1, "prepare-startup-demo-one", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var (secondPreparationSeeder, secondLegalDocuments) = BuildSeeder(_ctx.Db);
+        secondLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => secondPreparationSeeder.SeedPortfolioAsync(
+                2, "prepare-startup-demo-two", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        foreach (var portfolioId in new[] { 1, 2 })
+        {
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.ExecutedArtifactId == null))
+                .Should().BeGreaterThan(0);
+        }
+        var nonDemoPropertyCount = await _ctx.Db.Properties.CountAsync(property =>
+            property.PortfolioId == 3);
+        var nonDemoReceiptCount = await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.IdempotencyKey.StartsWith("portfolio:3:"));
+
+        var (startupSeeder, _) = BuildSeeder(_ctx.Db);
+        await FluentActions.Awaiting(() => startupSeeder.SeedAsync(CancellationToken.None))
+            .Should().NotThrowAsync();
+
+        _ctx.Db.ChangeTracker.Clear();
+        foreach (var portfolioId in new[] { 1, 2 })
+        {
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && (agreement.ExecutedArtifactId == null
+                    || agreement.FullyExecutedAtUtc == null)))
+                .Should().Be(0);
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.ExecutedArtifactId != null
+                && agreement.FullyExecutedAtUtc != null))
+                .Should().BeGreaterThan(0);
+        }
+        (await _ctx.Db.Properties.CountAsync(property => property.PortfolioId == 3))
+            .Should().Be(nonDemoPropertyCount);
+        (await _ctx.Db.LeaseManagements.CountAsync(relationship => relationship.PortfolioId == 3))
+            .Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.IdempotencyKey.StartsWith("portfolio:3:")))
+            .Should().Be(nonDemoReceiptCount);
+    }
+
+    [Fact]
     public async Task SeedPortfolio_FirstPassUsesContentAddressedLegalUploadRegistrations()
     {
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);

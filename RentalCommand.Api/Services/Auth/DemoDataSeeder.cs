@@ -1,5 +1,6 @@
-using System.Text.Json;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
@@ -24,9 +25,9 @@ namespace RentalCommand.Api.Services.Auth;
 /// canonical lease relationships, agreement drafts, tenant/deposit ledgers, expenses, work orders,
 /// appointments, and inspections) for a given portfolio so every report and analytics screen has realistic data.
 ///
-/// Two callers: startup (seeds portfolio 1 = the dev admin when <c>Seed:DemoData=true</c>), and new
-/// signups (each new portfolio is seeded as a Sandbox to explore). Every row is parameterized on the
-/// passed portfolio id; nothing is hardcoded to portfolio 1.
+/// Two callers: startup (seeds portfolio 1 = the dev admin and reconciles every other demo-marked
+/// portfolio when <c>Seed:DemoData=true</c>), and new signups (each new portfolio is seeded as a
+/// Sandbox to explore). Every row is parameterized on the passed portfolio id.
 /// </summary>
 public class DemoDataSeeder
 {
@@ -65,13 +66,67 @@ public class DemoDataSeeder
         _fileStorage = fileStorage;
     }
 
-    /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
-    public Task SeedAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Seeds the dev-admin portfolio (id 1), then reconciles every other portfolio that already
+    /// contains canonical demo lease-management facts.
+    /// </summary>
+    public async Task SeedAsync(CancellationToken ct = default)
     {
-        // Each application start is a new reconciliation action. One key is created for this
-        // invocation and reused by every exact retry within the action.
-        var operationKey = $"startup:{Guid.NewGuid():N}";
-        return SeedStartupPortfolioAsync(1, operationKey, ct);
+        var failures = new List<Exception>();
+        var successfulPortfolioCount = 0;
+
+        async Task SeedOneAsync(int portfolioId)
+        {
+            // Each portfolio reconciliation is an independent startup action with its own receipt.
+            var operationKey = $"startup:portfolio:{portfolioId}:{Guid.NewGuid():N}";
+            try
+            {
+                await SeedStartupPortfolioAsync(portfolioId, operationKey, ct);
+                successfulPortfolioCount++;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+                _logger.LogError(
+                    exception,
+                    "Startup demo reconciliation failed for portfolio {PortfolioId}.",
+                    portfolioId);
+            }
+        }
+
+        await SeedOneAsync(1);
+
+        var otherDemoPortfolioIds = await _db.LeaseManagements
+            .AsNoTracking()
+            .Where(relationship => relationship.PortfolioId != 1
+                && EF.Functions.Like(relationship.RelationshipNumber, "DEMO-LM-%"))
+            .Select(relationship => relationship.PortfolioId)
+            .Distinct()
+            .OrderBy(portfolioId => portfolioId)
+            .ToListAsync(ct);
+
+        foreach (var portfolioId in otherDemoPortfolioIds)
+        {
+            await SeedOneAsync(portfolioId);
+        }
+
+        if (successfulPortfolioCount > 0 || failures.Count == 0)
+        {
+            return;
+        }
+
+        if (failures.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+
+        throw new AggregateException(
+            "Startup demo reconciliation failed for every eligible portfolio.",
+            failures);
     }
 
     private async Task SeedStartupPortfolioAsync(
