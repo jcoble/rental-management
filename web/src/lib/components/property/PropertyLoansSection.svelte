@@ -9,6 +9,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -433,7 +434,11 @@
 						<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" maxlength={4} error={formErrors.termMonths} testid="loan-term" />
 					</div>
 					<div class="grid gap-3 sm:grid-cols-2">
-						<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
+						<div data-testid="loan-start-date-field">
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="loan-start-date-input">Start date</label>
+							<DatePicker id="loan-start-date-input" testid="loan-start-date-input" bind:value={form.startDate} />
+							{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="loan-start-date-error">{formErrors.startDate}</p>{/if}
+						</div>
 						<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" maxlength={2} error={formErrors.dayOfMonthDue} testid="loan-day-due" />
 					</div>
 				{:else if loanStep === 2}

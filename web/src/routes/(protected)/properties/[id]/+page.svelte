@@ -27,6 +27,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
@@ -569,6 +570,14 @@
 	</div>
 {/snippet}
 
+{#snippet propertyInServiceDateControl()}
+	<DatePicker
+		id="property-detail-in-service-date-input"
+		testid="property-detail-in-service-date-input"
+		bind:value={propertyForm.inServiceDate}
+	/>
+{/snippet}
+
 <!-- Editing controls for the Address card (hoisted to top level so they are not
      mistaken for slot props when referenced inside <DetailCard>). -->
 {#snippet addressControl()}
@@ -766,7 +775,7 @@
 			<DetailCard title="Tax basis" icon={Info} accent="muted" testid="property-detail-tax-basis-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-detail-purchase-price" morphName="vt-prop-purchase-price" />
 				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-detail-land-value" morphName="vt-prop-land-value" />
-				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-detail-in-service-date" morphName="vt-prop-in-service-date" />
+				{@render inlineFieldWrap('property-detail-in-service-date', 'In-service date', property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—', propertyFormErrors.inServiceDate, propertyInServiceDateControl, editingProperty, 'vt-prop-in-service-date')}
 				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-detail-manual-depreciation" morphName="vt-prop-manual-depreciation" />
 				<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={fmtMoney(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-detail-accumulated-depreciation" class="sm:col-span-2" morphName="vt-prop-accumulated-depreciation" />
 			</DetailCard>
@@ -877,7 +886,7 @@
 				>
 					<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={false} type="number" testid="property-basis-purchase-price" />
 					<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={false} type="number" testid="property-basis-land-value" />
-					<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={false} type="date" testid="property-basis-in-service" />
+					<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={false} testid="property-basis-in-service" />
 					<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={fmtMoney(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-basis-accumulated" />
 				</DetailCard>
 			</div>
