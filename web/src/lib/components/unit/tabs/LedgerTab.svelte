@@ -3,6 +3,10 @@
 	import { pushState } from '$app/navigation';
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
+	import {
+		UNIT_SUBNAV_ITEM_CLASS,
+		UNIT_SUBNAV_LIST_CLASS,
+	} from '$lib/components/unit/unit-tabs';
 	import RentTab from './RentTab.svelte';
 	import ExpensesTab from './ExpensesTab.svelte';
 
@@ -42,10 +46,12 @@
 
 <div class="space-y-4" data-testid="unit-ledger-tab">
 	<div class="min-w-0 overflow-x-auto">
-		<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Money views" data-testid="unit-money-tabs">
-			<button type="button" role="tab" aria-selected={activeView === 'tenant-account'} data-state={activeView === 'tenant-account' ? 'active' : 'inactive'} class="m3-tabs-trigger" onclick={() => setView('tenant-account')}>Rent &amp; payments</button>
-			<button type="button" role="tab" aria-selected={activeView === 'operating-costs'} data-state={activeView === 'operating-costs' ? 'active' : 'inactive'} class="m3-tabs-trigger" onclick={() => setView('operating-costs')}>Property expenses</button>
-		</div>
+		<nav aria-label="Money sections" data-testid="unit-money-subnav">
+			<div class={UNIT_SUBNAV_LIST_CLASS}>
+				<button type="button" aria-current={activeView === 'tenant-account' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('tenant-account')}>Rent &amp; payments</button>
+				<button type="button" aria-current={activeView === 'operating-costs' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('operating-costs')}>Property expenses</button>
+			</div>
+		</nav>
 	</div>
 
 	<div data-testid="unit-money-surface">

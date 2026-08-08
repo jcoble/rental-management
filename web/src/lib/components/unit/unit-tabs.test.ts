@@ -1,11 +1,22 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { resolveUnitDestination, resolveUnitTab, UNIT_TABS } from './unit-tabs.ts';
+import {
+	resolveUnitDestination,
+	resolveUnitTab,
+	UNIT_SUBNAV_ITEM_CLASS,
+	UNIT_SUBNAV_LIST_CLASS,
+	UNIT_TABS,
+} from './unit-tabs.ts';
 
 describe('unit tab routing', () => {
 	it('exposes the six approved Unit Command Center areas', () => {
 		assert.deepEqual(UNIT_TABS, ['summary', 'leasing', 'tenant-lease', 'money', 'maintenance', 'documents-history']);
 		for (const tab of UNIT_TABS) assert.equal(resolveUnitTab(tab), tab);
+		assert.doesNotMatch(UNIT_SUBNAV_LIST_CLASS, /m3-tabs-list/);
+		assert.match(UNIT_SUBNAV_LIST_CLASS, /bg-muted/);
+		assert.match(UNIT_SUBNAV_ITEM_CLASS, /text-sm/);
+		assert.match(UNIT_SUBNAV_ITEM_CLASS, /text-muted-foreground/);
+		assert.match(UNIT_SUBNAV_ITEM_CLASS, /aria-\[current=page\]:text-foreground/);
 	});
 
 	it('restores a meaningful subsection from canonical URLs', () => {

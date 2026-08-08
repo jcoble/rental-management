@@ -30,6 +30,8 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import {
 		resolveUnitDestination,
+		UNIT_SUBNAV_ITEM_CLASS,
+		UNIT_SUBNAV_LIST_CLASS,
 		type UnitView,
 	} from '$lib/components/unit/unit-tabs';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
@@ -111,10 +113,6 @@
 
 	function tabState(tab: string) {
 		return activeTab === tab ? 'active' : 'inactive';
-	}
-
-	function viewState(view: UnitView) {
-		return activeView === view ? 'active' : 'inactive';
 	}
 
 	function currentUnitReturnTo() {
@@ -376,10 +374,12 @@
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Leasing">
 						<div class="space-y-4" data-testid="unit-leasing-surface">
 							<div class="min-w-0 overflow-x-auto">
-								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Leasing views" data-testid="unit-leasing-tabs">
-									<button type="button" role="tab" aria-selected={activeView === 'listing'} data-state={viewState('listing')} class="m3-tabs-trigger" onclick={() => setTab('leasing', 'listing')}>Listing</button>
-									<button type="button" role="tab" aria-selected={activeView === 'applications'} data-state={viewState('applications')} class="m3-tabs-trigger" onclick={() => setTab('leasing', 'applications')}>Applications</button>
-								</div>
+								<nav aria-label="Leasing sections" data-testid="unit-leasing-subnav">
+									<div class={UNIT_SUBNAV_LIST_CLASS}>
+										<button type="button" aria-current={activeView === 'listing' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('leasing', 'listing')}>Listing</button>
+										<button type="button" aria-current={activeView === 'applications' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('leasing', 'applications')}>Applications</button>
+									</div>
+								</nav>
 							</div>
 							{#if activeView === 'applications'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-applications-section">
@@ -396,10 +396,12 @@
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Tenant & lease">
 						<div class="space-y-4" data-testid="unit-tenant-lease-surface">
 							<div class="min-w-0 overflow-x-auto">
-								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Tenant and lease views" data-testid="unit-tenant-lease-tabs">
-									<button type="button" role="tab" aria-selected={activeView === 'agreements'} data-state={viewState('agreements')} class="m3-tabs-trigger" onclick={() => setTab('tenant-lease', 'agreements')}>Lease &amp; move-in</button>
-									<button type="button" role="tab" aria-selected={activeView === 'residents'} data-state={viewState('residents')} class="m3-tabs-trigger" onclick={() => setTab('tenant-lease', 'residents')}>Residents</button>
-								</div>
+								<nav aria-label="Tenant and lease sections" data-testid="unit-tenant-lease-subnav">
+									<div class={UNIT_SUBNAV_LIST_CLASS}>
+										<button type="button" aria-current={activeView === 'agreements' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('tenant-lease', 'agreements')}>Lease &amp; move-in</button>
+										<button type="button" aria-current={activeView === 'residents' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('tenant-lease', 'residents')}>Residents</button>
+									</div>
+								</nav>
 							</div>
 							{#if activeView === 'residents'}
 							<section
@@ -443,12 +445,14 @@
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Maintenance">
 						<div class="space-y-4" data-testid="unit-maintenance-surface">
 							<div class="min-w-0 overflow-x-auto">
-								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Maintenance views" data-testid="unit-maintenance-tabs">
-									<button type="button" role="tab" aria-selected={activeView === 'work-orders'} data-state={viewState('work-orders')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'work-orders')}>Work orders</button>
-									<button type="button" role="tab" aria-selected={activeView === 'inspections'} data-state={viewState('inspections')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'inspections')}>Inspections</button>
-									<button type="button" role="tab" aria-selected={activeView === 'recurring'} data-state={viewState('recurring')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'recurring')}>Recurring work</button>
-									<button type="button" role="tab" aria-selected={activeView === 'turnover'} data-state={viewState('turnover')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'turnover')}>Move-out &amp; turnover</button>
-								</div>
+								<nav aria-label="Maintenance sections" data-testid="unit-maintenance-subnav">
+									<div class={UNIT_SUBNAV_LIST_CLASS}>
+										<button type="button" aria-current={activeView === 'work-orders' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'work-orders')}>Work orders</button>
+										<button type="button" aria-current={activeView === 'inspections' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'inspections')}>Inspections</button>
+										<button type="button" aria-current={activeView === 'recurring' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'recurring')}>Recurring work</button>
+										<button type="button" aria-current={activeView === 'turnover' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('maintenance', 'turnover')}>Move-out &amp; turnover</button>
+									</div>
+								</nav>
 							</div>
 							{#if activeView === 'inspections'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-inspections-section">
@@ -539,10 +543,12 @@
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Documents & history">
 						<div class="space-y-4" data-testid="unit-documents-history-surface">
 							<div class="min-w-0 overflow-x-auto">
-								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Documents and history views" data-testid="unit-documents-history-tabs">
-									<button type="button" role="tab" aria-selected={activeView === 'documents'} data-state={viewState('documents')} class="m3-tabs-trigger" onclick={() => setTab('documents-history', 'documents')}>Documents</button>
-									<button type="button" role="tab" aria-selected={activeView === 'history'} data-state={viewState('history')} class="m3-tabs-trigger" onclick={() => setTab('documents-history', 'history')}>Activity</button>
-								</div>
+								<nav aria-label="Documents and history sections" data-testid="unit-documents-history-subnav">
+									<div class={UNIT_SUBNAV_LIST_CLASS}>
+										<button type="button" aria-current={activeView === 'documents' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('documents-history', 'documents')}>Documents</button>
+										<button type="button" aria-current={activeView === 'history' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setTab('documents-history', 'history')}>Activity</button>
+									</div>
+								</nav>
 							</div>
 							{#if activeView === 'history'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-history-section"><TimelineTab unitId={id} /></section>
