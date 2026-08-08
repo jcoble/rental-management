@@ -23,6 +23,7 @@
 	import AgreementSuccessorDialog from '$lib/components/leases/AgreementSuccessorDialog.svelte';
 	import EndingDispositionDialog from '$lib/components/leases/EndingDispositionDialog.svelte';
 	import HouseholdManagementDialog from '$lib/components/leases/HouseholdManagementDialog.svelte';
+	import LeaseEvictionCasesSection from '$lib/components/leases/LeaseEvictionCasesSection.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
 	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
@@ -70,6 +71,7 @@
 	const canManageHousehold = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.onboarding.manage'));
 	const canPrepareAgreements = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.agreements.prepare'));
 	const canManageTenantNotices = $derived(activeCapabilities.has('notifications.tenant-notices.manage'));
+	const canManageEvictions = $derived(activeCapabilities.has('rentals.manage'));
 
 	function endingDispositionLabel(value: string) {
 		switch (value) {
@@ -397,6 +399,13 @@
 			</div>
 
 		<PossessionActions {summary} canManage={canManageHousehold} onchanged={refreshLease} />
+
+		<LeaseEvictionCasesSection
+			{leaseManagementId}
+			leaseAgreementId={summary.leaseAgreementId}
+			respondents={detail.parties}
+			canManage={canManageEvictions}
+		/>
 
 		{#if endingDispositionOpen && canPrepareAgreements}
 			<EndingDispositionDialog
