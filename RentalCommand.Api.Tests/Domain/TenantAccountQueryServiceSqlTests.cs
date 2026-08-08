@@ -82,6 +82,8 @@ public sealed class TenantAccountQueryServiceSqlTests
             new TenantLedgerEntryGlobalListQuery
             {
                 TenantAccountId = 41,
+                PropertyId = 53,
+                UnitId = 67,
                 EntryType = TenantLedgerEntryType.PaymentReceipt,
                 Direction = TenantLedgerDirection.Credit,
                 Search = "check 1042",
@@ -93,6 +95,7 @@ public sealed class TenantAccountQueryServiceSqlTests
             }).ToQueryString();
 
         AssertAuthorized(sql);
+        sql.Should().Contain("authorized_accounts AS MATERIALIZED");
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("TenantLedgerEntries");
         sql.Should().Contain("LeaseManagements");
@@ -105,11 +108,82 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().Contain("DESC");
         sql.Should().Contain("LIMIT");
         sql.Should().Contain("OFFSET");
-        sql.Should().Contain("LeaseAgreementId");
-        sql.Should().Contain("LeaseAddendumId");
-        sql.Should().Contain("ProviderPaymentAttemptId");
-        sql.Should().Contain("SourceStoredFileId");
+        sql.Should().Contain("TenantLedgerEntryId");
+        sql.Should().NotContain("LeaseAgreementId");
+        sql.Should().NotContain("LeaseAddendumId");
+        sql.Should().NotContain("ProviderPaymentAttemptId");
+        sql.Should().NotContain("SourceStoredFileId",
+            "statement 2 must return only ordered page entry keys, not hydrate details");
         sql.Should().Contain("41");
+        sql.Should().Contain("53");
+        sql.Should().Contain("67");
+    }
+
+    [Fact]
+    public void GlobalEntryDefaultPageSeed_AvoidsLifecycleAndDisplayJoinsBeforePaging()
+    {
+        using var db = NewContext();
+
+        var sql = NewService(db).BuildGlobalEntryPageQuery(
+            Scope,
+            new TenantLedgerEntryGlobalListQuery
+            {
+                Sort = "-effectiveOn",
+                Skip = 20,
+                Take = 25,
+            }).ToQueryString();
+
+        AssertAuthorized(sql);
+        sql.Should().Contain("authorized_accounts AS MATERIALIZED");
+        sql.Should().Contain("TenantLedgerEntries");
+        sql.Should().Contain("ORDER BY").And.Contain("LIMIT").And.Contain("OFFSET");
+        sql.Should().NotContain("vw_lease_management_lifecycle");
+        sql.Should().NotContain("\"Units\"");
+        sql.Should().Contain("NULL::text AS \"PropertyName\"");
+        sql.Should().Contain("NULL::text AS \"UnitNumber\"");
+        sql.Should().Contain("NULL::text AS \"PrimaryTenantName\"");
+    }
+
+    [Theory]
+    [InlineData("effectiveOn", false)]
+    [InlineData("-effectiveOn", true)]
+    [InlineData("dueOn", false)]
+    [InlineData("-dueOn", true)]
+    [InlineData("amount", false)]
+    [InlineData("-amount", true)]
+    [InlineData("entryType", false)]
+    [InlineData("-entryType", true)]
+    [InlineData("propertyName", false)]
+    [InlineData("-propertyName", true)]
+    [InlineData("tenantName", false)]
+    [InlineData("-tenantName", true)]
+    [InlineData("unsupported", true)]
+    public void GlobalEntryPage_AllSortsRemainStableAndDatabaseSide(string sort, bool descending)
+    {
+        using var db = NewContext();
+
+        var sql = NewService(db).BuildGlobalEntryPageQuery(
+            Scope,
+            new TenantLedgerEntryGlobalListQuery { Sort = sort }).ToQueryString();
+
+        var orderBy = sql[sql.LastIndexOf("ORDER BY", StringComparison.Ordinal)..];
+        orderBy.Should().Contain("TenantLedgerEntryId");
+        if (descending)
+            orderBy.Should().Contain("DESC");
+        else
+            orderBy.Should().NotContain("DESC");
+
+        sql.Should().NotContain("\"Units\"",
+            "no supported global-entry sort needs unit display data before paging");
+        if (sort.Contains("tenantName", StringComparison.OrdinalIgnoreCase))
+        {
+            sql.Should().Contain("vw_lease_management_lifecycle");
+        }
+        else
+        {
+            sql.Should().NotContain("vw_lease_management_lifecycle",
+                "lifecycle must be joined only for tenant-name search or sort");
+        }
     }
 
     [Fact]

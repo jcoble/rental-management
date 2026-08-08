@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -49,33 +51,11 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         TenantLedgerEntryGlobalListQuery query,
         CancellationToken ct = default)
     {
-        var rows = BuildGlobalEntryQuery(scope, query);
-        var totalCount = await rows.CountAsync(ct);
-        var monthTotals = await rows
-            .GroupBy(row => new { row.EffectiveOn.Year, row.EffectiveOn.Month })
-            .Select(group => new
-            {
-                group.Key.Year,
-                group.Key.Month,
-                Charges = group
-                    .Where(row => row.Direction == TenantLedgerDirection.Debit)
-                    .Sum(row => row.Amount),
-                Credits = group
-                    .Where(row => row.Direction == TenantLedgerDirection.Credit)
-                    .Sum(row => row.Amount),
-            })
-            .ToListAsync(ct);
-        var totalsByMonth = monthTotals.ToDictionary(
-            total => (total.Year, total.Month),
-            total => (total.Charges, total.Credits));
-        var pageRows = await BuildGlobalEntryPageQuery(scope, query).ToListAsync(ct);
-        var items = pageRows
-            .Select(row => AttachGlobalEntryTotals(
-                row,
-                totalCount,
-                totalsByMonth.TryGetValue((row.EffectiveOn.Year, row.EffectiveOn.Month), out var totals)
-                    ? totals
-                    : (0m, 0m)))
+        var totalCount = await BuildGlobalEntrySeedQuery(scope, query).CountAsync(ct);
+        var pageEntryIds = await BuildGlobalEntryPageQuery(scope, query).ToArrayAsync(ct);
+        var pageFacts = await LoadGlobalEntryPageFactsAsync(scope, query, pageEntryIds, ct);
+        var items = pageFacts
+            .Select(row => row.ToResponse(totalCount))
             .ToList();
 
         return new TenantLedgerEntryGlobalPageResponse
@@ -272,51 +252,82 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake);
 
-    internal IQueryable<TenantLedgerEntryGlobalResponse> BuildGlobalEntryQuery(
+    private IQueryable<GlobalEntrySeedRow> BuildGlobalEntrySeedQuery(
         WorkspaceReadScope scope,
         TenantLedgerEntryGlobalListQuery query)
     {
-        var rows =
-            from account in BuildAuthorizedAccountQuery(scope)
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, Id = account.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { management.PortfolioId, LeaseManagementId = management.Id }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            join entry in _db.TenantLedgerEntries.AsNoTracking()
-                on new { account.PortfolioId, TenantAccountId = account.Id }
-                equals new { entry.PortfolioId, entry.TenantAccountId }
-            select new TenantLedgerEntryGlobalResponse
-            {
-                TenantAccountId = account.Id,
-                LeaseManagementId = management.Id,
-                PropertyId = management.PropertyId,
-                PropertyName = management.Property!.Name,
-                UnitId = management.UnitId,
-                UnitNumber = management.Unit!.UnitNumber,
-                AccountNumber = account.AccountNumber,
-                RelationshipNumber = management.RelationshipNumber,
-                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
-                TenantLedgerEntryId = entry.Id,
-                PublicId = entry.PublicId,
-                EntryType = entry.EntryType,
-                Direction = entry.Direction,
-                Amount = entry.Amount,
-                Currency = entry.Currency,
-                EffectiveOn = entry.EffectiveOn,
-                DueOn = entry.DueOn,
-                PostedAtUtc = entry.PostedAtUtc,
-                Description = entry.Description,
-                BusinessKey = entry.BusinessKey,
-                TransferPublicId = entry.TransferPublicId,
-                LeaseAgreementId = entry.LeaseAgreementId,
-                LeaseAddendumId = entry.LeaseAddendumId,
-                ReversesEntryId = entry.ReversesEntryId,
-                ProviderPaymentAttemptId = entry.ProviderPaymentAttemptId,
-                SourceStoredFileId = entry.SourceStoredFileId,
-                CreatedByUserId = entry.CreatedByUserId,
-            };
+        var capabilityKeys = new[] { CapabilityKeys.MoneyBalancesRead };
+        var targetKind = CapabilityAuthorizationTargetKind.Property.ToString();
+        IQueryable<GlobalEntrySeedRow> rows = _db.Database.SqlQuery<GlobalEntrySeedRow>($"""
+            WITH effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    {scope.PortfolioId},
+                    {scope.SessionId},
+                    {scope.UserId},
+                    {scope.AccessContextId},
+                    {scope.AccessRevision},
+                    {capabilityKeys},
+                    {targetKind}) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT property_row."Id" AS "PropertyId"
+                FROM "Properties" AS property_row
+                INNER JOIN "Portfolios" AS portfolio
+                    ON portfolio."Id" = property_row."PortfolioId"
+                   AND portfolio."DeletedAt" IS NULL
+                WHERE property_row."PortfolioId" = {scope.PortfolioId}
+                  AND property_row."DeletedAt" IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM effective_scopes
+                      WHERE effective_scopes."ScopeKind" = 'AllProperties'
+                         OR (effective_scopes."ScopeKind" = 'SelectedProperties'
+                             AND effective_scopes."PropertyId" = property_row."Id")
+                  )
+            ),
+            authorized_accounts AS MATERIALIZED (
+                SELECT
+                    account."PortfolioId" AS "PortfolioId",
+                    account."Id" AS "TenantAccountId",
+                    account."LeaseManagementId" AS "LeaseManagementId",
+                    management."PropertyId" AS "PropertyId",
+                    management."UnitId" AS "UnitId",
+                    account."AccountNumber" AS "AccountNumber",
+                    management."RelationshipNumber" AS "RelationshipNumber"
+                FROM "TenantAccounts" AS account
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = account."PortfolioId"
+                   AND management."Id" = account."LeaseManagementId"
+                INNER JOIN authorized_properties
+                    ON authorized_properties."PropertyId" = management."PropertyId"
+                WHERE account."PortfolioId" = {scope.PortfolioId}
+            )
+            SELECT
+                authorized_accounts."PortfolioId" AS "PortfolioId",
+                authorized_accounts."TenantAccountId" AS "TenantAccountId",
+                authorized_accounts."LeaseManagementId" AS "LeaseManagementId",
+                authorized_accounts."PropertyId" AS "PropertyId",
+                authorized_accounts."UnitId" AS "UnitId",
+                authorized_accounts."AccountNumber" AS "AccountNumber",
+                authorized_accounts."RelationshipNumber" AS "RelationshipNumber",
+                NULL::text AS "PropertyName",
+                NULL::text AS "UnitNumber",
+                NULL::text AS "PrimaryTenantName",
+                entry."Id" AS "TenantLedgerEntryId",
+                entry."EntryType" AS "EntryType",
+                entry."Direction" AS "Direction",
+                entry."Amount" AS "Amount",
+                entry."EffectiveOn" AS "EffectiveOn",
+                entry."DueOn" AS "DueOn",
+                entry."Description" AS "Description",
+                entry."BusinessKey" AS "BusinessKey"
+            FROM authorized_accounts
+            INNER JOIN "TenantLedgerEntries" AS entry
+                ON entry."PortfolioId" = authorized_accounts."PortfolioId"
+               AND entry."TenantAccountId" = authorized_accounts."TenantAccountId"
+            WHERE entry."PortfolioId" = {scope.PortfolioId}
+            """);
 
         if (query.TenantAccountId.HasValue)
         {
@@ -332,24 +343,13 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         }
         if (query.EntryType.HasValue)
         {
-            rows = rows.Where(row => row.EntryType == query.EntryType.Value);
+            var entryType = query.EntryType.Value.ToString();
+            rows = rows.Where(row => row.EntryType == entryType);
         }
         if (query.Direction.HasValue)
         {
-            rows = rows.Where(row => row.Direction == query.Direction.Value);
-        }
-        if (!string.IsNullOrWhiteSpace(query.Search))
-        {
-            var like = $"%{query.Search.Trim()}%";
-            rows = rows.Where(row =>
-                EF.Functions.ILike(row.Description, like)
-                || EF.Functions.ILike(row.BusinessKey, like)
-                || EF.Functions.ILike(row.AccountNumber, like)
-                || EF.Functions.ILike(row.RelationshipNumber, like)
-                || EF.Functions.ILike(row.PropertyName, like)
-                || EF.Functions.ILike(row.UnitNumber, like)
-                || (row.PrimaryTenantName != null
-                    && EF.Functions.ILike(row.PrimaryTenantName, like)));
+            var direction = query.Direction.Value.ToString();
+            rows = rows.Where(row => row.Direction == direction);
         }
         if (query.From.HasValue)
         {
@@ -361,89 +361,369 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             var throughExclusive = DateOnly.FromDateTime(query.To.Value.Date.AddDays(1));
             rows = rows.Where(row => row.EffectiveOn < throughExclusive);
         }
+
+        var hasSearch = !string.IsNullOrWhiteSpace(query.Search);
+        if (hasSearch)
+        {
+            rows =
+                from row in rows
+                join property in _db.Properties.AsNoTracking()
+                    on new { row.PortfolioId, row.PropertyId }
+                    equals new { property.PortfolioId, PropertyId = property.Id }
+                join unit in _db.Units.AsNoTracking()
+                    on new { row.PortfolioId, row.PropertyId, row.UnitId }
+                    equals new { unit.PortfolioId, unit.PropertyId, UnitId = unit.Id }
+                join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                    on new { row.PortfolioId, row.LeaseManagementId }
+                    equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                select new GlobalEntrySeedRow
+                {
+                    PortfolioId = row.PortfolioId,
+                    TenantAccountId = row.TenantAccountId,
+                    LeaseManagementId = row.LeaseManagementId,
+                    PropertyId = row.PropertyId,
+                    UnitId = row.UnitId,
+                    AccountNumber = row.AccountNumber,
+                    RelationshipNumber = row.RelationshipNumber,
+                    PropertyName = property.Name,
+                    UnitNumber = unit.UnitNumber,
+                    PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                    TenantLedgerEntryId = row.TenantLedgerEntryId,
+                    EntryType = row.EntryType,
+                    Direction = row.Direction,
+                    Amount = row.Amount,
+                    EffectiveOn = row.EffectiveOn,
+                    DueOn = row.DueOn,
+                    Description = row.Description,
+                    BusinessKey = row.BusinessKey,
+                };
+
+            var like = $"%{query.Search!.Trim()}%";
+            rows = rows.Where(row =>
+                EF.Functions.ILike(row.Description, like)
+                || EF.Functions.ILike(row.BusinessKey, like)
+                || EF.Functions.ILike(row.AccountNumber, like)
+                || EF.Functions.ILike(row.RelationshipNumber, like)
+                || (row.PropertyName != null && EF.Functions.ILike(row.PropertyName, like))
+                || (row.UnitNumber != null && EF.Functions.ILike(row.UnitNumber, like))
+                || (row.PrimaryTenantName != null
+                    && EF.Functions.ILike(row.PrimaryTenantName, like)));
+        }
+        else if (query.SortField == "propertyname")
+        {
+            rows =
+                from row in rows
+                join property in _db.Properties.AsNoTracking()
+                    on new { row.PortfolioId, row.PropertyId }
+                    equals new { property.PortfolioId, PropertyId = property.Id }
+                select new GlobalEntrySeedRow
+                {
+                    PortfolioId = row.PortfolioId,
+                    TenantAccountId = row.TenantAccountId,
+                    LeaseManagementId = row.LeaseManagementId,
+                    PropertyId = row.PropertyId,
+                    UnitId = row.UnitId,
+                    AccountNumber = row.AccountNumber,
+                    RelationshipNumber = row.RelationshipNumber,
+                    PropertyName = property.Name,
+                    UnitNumber = null,
+                    PrimaryTenantName = null,
+                    TenantLedgerEntryId = row.TenantLedgerEntryId,
+                    EntryType = row.EntryType,
+                    Direction = row.Direction,
+                    Amount = row.Amount,
+                    EffectiveOn = row.EffectiveOn,
+                    DueOn = row.DueOn,
+                    Description = row.Description,
+                    BusinessKey = row.BusinessKey,
+                };
+        }
+        else if (query.SortField == "tenantname")
+        {
+            rows =
+                from row in rows
+                join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                    on new { row.PortfolioId, row.LeaseManagementId }
+                    equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                select new GlobalEntrySeedRow
+                {
+                    PortfolioId = row.PortfolioId,
+                    TenantAccountId = row.TenantAccountId,
+                    LeaseManagementId = row.LeaseManagementId,
+                    PropertyId = row.PropertyId,
+                    UnitId = row.UnitId,
+                    AccountNumber = row.AccountNumber,
+                    RelationshipNumber = row.RelationshipNumber,
+                    PropertyName = null,
+                    UnitNumber = null,
+                    PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                    TenantLedgerEntryId = row.TenantLedgerEntryId,
+                    EntryType = row.EntryType,
+                    Direction = row.Direction,
+                    Amount = row.Amount,
+                    EffectiveOn = row.EffectiveOn,
+                    DueOn = row.DueOn,
+                    Description = row.Description,
+                    BusinessKey = row.BusinessKey,
+                };
+        }
+
         return rows;
     }
 
-    internal IQueryable<TenantLedgerEntryGlobalResponse> BuildGlobalEntryPageQuery(
+    internal IQueryable<long> BuildGlobalEntryPageQuery(
         WorkspaceReadScope scope,
-        TenantLedgerEntryGlobalListQuery query)
-    {
-        var page = ApplyGlobalEntrySort(BuildGlobalEntryQuery(scope, query), query)
+        TenantLedgerEntryGlobalListQuery query) =>
+        ApplyGlobalEntrySeedSort(BuildGlobalEntrySeedQuery(scope, query), query)
             .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake);
+            .Take(query.NormalizedTake)
+            .Select(row => row.TenantLedgerEntryId);
 
-        return page.Select(row => new TenantLedgerEntryGlobalResponse
+    private async Task<List<GlobalEntryPageFactRow>> LoadGlobalEntryPageFactsAsync(
+        WorkspaceReadScope scope,
+        TenantLedgerEntryGlobalListQuery query,
+        long[] pageEntryIds,
+        CancellationToken ct)
+    {
+        const string SearchJoins = """
+            INNER JOIN "Properties" AS search_property
+                ON search_property."PortfolioId" = authorized_accounts."PortfolioId"
+               AND search_property."Id" = authorized_accounts."PropertyId"
+               AND search_property."DeletedAt" IS NULL
+            INNER JOIN "Units" AS search_unit
+                ON search_unit."PortfolioId" = authorized_accounts."PortfolioId"
+               AND search_unit."PropertyId" = authorized_accounts."PropertyId"
+               AND search_unit."Id" = authorized_accounts."UnitId"
+               AND search_unit."DeletedAt" IS NULL
+            INNER JOIN vw_lease_management_lifecycle AS search_lifecycle
+                ON search_lifecycle."PortfolioId" = authorized_accounts."PortfolioId"
+               AND search_lifecycle."LeaseManagementId" = authorized_accounts."LeaseManagementId"
+            """;
+        const string SearchPredicate = """
+              AND (
+                    entry."Description" ILIKE @searchLike ESCAPE ''
+                 OR entry."BusinessKey" ILIKE @searchLike ESCAPE ''
+                 OR authorized_accounts."AccountNumber" ILIKE @searchLike ESCAPE ''
+                 OR authorized_accounts."RelationshipNumber" ILIKE @searchLike ESCAPE ''
+                 OR search_property."Name" ILIKE @searchLike ESCAPE ''
+                 OR search_unit."UnitNumber" ILIKE @searchLike ESCAPE ''
+                 OR search_lifecycle."CurrentPrimaryTenantName" ILIKE @searchLike ESCAPE ''
+              )
+            """;
+
+        var hasSearch = !string.IsNullOrWhiteSpace(query.Search);
+        // Only these two fixed, application-owned fragments vary. All request values remain typed
+        // command parameters; no user value or sort expression is inserted into the SQL text.
+        var searchJoins = hasSearch ? SearchJoins : string.Empty;
+        var searchPredicate = hasSearch ? SearchPredicate : string.Empty;
+        var sql = $$"""
+            WITH effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    @portfolioId,
+                    @sessionId,
+                    @userId,
+                    @accessContextId,
+                    @accessRevision,
+                    @capabilityKeys,
+                    @targetKind) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT property_row."Id" AS "PropertyId"
+                FROM "Properties" AS property_row
+                INNER JOIN "Portfolios" AS portfolio
+                    ON portfolio."Id" = property_row."PortfolioId"
+                   AND portfolio."DeletedAt" IS NULL
+                WHERE property_row."PortfolioId" = @portfolioId
+                  AND property_row."DeletedAt" IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM effective_scopes
+                      WHERE effective_scopes."ScopeKind" = 'AllProperties'
+                         OR (effective_scopes."ScopeKind" = 'SelectedProperties'
+                             AND effective_scopes."PropertyId" = property_row."Id")
+                  )
+            ),
+            authorized_accounts AS MATERIALIZED (
+                SELECT
+                    account."PortfolioId" AS "PortfolioId",
+                    account."Id" AS "TenantAccountId",
+                    account."LeaseManagementId" AS "LeaseManagementId",
+                    management."PropertyId" AS "PropertyId",
+                    management."UnitId" AS "UnitId",
+                    account."AccountNumber" AS "AccountNumber",
+                    management."RelationshipNumber" AS "RelationshipNumber"
+                FROM "TenantAccounts" AS account
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = account."PortfolioId"
+                   AND management."Id" = account."LeaseManagementId"
+                INNER JOIN authorized_properties
+                    ON authorized_properties."PropertyId" = management."PropertyId"
+                WHERE account."PortfolioId" = @portfolioId
+            ),
+            page_entries AS MATERIALIZED (
+                SELECT entry.*
+                FROM authorized_accounts
+                INNER JOIN "TenantLedgerEntries" AS entry
+                    ON entry."PortfolioId" = authorized_accounts."PortfolioId"
+                   AND entry."TenantAccountId" = authorized_accounts."TenantAccountId"
+                WHERE entry."PortfolioId" = @portfolioId
+                  AND entry."Id" = ANY(@pageEntryIds::bigint[])
+            ),
+            page_months AS (
+                SELECT DISTINCT
+                    date_trunc('month', page_entry."EffectiveOn"::timestamp)::date AS "MonthStart"
+                FROM page_entries AS page_entry
+            ),
+            filtered_entries AS MATERIALIZED (
+                SELECT entry."Amount", entry."Direction", entry."EffectiveOn"
+                FROM authorized_accounts
+                INNER JOIN "TenantLedgerEntries" AS entry
+                    ON entry."PortfolioId" = authorized_accounts."PortfolioId"
+                   AND entry."TenantAccountId" = authorized_accounts."TenantAccountId"
+                {{searchJoins}}
+                WHERE entry."PortfolioId" = @portfolioId
+                  AND (@tenantAccountId IS NULL
+                       OR authorized_accounts."TenantAccountId" = @tenantAccountId)
+                  AND (@propertyId IS NULL
+                       OR authorized_accounts."PropertyId" = @propertyId)
+                  AND (@unitId IS NULL
+                       OR authorized_accounts."UnitId" = @unitId)
+                  AND (@entryType IS NULL OR entry."EntryType" = @entryType)
+                  AND (@direction IS NULL OR entry."Direction" = @direction)
+                  AND (@fromOn IS NULL OR entry."EffectiveOn" >= @fromOn)
+                  AND (@throughExclusive IS NULL OR entry."EffectiveOn" < @throughExclusive)
+                {{searchPredicate}}
+            ),
+            month_totals AS (
+                SELECT
+                    page_months."MonthStart" AS "MonthStart",
+                    COALESCE(
+                        sum(filtered_entries."Amount")
+                            FILTER (WHERE filtered_entries."Direction" = 'Debit'),
+                        0) AS "MonthCharges",
+                    COALESCE(
+                        sum(filtered_entries."Amount")
+                            FILTER (WHERE filtered_entries."Direction" = 'Credit'),
+                        0) AS "MonthPaymentsAndCredits"
+                FROM page_months
+                LEFT JOIN filtered_entries
+                    ON filtered_entries."EffectiveOn" >= page_months."MonthStart"
+                   AND filtered_entries."EffectiveOn"
+                       < (page_months."MonthStart" + INTERVAL '1 month')::date
+                GROUP BY page_months."MonthStart"
+            )
+            SELECT
+                authorized_accounts."TenantAccountId" AS "TenantAccountId",
+                authorized_accounts."LeaseManagementId" AS "LeaseManagementId",
+                authorized_accounts."PropertyId" AS "PropertyId",
+                property_row."Name" AS "PropertyName",
+                authorized_accounts."UnitId" AS "UnitId",
+                unit_row."UnitNumber" AS "UnitNumber",
+                authorized_accounts."AccountNumber" AS "AccountNumber",
+                authorized_accounts."RelationshipNumber" AS "RelationshipNumber",
+                lifecycle."CurrentPrimaryTenantName" AS "PrimaryTenantName",
+                page_entry."Id" AS "TenantLedgerEntryId",
+                page_entry."PublicId" AS "PublicId",
+                page_entry."EntryType" AS "EntryType",
+                page_entry."Direction" AS "Direction",
+                page_entry."Amount" AS "Amount",
+                page_entry."Currency" AS "Currency",
+                page_entry."EffectiveOn" AS "EffectiveOn",
+                page_entry."DueOn" AS "DueOn",
+                page_entry."PostedAtUtc" AS "PostedAtUtc",
+                page_entry."Description" AS "Description",
+                page_entry."BusinessKey" AS "BusinessKey",
+                page_entry."TransferPublicId" AS "TransferPublicId",
+                page_entry."LeaseAgreementId" AS "LeaseAgreementId",
+                page_entry."LeaseAddendumId" AS "LeaseAddendumId",
+                page_entry."ReversesEntryId" AS "ReversesEntryId",
+                EXISTS (
+                    SELECT 1
+                    FROM "TenantLedgerEntries" AS reversal
+                    WHERE reversal."PortfolioId" = @portfolioId
+                      AND reversal."Id" <> page_entry."Id"
+                      AND reversal."ReversesEntryId" = page_entry."Id"
+                ) AS "HasReversal",
+                page_entry."ProviderPaymentAttemptId" AS "ProviderPaymentAttemptId",
+                page_entry."SourceStoredFileId" AS "SourceStoredFileId",
+                page_entry."CreatedByUserId" AS "CreatedByUserId",
+                COALESCE(month_totals."MonthCharges", 0) AS "MonthCharges",
+                COALESCE(month_totals."MonthPaymentsAndCredits", 0)
+                    AS "MonthPaymentsAndCredits"
+            FROM page_entries AS page_entry
+            INNER JOIN authorized_accounts
+                ON authorized_accounts."PortfolioId" = page_entry."PortfolioId"
+               AND authorized_accounts."TenantAccountId" = page_entry."TenantAccountId"
+            INNER JOIN "Properties" AS property_row
+                ON property_row."PortfolioId" = authorized_accounts."PortfolioId"
+               AND property_row."Id" = authorized_accounts."PropertyId"
+               AND property_row."DeletedAt" IS NULL
+            INNER JOIN "Units" AS unit_row
+                ON unit_row."PortfolioId" = authorized_accounts."PortfolioId"
+               AND unit_row."PropertyId" = authorized_accounts."PropertyId"
+               AND unit_row."Id" = authorized_accounts."UnitId"
+               AND unit_row."DeletedAt" IS NULL
+            INNER JOIN vw_lease_management_lifecycle AS lifecycle
+                ON lifecycle."PortfolioId" = authorized_accounts."PortfolioId"
+               AND lifecycle."LeaseManagementId" = authorized_accounts."LeaseManagementId"
+            LEFT JOIN month_totals
+                ON month_totals."MonthStart"
+                    = date_trunc('month', page_entry."EffectiveOn"::timestamp)::date
+            ORDER BY array_position(@pageEntryIds::bigint[], page_entry."Id")
+            """;
+
+        var parameters = new List<object>
         {
-            TenantAccountId = row.TenantAccountId,
-            LeaseManagementId = row.LeaseManagementId,
-            PropertyId = row.PropertyId,
-            PropertyName = row.PropertyName,
-            UnitId = row.UnitId,
-            UnitNumber = row.UnitNumber,
-            AccountNumber = row.AccountNumber,
-            RelationshipNumber = row.RelationshipNumber,
-            PrimaryTenantName = row.PrimaryTenantName,
-            TenantLedgerEntryId = row.TenantLedgerEntryId,
-            PublicId = row.PublicId,
-            EntryType = row.EntryType,
-            Direction = row.Direction,
-            Amount = row.Amount,
-            Currency = row.Currency,
-            EffectiveOn = row.EffectiveOn,
-            DueOn = row.DueOn,
-            PostedAtUtc = row.PostedAtUtc,
-            Description = row.Description,
-            BusinessKey = row.BusinessKey,
-            TransferPublicId = row.TransferPublicId,
-            LeaseAgreementId = row.LeaseAgreementId,
-            LeaseAddendumId = row.LeaseAddendumId,
-            ReversesEntryId = row.ReversesEntryId,
-            HasReversal = _db.TenantLedgerEntries.AsNoTracking().Any(reversal =>
-                reversal.PortfolioId == scope.PortfolioId
-                && reversal.Id != row.TenantLedgerEntryId
-                && reversal.ReversesEntryId == row.TenantLedgerEntryId),
-            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId,
-            SourceStoredFileId = row.SourceStoredFileId,
-            CreatedByUserId = row.CreatedByUserId,
-        });
+            new NpgsqlParameter<int>("portfolioId", scope.PortfolioId),
+            new NpgsqlParameter<Guid>("sessionId", scope.SessionId),
+            new NpgsqlParameter<int>("userId", scope.UserId),
+            new NpgsqlParameter<int>("accessContextId", scope.AccessContextId),
+            new NpgsqlParameter<long>("accessRevision", scope.AccessRevision),
+            new NpgsqlParameter("capabilityKeys", NpgsqlDbType.Array | NpgsqlDbType.Text)
+            {
+                Value = new[] { CapabilityKeys.MoneyBalancesRead },
+            },
+            new NpgsqlParameter<string>(
+                "targetKind",
+                CapabilityAuthorizationTargetKind.Property.ToString()),
+            new NpgsqlParameter("pageEntryIds", NpgsqlDbType.Array | NpgsqlDbType.Bigint)
+            {
+                Value = pageEntryIds,
+            },
+            NullableParameter("tenantAccountId", NpgsqlDbType.Integer, query.TenantAccountId),
+            NullableParameter("propertyId", NpgsqlDbType.Integer, query.PropertyId),
+            NullableParameter("unitId", NpgsqlDbType.Integer, query.UnitId),
+            NullableParameter("entryType", NpgsqlDbType.Text, query.EntryType?.ToString()),
+            NullableParameter("direction", NpgsqlDbType.Text, query.Direction?.ToString()),
+            NullableParameter(
+                "fromOn",
+                NpgsqlDbType.Date,
+                query.From.HasValue ? DateOnly.FromDateTime(query.From.Value) : null),
+            NullableParameter(
+                "throughExclusive",
+                NpgsqlDbType.Date,
+                query.To.HasValue
+                    ? DateOnly.FromDateTime(query.To.Value.Date.AddDays(1))
+                    : null),
+        };
+        if (hasSearch)
+        {
+            parameters.Add(new NpgsqlParameter<string>(
+                "searchLike",
+                $"%{query.Search!.Trim()}%"));
+        }
+
+        return await _db.Database.SqlQueryRaw<GlobalEntryPageFactRow>(sql, parameters.ToArray())
+            .ToListAsync(ct);
     }
 
-    private static TenantLedgerEntryGlobalResponse AttachGlobalEntryTotals(
-        TenantLedgerEntryGlobalResponse row,
-        int totalCount,
-        (decimal Charges, decimal Credits) monthTotals) => new()
+    private static NpgsqlParameter NullableParameter(
+        string name,
+        NpgsqlDbType type,
+        object? value) => new(name, type)
         {
-            FilteredTotalCount = totalCount,
-            MonthCharges = monthTotals.Charges,
-            MonthPaymentsAndCredits = monthTotals.Credits,
-            TenantAccountId = row.TenantAccountId,
-            LeaseManagementId = row.LeaseManagementId,
-            PropertyId = row.PropertyId,
-            PropertyName = row.PropertyName,
-            UnitId = row.UnitId,
-            UnitNumber = row.UnitNumber,
-            AccountNumber = row.AccountNumber,
-            RelationshipNumber = row.RelationshipNumber,
-            PrimaryTenantName = row.PrimaryTenantName,
-            TenantLedgerEntryId = row.TenantLedgerEntryId,
-            PublicId = row.PublicId,
-            EntryType = row.EntryType,
-            Direction = row.Direction,
-            Amount = row.Amount,
-            Currency = row.Currency,
-            EffectiveOn = row.EffectiveOn,
-            DueOn = row.DueOn,
-            PostedAtUtc = row.PostedAtUtc,
-            Description = row.Description,
-            BusinessKey = row.BusinessKey,
-            TransferPublicId = row.TransferPublicId,
-            LeaseAgreementId = row.LeaseAgreementId,
-            LeaseAddendumId = row.LeaseAddendumId,
-            ReversesEntryId = row.ReversesEntryId,
-            HasReversal = row.HasReversal,
-            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId,
-            SourceStoredFileId = row.SourceStoredFileId,
-            CreatedByUserId = row.CreatedByUserId,
+            Value = value ?? DBNull.Value,
         };
 
     internal IQueryable<TenantAccountDepositListItemResponse> BuildDepositListQuery(
@@ -1259,8 +1539,8 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 .ThenBy(row => row.TenantAccountId),
         };
 
-    private static IQueryable<TenantLedgerEntryGlobalResponse> ApplyGlobalEntrySort(
-        IQueryable<TenantLedgerEntryGlobalResponse> rows,
+    private static IQueryable<GlobalEntrySeedRow> ApplyGlobalEntrySeedSort(
+        IQueryable<GlobalEntrySeedRow> rows,
         TenantLedgerEntryGlobalListQuery query) => query.SortField switch
         {
             "effectiveon" => query.SortDescending
@@ -1353,6 +1633,97 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
                 .ThenBy(row => row.UnitNumber)
                 .ThenBy(row => row.SecurityDepositAccountId),
         };
+
+    private sealed class GlobalEntrySeedRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantAccountId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public int PropertyId { get; init; }
+        public int UnitId { get; init; }
+        public string AccountNumber { get; init; } = string.Empty;
+        public string RelationshipNumber { get; init; } = string.Empty;
+        public string? PropertyName { get; init; }
+        public string? UnitNumber { get; init; }
+        public string? PrimaryTenantName { get; init; }
+        public long TenantLedgerEntryId { get; init; }
+        public string EntryType { get; init; } = string.Empty;
+        public string Direction { get; init; } = string.Empty;
+        public decimal Amount { get; init; }
+        public DateOnly EffectiveOn { get; init; }
+        public DateOnly? DueOn { get; init; }
+        public string Description { get; init; } = string.Empty;
+        public string BusinessKey { get; init; } = string.Empty;
+    }
+
+    private sealed class GlobalEntryPageFactRow
+    {
+        public decimal MonthCharges { get; init; }
+        public decimal MonthPaymentsAndCredits { get; init; }
+        public int TenantAccountId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public int UnitId { get; init; }
+        public string UnitNumber { get; init; } = string.Empty;
+        public string AccountNumber { get; init; } = string.Empty;
+        public string RelationshipNumber { get; init; } = string.Empty;
+        public string? PrimaryTenantName { get; init; }
+        public long TenantLedgerEntryId { get; init; }
+        public Guid PublicId { get; init; }
+        public string EntryType { get; init; } = string.Empty;
+        public string Direction { get; init; } = string.Empty;
+        public decimal Amount { get; init; }
+        public string Currency { get; init; } = string.Empty;
+        public DateOnly EffectiveOn { get; init; }
+        public DateOnly? DueOn { get; init; }
+        public DateTime PostedAtUtc { get; init; }
+        public string Description { get; init; } = string.Empty;
+        public string BusinessKey { get; init; } = string.Empty;
+        public Guid? TransferPublicId { get; init; }
+        public int? LeaseAgreementId { get; init; }
+        public int? LeaseAddendumId { get; init; }
+        public long? ReversesEntryId { get; init; }
+        public bool HasReversal { get; init; }
+        public long? ProviderPaymentAttemptId { get; init; }
+        public int? SourceStoredFileId { get; init; }
+        public int CreatedByUserId { get; init; }
+
+        public TenantLedgerEntryGlobalResponse ToResponse(int filteredTotalCount) => new()
+        {
+            FilteredTotalCount = filteredTotalCount,
+            MonthCharges = MonthCharges,
+            MonthPaymentsAndCredits = MonthPaymentsAndCredits,
+            TenantAccountId = TenantAccountId,
+            LeaseManagementId = LeaseManagementId,
+            PropertyId = PropertyId,
+            PropertyName = PropertyName,
+            UnitId = UnitId,
+            UnitNumber = UnitNumber,
+            AccountNumber = AccountNumber,
+            RelationshipNumber = RelationshipNumber,
+            PrimaryTenantName = PrimaryTenantName,
+            TenantLedgerEntryId = TenantLedgerEntryId,
+            PublicId = PublicId,
+            EntryType = Enum.Parse<TenantLedgerEntryType>(EntryType),
+            Direction = Enum.Parse<TenantLedgerDirection>(Direction),
+            Amount = Amount,
+            Currency = Currency,
+            EffectiveOn = EffectiveOn,
+            DueOn = DueOn,
+            PostedAtUtc = PostedAtUtc,
+            Description = Description,
+            BusinessKey = BusinessKey,
+            TransferPublicId = TransferPublicId,
+            LeaseAgreementId = LeaseAgreementId,
+            LeaseAddendumId = LeaseAddendumId,
+            ReversesEntryId = ReversesEntryId,
+            HasReversal = HasReversal,
+            ProviderPaymentAttemptId = ProviderPaymentAttemptId,
+            SourceStoredFileId = SourceStoredFileId,
+            CreatedByUserId = CreatedByUserId,
+        };
+    }
 
     private sealed class TenantAccountReadIdentity
     {

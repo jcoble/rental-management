@@ -143,7 +143,188 @@ public class TenantService : ITenantService
         return ListPageFromQueryAsync(q, portfolioId, query, ct);
     }
 
-    private async Task<TenantListResponse> ListPageFromQueryAsync(
+    private Task<TenantListResponse> ListPageFromQueryAsync(
+        IQueryable<Tenant> q,
+        int portfolioId,
+        TenantListQuery query,
+        CancellationToken ct) =>
+        _db.Database.IsNpgsql()
+            ? ListPagePostgreSqlAsync(q, portfolioId, query, ct)
+            : ListPageLegacyProviderAsync(q, portfolioId, query, ct);
+
+    private async Task<TenantListResponse> ListPagePostgreSqlAsync(
+        IQueryable<Tenant> q,
+        int portfolioId,
+        TenantListQuery query,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var tokens = SearchTokens(query.Search);
+            if (tokens.Count == 0)
+            {
+                q = q.Where(_ => false);
+            }
+            else
+            {
+                foreach (var token in tokens)
+                {
+                    var pattern = $"%{token}%";
+                    q = q.Where(tenant =>
+                        EF.Functions.Like(tenant.FirstName.ToLower(), pattern) ||
+                        EF.Functions.Like(tenant.LastName.ToLower(), pattern) ||
+                        EF.Functions.Like((tenant.FirstName + " " + tenant.LastName).ToLower(), pattern) ||
+                        (tenant.Email != null && EF.Functions.Like(tenant.Email.ToLower(), pattern)) ||
+                        (tenant.Phone != null && EF.Functions.Like(tenant.Phone.ToLower(), pattern)));
+                }
+            }
+        }
+
+        var needsRelationshipSeed = query.UnitId.HasValue
+            || query.PropertyId.HasValue
+            || query.AvailableForLease == true
+            || query.SortField == "activeleasecount";
+
+        int totalCount;
+        List<Tenant> pageTenants;
+
+        if (needsRelationshipSeed)
+        {
+            var currentRelationships = BuildMaterializedCurrentRelationshipQuery(
+                portfolioId,
+                query.UnitId,
+                query.PropertyId);
+
+            var seed =
+                from tenant in q
+                join current in currentRelationships
+                    on new { tenant.PortfolioId, TenantId = tenant.Id }
+                    equals new { current.PortfolioId, current.TenantId }
+                    into currentGroup
+                from current in currentGroup.DefaultIfEmpty()
+                select new TenantPageSeedRow
+                {
+                    Entity = tenant,
+                    ActiveLeaseCount = (int?)current.ActiveLeaseCount ?? 0,
+                    CurrentTenantId = current.TenantId,
+                    HasCurrentUnitMatch = (bool?)current.HasCurrentUnitMatch ?? false,
+                    HasCurrentPropertyMatch = (bool?)current.HasCurrentPropertyMatch ?? false,
+                };
+
+            if (query.UnitId.HasValue)
+            {
+                var workOrderTenantIds = BuildWorkOrderTenantIdsQuery(
+                    portfolioId,
+                    query.UnitId,
+                    query.PropertyId);
+                seed = seed.Where(row =>
+                    row.HasCurrentUnitMatch || workOrderTenantIds.Contains(row.Entity.Id));
+            }
+            else if (query.PropertyId.HasValue)
+            {
+                var workOrderTenantIds = BuildWorkOrderTenantIdsQuery(
+                    portfolioId,
+                    unitId: null,
+                    query.PropertyId);
+                seed = seed.Where(row =>
+                    row.HasCurrentPropertyMatch || workOrderTenantIds.Contains(row.Entity.Id));
+            }
+
+            if (query.AvailableForLease == true)
+            {
+                if (query.IncludeLeaseManagementId is { } includeLeaseManagementId)
+                {
+                    var includedTenantIds = _db.LeaseManagementParties
+                        .AsNoTracking()
+                        .Where(party => party.PortfolioId == portfolioId
+                            && party.LeaseManagementId == includeLeaseManagementId)
+                        .Select(party => party.TenantId)
+                        .Distinct();
+                    seed = seed.Where(row =>
+                        includedTenantIds.Contains(row.Entity.Id) || row.CurrentTenantId == null);
+                }
+                else
+                {
+                    seed = seed.Where(row => row.CurrentTenantId == null);
+                }
+            }
+
+            totalCount = await seed.CountAsync(ct);
+
+            var orderedSeed = query.SortField switch
+            {
+                "name" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.LastName).ThenByDescending(row => row.Entity.FirstName) : seed.OrderBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName),
+                "firstname" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.FirstName) : seed.OrderBy(row => row.Entity.FirstName),
+                "lastname" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.LastName) : seed.OrderBy(row => row.Entity.LastName),
+                "email" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.Email) : seed.OrderBy(row => row.Entity.Email),
+                "phone" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.Phone) : seed.OrderBy(row => row.Entity.Phone),
+                "activeleasecount" => query.SortDescending
+                    ? seed.OrderByDescending(row => row.ActiveLeaseCount).ThenBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName)
+                    : seed.OrderBy(row => row.ActiveLeaseCount).ThenBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName),
+                "createdat" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.CreatedAt) : seed.OrderBy(row => row.Entity.CreatedAt),
+                "updatedat" => query.SortDescending ? seed.OrderByDescending(row => row.Entity.UpdatedAt) : seed.OrderBy(row => row.Entity.UpdatedAt),
+                _ => query.SortDescending ? seed.OrderByDescending(row => row.Entity.CreatedAt) : seed.OrderBy(row => row.Entity.CreatedAt),
+            };
+
+            pageTenants = await orderedSeed
+                .Skip(query.NormalizedSkip)
+                .Take(query.NormalizedTake)
+                .Select(row => row.Entity)
+                .ToListAsync(ct);
+        }
+        else
+        {
+            totalCount = await q.CountAsync(ct);
+
+            var orderedTenants = query.SortField switch
+            {
+                "name" => query.SortDescending ? q.OrderByDescending(tenant => tenant.LastName).ThenByDescending(tenant => tenant.FirstName) : q.OrderBy(tenant => tenant.LastName).ThenBy(tenant => tenant.FirstName),
+                "firstname" => query.SortDescending ? q.OrderByDescending(tenant => tenant.FirstName) : q.OrderBy(tenant => tenant.FirstName),
+                "lastname" => query.SortDescending ? q.OrderByDescending(tenant => tenant.LastName) : q.OrderBy(tenant => tenant.LastName),
+                "email" => query.SortDescending ? q.OrderByDescending(tenant => tenant.Email) : q.OrderBy(tenant => tenant.Email),
+                "phone" => query.SortDescending ? q.OrderByDescending(tenant => tenant.Phone) : q.OrderBy(tenant => tenant.Phone),
+                "createdat" => query.SortDescending ? q.OrderByDescending(tenant => tenant.CreatedAt) : q.OrderBy(tenant => tenant.CreatedAt),
+                "updatedat" => query.SortDescending ? q.OrderByDescending(tenant => tenant.UpdatedAt) : q.OrderBy(tenant => tenant.UpdatedAt),
+                _ => query.SortDescending ? q.OrderByDescending(tenant => tenant.CreatedAt) : q.OrderBy(tenant => tenant.CreatedAt),
+            };
+
+            pageTenants = await orderedTenants
+                .Skip(query.NormalizedSkip)
+                .Take(query.NormalizedTake)
+                .ToListAsync(ct);
+        }
+
+        var pageFacts = await LoadTenantPageRelationshipFactsAsync(
+            portfolioId,
+            pageTenants.Select(tenant => tenant.Id).ToArray(),
+            ct);
+        var factsByTenantId = pageFacts.ToDictionary(row => row.TenantId);
+
+        var items = pageTenants.Select(tenant =>
+        {
+            var response = TenantResponse.FromEntity(tenant);
+            factsByTenantId.TryGetValue(tenant.Id, out var facts);
+            ApplyDeleteState(
+                response,
+                facts?.ActiveLeaseCount ?? 0,
+                facts?.LeaseHistoryCount ?? 0);
+            response.CurrentPropertyId = facts?.CurrentPropertyId;
+            response.CurrentPropertyName = facts?.CurrentPropertyName;
+            response.CurrentUnitId = facts?.CurrentUnitId;
+            response.CurrentUnitNumber = facts?.CurrentUnitNumber;
+            return response;
+        }).ToList();
+
+        return new TenantListResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private async Task<TenantListResponse> ListPageLegacyProviderAsync(
         IQueryable<Tenant> q,
         int portfolioId,
         TenantListQuery query,
@@ -313,6 +494,177 @@ public class TenantService : ITenantService
                 CurrentUnitNumber = current.CurrentUnitNumber,
             };
     }
+
+    private IQueryable<TenantCurrentRelationshipSeedRow> BuildMaterializedCurrentRelationshipQuery(
+        int portfolioId,
+        int? unitId,
+        int? propertyId)
+    {
+        var targetUnitId = unitId ?? -1;
+        var targetPropertyId = propertyId ?? -1;
+        var restrictTenantIds = false;
+        var tenantIds = Array.Empty<int>();
+
+        return _db.Database.SqlQuery<TenantCurrentRelationshipSeedRow>($"""
+            WITH occupancy_rows AS MATERIALIZED (
+                SELECT occupancy."PortfolioId", occupancy."CurrentLeaseManagementId"
+                FROM vw_unit_occupancy AS occupancy
+                WHERE occupancy."PortfolioId" = {portfolioId}
+                  AND occupancy."CurrentLeaseManagementId" IS NOT NULL
+            ),
+            lifecycle_rows AS MATERIALIZED (
+                SELECT lifecycle."PortfolioId", lifecycle."LeaseManagementId", lifecycle."BusinessDate"
+                FROM vw_lease_management_lifecycle AS lifecycle
+                WHERE lifecycle."PortfolioId" = {portfolioId}
+            ),
+            current_rows AS MATERIALIZED (
+                SELECT DISTINCT
+                    party."PortfolioId" AS "PortfolioId",
+                    party."TenantId" AS "TenantId",
+                    party."LeaseManagementId" AS "LeaseManagementId",
+                    management."PropertyId" AS "PropertyId",
+                    property_row."Name" AS "PropertyName",
+                    management."UnitId" AS "UnitId",
+                    unit_row."UnitNumber" AS "UnitNumber"
+                FROM occupancy_rows AS occupancy
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = occupancy."PortfolioId"
+                   AND management."Id" = occupancy."CurrentLeaseManagementId"
+                INNER JOIN lifecycle_rows AS lifecycle
+                    ON lifecycle."PortfolioId" = management."PortfolioId"
+                   AND lifecycle."LeaseManagementId" = management."Id"
+                INNER JOIN "LeaseManagementParties" AS party
+                    ON party."PortfolioId" = management."PortfolioId"
+                   AND party."LeaseManagementId" = management."Id"
+                INNER JOIN "Properties" AS property_row
+                    ON property_row."PortfolioId" = management."PortfolioId"
+                   AND property_row."Id" = management."PropertyId"
+                   AND property_row."DeletedAt" IS NULL
+                INNER JOIN "Units" AS unit_row
+                    ON unit_row."PortfolioId" = management."PortfolioId"
+                   AND unit_row."Id" = management."UnitId"
+                   AND unit_row."DeletedAt" IS NULL
+                WHERE party."PortfolioId" = {portfolioId}
+                  AND party."Role" <> 'Guarantor'
+                  AND party."EffectiveFrom" <= lifecycle."BusinessDate"
+                  AND (party."EffectiveThrough" IS NULL
+                       OR party."EffectiveThrough" >= lifecycle."BusinessDate")
+                  AND (NOT {restrictTenantIds}
+                       OR party."TenantId" = ANY({tenantIds}::integer[]))
+            )
+            SELECT
+                current_rows."PortfolioId" AS "PortfolioId",
+                current_rows."TenantId" AS "TenantId",
+                count(DISTINCT current_rows."LeaseManagementId")::integer AS "ActiveLeaseCount",
+                COALESCE(bool_or(current_rows."UnitId" = {targetUnitId}), FALSE) AS "HasCurrentUnitMatch",
+                COALESCE(bool_or(current_rows."PropertyId" = {targetPropertyId}), FALSE) AS "HasCurrentPropertyMatch"
+            FROM current_rows
+            GROUP BY current_rows."PortfolioId", current_rows."TenantId"
+            """);
+    }
+
+    private Task<List<TenantPageRelationshipFactsRow>> LoadTenantPageRelationshipFactsAsync(
+        int portfolioId,
+        int[] pageTenantIds,
+        CancellationToken ct) =>
+        _db.Database.SqlQuery<TenantPageRelationshipFactsRow>($"""
+            WITH page_tenants AS MATERIALIZED (
+                SELECT unnest({pageTenantIds}::integer[]) AS "TenantId"
+            ),
+            occupancy_rows AS MATERIALIZED (
+                SELECT occupancy."PortfolioId", occupancy."CurrentLeaseManagementId"
+                FROM vw_unit_occupancy AS occupancy
+                WHERE occupancy."PortfolioId" = {portfolioId}
+                  AND occupancy."CurrentLeaseManagementId" IS NOT NULL
+            ),
+            lifecycle_rows AS MATERIALIZED (
+                SELECT lifecycle."PortfolioId", lifecycle."LeaseManagementId", lifecycle."BusinessDate"
+                FROM vw_lease_management_lifecycle AS lifecycle
+                WHERE lifecycle."PortfolioId" = {portfolioId}
+            ),
+            current_rows AS MATERIALIZED (
+                SELECT DISTINCT
+                    party."PortfolioId" AS "PortfolioId",
+                    party."TenantId" AS "TenantId",
+                    party."LeaseManagementId" AS "LeaseManagementId",
+                    management."PropertyId" AS "PropertyId",
+                    property_row."Name" AS "PropertyName",
+                    management."UnitId" AS "UnitId",
+                    unit_row."UnitNumber" AS "UnitNumber"
+                FROM occupancy_rows AS occupancy
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = occupancy."PortfolioId"
+                   AND management."Id" = occupancy."CurrentLeaseManagementId"
+                INNER JOIN lifecycle_rows AS lifecycle
+                    ON lifecycle."PortfolioId" = management."PortfolioId"
+                   AND lifecycle."LeaseManagementId" = management."Id"
+                INNER JOIN "LeaseManagementParties" AS party
+                    ON party."PortfolioId" = management."PortfolioId"
+                   AND party."LeaseManagementId" = management."Id"
+                INNER JOIN "Properties" AS property_row
+                    ON property_row."PortfolioId" = management."PortfolioId"
+                   AND property_row."Id" = management."PropertyId"
+                   AND property_row."DeletedAt" IS NULL
+                INNER JOIN "Units" AS unit_row
+                    ON unit_row."PortfolioId" = management."PortfolioId"
+                   AND unit_row."Id" = management."UnitId"
+                   AND unit_row."DeletedAt" IS NULL
+                WHERE party."PortfolioId" = {portfolioId}
+                  AND party."Role" <> 'Guarantor'
+                  AND party."EffectiveFrom" <= lifecycle."BusinessDate"
+                  AND (party."EffectiveThrough" IS NULL
+                       OR party."EffectiveThrough" >= lifecycle."BusinessDate")
+                  AND party."TenantId" = ANY({pageTenantIds}::integer[])
+            ),
+            current_aggregates AS (
+                SELECT
+                    current_rows."PortfolioId" AS "PortfolioId",
+                    current_rows."TenantId" AS "TenantId",
+                    count(DISTINCT current_rows."LeaseManagementId")::integer AS "ActiveLeaseCount",
+                    (array_agg(current_rows."PropertyId" ORDER BY current_rows."PropertyName", current_rows."UnitNumber", current_rows."LeaseManagementId"))[1] AS "CurrentPropertyId",
+                    (array_agg(current_rows."PropertyName" ORDER BY current_rows."PropertyName", current_rows."UnitNumber", current_rows."LeaseManagementId"))[1] AS "CurrentPropertyName",
+                    (array_agg(current_rows."UnitId" ORDER BY current_rows."PropertyName", current_rows."UnitNumber", current_rows."LeaseManagementId"))[1] AS "CurrentUnitId",
+                    (array_agg(current_rows."UnitNumber" ORDER BY current_rows."PropertyName", current_rows."UnitNumber", current_rows."LeaseManagementId"))[1] AS "CurrentUnitNumber"
+                FROM current_rows
+                GROUP BY current_rows."PortfolioId", current_rows."TenantId"
+            ),
+            history_rows AS MATERIALIZED (
+                SELECT
+                    history_party."PortfolioId" AS "PortfolioId",
+                    history_party."TenantId" AS "TenantId",
+                    history_party."LeaseManagementId" AS "LeaseManagementId"
+                FROM "LeaseManagementParties" AS history_party
+                INNER JOIN "Portfolios" AS history_portfolio
+                    ON history_portfolio."Id" = history_party."PortfolioId"
+                   AND history_portfolio."DeletedAt" IS NULL
+                WHERE history_party."PortfolioId" = {portfolioId}
+                  AND history_party."TenantId" = ANY({pageTenantIds}::integer[])
+            ),
+            history_aggregates AS (
+                SELECT
+                    history_rows."PortfolioId" AS "PortfolioId",
+                    history_rows."TenantId" AS "TenantId",
+                    count(DISTINCT history_rows."LeaseManagementId")::integer AS "LeaseHistoryCount"
+                FROM history_rows
+                GROUP BY history_rows."PortfolioId", history_rows."TenantId"
+            )
+            SELECT
+                {portfolioId}::integer AS "PortfolioId",
+                page_tenants."TenantId" AS "TenantId",
+                COALESCE(current_aggregates."ActiveLeaseCount", 0)::integer AS "ActiveLeaseCount",
+                COALESCE(history_aggregates."LeaseHistoryCount", 0)::integer AS "LeaseHistoryCount",
+                current_aggregates."CurrentPropertyId" AS "CurrentPropertyId",
+                current_aggregates."CurrentPropertyName" AS "CurrentPropertyName",
+                current_aggregates."CurrentUnitId" AS "CurrentUnitId",
+                current_aggregates."CurrentUnitNumber" AS "CurrentUnitNumber"
+            FROM page_tenants
+            LEFT JOIN current_aggregates
+                ON current_aggregates."PortfolioId" = {portfolioId}
+               AND current_aggregates."TenantId" = page_tenants."TenantId"
+            LEFT JOIN history_aggregates
+                ON history_aggregates."PortfolioId" = {portfolioId}
+               AND history_aggregates."TenantId" = page_tenants."TenantId"
+            """).ToListAsync(ct);
 
     private IQueryable<TenantCurrentRelationshipAggregateRow> BuildGroupedCurrentRelationshipRelation(
         int portfolioId,
@@ -528,6 +880,36 @@ public class TenantService : ITenantService
         public string? CurrentPropertyName { get; init; }
         public int? CurrentUnitId { get; init; }
         public string? CurrentUnitNumber { get; init; }
+    }
+
+    private sealed class TenantPageSeedRow
+    {
+        public Tenant Entity { get; init; } = null!;
+        public int ActiveLeaseCount { get; init; }
+        public int? CurrentTenantId { get; init; }
+        public bool HasCurrentUnitMatch { get; init; }
+        public bool HasCurrentPropertyMatch { get; init; }
+    }
+
+    private sealed class TenantPageRelationshipFactsRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantId { get; init; }
+        public int ActiveLeaseCount { get; init; }
+        public int LeaseHistoryCount { get; init; }
+        public int? CurrentPropertyId { get; init; }
+        public string? CurrentPropertyName { get; init; }
+        public int? CurrentUnitId { get; init; }
+        public string? CurrentUnitNumber { get; init; }
+    }
+
+    private sealed class TenantCurrentRelationshipSeedRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantId { get; init; }
+        public int ActiveLeaseCount { get; init; }
+        public bool HasCurrentUnitMatch { get; init; }
+        public bool HasCurrentPropertyMatch { get; init; }
     }
 
     private sealed class TenantCurrentRelationshipRow

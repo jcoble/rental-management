@@ -113,6 +113,94 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
+    public async Task Transactions_PageKeysPrecedeHydrationAndStayWithinThreeStatements()
+    {
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
+        var scope = setup.Db.SeedAdministratorScope(
+            1, nameof(Transactions_PageKeysPrecedeHydrationAndStayWithinThreeStatements));
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Transaction plan property",
+            AddressLine1 = "818 Plan Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var expense = new Expense
+        {
+            PortfolioId = 1,
+            OperationalScope = ExpenseOperationalScope.Property,
+            Property = property,
+            Category = ScheduleECategory.Repairs,
+            Description = "Page-keyed repair",
+            Status = ExpenseStatus.Paid,
+            Amount = 818m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        setup.Db.AddRange(property, expense);
+        await setup.Db.SaveChangesAsync();
+        await setup.ActivateApiScopeAsync(scope);
+        commands.Reset();
+
+        var service = new AccountingService(
+            setup.Db,
+            new ScheduleEService(setup.Db),
+            new YearEndPacketPdfGenerator(),
+            TimeProvider.System);
+        var result = await service.GetTransactionsAsync(
+            scope,
+            new AccountingTransactionsQuery
+            {
+                Kind = "Expense",
+                PropertyId = property.Id,
+                Take = 20,
+            });
+
+        result.Items.Should().ContainSingle().Which.Id.Should().Be(expense.Id);
+        commands.Count.Should().Be(3);
+        var countSql = commands.Sql[0];
+        var pageSql = commands.Sql[1];
+        var hydrationSql = commands.Sql[2];
+
+        countSql.Should()
+            .Contain("authorized_properties AS MATERIALIZED")
+            .And.Contain("transaction_seed AS")
+            .And.NotContain("vw_lease_management_lifecycle")
+            .And.NotContain("\"Vendors\"")
+            .And.NotContain("\"WorkOrders\"")
+            .And.NotContain("\"StoredFiles\"")
+            .And.NotContain("\"BankTransactions\"");
+        pageSql.Should()
+            .Contain("page_seed AS MATERIALIZED")
+            .And.Contain("OFFSET @skip")
+            .And.Contain("LIMIT @take")
+            .And.Contain("row_number() OVER");
+        pageSql.IndexOf("OFFSET @skip", StringComparison.Ordinal).Should().BeLessThan(
+            pageSql.IndexOf("row_number() OVER", StringComparison.Ordinal),
+            "the slim union must be paged before an ordinal is assigned to its keys");
+
+        hydrationSql.Should()
+            .Contain("page_expenses AS MATERIALIZED")
+            .And.Contain("expense.\"Id\" = ANY(@expenseIds::integer[])")
+            .And.Contain("file.\"EntityId\" = ANY(@expenseIds::bigint[])")
+            .And.Contain("bank.\"MatchedExpenseId\" = ANY(@expenseIds::integer[])")
+            .And.NotContain("page_ledger_entries AS MATERIALIZED")
+            .And.NotContain("page_application_entries AS MATERIALIZED");
+        hydrationSql.IndexOf(
+            "expense.\"Id\" = ANY(@expenseIds::integer[])",
+            StringComparison.Ordinal).Should().BeLessThan(
+                hydrationSql.IndexOf("INNER JOIN authorized_properties", StringComparison.Ordinal),
+                "the expense page-key predicate must execute before authorization and display joins");
+    }
+
+    [Fact]
     public async Task ChartJournalAndFinancialStatements_StayPortfolioScopedAndBalanced()
     {
         await using var setup = await _fixture.CreateContextAsync();
