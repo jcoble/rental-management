@@ -219,6 +219,12 @@ export interface IssueLeaseAgreementResponse {
   replayed: boolean;
 }
 
+export interface ResendNativeEsignInvitationResponse {
+  signatureRequestId: number;
+  signatureSignerId: number;
+  replayed: boolean;
+}
+
 export type SignatureRequestStatus =
   | "Prepared"
   | "Dispatching"
@@ -820,6 +826,18 @@ export const leaseManagements = {
   ) =>
     api.get<LeaseAgreementSignatureProgress>(
       `/lease-managements/${leaseManagementId}/agreements/${leaseAgreementId}/signature-progress`
+    ),
+  resendAgreementInvitation: (
+    leaseManagementId: number,
+    leaseAgreementId: number,
+    leaseAgreementSignerId: number,
+    operationKey: string
+  ) =>
+    idempotentJson<ResendNativeEsignInvitationResponse>(
+      `/lease-managements/${leaseManagementId}/agreements/${leaseAgreementId}/signers/${leaseAgreementSignerId}/resend-invitation`,
+      "POST",
+      {},
+      operationKey
     ),
   getEffectiveAddendumSeries: (
     leaseManagementId: number,
