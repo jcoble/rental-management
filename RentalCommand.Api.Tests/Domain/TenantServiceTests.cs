@@ -1030,7 +1030,7 @@ public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
         result.Items.Should().ContainSingle(t => t.FirstName == "Yara" && t.LastName == "Brooks");
         result.Items.Should().NotContain(t => t.FirstName == "Devon");
 
-        _commands.Should().HaveCount(2, "the authorized count and page should remain DB-side queries");
+        _commands.Should().HaveCount(3, "count, page seed, and page-keyed facts should remain DB-side queries");
         _commands.Should().Contain(sql =>
             sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LeaseManagementParties", StringComparison.OrdinalIgnoreCase));
@@ -1038,6 +1038,200 @@ public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
             sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("public.rc_api_effective_capability_scopes", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAuthorizedAsync_MaterializesRelationshipsAfterSlimPageSeed()
+    {
+        var now = DateTime.UtcNow;
+        var (laterProperty, laterUnit) = SeedPropertyWithUnit(now);
+        laterProperty.Name = "Zulu Court";
+        laterUnit.UnitNumber = "9B";
+        var (firstProperty, firstUnit) = SeedPropertyWithUnit(now.AddMinutes(1));
+        firstProperty.Name = "Alpha Court";
+        firstUnit.UnitNumber = "1A";
+
+        var tenant = SeedTenant("Morgan", "Resident", now);
+        SeedRelationshipOnUnit(tenant, laterProperty, laterUnit, now, occupying: true);
+        SeedRelationshipOnUnit(tenant, firstProperty, firstUnit, now.AddMinutes(1), occupying: true);
+        _ctx.Db.SaveChanges();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        var response = result.Items.Should().ContainSingle().Subject;
+        response.Id.Should().Be(tenant.Id);
+        response.ActiveLeaseCount.Should().Be(2);
+        response.LeaseHistoryCount.Should().Be(2);
+        response.CurrentPropertyId.Should().Be(firstProperty.Id);
+        response.CurrentPropertyName.Should().Be("Alpha Court");
+        response.CurrentUnitId.Should().Be(firstUnit.Id);
+        response.CurrentUnitNumber.Should().Be("1A");
+
+        _commands.Should().HaveCount(3, "the endpoint contract is count, slim page seed, and page facts");
+
+        var pageSeed = _commands.Should().ContainSingle(sql =>
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)).Subject;
+        pageSeed.Should().NotContain("vw_unit_occupancy");
+        pageSeed.Should().NotContain("vw_lease_management_lifecycle");
+        pageSeed.Should().NotContain("LeaseHistoryCount");
+
+        var pageFacts = _commands.Should().ContainSingle(sql =>
+            sql.Contains("current_rows AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)).Subject;
+        pageFacts.Should().Contain("occupancy_rows AS MATERIALIZED");
+        pageFacts.Should().Contain("lifecycle_rows AS MATERIALIZED");
+        pageFacts.Should().Contain("array_agg");
+        pageFacts.Should().Contain("ORDER BY current_rows.\"PropertyName\", current_rows.\"UnitNumber\", current_rows.\"LeaseManagementId\"");
+        pageFacts.Should().Contain("party.\"TenantId\" = ANY");
+        pageFacts.Should().Contain("history_party.\"TenantId\" = ANY");
+        pageFacts.Should().NotContain("MIN(");
+    }
+
+    [Fact]
+    public async Task ListPageAuthorizedAsync_PreservesEverySortOnThePostgreSqlPageSeed()
+    {
+        var now = DateTime.UtcNow;
+        var tenantA = SeedTenant("Charlie", "Able", now.AddMinutes(3));
+        tenantA.Email = "z@example.test";
+        tenantA.Phone = "300";
+        tenantA.UpdatedAt = now.AddMinutes(1);
+        var tenantB = SeedTenant("Alpha", "Zulu", now.AddMinutes(1));
+        tenantB.Email = "a@example.test";
+        tenantB.Phone = "200";
+        tenantB.UpdatedAt = now.AddMinutes(3);
+        var tenantC = SeedTenant("Bravo", "Moss", now.AddMinutes(2));
+        tenantC.Email = "m@example.test";
+        tenantC.Phone = "100";
+        tenantC.UpdatedAt = now.AddMinutes(2);
+
+        var (propertyA, unitA) = SeedPropertyWithUnit(now);
+        propertyA.Name = "Sort A";
+        var (propertyB1, unitB1) = SeedPropertyWithUnit(now.AddMinutes(1));
+        propertyB1.Name = "Sort B1";
+        var (propertyB2, unitB2) = SeedPropertyWithUnit(now.AddMinutes(2));
+        propertyB2.Name = "Sort B2";
+        SeedRelationshipOnUnit(tenantA, propertyA, unitA, now, occupying: true);
+        SeedRelationshipOnUnit(tenantB, propertyB1, unitB1, now.AddMinutes(1), occupying: true);
+        SeedRelationshipOnUnit(tenantB, propertyB2, unitB2, now.AddMinutes(2), occupying: true);
+        _ctx.Db.SaveChanges();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        (string? Sort, int[] Expected)[] cases =
+        [
+            (null, [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("name", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("-name", [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("firstName", [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("-firstName", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("lastName", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("-lastName", [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("email", [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("-email", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("phone", [tenantC.Id, tenantB.Id, tenantA.Id]),
+            ("-phone", [tenantA.Id, tenantB.Id, tenantC.Id]),
+            ("activeLeaseCount", [tenantC.Id, tenantA.Id, tenantB.Id]),
+            ("-activeLeaseCount", [tenantB.Id, tenantA.Id, tenantC.Id]),
+            ("createdAt", [tenantB.Id, tenantC.Id, tenantA.Id]),
+            ("-createdAt", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("updatedAt", [tenantA.Id, tenantC.Id, tenantB.Id]),
+            ("-updatedAt", [tenantB.Id, tenantC.Id, tenantA.Id]),
+        ];
+
+        foreach (var testCase in cases)
+        {
+            _commands.Clear();
+            var result = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+            {
+                Sort = testCase.Sort,
+                Skip = 0,
+                Take = 20,
+            });
+
+            result.Items.Select(tenant => tenant.Id).Should().Equal(testCase.Expected);
+            _commands.Should().HaveCount(3, $"sort '{testCase.Sort ?? "default"}' must retain the statement budget");
+        }
+    }
+
+    [Fact]
+    public async Task ListPageAuthorizedAsync_PreservesRelationshipFiltersOnMaterializedSeed()
+    {
+        var now = DateTime.UtcNow;
+        var (currentProperty, targetUnit) = SeedPropertyWithUnit(now);
+        currentProperty.Name = "Current Property";
+        var (differentProperty, _) = SeedPropertyWithUnit(now.AddMinutes(1));
+        differentProperty.Name = "Different Property";
+        var currentTenant = SeedTenant("Current", "Resident", now);
+        var availableTenant = SeedTenant("Available", "Resident", now.AddMinutes(1));
+        var currentRelationship = SeedRelationshipOnUnit(
+            currentTenant,
+            currentProperty,
+            targetUnit,
+            now,
+            occupying: true);
+        _ctx.Db.SaveChanges();
+        await _ctx.ActivateApiScopeAsync(_scope);
+
+        _commands.Clear();
+        var unitFiltered = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            UnitId = targetUnit.Id,
+            PropertyId = differentProperty.Id,
+            Sort = "name",
+            Take = 20,
+        });
+        unitFiltered.Items.Should().ContainSingle(tenant => tenant.Id == currentTenant.Id);
+        _commands.Should().HaveCount(3);
+        _commands.Take(2).Should().OnlyContain(sql =>
+            sql.Contains("current_rows AS MATERIALIZED", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("array_agg", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var propertyFiltered = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            PropertyId = currentProperty.Id,
+            Sort = "name",
+            Take = 20,
+        });
+        propertyFiltered.Items.Should().ContainSingle(tenant => tenant.Id == currentTenant.Id);
+        _commands.Should().HaveCount(3);
+
+        _commands.Clear();
+        var searched = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            Search = "Current-Resident",
+            Sort = "name",
+            Take = 20,
+        });
+        searched.Items.Should().ContainSingle(tenant => tenant.Id == currentTenant.Id);
+        _commands.Should().HaveCount(3);
+
+        _commands.Clear();
+        var available = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            AvailableForLease = true,
+            Sort = "name",
+            Take = 20,
+        });
+        available.Items.Should().ContainSingle(tenant => tenant.Id == availableTenant.Id);
+        _commands.Should().HaveCount(3);
+
+        _commands.Clear();
+        var includingCurrent = await _sut.ListPageAuthorizedAsync(_scope, new TenantListQuery
+        {
+            AvailableForLease = true,
+            IncludeLeaseManagementId = currentRelationship.Id,
+            Sort = "name",
+            Take = 20,
+        });
+        includingCurrent.Items.Select(tenant => tenant.Id)
+            .Should().BeEquivalentTo([availableTenant.Id, currentTenant.Id]);
+        _commands.Should().HaveCount(3);
     }
 
     private (Property property, Unit unit) SeedPropertyWithUnit(DateTime now)
