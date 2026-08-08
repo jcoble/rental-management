@@ -27,6 +27,12 @@ describe('date picker wiring', () => {
 		assert.match(datePickerSource, /data-testid=\{testid \? `\$\{testid\}-today` : undefined\}/);
 	});
 
+	it('exposes the DatePicker invalid state for submit guards', () => {
+		assert.match(datePickerSource, /invalid = \$bindable\(false\)/);
+		assert.match(datePickerSource, /invalid\?: boolean/);
+		assert.match(datePickerSource, /aria-invalid=\{invalid\}/);
+	});
+
 	it('routes inline date fields through the shared DatePicker', () => {
 		assert.match(inlineFieldSource, /import DatePicker from '\.\/DatePicker\.svelte'/);
 		assert.match(inlineFieldSource, /type === 'date'/);

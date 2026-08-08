@@ -39,4 +39,20 @@ describe('properties list create contract', () => {
 		assert.doesNotMatch(propertiesEndpoint, /properties:create:/);
 		assert.doesNotMatch(propertiesEndpoint, /\{ property: data, units: \[\] \}/);
 	});
+
+	it('blocks stale in-service-date submission while the picker text is invalid', () => {
+		assert.match(propertiesPage, /let inServiceDateInvalid = \$state\(false\);/);
+		assert.match(propertiesPage, /<DatePicker[\s\S]*?bind:invalid=\{inServiceDateInvalid\}/);
+		assert.match(
+			propertiesPage,
+			/disabled=\{savePropertyMutation\.isPending \|\| inServiceDateInvalid\}/
+		);
+		const submitProperty = propertiesPage.match(
+			/function submitProperty\(\) \{[\s\S]*?\n\t\}\n\n\t\/\/ DataGrid/
+		)?.[0] ?? '';
+		assert.match(submitProperty, /if \(inServiceDateInvalid\) \{[\s\S]*?return;/);
+		const invalidGuardIndex = submitProperty.indexOf('if (inServiceDateInvalid)');
+		const mutationIndex = submitProperty.indexOf('savePropertyMutation.mutate');
+		assert.ok(invalidGuardIndex >= 0 && invalidGuardIndex < mutationIndex);
+	});
 });

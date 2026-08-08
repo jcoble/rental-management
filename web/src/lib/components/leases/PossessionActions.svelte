@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { CalendarCheck, KeyRound, Loader2, Undo2 } from '@lucide/svelte';
 
 	let {
@@ -30,6 +31,7 @@
 	let giveOperationKey = $state('');
 	let historicalOpen = $state(false);
 	let historicalPossessionDate = $state('');
+	let historicalDateInvalid = $state(false);
 	let historicalValidationError = $state('');
 	let historicalOperation = $state<{ fingerprint: string; key: string } | null>(null);
 	let returnOpen = $state(false);
@@ -67,6 +69,7 @@
 	function openHistorical() {
 		historicalPossessionDate =
 			summary.termStartOn ?? summary.plannedPossessionAtUtc?.slice(0, 10) ?? summary.businessDate;
+		historicalDateInvalid = false;
 		historicalValidationError = '';
 		historicalOperation = null;
 		historicalOpen = true;
@@ -75,6 +78,7 @@
 	function closeHistorical() {
 		if (historicalMutation.isPending) return;
 		historicalOpen = false;
+		historicalDateInvalid = false;
 		historicalValidationError = '';
 		historicalOperation = null;
 	}
@@ -124,6 +128,10 @@
 
 	function submitHistorical() {
 		historicalValidationError = '';
+		if (historicalDateInvalid) {
+			historicalValidationError = 'Enter a valid possession date.';
+			return;
+		}
 		if (!historicalPossessionDate) {
 			historicalValidationError = 'Possession date is required.';
 			return;
@@ -312,20 +320,20 @@
 		</Dialog.Header>
 		<div class="space-y-2">
 			<label for="historical-possession-date" class="text-sm font-medium">Possession date</label>
-			<Input
+			<DatePicker
 				id="historical-possession-date"
-				type="date"
+				testid="historical-possession-date"
 				bind:value={historicalPossessionDate}
+				bind:invalid={historicalDateInvalid}
 				max={summary.businessDate}
-				data-testid="historical-possession-date"
-				oninput={() => (historicalValidationError = '')}
+				onchange={() => (historicalValidationError = '')}
 			/>
 			<p class="text-xs text-muted-foreground">The date must be inside the executed agreement term.</p>
 		</div>
 		{#if historicalValidationError}<p class="text-sm text-destructive">{historicalValidationError}</p>{/if}
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeHistorical} disabled={historicalMutation.isPending}>Cancel</Button>
-			<Button onclick={submitHistorical} disabled={historicalMutation.isPending} data-testid="historical-possession-submit">
+			<Button onclick={submitHistorical} disabled={historicalMutation.isPending || historicalDateInvalid} data-testid="historical-possession-submit">
 				{#if historicalMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
 				Reconcile possession
 			</Button>

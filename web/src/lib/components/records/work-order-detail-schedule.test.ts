@@ -13,15 +13,15 @@ describe('work order detail schedule edit flow', () => {
 		assert.doesNotMatch(source, /formatDateOnly\(wo\.scheduledFor\)/);
 	});
 
-	it('renders schedule fields through datetime-local inputs in the supported detail edit form', () => {
-		assert.match(
-			source,
-			/<InlineField label="Scheduled start" type="datetime-local"[^>]+testid="work-order-detail-scheduled"/
-		);
-		assert.match(
-			source,
-			/<InlineField label="Service window end" type="datetime-local"[^>]+testid="work-order-detail-scheduled-window-end"/
-		);
+	it('renders schedule fields through the shared DateTimePicker in the supported detail edit form', () => {
+		const dateTimeFieldSnippet = source.match(/\{#snippet dateTimeField\([\s\S]*?\n\{\/snippet\}/)?.[0] ?? '';
+		assert.ok(dateTimeFieldSnippet, 'dateTimeField snippet should be present');
+		assert.match(source, /dateTimeField\(\{ label: 'Scheduled start'/);
+		assert.match(source, /testid: 'work-order-detail-scheduled'/);
+		assert.match(source, /dateTimeField\(\{ label: 'Service window end'/);
+		assert.match(source, /testid: 'work-order-detail-scheduled-window-end'/);
+		assert.match(source, /import DateTimePicker from '\$lib\/components\/shared\/DateTimePicker\.svelte'/);
+		assert.match(dateTimeFieldSnippet, /<DateTimePicker[\s\S]*?testid=\{`\$\{opts\.testid\}-input`\}/);
 	});
 
 	it('sends changed schedule fields with the local offset so linked appointments keep the window', () => {

@@ -12,6 +12,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
@@ -221,7 +222,11 @@
 			<Dialog.Title>{editingId == null ? 'Record Property Sale' : 'Edit Property Sale'}</Dialog.Title>
 		</Dialog.Header>
 		<div class="grid gap-3" data-testid="property-disposition-form">
-			<InlineField label="Close date" bind:value={form.closedOnDate} editing type="date" error={formErrors.closedOnDate} testid="property-disposition-closed-on" />
+			<div data-testid="property-disposition-closed-on-field">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-disposition-closed-on-input">Close date</label>
+				<DatePicker id="property-disposition-closed-on-input" testid="property-disposition-closed-on-input" bind:value={form.closedOnDate} />
+				{#if formErrors.closedOnDate}<p class="mt-1 text-xs text-destructive" data-testid="property-disposition-closed-on-error">{formErrors.closedOnDate}</p>{/if}
+			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<InlineField label="Sale price" bind:value={form.salePrice} editing type="number" error={formErrors.salePrice} testid="property-disposition-sale-price" />
 				<InlineField label="Selling costs" bind:value={form.sellingCosts} editing type="number" error={formErrors.sellingCosts} testid="property-disposition-selling-costs" />
