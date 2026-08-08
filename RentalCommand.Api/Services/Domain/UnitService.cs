@@ -302,6 +302,21 @@ public class UnitService : IUnitService
         // canonical LeaseManagement graph. This query deliberately does not consult Unit.Status,
         // Unit.Leases, Lease.Status, or LeaseTenants: those legacy columns cannot be allowed to
         // disagree with possession and effective-dated agreement facts.
+        var openWorkOrderCounts =
+            from workOrder in _db.WorkOrders.AsNoTracking()
+            where workOrder.PortfolioId == portfolioId
+                && workOrder.UnitId != null
+                && workOrder.Status != WorkOrderStatus.Completed
+                && workOrder.Status != WorkOrderStatus.Cancelled
+                && workOrder.Status != WorkOrderStatus.Archived
+            group workOrder by new { workOrder.PortfolioId, workOrder.UnitId } into workOrders
+            select new UnitOpenWorkOrderCountRow
+            {
+                PortfolioId = workOrders.Key.PortfolioId,
+                UnitId = workOrders.Key.UnitId!.Value,
+                Count = workOrders.Count(),
+            };
+
         return
             from unit in _db.Units.AsNoTracking()
             where unit.PortfolioId == portfolioId
@@ -318,6 +333,12 @@ public class UnitService : IUnitService
             from agreement in _db.LeaseAgreements.AsNoTracking()
                 .Where(row => row.PortfolioId == unit.PortfolioId
                     && row.Id == lifecycle!.CurrentAgreementId)
+                .DefaultIfEmpty()
+            join openWorkOrderCount in openWorkOrderCounts
+                on new { unit.PortfolioId, UnitId = unit.Id }
+                equals new { openWorkOrderCount.PortfolioId, openWorkOrderCount.UnitId }
+                into openWorkOrderCountGroup
+            from openWorkOrderCount in openWorkOrderCountGroup
                 .DefaultIfEmpty()
             select new UnitHealthReadRow
             {
@@ -338,10 +359,7 @@ public class UnitService : IUnitService
                 Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
                 BusinessDate = lifecycle == null ? null : lifecycle.BusinessDate,
                 CurrentAgreementEndOn = agreement == null ? null : agreement.TermEndOn,
-                OpenWorkOrderCount = unit.WorkOrders.Count(workOrder =>
-                    workOrder.Status != WorkOrderStatus.Completed
-                    && workOrder.Status != WorkOrderStatus.Cancelled
-                    && workOrder.Status != WorkOrderStatus.Archived),
+                OpenWorkOrderCount = (int?)openWorkOrderCount.Count ?? 0,
             };
     }
 
@@ -571,6 +589,13 @@ public class UnitService : IUnitService
 
     internal sealed class UnitAggregateCountRow
     {
+        public int UnitId { get; init; }
+        public int Count { get; init; }
+    }
+
+    internal sealed class UnitOpenWorkOrderCountRow
+    {
+        public int PortfolioId { get; init; }
         public int UnitId { get; init; }
         public int Count { get; init; }
     }
