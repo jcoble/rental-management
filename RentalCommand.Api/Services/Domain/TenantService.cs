@@ -634,6 +634,9 @@ public class TenantService : ITenantService
                     history_party."TenantId" AS "TenantId",
                     history_party."LeaseManagementId" AS "LeaseManagementId"
                 FROM "LeaseManagementParties" AS history_party
+                INNER JOIN "Portfolios" AS history_portfolio
+                    ON history_portfolio."Id" = history_party."PortfolioId"
+                   AND history_portfolio."DeletedAt" IS NULL
                 WHERE history_party."PortfolioId" = {portfolioId}
                   AND history_party."TenantId" = ANY({pageTenantIds}::integer[])
             ),

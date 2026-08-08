@@ -82,9 +82,11 @@ public partial class AccountingService
             LEFT JOIN "Vendors" AS search_vendor
                 ON search_vendor."PortfolioId" = expense."PortfolioId"
                AND search_vendor."Id" = expense."VendorId"
+               AND search_vendor."DeletedAt" IS NULL
             LEFT JOIN "WorkOrders" AS search_work_order
                 ON search_work_order."PortfolioId" = expense."PortfolioId"
                AND search_work_order."Id" = expense."WorkOrderId"
+               AND search_work_order."DeletedAt" IS NULL
             """;
         const string ApplicationSearchJoins = """
             INNER JOIN "Properties" AS search_property
@@ -580,6 +582,16 @@ public partial class AccountingService
                       AND entry."Id" = ANY(@ledgerIds::bigint[])
                 )
                 """);
+            ctes.Add("""
+                page_lifecycle AS MATERIALIZED (
+                    SELECT
+                        lifecycle."PortfolioId" AS "PortfolioId",
+                        lifecycle."LeaseManagementId" AS "LeaseManagementId",
+                        lifecycle."CurrentPrimaryTenantName" AS "CurrentPrimaryTenantName"
+                    FROM vw_lease_management_lifecycle AS lifecycle
+                    WHERE lifecycle."PortfolioId" = @portfolioId
+                )
+                """);
             branches.Add("""
                 SELECT
                     CASE WHEN entry."EntryType" = 'PaymentReceipt'
@@ -611,7 +623,7 @@ public partial class AccountingService
                     ON property_row."PortfolioId" = authorized_accounts."PortfolioId"
                    AND property_row."Id" = authorized_accounts."PropertyId"
                    AND property_row."DeletedAt" IS NULL
-                LEFT JOIN vw_lease_management_lifecycle AS lifecycle
+                LEFT JOIN page_lifecycle AS lifecycle
                     ON lifecycle."PortfolioId" = authorized_accounts."PortfolioId"
                    AND lifecycle."LeaseManagementId" = authorized_accounts."LeaseManagementId"
                 """);
@@ -745,6 +757,7 @@ public partial class AccountingService
                 LEFT JOIN "Vendors" AS vendor
                     ON vendor."PortfolioId" = expense."PortfolioId"
                    AND vendor."Id" = expense."VendorId"
+                   AND vendor."DeletedAt" IS NULL
                 LEFT JOIN receipt_facts AS receipt
                     ON receipt."ExpenseId" = expense."Id"::bigint
                 LEFT JOIN bank_facts AS bank
