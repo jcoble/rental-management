@@ -1090,6 +1090,8 @@ public sealed class TenantServicePostgreSqlTests : IAsyncLifetime
         pageFacts.Should().Contain("ORDER BY current_rows.\"PropertyName\", current_rows.\"UnitNumber\", current_rows.\"LeaseManagementId\"");
         pageFacts.Should().Contain("party.\"TenantId\" = ANY");
         pageFacts.Should().Contain("history_party.\"TenantId\" = ANY");
+        pageFacts.Should().Contain("INNER JOIN \"Portfolios\" AS history_portfolio");
+        pageFacts.Should().Contain("history_portfolio.\"DeletedAt\" IS NULL");
         pageFacts.Should().NotContain("MIN(");
     }
 

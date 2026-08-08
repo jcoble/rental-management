@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using FluentAssertions.Execution;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -706,6 +707,9 @@ public class AccountingServiceTests : IAsyncLifetime
         defaultHydrationSql.Should()
             .Contain("page_ledger_entries AS MATERIALIZED")
             .And.Contain("entry.\"Id\" = ANY(@ledgerIds::bigint[])")
+            .And.Contain("page_lifecycle AS MATERIALIZED")
+            .And.Contain("LEFT JOIN page_lifecycle AS lifecycle")
+            .And.NotContain("LEFT JOIN vw_lease_management_lifecycle AS lifecycle")
             .And.NotContain("page_expenses AS MATERIALIZED")
             .And.NotContain("page_application_entries AS MATERIALIZED",
                 "branches without page keys are omitted from the hydration statement");
@@ -927,6 +931,38 @@ public class AccountingServiceTests : IAsyncLifetime
                 sql.Contains("filtered_seed", StringComparison.Ordinal) &&
                 sql.Contains("transaction_seed", StringComparison.Ordinal),
                 "filtering must be applied to the normalized union in both count and page statements");
+        }
+
+        vendor.DeletedAt = day3.AddMinutes(1);
+        workOrder.DeletedAt = day3.AddMinutes(1);
+        _db.SaveChanges();
+
+        _commands.Clear();
+        var rowsAfterSourceDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { PropertyId = property.Id, Take = 20 },
+            CancellationToken.None);
+        var vendorSearchAfterDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Search = vendor.Name, Take = 20 },
+            CancellationToken.None);
+        var workOrderSearchAfterDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Search = workOrder.Title, Take = 20 },
+            CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            rowsAfterSourceDeletion.Items
+                .Single(row => row.Kind == "Expense" && row.Id == expense.Id)
+                .Counterparty.Should().BeNull(
+                    "soft-deleted vendors must retain the prior EF query-filter semantics during hydration");
+            vendorSearchAfterDeletion.Items.Should().NotContain(
+                row => row.Kind == "Expense" && row.Id == expense.Id,
+                "soft-deleted vendor text must not match transaction search");
+            workOrderSearchAfterDeletion.Items.Should().NotContain(
+                row => row.Kind == "Expense" && row.Id == expense.Id,
+                "soft-deleted work-order text must not match transaction search");
         }
 
         _commands.Clear();
