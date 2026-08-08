@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using FluentAssertions.Execution;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -417,10 +418,17 @@ public class AccountingServiceTests : IAsyncLifetime
         result.TotalCount.Should().Be(2);
         result.Items.Should().ContainSingle(row => row.Category == entryType.ToString());
         result.Items.Should().ContainSingle(row => row.Category == nameof(TenantLedgerEntryType.PaymentReceipt));
-        _commands.Should().HaveCount(2, "the grid uses one count and one bounded page query");
-        _commands.Should().OnlyContain(sql =>
+        _commands.Should().HaveCount(3,
+            "the grid uses a slim count, ordered page keys, and one page-keyed hydration query");
+        _commands.Take(2).Should().OnlyContain(sql =>
             sql.Contains("\"TenantLedgerAllocations\"", StringComparison.OrdinalIgnoreCase),
             "both the count and page query must resolve receipt categories from allocations DB-side");
+        _commands[2].Should()
+            .Contain("page_ledger_entries AS MATERIALIZED")
+            .And.Contain("entry.\"Id\" = ANY(@ledgerIds::bigint[])")
+            .And.NotContain("\"StoredFiles\"")
+            .And.NotContain("\"BankTransactions\"",
+                "a ledger-only page hydrates only its branch and must not enter expense fact tables");
     }
 
     [Fact]
@@ -507,24 +515,27 @@ public class AccountingServiceTests : IAsyncLifetime
         plain.ClearedBankName.Should().BeNull();
         plain.ClearedAt.Should().BeNull();
 
-        _commands.Should().HaveCount(4,
-            "the grid uses count + slim page + page-keyed receipt facts + page-keyed bank facts");
+        _commands.Should().HaveCount(3,
+            "the grid uses count + ordered page keys + one page-keyed hydration statement");
         var pageSql = _commands[1];
         pageSql.Should().Contain("UNION ALL").And.Contain("ORDER BY").And.Contain("LIMIT");
         pageSql.Should().NotContain("\"StoredFiles\"")
             .And.NotContain("\"BankTransactions\"",
                 "receipt and bank tables must not be re-entered by each output-row projection");
 
-        var receiptSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
-        receiptSql.Should().Contain("GROUP BY")
+        var hydrationSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
+        hydrationSql.Should()
+            .Contain("page_expenses AS MATERIALIZED")
+            .And.Contain("expense.\"Id\" = ANY(@expenseIds::integer[])")
+            .And.Contain("file.\"EntityId\" = ANY(@expenseIds::bigint[])")
+            .And.Contain("bank.\"MatchedExpenseId\" = ANY(@expenseIds::integer[])")
+            .And.Contain("GROUP BY")
             .And.Contain("array_agg")
-            .And.NotContain("EXISTS")
             .And.Contain("UploadedAt",
                 "receipt presence and newest-receipt type must be computed DB-side for page expense ids");
-        var bankSql = _commands.Single(sql => sql.Contains("\"BankTransactions\""));
-        bankSql.Should().Contain("\"BankConnections\"")
-            .And.NotContain("UNION ALL",
-                "bank facts must be fetched once for page expense ids, outside the base union");
+        hydrationSql.Should().Contain("\"BankTransactions\"")
+            .And.Contain("\"BankConnections\"",
+                "the newest matched bank fact is folded into the same page-keyed hydration statement");
     }
 
     [Fact]
@@ -655,13 +666,395 @@ public class AccountingServiceTests : IAsyncLifetime
         row.ClearedBankName.Should().Be("Higher Id Bank");
         row.ClearedAt.Should().Be(postedAt);
 
-        var receiptSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
-        receiptSql.Should().Contain("ORDER BY")
+        _commands.Should().HaveCount(3);
+        var hydrationSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
+        hydrationSql.Should().Contain("ORDER BY")
             .And.Contain("\"UploadedAt\" DESC")
             .And.Contain("\"Id\" DESC");
-        var bankSql = _commands.Single(sql => sql.Contains("\"BankTransactions\""));
-        bankSql.Should().Contain("\"PostedAt\" DESC")
+        hydrationSql.Should().Contain("\"PostedAt\" DESC")
             .And.Contain("\"Id\" DESC");
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_DefaultSeedIsSlimAndHydratesOnlyPageBranches()
+    {
+        var now = new DateTime(2027, 2, 18, 12, 0, 0, DateTimeKind.Utc);
+        var (_, lease) = SeedPropertyAndLease(now);
+        SeedPayment(lease, 1_100m, dueDate: now, paidInFull: false);
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Take = 20 },
+            CancellationToken.None);
+
+        result.Items.Should().ContainSingle();
+        _commands.Should().HaveCount(3);
+        foreach (var seedSql in _commands.Take(2))
+        {
+            seedSql.Should()
+                .Contain("authorized_accounts AS MATERIALIZED")
+                .And.Contain("UNION ALL")
+                .And.NotContain("vw_lease_management_lifecycle")
+                .And.NotContain("\"Vendors\"")
+                .And.NotContain("\"WorkOrders\"")
+                .And.NotContain("\"StoredFiles\"")
+                .And.NotContain("\"BankTransactions\"",
+                    "default count and top-N operate on normalized source keys, not display hydration");
+        }
+
+        var defaultHydrationSql = _commands[2];
+        defaultHydrationSql.Should()
+            .Contain("page_ledger_entries AS MATERIALIZED")
+            .And.Contain("entry.\"Id\" = ANY(@ledgerIds::bigint[])")
+            .And.Contain("page_lifecycle AS MATERIALIZED")
+            .And.Contain("LEFT JOIN page_lifecycle AS lifecycle")
+            .And.NotContain("LEFT JOIN vw_lease_management_lifecycle AS lifecycle")
+            .And.NotContain("page_expenses AS MATERIALIZED")
+            .And.NotContain("page_application_entries AS MATERIALIZED",
+                "branches without page keys are omitted from the hydration statement");
+
+        _commands.Clear();
+        var empty = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Kind = "Bank", Take = 20 },
+            CancellationToken.None);
+
+        empty.Items.Should().BeEmpty();
+        empty.TotalCount.Should().Be(0);
+        _commands.Should().HaveCount(3, "empty pages retain the fixed statement budget");
+        _commands[2].Should().Contain("WHERE FALSE",
+            "empty hydration is one typed SQL statement rather than a skipped round trip");
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_PreservesEveryWhitelistedSortInSql()
+    {
+        var day1 = new DateTime(2027, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        var day2 = day1.AddDays(1);
+        var day3 = day1.AddDays(2);
+        var day4 = day1.AddDays(3);
+        var (property, lease) = SeedPropertyAndLease(day3);
+        SeedPayment(lease, 300m, dueDate: day3, paidInFull: false);
+        var expense = SeedExpense(
+            "Alpha expense",
+            100m,
+            day2,
+            ScheduleECategory.Repairs,
+            ExpenseStatus.Paid,
+            property.Id);
+        expense.UpdatedAt = day4;
+        var applicationAccount = SeedApplicationFinancialAccount(property, day1);
+        SeedApplicationFinancialEntry(
+            applicationAccount,
+            property,
+            day1,
+            "Zulu application",
+            200m,
+            ApplicationFinancialEntryType.FeeCollection,
+            ApplicationFinancialDirection.Increase);
+        _db.SaveChanges();
+
+        var ascending = new Dictionary<string, string[]>
+        {
+            ["amount"] = ["TenantLedger", "Expense", "ApplicationFee"],
+            ["description"] = ["Expense", "TenantLedger", "ApplicationFee"],
+            ["category"] = ["ApplicationFee", "TenantLedger", "Expense"],
+            ["status"] = ["TenantLedger", "Expense", "ApplicationFee"],
+            ["kind"] = ["ApplicationFee", "Expense", "TenantLedger"],
+            ["date"] = ["ApplicationFee", "Expense", "TenantLedger"],
+            ["createdat"] = ["ApplicationFee", "Expense", "TenantLedger"],
+            ["updatedat"] = ["ApplicationFee", "TenantLedger", "Expense"],
+        };
+
+        foreach (var (sortField, expectedKinds) in ascending)
+        {
+            foreach (var descending in new[] { false, true })
+            {
+                _commands.Clear();
+                var result = await _sut.GetTransactionsAsync(
+                    _scope,
+                    new AccountingTransactionsQuery
+                    {
+                        Sort = descending ? $"-{sortField}" : sortField,
+                        Take = 20,
+                    },
+                    CancellationToken.None);
+
+                result.Items.Select(row => row.Kind).Should().Equal(
+                    descending ? expectedKinds.Reverse() : expectedKinds,
+                    $"{sortField} {(descending ? "descending" : "ascending")} must retain the existing union order");
+                _commands.Should().HaveCount(3);
+                _commands[1].Should()
+                    .Contain("row_number() OVER")
+                    .And.Contain("ORDER BY")
+                    .And.Contain("OFFSET @skip")
+                    .And.Contain("LIMIT @take",
+                        "every whitelisted sort and page boundary must run in PostgreSQL");
+            }
+        }
+
+        var mixedHydrationSql = _commands[2];
+        mixedHydrationSql.Should()
+            .Contain("page_ledger_entries AS MATERIALIZED")
+            .And.Contain("entry.\"Id\" = ANY(@ledgerIds::bigint[])")
+            .And.Contain("page_expenses AS MATERIALIZED")
+            .And.Contain("expense.\"Id\" = ANY(@expenseIds::integer[])")
+            .And.Contain("page_application_entries AS MATERIALIZED")
+            .And.Contain("application_entry.\"Id\" = ANY(@applicationIds::integer[])")
+            .And.Contain("page_keys AS MATERIALIZED")
+            .And.Contain("UNION ALL",
+                "a mixed page hydrates each source only after its branch-local page predicate");
+        mixedHydrationSql.IndexOf(
+            "entry.\"Id\" = ANY(@ledgerIds::bigint[])",
+            StringComparison.Ordinal).Should().BeLessThan(
+                mixedHydrationSql.IndexOf("INNER JOIN authorized_accounts", StringComparison.Ordinal));
+        var expensePredicateIndex = mixedHydrationSql.IndexOf(
+            "expense.\"Id\" = ANY(@expenseIds::integer[])",
+            StringComparison.Ordinal);
+        expensePredicateIndex.Should().BeLessThan(mixedHydrationSql.IndexOf(
+            "INNER JOIN authorized_properties",
+            expensePredicateIndex,
+            StringComparison.Ordinal));
+        var applicationPredicateIndex = mixedHydrationSql.IndexOf(
+            "application_entry.\"Id\" = ANY(@applicationIds::integer[])",
+            StringComparison.Ordinal);
+        applicationPredicateIndex.Should().BeLessThan(mixedHydrationSql.IndexOf(
+            "INNER JOIN authorized_properties",
+            applicationPredicateIndex,
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_PreservesEveryFilterAndSearchSurfaceInSql()
+    {
+        var day3 = DateTime.UtcNow.Date.AddHours(12);
+        var day2 = day3.AddDays(-1);
+        var day1 = day3.AddDays(-2);
+        var day5 = day3.AddDays(2);
+        var (property, lease) = SeedPropertyAndLease(day3);
+        var payment = SeedPayment(lease, 300m, dueDate: day3, paidInFull: true, paidDate: day3);
+        var charge = _db.TenantLedgerEntries.Single(entry =>
+            entry.TenantAccountId == payment.TenantAccountId &&
+            entry.EntryType == TenantLedgerEntryType.RentCharge);
+
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Acme vendor",
+            ServiceType = "Repairs",
+            CreatedAt = day2,
+            UpdatedAt = day2,
+        };
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = lease.LeaseManagement!.UnitId,
+            Title = "Boiler work",
+            Description = "Boiler work",
+            Category = "General",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = day2,
+            UpdatedAt = day2,
+        };
+        _db.AddRange(vendor, workOrder);
+        _db.SaveChanges();
+        var expense = SeedExpense(
+            "Filterable expense",
+            100m,
+            day2,
+            ScheduleECategory.Repairs,
+            ExpenseStatus.Paid,
+            property.Id,
+            save: false);
+        expense.OperationalScope = ExpenseOperationalScope.WorkOrder;
+        expense.UnitId = lease.LeaseManagement.UnitId;
+        expense.VendorId = vendor.Id;
+        expense.WorkOrderId = workOrder.Id;
+        expense.Notes = "expense note 818";
+        _db.SaveChanges();
+
+        var applicationAccount = SeedApplicationFinancialAccount(property, day1);
+        var applicationEntry = SeedApplicationFinancialEntry(
+            applicationAccount,
+            property,
+            day1,
+            "Application fee",
+            200m,
+            ApplicationFinancialEntryType.FeeCollection,
+            ApplicationFinancialDirection.Increase,
+            providerReference: "provider-filter-818");
+        var otherProperty = SeedProperty("Other", day5);
+        var otherExpense = SeedExpense(
+            "Other property expense",
+            50m,
+            day5,
+            ScheduleECategory.Supplies,
+            ExpenseStatus.Pending,
+            otherProperty.Id);
+
+        var cases = new (string Name, AccountingTransactionsQuery Query, (string Kind, long Id)[] Expected)[]
+        {
+            ("kind", new() { Kind = "payment", Take = 20 }, [("Payment", payment.Id)]),
+            ("status", new() { Status = "debit", Take = 20 }, [("TenantLedger", charge.Id)]),
+            ("category", new() { Category = "repairs", Take = 20 }, [("Expense", expense.Id)]),
+            ("property", new() { PropertyId = property.Id, Take = 20 },
+                [("TenantLedger", charge.Id), ("Payment", payment.Id), ("Expense", expense.Id), ("ApplicationFee", applicationEntry.Id)]),
+            ("date", new() { From = day2.Date, To = day2.Date, Take = 20 }, [("Expense", expense.Id)]),
+            ("description search", new() { Search = "Filterable expense", Take = 20 }, [("Expense", expense.Id)]),
+            ("property search", new() { Search = property.Name, Take = 20 },
+                [("TenantLedger", charge.Id), ("Payment", payment.Id), ("Expense", expense.Id), ("ApplicationFee", applicationEntry.Id)]),
+            ("tenant search", new() { Search = "Maria Tenant", Take = 20 },
+                [("TenantLedger", charge.Id), ("Payment", payment.Id)]),
+            ("account search", new() { Search = lease.LeaseManagement.TenantAccount!.AccountNumber, Take = 20 },
+                [("TenantLedger", charge.Id), ("Payment", payment.Id)]),
+            ("vendor search", new() { Search = vendor.Name, Take = 20 }, [("Expense", expense.Id)]),
+            ("work-order search", new() { Search = workOrder.Title, Take = 20 }, [("Expense", expense.Id)]),
+            ("notes search", new() { Search = "expense note 818", Take = 20 }, [("Expense", expense.Id)]),
+            ("application label search", new() { Search = "Rental application", Take = 20 }, [("ApplicationFee", applicationEntry.Id)]),
+            ("application reference search", new() { Search = "provider-filter-818", Take = 20 }, [("ApplicationFee", applicationEntry.Id)]),
+            ("other property exclusion", new() { PropertyId = otherProperty.Id, Take = 20 }, [("Expense", otherExpense.Id)]),
+        };
+
+        foreach (var testCase in cases)
+        {
+            _commands.Clear();
+            var result = await _sut.GetTransactionsAsync(_scope, testCase.Query, CancellationToken.None);
+
+            result.Items.Select(row => (row.Kind, row.Id)).Should().BeEquivalentTo(
+                testCase.Expected,
+                $"the {testCase.Name} filter must retain the existing union membership");
+            _commands.Should().HaveCount(3);
+            _commands.Take(2).Should().OnlyContain(sql =>
+                sql.Contains("filtered_seed", StringComparison.Ordinal) &&
+                sql.Contains("transaction_seed", StringComparison.Ordinal),
+                "filtering must be applied to the normalized union in both count and page statements");
+        }
+
+        vendor.DeletedAt = day3.AddMinutes(1);
+        workOrder.DeletedAt = day3.AddMinutes(1);
+        _db.SaveChanges();
+
+        _commands.Clear();
+        var rowsAfterSourceDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { PropertyId = property.Id, Take = 20 },
+            CancellationToken.None);
+        var vendorSearchAfterDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Search = vendor.Name, Take = 20 },
+            CancellationToken.None);
+        var workOrderSearchAfterDeletion = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { Search = workOrder.Title, Take = 20 },
+            CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            rowsAfterSourceDeletion.Items
+                .Single(row => row.Kind == "Expense" && row.Id == expense.Id)
+                .Counterparty.Should().BeNull(
+                    "soft-deleted vendors must retain the prior EF query-filter semantics during hydration");
+            vendorSearchAfterDeletion.Items.Should().NotContain(
+                row => row.Kind == "Expense" && row.Id == expense.Id,
+                "soft-deleted vendor text must not match transaction search");
+            workOrderSearchAfterDeletion.Items.Should().NotContain(
+                row => row.Kind == "Expense" && row.Id == expense.Id,
+                "soft-deleted work-order text must not match transaction search");
+        }
+
+        _commands.Clear();
+        var signedRows = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery { PropertyId = property.Id, Take = 20 },
+            CancellationToken.None);
+        signedRows.Items.Single(row => row.Id == charge.Id && row.Kind == "TenantLedger")
+            .Amount.Should().Be(-300m);
+        signedRows.Items.Single(row => row.Id == payment.Id && row.Kind == "Payment")
+            .Amount.Should().Be(300m);
+        signedRows.Items.Single(row => row.Id == expense.Id && row.Kind == "Expense")
+            .Amount.Should().Be(-100m);
+        signedRows.Items.Single(row => row.Id == applicationEntry.Id && row.Kind == "ApplicationFee")
+            .Amount.Should().Be(200m);
+        _commands.Should().HaveCount(3);
+
+        _commands.Clear();
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            property.Id,
+            "accounting-transaction-selected-property");
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _commands.Clear();
+        var selectedResult = await _sut.GetTransactionsAsync(
+            selectedScope,
+            new AccountingTransactionsQuery { Take = 20 },
+            CancellationToken.None);
+
+        selectedResult.Items.Select(row => (row.Kind, row.Id)).Should().BeEquivalentTo(
+            new[]
+            {
+                ("TenantLedger", charge.Id),
+                ("Payment", payment.Id),
+                ("Expense", (long)expense.Id),
+                ("ApplicationFee", (long)applicationEntry.Id),
+            },
+            "the same SQL authorization relation must exclude the other property's expense");
+        _commands.Should().HaveCount(3);
+        _commands.Take(2).Should().OnlyContain(sql =>
+            sql.Contains("rc_api_effective_capability_scopes", StringComparison.Ordinal) &&
+            sql.Contains("authorized_properties AS MATERIALIZED", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_PreservesApplicationFeeSignsAfterApplicationDeletionWithoutPii()
+    {
+        var now = new DateTime(2027, 3, 20, 12, 0, 0, DateTimeKind.Utc);
+        var (property, _) = SeedPropertyAndLease(now);
+        var account = SeedApplicationFinancialAccount(property, now, "Private", "Applicant");
+        var collection = SeedApplicationFinancialEntry(
+            account,
+            property,
+            now,
+            "Application fee collected",
+            125m,
+            ApplicationFinancialEntryType.FeeCollection,
+            ApplicationFinancialDirection.Increase);
+        var refund = SeedApplicationFinancialEntry(
+            account,
+            property,
+            now.AddMinutes(1),
+            "Application fee refunded",
+            50m,
+            ApplicationFinancialEntryType.Refund,
+            ApplicationFinancialDirection.Decrease,
+            relatedEntryId: collection.Id);
+        account.RentalApplication!.DeletedAt = now.AddMinutes(2);
+        _db.SaveChanges();
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery
+            {
+                Kind = "ApplicationFee",
+                Sort = "date",
+                Take = 20,
+            },
+            CancellationToken.None);
+
+        result.Items.Select(row => (row.Id, row.Category, row.Amount)).Should().Equal(
+            (collection.Id, "ApplicationFee", 125m),
+            (refund.Id, "ApplicationFeeRefund", -50m));
+        result.Items.Should().OnlyContain(row =>
+            row.Kind == "ApplicationFee" &&
+            row.Counterparty == "Rental application" &&
+            row.DetailHref == "/applications");
+        _commands.Should().HaveCount(3);
+        _commands.Should().OnlyContain(sql =>
+            !sql.Contains("\"RentalApplications\"", StringComparison.Ordinal),
+            "immutable finance history must never rejoin a deleted application or recover applicant PII");
     }
 
     [Fact]
@@ -1363,6 +1756,78 @@ public class AccountingServiceTests : IAsyncLifetime
         });
         _db.SaveChanges();
         return receipt;
+    }
+
+    private ApplicationFinancialAccount SeedApplicationFinancialAccount(
+        Property property,
+        DateTime openedAt,
+        string firstName = "Alex",
+        string lastName = "Applicant")
+    {
+        var application = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            FirstName = firstName,
+            LastName = lastName,
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = openedAt,
+            CreatedAt = openedAt,
+            UpdatedAt = openedAt,
+        };
+        _db.RentalApplications.Add(application);
+        _db.SaveChanges();
+
+        var account = new ApplicationFinancialAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            RentalApplicationId = application.Id,
+            RentalApplication = application,
+            Currency = "USD",
+            OpenedAtUtc = openedAt,
+            CreatedByUserId = _scope.UserId,
+        };
+        _db.ApplicationFinancialAccounts.Add(account);
+        _db.SaveChanges();
+        return account;
+    }
+
+    private ApplicationFinancialEntry SeedApplicationFinancialEntry(
+        ApplicationFinancialAccount account,
+        Property property,
+        DateTime occurredAt,
+        string description,
+        decimal amount,
+        ApplicationFinancialEntryType entryType,
+        ApplicationFinancialDirection direction,
+        string? providerReference = null,
+        int? relatedEntryId = null)
+    {
+        var entry = new ApplicationFinancialEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            ApplicationFinancialAccountId = account.Id,
+            PropertyId = property.Id,
+            EntryType = entryType,
+            Direction = direction,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(occurredAt),
+            OccurredAtUtc = occurredAt,
+            Description = description,
+            Method = "Card",
+            Provider = providerReference == null ? null : "Test",
+            ProviderReference = providerReference,
+            Source = ApplicationFinancialEntrySource.Manual,
+            IdempotencyKey = $"accounting-transaction:{Guid.NewGuid():N}",
+            RelatedEntryId = relatedEntryId,
+            CreatedByUserId = _scope.UserId,
+        };
+        _db.ApplicationFinancialEntries.Add(entry);
+        _db.SaveChanges();
+        return entry;
     }
 
     private Expense SeedExpense(
