@@ -70,6 +70,103 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RecentActivity_WidensBigintLedgerAndDepositLookupIds()
+    {
+        var seeded = SeedActivityGraph();
+        var baseTime = new DateTime(2026, 1, 10, 12, 0, 0, DateTimeKind.Utc);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-BIGINT",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(baseTime),
+            TermEndOn = DateOnly.FromDateTime(baseTime.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(baseTime),
+            BaseRentAmount = 1_200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_200m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, 1, baseTime),
+            CreatedAtUtc = baseTime,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = baseTime,
+        };
+        _db.LeaseAgreements.Add(agreement);
+        _db.SaveChanges();
+
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            OriginatingAgreementId = agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = baseTime,
+            CreatedByUserId = 1,
+        };
+        _db.SecurityDepositAccounts.Add(depositAccount);
+        _db.SaveChanges();
+
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            Id = (long)int.MaxValue + 1,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 1_200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(baseTime),
+            PostedAtUtc = baseTime,
+            Description = "Bigint tenant ledger entry",
+            BusinessKey = "dashboard-bigint-ledger",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = 1,
+        });
+        _db.SecurityDepositEntries.Add(new SecurityDepositEntry
+        {
+            Id = (long)int.MaxValue + 2,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt,
+            Direction = SecurityDepositDirection.Increase,
+            Amount = 1_200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(baseTime),
+            PostedAtUtc = baseTime,
+            BusinessKey = "dashboard-bigint-deposit",
+            Description = "Bigint security deposit entry",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = 1,
+        });
+        _db.SaveChanges();
+
+        // This unrelated recent row forces the full entity UNION to execute while its label
+        // remains a normal int-keyed lookup and the public response contract stays unchanged.
+        _db.AtomicAuditLogs.Add(Audit(
+            nameof(Property), seeded.Property.Id, AuditLogOperation.Updated, baseTime, -60));
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.RecentActivity.Should().Contain(row =>
+            row.Type == nameof(Property)
+            && row.EntityId == seeded.Property.Id
+            && row.Label == "Maple");
+    }
+
+    [Fact]
     public async Task Dashboard_GroupsKpisAndPreservesKpiValues()
     {
         SeedActivityGraph();

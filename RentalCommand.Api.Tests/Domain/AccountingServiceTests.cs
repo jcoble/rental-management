@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Moq;
+using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
@@ -524,6 +525,143 @@ public class AccountingServiceTests : IAsyncLifetime
         bankSql.Should().Contain("\"BankConnections\"")
             .And.NotContain("UNION ALL",
                 "bank facts must be fetched once for page expense ids, outside the base union");
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_SelectsHigherIdForEqualReceiptAndBankTimestamps()
+    {
+        var now = new DateTime(2027, 2, 17, 12, 0, 0, DateTimeKind.Utc);
+        var (property, _) = SeedPropertyAndLease(now);
+        var expense = SeedExpense(
+            "Equal timestamp tie expense",
+            225m,
+            now,
+            ScheduleECategory.Repairs,
+            ExpenseStatus.Paid,
+            property.Id);
+
+        var uploadedAt = now.AddHours(-1);
+        _db.StoredFiles.AddRange(
+            new StoredFile
+            {
+                Id = 1_818_001,
+                PortfolioId = PortfolioId,
+                FileName = "older-id-receipt.pdf",
+                FilePath = "accounting/tie/older-id-receipt.pdf",
+                ContentType = "application/pdf",
+                FileSize = 128,
+                EntityType = "Expense",
+                EntityId = expense.Id,
+                UploadedAt = uploadedAt,
+            },
+            new StoredFile
+            {
+                Id = 1_818_002,
+                PortfolioId = PortfolioId,
+                FileName = "higher-id-receipt.png",
+                FilePath = "accounting/tie/higher-id-receipt.png",
+                ContentType = "image/png",
+                FileSize = 256,
+                EntityType = "Expense",
+                EntityId = expense.Id,
+                UploadedAt = uploadedAt,
+            });
+
+        var lowerBank = new BankConnection
+        {
+            PortfolioId = PortfolioId,
+            Provider = "Plaid",
+            InstitutionName = "Lower Id Bank",
+            AccountName = "Checking",
+            Status = "Active",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // The production schema normally prevents duplicate matched expense targets. Remove that
+        // guard only from this isolated test database to exercise legacy duplicate facts at the read
+        // boundary, where equal timestamps must still resolve deterministically.
+        await using (var adminConnection = new NpgsqlConnection(_context.ConnectionString))
+        {
+            await adminConnection.OpenAsync();
+            await using var dropIndex = adminConnection.CreateCommand();
+            dropIndex.CommandText = "DROP INDEX \"IX_BankTransactions_PortfolioId_MatchedExpenseId\";";
+            await dropIndex.ExecuteNonQueryAsync();
+        }
+        var higherBank = new BankConnection
+        {
+            PortfolioId = PortfolioId,
+            Provider = "Plaid",
+            InstitutionName = "Higher Id Bank",
+            AccountName = "Checking",
+            Status = "Active",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.BankConnections.AddRange(lowerBank, higherBank);
+        _db.SaveChanges();
+
+        var postedAt = now.AddMinutes(-30);
+        _db.BankTransactions.AddRange(
+            new BankTransaction
+            {
+                Id = 1_828_001,
+                PortfolioId = PortfolioId,
+                BankConnectionId = lowerBank.Id,
+                ProviderTransactionId = "tie-lower-id",
+                PostedAt = postedAt,
+                Description = "Lower id match",
+                MerchantName = "Lower",
+                Amount = -225m,
+                IsoCurrencyCode = "USD",
+                Category = "Withdrawal",
+                MatchStatus = "Matched",
+                MatchedExpenseId = expense.Id,
+                CreatedAt = postedAt,
+                UpdatedAt = postedAt,
+            },
+            new BankTransaction
+            {
+                Id = 1_828_002,
+                PortfolioId = PortfolioId,
+                BankConnectionId = higherBank.Id,
+                ProviderTransactionId = "tie-higher-id",
+                PostedAt = postedAt,
+                Description = "Higher id match",
+                MerchantName = "Higher",
+                Amount = -225m,
+                IsoCurrencyCode = "USD",
+                Category = "Withdrawal",
+                MatchStatus = "Matched",
+                MatchedExpenseId = expense.Id,
+                CreatedAt = postedAt,
+                UpdatedAt = postedAt,
+            });
+        _db.SaveChanges();
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery
+            {
+                Kind = "Expense",
+                Take = 20,
+            },
+            CancellationToken.None);
+
+        var row = result.Items.Should().ContainSingle(item => item.Id == expense.Id).Subject;
+        row.HasReceipt.Should().BeTrue();
+        row.ReceiptIsImage.Should().BeTrue("the higher-id receipt wins an UploadedAt tie");
+        row.Reconciled.Should().BeTrue();
+        row.ClearedBankName.Should().Be("Higher Id Bank");
+        row.ClearedAt.Should().Be(postedAt);
+
+        var receiptSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
+        receiptSql.Should().Contain("ORDER BY")
+            .And.Contain("\"UploadedAt\" DESC")
+            .And.Contain("\"Id\" DESC");
+        var bankSql = _commands.Single(sql => sql.Contains("\"BankTransactions\""));
+        bankSql.Should().Contain("\"PostedAt\" DESC")
+            .And.Contain("\"Id\" DESC");
     }
 
     [Fact]
