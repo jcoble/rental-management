@@ -96,6 +96,23 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
         }
 
         _commands.Reset();
+        var januaryOnly = await service.ListEntriesPageAsync(_scope,
+            new TenantLedgerEntryGlobalListQuery
+            {
+                PropertyId = _ledger.PropertyId,
+                UnitId = _ledger.UnitId,
+                Search = "ledger filter",
+                Sort = "effectiveOn",
+                Take = 3,
+            });
+        januaryOnly.Items.Should().HaveCount(3);
+        januaryOnly.Items.Should().OnlyContain(item => item.EffectiveOn.Month == 1);
+        januaryOnly.Items.Should().OnlyContain(item =>
+            item.MonthCharges == 100m && item.MonthPaymentsAndCredits == 125m,
+            "represented-month totals must cover every filtered January entry, not only a page aggregate");
+        _commands.Sql.Should().HaveCount(3);
+
+        _commands.Reset();
         var outOfRange = await service.ListEntriesPageAsync(_scope,
             new TenantLedgerEntryGlobalListQuery
             {
@@ -110,14 +127,35 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
         outOfRange.Items.Should().BeEmpty();
         outOfRange.TotalCount.Should().Be(2,
             "the filtered count must not depend on the page containing a first item");
+
+        _commands.Reset();
+        var defaultPage = await service.ListEntriesPageAsync(_scope,
+            new TenantLedgerEntryGlobalListQuery
+            {
+                Sort = "-effectiveOn",
+                Take = 25,
+            });
+        var defaultPageSql = _commands.Sql.ToArray();
+        defaultPage.Items.Should().HaveCount(4);
+        defaultPageSql.Should().HaveCount(3);
+        defaultPageSql[0].Should().NotContain("vw_lease_management_lifecycle");
+        defaultPageSql[1].Should().NotContain("vw_lease_management_lifecycle");
+        defaultPageSql[2].Should().NotContain("search_lifecycle",
+            "the represented-month scan must stay slim when search does not need display fields");
+
         pageSql.Should().HaveCount(3);
         pageSql[0].Should().ContainEquivalentOf("count(*)");
-        pageSql[1].Should().ContainEquivalentOf("sum(").And.Contain("GROUP BY");
-        pageSql[2].Should().Contain("ORDER BY").And.Contain("LIMIT").And.Contain("OFFSET");
+        pageSql[1].Should().Contain("ORDER BY").And.Contain("LIMIT").And.Contain("OFFSET");
+        pageSql[1].Should().Contain("TenantLedgerEntryId");
+        pageSql[2].Should().Contain("page_entries AS MATERIALIZED");
+        pageSql[2].Should().Contain("page_months").And.Contain("month_totals");
+        pageSql[2].Should().ContainEquivalentOf("sum(").And.Contain("GROUP BY");
+        pageSql[2].Should().Contain("= ANY");
+        pageSql[2].Should().Contain("array_position");
         pageSql[0].Should().NotContainEquivalentOf("sum(");
         pageSql[0].Should().NotContain("ReversesEntryId");
+        pageSql[1].Should().NotContainEquivalentOf("sum(");
         pageSql[1].Should().NotContain("ReversesEntryId");
-        pageSql[2].Should().NotContainEquivalentOf("sum(");
         pageSql[2].Should().Contain("ReversesEntryId").And.Contain("EXISTS");
         foreach (var sql in pageSql)
         {
