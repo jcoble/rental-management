@@ -234,6 +234,16 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         executedDemo.ExecutedArtifact!.ByteLength.Should().BeGreaterThan(0);
         executedDemo.LeaseManagement!.PossessionAgreementExceptionReason.Should().BeNull();
 
+        var seededAddendumTemplate = await _ctx.Db.DocumentTemplates
+            .SingleAsync(template => template.PortfolioId == 2
+                && template.Name == "Standard lease addendum page");
+        seededAddendumTemplate.Kind.Should().Be(DocumentTemplateKind.Lease);
+        seededAddendumTemplate.Status.Should().Be(DocumentTemplateStatus.Active);
+        seededAddendumTemplate.ArchivedAtUtc.Should().BeNull();
+        seededAddendumTemplate.PropertyId.Should().BeNull();
+        seededAddendumTemplate.IsSandboxSeeded.Should().BeTrue();
+        seededAddendumTemplate.OriginalStoredFileId.Should().Be(executedDemo.IssuedArtifact.StoredFileId);
+
         var noAgreementDemo = await _ctx.Db.LeaseManagements
             .Include(relationship => relationship.Agreements)
             .Include(relationship => relationship.TenantAccount)
@@ -320,11 +330,17 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, "seed-idempotency", CancellationToken.None);
         var firstCount = await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1);
         firstCount.Should().BeGreaterThan(0);
+        (await _ctx.Db.DocumentTemplates.CountAsync(template =>
+            template.PortfolioId == 1
+            && template.Name == "Standard lease addendum page")).Should().Be(1);
 
         // An exact retry reuses the completed receipt and does not duplicate the graph or outbox.
         await seeder.SeedPortfolioAsync(
             1, "seed-idempotency", CancellationToken.None);
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1)).Should().Be(firstCount);
+        (await _ctx.Db.DocumentTemplates.CountAsync(template =>
+            template.PortfolioId == 1
+            && template.Name == "Standard lease addendum page")).Should().Be(1);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "sandbox.demo-seed"
             && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
@@ -1007,6 +1023,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             FinalizeDemoLegalDocumentCommand,
             FinalizeDemoLegalDocumentResult,
             DemoLegalDocumentFinalizeCommandHandler>();
+        services.AddAtomicCommandHandler<
+            EnsureDemoLeaseAddendumTemplateCommand,
+            EnsureDemoLeaseAddendumTemplateResult,
+            DemoLeaseAddendumTemplateCommandHandler>();
         services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
