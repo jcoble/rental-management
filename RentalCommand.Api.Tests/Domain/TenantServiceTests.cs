@@ -194,6 +194,26 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_PreservesActiveAndHistoricalRelationshipCounts()
+    {
+        var tenant = SeedTenant("Harper", "Resident", activeRelationshipCount: 2);
+        SeedRelationshipMembership(tenant, occupying: false);
+
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        var response = result.Items.Should().ContainSingle().Subject;
+        response.ActiveLeaseCount.Should().Be(2);
+        response.LeaseHistoryCount.Should().Be(3);
+        response.CurrentPropertyName.Should().Be("Harper Property 0");
+        response.CurrentUnitNumber.Should().Be("1A");
+    }
+
+    [Fact]
     public async Task ListPageAsync_TokenizesHyphenatedSearchTermsInSql()
     {
         SeedTenant("Avery", "Ellis", activeRelationshipCount: 0);

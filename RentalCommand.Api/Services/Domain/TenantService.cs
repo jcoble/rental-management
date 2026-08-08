@@ -149,91 +149,57 @@ public class TenantService : ITenantService
         TenantListQuery query,
         CancellationToken ct)
     {
+        // Keep one grouped relation for all current-resident filters, active-count sorting, and
+        // page projection. It remains an IQueryable, so grouping and relationship work stay in SQL.
+        var currentRelationships = BuildGroupedCurrentRelationshipRelation(
+            portfolioId,
+            query.UnitId,
+            query.PropertyId);
 
         if (query.UnitId.HasValue)
         {
-            var unitId = query.UnitId.Value;
-            var propertyId = query.PropertyId;
+            var workOrderTenantIds = BuildWorkOrderTenantIdsQuery(
+                portfolioId,
+                query.UnitId,
+                query.PropertyId);
             q = q.Where(tenant =>
-                _db.LeaseManagementParties.Any(party =>
-                    party.PortfolioId == portfolioId
-                    && party.TenantId == tenant.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.UnitId == unitId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                || _db.WorkOrders.Any(workOrder =>
-                    workOrder.PortfolioId == portfolioId
-                    && workOrder.TenantId == tenant.Id
-                    && workOrder.UnitId == unitId
-                    && (!propertyId.HasValue || workOrder.PropertyId == propertyId.Value)
-                    && _db.LeaseManagementParties.Any(party =>
-                        party.PortfolioId == portfolioId
-                        && party.TenantId == tenant.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && party.LeaseManagement != null
-                        && party.LeaseManagement.UnitId == unitId
-                        && (!propertyId.HasValue || party.LeaseManagement.PropertyId == propertyId.Value)
-                        && party.LeaseManagement.CanceledAtUtc == null
-                        && party.LeaseManagement.PossessionReturnedAtUtc == null)));
+                currentRelationships
+                    .Where(row => row.HasCurrentUnitMatch)
+                    .Select(row => row.TenantId)
+                    .Contains(tenant.Id)
+                || workOrderTenantIds.Contains(tenant.Id));
         }
         else if (query.PropertyId.HasValue)
         {
-            var propertyId = query.PropertyId.Value;
+            var workOrderTenantIds = BuildWorkOrderTenantIdsQuery(
+                portfolioId,
+                unitId: null,
+                query.PropertyId);
             q = q.Where(tenant =>
-                _db.LeaseManagementParties.Any(party =>
-                    party.PortfolioId == portfolioId
-                    && party.TenantId == tenant.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.PropertyId == propertyId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                || _db.WorkOrders.Any(workOrder =>
-                    workOrder.PortfolioId == portfolioId
-                    && workOrder.TenantId == tenant.Id
-                    && workOrder.PropertyId == propertyId
-                    && _db.LeaseManagementParties.Any(party =>
-                        party.PortfolioId == portfolioId
-                        && party.TenantId == tenant.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && party.LeaseManagement != null
-                        && party.LeaseManagement.PropertyId == propertyId
-                        && party.LeaseManagement.CanceledAtUtc == null
-                        && party.LeaseManagement.PossessionReturnedAtUtc == null)));
+                currentRelationships
+                    .Where(row => row.HasCurrentPropertyMatch)
+                    .Select(row => row.TenantId)
+                    .Contains(tenant.Id)
+                || workOrderTenantIds.Contains(tenant.Id));
         }
 
         if (query.AvailableForLease == true)
         {
-            var includeLeaseManagementId = query.IncludeLeaseManagementId;
-            q = q.Where(tenant =>
-                (includeLeaseManagementId.HasValue && _db.LeaseManagementParties.Any(party =>
-                    party.PortfolioId == portfolioId
-                    && party.LeaseManagementId == includeLeaseManagementId.Value
-                    && party.TenantId == tenant.Id))
-                || !_db.LeaseManagementParties.Any(party =>
-                    party.PortfolioId == portfolioId
-                    && party.TenantId == tenant.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
+            if (query.IncludeLeaseManagementId is { } includeLeaseManagementId)
+            {
+                var includedTenantIds = _db.LeaseManagementParties
+                    .AsNoTracking()
+                    .Where(party => party.PortfolioId == portfolioId
+                        && party.LeaseManagementId == includeLeaseManagementId)
+                    .Select(party => party.TenantId)
+                    .Distinct();
+                q = q.Where(tenant => includedTenantIds.Contains(tenant.Id)
+                    || !currentRelationships.Any(row => row.TenantId == tenant.Id));
+            }
+            else
+            {
+                q = q.Where(tenant => !currentRelationships.Any(row => row.TenantId == tenant.Id));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -248,72 +214,46 @@ public class TenantService : ITenantService
                 foreach (var token in tokens)
                 {
                     var pattern = $"%{token}%";
-                    q = q.Where(t =>
-                        EF.Functions.Like(t.FirstName.ToLower(), pattern) ||
-                        EF.Functions.Like(t.LastName.ToLower(), pattern) ||
-                        EF.Functions.Like((t.FirstName + " " + t.LastName).ToLower(), pattern) ||
-                        (t.Email != null && EF.Functions.Like(t.Email.ToLower(), pattern)) ||
-                        (t.Phone != null && EF.Functions.Like(t.Phone.ToLower(), pattern)));
+                    q = q.Where(tenant =>
+                        EF.Functions.Like(tenant.FirstName.ToLower(), pattern) ||
+                        EF.Functions.Like(tenant.LastName.ToLower(), pattern) ||
+                        EF.Functions.Like((tenant.FirstName + " " + tenant.LastName).ToLower(), pattern) ||
+                        (tenant.Email != null && EF.Functions.Like(tenant.Email.ToLower(), pattern)) ||
+                        (tenant.Phone != null && EF.Functions.Like(tenant.Phone.ToLower(), pattern)));
                 }
             }
         }
 
-        q = query.SortField switch
-        {
-            "name" => query.SortDescending ? q.OrderByDescending(t => t.LastName).ThenByDescending(t => t.FirstName) : q.OrderBy(t => t.LastName).ThenBy(t => t.FirstName),
-            "firstname" => query.SortDescending ? q.OrderByDescending(t => t.FirstName) : q.OrderBy(t => t.FirstName),
-            "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
-            "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
-            "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
-            "activeleasecount" => query.SortDescending
-                ? q.OrderByDescending(tenant => _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId
-                        && party.TenantId == tenant.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && _db.UnitOccupancyProjections.Any(occupancy =>
-                            occupancy.PortfolioId == portfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                            lifecycle.PortfolioId == portfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count()).ThenBy(tenant => tenant.LastName).ThenBy(tenant => tenant.FirstName)
-                : q.OrderBy(tenant => _db.LeaseManagementParties
-                    .Where(party => party.PortfolioId == portfolioId
-                        && party.TenantId == tenant.Id
-                        && party.Role != LeaseManagementPartyRole.Guarantor
-                        && _db.UnitOccupancyProjections.Any(occupancy =>
-                            occupancy.PortfolioId == portfolioId
-                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                            lifecycle.PortfolioId == portfolioId
-                            && lifecycle.LeaseManagementId == party.LeaseManagementId
-                            && party.EffectiveFrom <= lifecycle.BusinessDate
-                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                    .Select(party => party.LeaseManagementId)
-                    .Distinct()
-                    .Count()).ThenBy(tenant => tenant.LastName).ThenBy(tenant => tenant.FirstName),
-            "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
-            "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
-            _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
-        };
-
         var totalCount = await q.CountAsync(ct);
 
-        // Both counts are correlated, DISTINCT LeaseManagement aggregates in this page statement.
-        // Agreement versions never inflate relationship history and no IDs are materialized for a
-        // follow-up IN query.
-        var rows = await BuildRelationshipCountQuery(
-                q.Skip(query.NormalizedSkip).Take(query.NormalizedTake),
-                portfolioId)
+        var rows = BuildTenantRelationshipReadQuery(
+            q,
+            BuildRelationshipHistoryRelation(portfolioId),
+            currentRelationships);
+
+        rows = query.SortField switch
+        {
+            "name" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.LastName).ThenByDescending(row => row.Entity.FirstName) : rows.OrderBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName),
+            "firstname" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.FirstName) : rows.OrderBy(row => row.Entity.FirstName),
+            "lastname" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.LastName) : rows.OrderBy(row => row.Entity.LastName),
+            "email" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.Email) : rows.OrderBy(row => row.Entity.Email),
+            "phone" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.Phone) : rows.OrderBy(row => row.Entity.Phone),
+            "activeleasecount" => query.SortDescending
+                ? rows.OrderByDescending(row => row.ActiveLeaseCount).ThenBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName)
+                : rows.OrderBy(row => row.ActiveLeaseCount).ThenBy(row => row.Entity.LastName).ThenBy(row => row.Entity.FirstName),
+            "createdat" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.CreatedAt) : rows.OrderBy(row => row.Entity.CreatedAt),
+            "updatedat" => query.SortDescending ? rows.OrderByDescending(row => row.Entity.UpdatedAt) : rows.OrderBy(row => row.Entity.UpdatedAt),
+            _ => query.SortDescending ? rows.OrderByDescending(row => row.Entity.CreatedAt) : rows.OrderBy(row => row.Entity.CreatedAt),
+        };
+
+        var pageRows = await rows
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
         return new TenantListResponse
         {
-            Items = rows.Select(r =>
+            Items = pageRows.Select(r =>
             {
                 var response = TenantResponse.FromEntity(r.Entity);
                 ApplyDeleteState(
@@ -330,105 +270,256 @@ public class TenantService : ITenantService
     }
 
     /// <summary>
-    /// Adds canonical relationship counts as correlated PostgreSQL subqueries. Agreement versions
-    /// do not inflate history; an active count requires current effective resident membership in a
+    /// Adds one grouped, set-based relationship relation to a tenant query. Agreement versions do
+    /// not inflate history; an active count requires current effective resident membership in a
     /// LeaseManagement that the occupancy projection identifies as possessing its Unit.
     /// </summary>
     internal IQueryable<TenantRelationshipReadRow> BuildRelationshipCountQuery(
         IQueryable<Tenant> tenants,
-        int portfolioId) =>
-        tenants.Select(t => new TenantRelationshipReadRow
+        int portfolioId)
+    {
+        var currentRelationships = BuildGroupedCurrentRelationshipRelation(portfolioId, null, null);
+        return BuildTenantRelationshipReadQuery(
+            tenants,
+            BuildRelationshipHistoryRelation(portfolioId),
+            currentRelationships);
+    }
+
+    private IQueryable<TenantRelationshipReadRow> BuildTenantRelationshipReadQuery(
+        IQueryable<Tenant> tenants,
+        IQueryable<TenantRelationshipHistoryAggregateRow> historyCounts,
+        IQueryable<TenantCurrentRelationshipAggregateRow> currentRelationships)
+    {
+        return
+            from tenant in tenants
+            join history in historyCounts
+                on new { tenant.PortfolioId, TenantId = tenant.Id }
+                equals new { history.PortfolioId, history.TenantId }
+                into historyGroup
+            from history in historyGroup.DefaultIfEmpty()
+            join current in currentRelationships
+                on new { tenant.PortfolioId, TenantId = tenant.Id }
+                equals new { current.PortfolioId, current.TenantId }
+                into currentGroup
+            from current in currentGroup.DefaultIfEmpty()
+            select new TenantRelationshipReadRow
+            {
+                Entity = tenant,
+                ActiveLeaseCount = (int?)current.ActiveLeaseCount ?? 0,
+                LeaseHistoryCount = (int?)history.LeaseHistoryCount ?? 0,
+                CurrentPropertyId = current.CurrentPropertyId,
+                CurrentPropertyName = current.CurrentPropertyName,
+                CurrentUnitId = current.CurrentUnitId,
+                CurrentUnitNumber = current.CurrentUnitNumber,
+            };
+    }
+
+    private IQueryable<TenantCurrentRelationshipAggregateRow> BuildGroupedCurrentRelationshipRelation(
+        int portfolioId,
+        int? unitId,
+        int? propertyId)
+    {
+        var targetUnitId = unitId ?? -1;
+        var targetPropertyId = propertyId ?? -1;
+
+        var currentRelationshipRows = (
+            from party in _db.LeaseManagementParties.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { party.PortfolioId, Id = party.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { management.PortfolioId, Id = management.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join unit in _db.Units.AsNoTracking()
+                on new { management.PortfolioId, Id = management.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { party.PortfolioId, LeaseManagementId = (int?)party.LeaseManagementId }
+                equals new { occupancy.PortfolioId, LeaseManagementId = occupancy.CurrentLeaseManagementId }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { party.PortfolioId, LeaseManagementId = party.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            where party.PortfolioId == portfolioId
+                && party.Role != LeaseManagementPartyRole.Guarantor
+                && party.EffectiveFrom <= lifecycle.BusinessDate
+            where party.EffectiveThrough == null
+                || party.EffectiveThrough >= lifecycle.BusinessDate
+            select new TenantCurrentRelationshipRow
+            {
+                PortfolioId = party.PortfolioId,
+                TenantId = party.TenantId,
+                LeaseManagementId = party.LeaseManagementId,
+                PropertyId = management.PropertyId,
+                PropertyName = property.Name,
+                UnitId = management.UnitId,
+                UnitNumber = unit.UnitNumber,
+            }).Distinct();
+
+        var currentCountGroups =
+            from row in currentRelationshipRows
+            group row by new { row.PortfolioId, row.TenantId } into current
+            select new
+            {
+                PortfolioId = current.Key.PortfolioId,
+                TenantId = current.Key.TenantId,
+                ActiveLeaseCount = current
+                    .Select(row => row.LeaseManagementId)
+                    .Distinct()
+                    .Count(),
+                HasCurrentRelationship = current.Any(),
+                HasCurrentUnitMatch = unitId.HasValue
+                    && current.Any(row =>
+                        row.UnitId == targetUnitId
+                        && (!propertyId.HasValue || row.PropertyId == targetPropertyId)),
+                HasCurrentPropertyMatch = propertyId.HasValue
+                    && current.Any(row => row.PropertyId == targetPropertyId),
+            };
+
+        // Select the complete first relationship row once per tenant. Keeping the identity fields
+        // together prevents EF from emitting one ordered relationship subquery per response field.
+        var minimumPropertyNames =
+            from row in currentRelationshipRows
+            group row by new { row.PortfolioId, row.TenantId } into current
+            select new
+            {
+                current.Key.PortfolioId,
+                current.Key.TenantId,
+                PropertyName = current.Min(row => row.PropertyName),
+            };
+
+        var minimumPropertyRows =
+            from row in currentRelationshipRows
+            join minimum in minimumPropertyNames
+                on new { row.PortfolioId, row.TenantId, row.PropertyName }
+                equals new { minimum.PortfolioId, minimum.TenantId, minimum.PropertyName }
+            select row;
+
+        var minimumUnitNumbers =
+            from row in minimumPropertyRows
+            group row by new { row.PortfolioId, row.TenantId, row.PropertyName } into current
+            select new
+            {
+                current.Key.PortfolioId,
+                current.Key.TenantId,
+                current.Key.PropertyName,
+                UnitNumber = current.Min(row => row.UnitNumber),
+            };
+
+        var minimumUnitRows =
+            from row in minimumPropertyRows
+            join minimum in minimumUnitNumbers
+                on new { row.PortfolioId, row.TenantId, row.PropertyName, row.UnitNumber }
+                equals new { minimum.PortfolioId, minimum.TenantId, minimum.PropertyName, minimum.UnitNumber }
+            select row;
+
+        var minimumLeaseManagementIds =
+            from row in minimumUnitRows
+            group row by new { row.PortfolioId, row.TenantId, row.PropertyName, row.UnitNumber } into current
+            select new
+            {
+                current.Key.PortfolioId,
+                current.Key.TenantId,
+                current.Key.PropertyName,
+                current.Key.UnitNumber,
+                LeaseManagementId = current.Min(row => row.LeaseManagementId),
+            };
+
+        var currentIdentityRows =
+            from row in minimumUnitRows
+            join minimum in minimumLeaseManagementIds
+                on new { row.PortfolioId, row.TenantId, row.PropertyName, row.UnitNumber, row.LeaseManagementId }
+                equals new { minimum.PortfolioId, minimum.TenantId, minimum.PropertyName, minimum.UnitNumber, minimum.LeaseManagementId }
+            select row;
+
+        var currentGroups =
+            from counts in currentCountGroups
+            join identity in currentIdentityRows
+                on new { counts.PortfolioId, counts.TenantId }
+                equals new { identity.PortfolioId, identity.TenantId }
+            select new TenantCurrentRelationshipAggregateRow
+            {
+                PortfolioId = counts.PortfolioId,
+                TenantId = counts.TenantId,
+                ActiveLeaseCount = counts.ActiveLeaseCount,
+                HasCurrentRelationship = counts.HasCurrentRelationship,
+                HasCurrentUnitMatch = counts.HasCurrentUnitMatch,
+                HasCurrentPropertyMatch = counts.HasCurrentPropertyMatch,
+                CurrentPropertyId = identity.PropertyId,
+                CurrentPropertyName = identity.PropertyName,
+                CurrentUnitId = identity.UnitId,
+                CurrentUnitNumber = identity.UnitNumber,
+            };
+
+        return currentGroups;
+    }
+
+    private IQueryable<TenantRelationshipHistoryAggregateRow> BuildRelationshipHistoryRelation(int portfolioId) =>
+        from party in _db.LeaseManagementParties.AsNoTracking()
+        where party.PortfolioId == portfolioId
+        group party by new { party.PortfolioId, party.TenantId } into parties
+        select new TenantRelationshipHistoryAggregateRow
         {
-            Entity = t,
-            ActiveLeaseCount = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.TenantId == t.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+            PortfolioId = parties.Key.PortfolioId,
+            TenantId = parties.Key.TenantId,
+            LeaseHistoryCount = parties
                 .Select(party => party.LeaseManagementId)
                 .Distinct()
                 .Count(),
-            LeaseHistoryCount = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId && party.TenantId == t.Id)
-                .Select(party => party.LeaseManagementId)
-                .Distinct()
-                .Count(),
-            CurrentPropertyId = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.TenantId == t.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                .OrderBy(party => party.LeaseManagement!.Property!.Name)
-                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
-                .ThenBy(party => party.LeaseManagementId)
-                .Select(party => (int?)party.LeaseManagement!.PropertyId)
-                .FirstOrDefault(),
-            CurrentPropertyName = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.TenantId == t.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                .OrderBy(party => party.LeaseManagement!.Property!.Name)
-                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
-                .ThenBy(party => party.LeaseManagementId)
-                .Select(party => party.LeaseManagement!.Property!.Name)
-                .FirstOrDefault(),
-            CurrentUnitId = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.TenantId == t.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                .OrderBy(party => party.LeaseManagement!.Property!.Name)
-                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
-                .ThenBy(party => party.LeaseManagementId)
-                .Select(party => (int?)party.LeaseManagement!.UnitId)
-                .FirstOrDefault(),
-            CurrentUnitNumber = _db.LeaseManagementParties
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.TenantId == t.Id
-                    && party.Role != LeaseManagementPartyRole.Guarantor
-                    && _db.UnitOccupancyProjections.Any(occupancy =>
-                        occupancy.PortfolioId == portfolioId
-                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                        lifecycle.PortfolioId == portfolioId
-                        && lifecycle.LeaseManagementId == party.LeaseManagementId
-                        && party.EffectiveFrom <= lifecycle.BusinessDate
-                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
-                .OrderBy(party => party.LeaseManagement!.Property!.Name)
-                .ThenBy(party => party.LeaseManagement!.Unit!.UnitNumber)
-                .ThenBy(party => party.LeaseManagementId)
-                .Select(party => party.LeaseManagement!.Unit!.UnitNumber)
-                .FirstOrDefault(),
-        });
+        };
+
+    private IQueryable<int> BuildWorkOrderTenantIdsQuery(
+        int portfolioId,
+        int? unitId,
+        int? propertyId)
+    {
+        var workOrderMatches =
+            from workOrder in _db.WorkOrders.AsNoTracking()
+            join party in _db.LeaseManagementParties.AsNoTracking()
+                on new
+                {
+                    workOrder.PortfolioId,
+                    TenantId = workOrder.TenantId,
+                }
+                equals new
+                {
+                    party.PortfolioId,
+                    TenantId = (int?)party.TenantId,
+                }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { party.PortfolioId, Id = party.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            where workOrder.PortfolioId == portfolioId
+                && workOrder.TenantId != null
+                && party.Role != LeaseManagementPartyRole.Guarantor
+                && management.CanceledAtUtc == null
+                && management.PossessionReturnedAtUtc == null
+            select new TenantWorkOrderMatchRow
+            {
+                TenantId = workOrder.TenantId!.Value,
+                WorkOrderUnitId = workOrder.UnitId,
+                WorkOrderPropertyId = workOrder.PropertyId,
+                ManagementUnitId = management.UnitId,
+                ManagementPropertyId = management.PropertyId,
+            };
+
+        if (unitId is { } targetUnitId)
+        {
+            workOrderMatches = workOrderMatches.Where(row =>
+                row.WorkOrderUnitId == targetUnitId
+                && row.ManagementUnitId == targetUnitId);
+        }
+
+        if (propertyId is { } targetPropertyId)
+        {
+            workOrderMatches = workOrderMatches.Where(row =>
+                row.WorkOrderPropertyId == targetPropertyId
+                && row.ManagementPropertyId == targetPropertyId);
+        }
+
+        return workOrderMatches
+            .Select(row => row.TenantId)
+            .Distinct();
+    }
 
     internal sealed class TenantRelationshipReadRow
     {
@@ -439,6 +530,47 @@ public class TenantService : ITenantService
         public string? CurrentPropertyName { get; init; }
         public int? CurrentUnitId { get; init; }
         public string? CurrentUnitNumber { get; init; }
+    }
+
+    private sealed class TenantCurrentRelationshipRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public int UnitId { get; init; }
+        public string UnitNumber { get; init; } = string.Empty;
+    }
+
+    private sealed class TenantRelationshipHistoryAggregateRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantId { get; init; }
+        public int LeaseHistoryCount { get; init; }
+    }
+
+    private sealed class TenantCurrentRelationshipAggregateRow
+    {
+        public int PortfolioId { get; init; }
+        public int TenantId { get; init; }
+        public int ActiveLeaseCount { get; init; }
+        public int? CurrentPropertyId { get; init; }
+        public string? CurrentPropertyName { get; init; }
+        public int? CurrentUnitId { get; init; }
+        public string? CurrentUnitNumber { get; init; }
+        public bool HasCurrentRelationship { get; init; }
+        public bool HasCurrentUnitMatch { get; init; }
+        public bool HasCurrentPropertyMatch { get; init; }
+    }
+
+    private sealed class TenantWorkOrderMatchRow
+    {
+        public int TenantId { get; init; }
+        public int? WorkOrderUnitId { get; init; }
+        public int? WorkOrderPropertyId { get; init; }
+        public int ManagementUnitId { get; init; }
+        public int ManagementPropertyId { get; init; }
     }
 
     private static TenantListQuery ToTenantListQuery(ListQuery query) => new()
