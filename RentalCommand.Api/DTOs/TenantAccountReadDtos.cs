@@ -172,6 +172,7 @@ public sealed class TenantLedgerEntryGlobalResponse
     public int? LeaseAgreementId { get; init; }
     public int? LeaseAddendumId { get; init; }
     public long? ReversesEntryId { get; init; }
+    public bool HasReversal { get; init; }
     public long? ProviderPaymentAttemptId { get; init; }
     public int? SourceStoredFileId { get; init; }
     public int CreatedByUserId { get; init; }
