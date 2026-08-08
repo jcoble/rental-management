@@ -36,10 +36,10 @@ public sealed class AccountingFoundationModelTests
             {
                 nameof(JournalEntry.PortfolioId),
                 nameof(JournalEntry.SourceType),
-                nameof(JournalEntry.SourceId),
+                nameof(JournalEntry.SourceBusinessKey),
                 nameof(JournalEntry.PostingRuleVersion),
             }));
-        line.FindProperty(nameof(JournalLine.DebitAmount))!.GetPrecision().Should().Be(18);
-        line.FindProperty(nameof(JournalLine.DebitAmount))!.GetScale().Should().Be(2);
+        line.FindProperty(nameof(JournalLine.DebitAmount))!.GetPrecision().Should().Be(22);
+        line.FindProperty(nameof(JournalLine.DebitAmount))!.GetScale().Should().Be(6);
     }
 }
