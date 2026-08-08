@@ -44,6 +44,22 @@ public sealed class FinancialReportPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TrueCashFlow_Returns_ServerMonthlySeries_AndExpandableDetails()
+    {
+        await SeedPropertyAsync("Monthly cash flow");
+        var scope = await SeedScopeAsync("cash-flow-shape@example.test", RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties);
+        var result = await NewService().GetTrueCashFlowAsync(scope, new ReportRangeQuery
+        {
+            From = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(2026, 5, 31, 0, 0, 0, DateTimeKind.Utc),
+        });
+        result.Months.Should().HaveCount(2);
+        result.Months.Select(month => month.Month).Should().Equal("2026-04", "2026-05");
+        result.Properties.Should().OnlyContain(row => row.OperatingExpenseDetails != null && row.DebtServiceDetails != null);
+    }
+
+    [Fact]
     public async Task CapturedPlans_AreWrittenForVerifier()
     {
         var property = await SeedPropertyAsync("Maple");

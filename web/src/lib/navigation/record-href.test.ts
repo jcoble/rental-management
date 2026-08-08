@@ -18,6 +18,13 @@ describe('recordHref', () => {
 		assert.equal(recordHref('payment', { id: 9, unitId: 3 }), '/units/3?tab=money&view=tenant-account&payment=9');
 		assert.equal(recordHref('application', { id: 2, unitId: 3 }), '/units/3?tab=leasing&view=applications&app=2');
 	});
+	it('keeps unit-owned lease management folded into Unit and preserves the generic fallback', () => {
+		assert.equal(
+			recordHref('leaseManagement', { id: 5, unitId: 3 }),
+			'/units/3?tab=tenant-lease&view=agreements&leaseManagement=5',
+		);
+		assert.equal(recordHref('leaseManagement', { id: 5, unitId: null }), '/leases/5');
+	});
 	it('falls back to the generic page when unitId is missing/0', () => {
 		assert.equal(recordHref('expense', { id: 7, unitId: 0 }), '/accounting/expenses/7');
 		assert.equal(recordHref('payment', { id: 9, tenantAccountId: 7 }), '/tenant-accounts/7/entries/9');

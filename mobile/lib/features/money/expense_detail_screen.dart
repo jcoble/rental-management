@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../activity/activity_history_screen.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
 import '../properties/capital_assets_repository.dart';
 import 'expense_models.dart';
 import 'money_format.dart';
@@ -276,6 +278,14 @@ class _ExpenseBody extends ConsumerWidget {
               ),
             ),
         ],
+
+        AccountingImpactCard(
+          sourceId: expense.id,
+          sourceTypes: const [
+            JournalSourceType.billIncurred,
+            JournalSourceType.expensePayment,
+          ],
+        ),
 
         const SizedBox(height: 24),
         if (expense.hasReceipt)

@@ -92,3 +92,15 @@ export const ownerDistributions = {
 			})
 		)
 };
+
+export const ownerContributions = {
+	list: (params?: OwnerDistributionListParams) =>
+		api.get<OwnerDistribution[]>(
+			`/owner-contributions${buildListQuery(params, {
+				ownerEntityId: params?.ownerEntityId,
+				propertyId: params?.propertyId,
+				year: params?.year,
+				status: params?.status
+			})}`
+		)
+};

@@ -25,6 +25,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
@@ -65,6 +66,7 @@
 	);
 	let transactionSkip = $state(0);
 	let reviewSkip = $state(0);
+	let expandedMatchedTransactionId = $state<number | null>(null);
 	let exchangePublicToken = $state('');
 	let exchangeInstitutionName = $state('Plaid Sandbox Bank');
 	let exchangeAccountId = $state('');
@@ -655,6 +657,7 @@
 										{#if transaction.matchStatus === 'Matched'}
 											<div class="flex flex-wrap items-center gap-2">
 												<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
+												<Button size="sm" variant="link" onclick={() => (expandedMatchedTransactionId = expandedMatchedTransactionId === transaction.id ? null : transaction.id)} data-testid="bank-transaction-accounting-{transaction.id}">View matched record</Button>
 												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
@@ -666,6 +669,15 @@
 													</Button>
 												{/if}
 											</div>
+											{#if expandedMatchedTransactionId === transaction.id}
+												<div class="mt-3">
+													{#if transaction.matchedTenantLedgerEntryId}
+														<AccountingImpactCard sourceType="TenantReceipt" sourceId={transaction.matchedTenantLedgerEntryId} />
+													{:else if transaction.matchedExpenseId}
+														<AccountingImpactCard sourceType="ExpensePayment" sourceId={transaction.matchedExpenseId} />
+													{/if}
+												</div>
+											{/if}
 										{:else if transaction.matchStatus === 'Removed'}
 											<div class="flex flex-wrap items-center gap-2">
 												<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>

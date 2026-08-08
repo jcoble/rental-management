@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -12,19 +14,25 @@ public interface IAccountingLedgerReadModelService
         int portfolioId, ChartOfAccountsQuery query, CancellationToken ct = default);
 
     Task<AccountingPage<GeneralLedgerRow>> GetGeneralLedgerAsync(
-        int portfolioId, GeneralLedgerQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, GeneralLedgerQuery query, CancellationToken ct = default);
 
     Task<JournalDetail?> GetJournalDetailAsync(
-        int portfolioId, Guid publicId, CancellationToken ct = default);
+        WorkspaceReadScope scope, Guid publicId, CancellationToken ct = default);
 
     Task<TrialBalanceResponse> GetTrialBalanceAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default);
 
     Task<FinancialStatementResponse> GetBalanceSheetAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default);
 
     Task<FinancialStatementResponse> GetIncomeStatementAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default);
+
+    Task<IReadOnlyList<SourceJournalSummary>> GetSourceJournalsAsync(
+        WorkspaceReadScope scope, SourceJournalQuery query, CancellationToken ct = default);
+
+    Task<MoneyPositionResponse> GetMoneyPositionAsync(
+        WorkspaceReadScope scope, MoneyPositionQuery query, CancellationToken ct = default);
 
     Task<AccountingPage<TenantLedgerRow>?> GetTenantLedgerAsync(
         int portfolioId, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default);
@@ -95,11 +103,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     public async Task<AccountingPage<GeneralLedgerRow>> GetGeneralLedgerAsync(
-        int portfolioId, GeneralLedgerQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, GeneralLedgerQuery query, CancellationToken ct = default)
     {
-        var lines = _db.JournalLines
+        var portfolioId = scope.PortfolioId;
+        var authorizationNowUtc = DateTime.UtcNow;
+        var authorizedLines = _db.JournalLines
             .AsNoTracking()
-            .Where(line => line.JournalEntry!.PortfolioId == portfolioId);
+            .WhereAccountingAuthorized(
+                _db, scope, CapabilityKeys.MoneyBalancesRead, authorizationNowUtc);
+        var lines = authorizedLines;
 
         if (query.AccountId is int accountId)
             lines = lines.Where(line => line.LedgerAccountId == accountId);
@@ -141,6 +153,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             AccountId = line.LedgerAccountId,
             AccountCode = line.LedgerAccount!.Code,
             AccountName = line.LedgerAccount.Name,
+            AccountType = line.LedgerAccount.AccountType,
+            NormalBalance = line.LedgerAccount.NormalBalance,
             DebitAmount = line.DebitAmount,
             CreditAmount = line.CreditAmount,
             Currency = line.JournalEntry.Currency,
@@ -149,8 +163,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             TenantAccountId = line.TenantAccountId,
             OwnerEntityId = line.OwnerEntityId,
             RunningBalance = accountIsSelected
-                ? _db.JournalLines
-                    .Where(previous => previous.JournalEntry!.PortfolioId == portfolioId
+                ? authorizedLines.Where(previous => previous.JournalEntry!.PortfolioId == portfolioId
                         && previous.LedgerAccountId == line.LedgerAccountId
                         && previous.JournalEntry.Currency == line.JournalEntry.Currency
                         && (previous.JournalEntry.EffectiveOn < line.JournalEntry.EffectiveOn
@@ -160,16 +173,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                                         && (previous.JournalEntry.Id < line.JournalEntry.Id
                                             || (previous.JournalEntry.Id == line.JournalEntry.Id
                                                 && previous.Id <= line.Id)))))))
-                    .Select(previous => previous.DebitAmount - previous.CreditAmount)
+                    .Select(previous => line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? previous.DebitAmount - previous.CreditAmount
+                        : previous.CreditAmount - previous.DebitAmount)
                     .Sum()
                 : null,
         });
 
-        var rows = await projected
-            .OrderBy(row => row.EffectiveOn)
-            .ThenBy(row => row.PostedAtUtc)
-            .ThenBy(row => row.JournalEntryPublicId)
-            .ThenBy(row => row.LineId)
+        var ordered = OrderGeneralLedger(projected, query);
+        var rows = await ordered
             .Skip(skip)
             .Take(take)
             .ToListAsync(ct);
@@ -184,11 +196,18 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     public async Task<JournalDetail?> GetJournalDetailAsync(
-        int portfolioId, Guid publicId, CancellationToken ct = default)
+        WorkspaceReadScope scope, Guid publicId, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+            _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
         var header = await _db.JournalEntries
             .AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId && entry.PublicId == publicId)
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                entry.PublicId == publicId &&
+                entry.Lines.Any() &&
+                entry.Lines.All(line => authorizedLines.Any(authorized => authorized.Id == line.Id)))
             .Select(entry => new
             {
                 entry.Id,
@@ -223,6 +242,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 AccountId = line.LedgerAccountId,
                 AccountCode = line.LedgerAccount!.Code,
                 AccountName = line.LedgerAccount.Name,
+                NormalBalance = line.LedgerAccount.NormalBalance,
                 DebitAmount = line.DebitAmount,
                 CreditAmount = line.CreditAmount,
                 Memo = line.Memo,
@@ -267,40 +287,238 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             ReversesJournalEntryPublicId = header.ReversesPublicId,
             ReversalPublicIds = reversalIds,
             AuditLink = $"/api/v1/audits?entityType=JournalEntry&entityId={header.Id}",
-            DocumentIds = [],
+            DocumentIds = await GetSourceDocumentIdsAsync(
+                portfolioId, header.SourceType, header.SourceId, ct),
             BankReconciliationEvidence = await GetBankEvidenceAsync(
                 portfolioId, header.SourceType, header.SourceId, ct),
         };
     }
 
-    public async Task<TrialBalanceResponse> GetTrialBalanceAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SourceJournalSummary>> GetSourceJournalsAsync(
+        WorkspaceReadScope scope,
+        SourceJournalQuery query,
+        CancellationToken ct = default)
     {
-        var lines = FilterStatementLines(portfolioId, query, query.From, query.To);
-        var rows = await lines
-            .GroupBy(line => new
+        var authorizedLines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+            _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
+        return await _db.JournalEntries.AsNoTracking()
+            .Where(entry =>
+                entry.PortfolioId == scope.PortfolioId &&
+                entry.SourceType == query.SourceType &&
+                entry.SourceId == query.SourceId &&
+                entry.Lines.Any() &&
+                entry.Lines.All(line => authorizedLines.Any(authorized => authorized.Id == line.Id)))
+            .OrderByDescending(entry => entry.EffectiveOn)
+            .ThenByDescending(entry => entry.PostedAtUtc)
+            .ThenByDescending(entry => entry.Id)
+            .Select(entry => new SourceJournalSummary
             {
-                line.LedgerAccountId,
-                line.LedgerAccount!.Code,
-                line.LedgerAccount.Name,
-                line.LedgerAccount.AccountType,
-                line.JournalEntry!.Currency,
+                PublicId = entry.PublicId,
+                EffectiveOn = entry.EffectiveOn,
+                PostedAtUtc = entry.PostedAtUtc,
+                SourceType = entry.SourceType,
+                Description = entry.Description,
+                TotalDebits = entry.Lines.Sum(line => line.DebitAmount),
+                TotalCredits = entry.Lines.Sum(line => line.CreditAmount),
+                IsReversal = entry.ReversesJournalEntryId != null,
+                ReversesPublicId = entry.ReversedJournalEntry == null
+                    ? null
+                    : entry.ReversedJournalEntry.PublicId,
+                Lines = entry.Lines
+                    .OrderBy(line => line.Id)
+                    .Select(line => new JournalDetailLine
+                    {
+                        Id = line.Id,
+                        AccountId = line.LedgerAccountId,
+                        AccountCode = line.LedgerAccount.Code,
+                        AccountName = line.LedgerAccount.Name,
+                        NormalBalance = line.LedgerAccount.NormalBalance,
+                        DebitAmount = line.DebitAmount,
+                        CreditAmount = line.CreditAmount,
+                        Memo = line.Memo,
+                        PropertyId = line.PropertyId,
+                        UnitId = line.UnitId,
+                        TenantAccountId = line.TenantAccountId,
+                        OwnerEntityId = line.OwnerEntityId,
+                    })
+                    .ToList(),
             })
-            .Select(group => new TrialBalanceRow
+            .ToListAsync(ct);
+    }
+
+    public async Task<MoneyPositionResponse> GetMoneyPositionAsync(
+        WorkspaceReadScope scope,
+        MoneyPositionQuery query,
+        CancellationToken ct = default)
+    {
+        var asOfUtc = DateTime.UtcNow;
+        var today = DateOnly.FromDateTime(asOfUtc);
+        var from = query.From ?? new DateOnly(today.Year, today.Month, 1);
+        var to = query.To ?? today;
+        if (to < from)
+            throw new ArgumentException("The money-position end date cannot precede its start date.", nameof(query));
+
+        var authorized = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+            _db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
+        var throughAsOf = authorized.Where(line => line.JournalEntry!.EffectiveOn <= to);
+        var position = await throughAsOf.GroupBy(_ => 1)
+            .Select(group => new MoneyPositionSqlRow
             {
-                AccountId = group.Key.LedgerAccountId,
-                AccountCode = group.Key.Code,
-                AccountName = group.Key.Name,
-                AccountType = group.Key.AccountType,
-                DebitBalance = group.Sum(line => line.DebitAmount),
-                CreditBalance = group.Sum(line => line.CreditAmount),
-                Currency = group.Key.Currency,
+                TotalCashOnHand = group.Sum(line => line.LedgerAccount!.IsSystem &&
+                    (line.LedgerAccount.SystemKey == "operating-cash" ||
+                     line.LedgerAccount.SystemKey == "undeposited-funds" ||
+                     line.LedgerAccount.SystemKey == "security-deposit-trust-cash")
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : 0m),
+                TenantDepositsHeld = group.Sum(line => line.LedgerAccount!.IsSystem &&
+                    line.LedgerAccount.SystemKey == "tenant-security-deposits-payable"
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : 0m),
+                RentStillOwed = group.Sum(line => line.LedgerAccount!.IsSystem &&
+                    line.LedgerAccount.SystemKey == "tenant-accounts-receivable"
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : 0m),
+                LoanBalance = group.Sum(line => line.LedgerAccount!.IsSystem &&
+                    line.LedgerAccount.SystemKey == "mortgage-payable"
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : 0m),
+                Assets = group.Sum(line => line.LedgerAccount!.AccountType == AccountType.Asset
+                    ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? line.DebitAmount - line.CreditAmount
+                        : line.CreditAmount - line.DebitAmount
+                    : 0m),
+                Liabilities = group.Sum(line => line.LedgerAccount!.AccountType == AccountType.Liability
+                    ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? line.DebitAmount - line.CreditAmount
+                        : line.CreditAmount - line.DebitAmount
+                    : 0m),
+                ProfitOrLoss = group.Sum(line =>
+                    line.JournalEntry!.EffectiveOn >= from &&
+                    line.JournalEntry.EffectiveOn <= to &&
+                    line.LedgerAccount!.AccountType == AccountType.Income
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : line.JournalEntry.EffectiveOn >= from &&
+                          line.JournalEntry.EffectiveOn <= to &&
+                          line.LedgerAccount!.AccountType == AccountType.Expense
+                            ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                                ? -(line.DebitAmount - line.CreditAmount)
+                                : -(line.CreditAmount - line.DebitAmount)
+                            : 0m),
+            })
+            .SingleOrDefaultAsync(ct) ?? new MoneyPositionSqlRow();
+
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
+        var depositPosition = await (
+                from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { balance.PortfolioId, Id = balance.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                where balance.PortfolioId == scope.PortfolioId &&
+                      authorizedProperties.Any(property =>
+                          property.PortfolioId == management.PortfolioId &&
+                          property.Id == management.PropertyId)
+                select balance)
+            .GroupBy(_ => 1)
+            .Select(group => new DepositPositionSqlRow
+            {
+                TenantDepositsHeld = group.Sum(balance => balance.HeldBalance),
+            })
+            .SingleOrDefaultAsync(ct);
+        var tenantDepositsHeld = depositPosition?.TenantDepositsHeld
+            ?? position.TenantDepositsHeld;
+
+        var cashSystemKeys = new[]
+        {
+            "operating-cash",
+            "undeposited-funds",
+            "security-deposit-trust-cash",
+        };
+        var cashByJournal = authorized
+            .Where(line =>
+                line.JournalEntry!.EffectiveOn >= from &&
+                line.JournalEntry.EffectiveOn <= to &&
+                line.LedgerAccount!.IsSystem &&
+                cashSystemKeys.Contains(line.LedgerAccount.SystemKey!))
+            .GroupBy(line => line.JournalEntryId)
+            .Select(group => new
+            {
+                Net = group.Sum(line => line.DebitAmount - line.CreditAmount),
+            });
+        var movement = await cashByJournal.GroupBy(_ => 1)
+            .Select(group => new CashMovementSqlRow
+            {
+                CashReceived = group.Sum(journal => journal.Net > 0m ? journal.Net : 0m),
+                CashPaid = group.Sum(journal => journal.Net < 0m ? -journal.Net : 0m),
+            })
+            .SingleOrDefaultAsync(ct) ?? new CashMovementSqlRow();
+
+        return new MoneyPositionResponse
+        {
+            AsOfUtc = asOfUtc,
+            FromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            ToUtc = to.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc),
+            TotalCashOnHand = position.TotalCashOnHand,
+            TenantDepositsHeld = tenantDepositsHeld,
+            CashAfterTenantDeposits = position.TotalCashOnHand - tenantDepositsHeld,
+            RentStillOwed = position.RentStillOwed,
+            LoanBalance = position.LoanBalance,
+            BookEquity = position.Assets - position.Liabilities,
+            CashReceived = movement.CashReceived,
+            CashPaid = movement.CashPaid,
+            NetCashMovement = movement.CashReceived - movement.CashPaid,
+            ProfitOrLoss = position.ProfitOrLoss,
+        };
+    }
+
+    public async Task<TrialBalanceResponse> GetTrialBalanceAsync(
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default)
+    {
+        var lines = FilterStatementLines(scope, query, from: null, query.To);
+        var balances = _db.LedgerAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == scope.PortfolioId)
+            .Select(account => new
+            {
+                LedgerAccountId = account.Id,
+                account.Code,
+                account.Name,
+                account.AccountType,
+                Currency = "USD",
+                Net = lines.Where(line => line.LedgerAccountId == account.Id)
+                    .Sum(line => (decimal?)(line.DebitAmount - line.CreditAmount)) ?? 0m,
+            });
+        var rows = await balances.Select(balance => new TrialBalanceRow
+            {
+                AccountId = balance.LedgerAccountId,
+                AccountCode = balance.Code,
+                AccountName = balance.Name,
+                AccountType = balance.AccountType,
+                DebitBalance = balance.Net >= 0m ? balance.Net : 0m,
+                CreditBalance = balance.Net < 0m ? -balance.Net : 0m,
+                TypeSubtotal = balances.Where(other => other.AccountType == balance.AccountType)
+                    .Sum(other => other.Net),
+                Currency = balance.Currency,
             })
             .OrderBy(row => row.AccountCode)
             .ThenBy(row => row.Currency)
             .ToListAsync(ct);
-        var totalDebits = await lines.SumAsync(line => line.DebitAmount, ct);
-        var totalCredits = await lines.SumAsync(line => line.CreditAmount, ct);
+        var totals = await balances.GroupBy(_ => 1).Select(group => new
+        {
+            Debits = group.Sum(balance => balance.Net >= 0m ? balance.Net : 0m),
+            Credits = group.Sum(balance => balance.Net < 0m ? -balance.Net : 0m),
+        }).SingleOrDefaultAsync(ct);
+        var totalDebits = totals?.Debits ?? 0m;
+        var totalCredits = totals?.Credits ?? 0m;
         return new TrialBalanceResponse
         {
             Rows = rows,
@@ -311,17 +529,20 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     public async Task<FinancialStatementResponse> GetBalanceSheetAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default)
     {
+        var to = query.To ?? DateOnly.FromDateTime(DateTime.UtcNow);
         var sections = new List<StatementSection>();
         foreach (var type in new[] { AccountType.Asset, AccountType.Liability, AccountType.Equity })
         {
-            var section = await LoadStatementSectionAsync(portfolioId, query, type, ct);
+            var section = await LoadStatementSectionAsync(scope, query, type, null, to, ct);
             if (section.Rows.Count > 0)
                 sections.Add(section);
         }
 
-        var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
+        var totals = await LoadStatementTotalsAsync(scope, query, null, to, ct);
+        var currentEarnings = totals.Income - totals.Expenses;
+        var liabilitiesAndEquity = totals.LiabilitiesAndEquity + currentEarnings;
         return new FinancialStatementResponse
         {
             Sections = sections,
@@ -329,23 +550,28 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             {
                 Total = totals.Assets,
                 Assets = totals.Assets,
-                LiabilitiesAndEquity = totals.LiabilitiesAndEquity,
+                LiabilitiesAndEquity = liabilitiesAndEquity,
+                CurrentEarnings = currentEarnings,
+                IsBalanced = totals.Assets == liabilitiesAndEquity,
             },
         };
     }
 
     public async Task<FinancialStatementResponse> GetIncomeStatementAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, StatementQuery query, CancellationToken ct = default)
     {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var from = query.From ?? new DateOnly(today.Year, today.Month, 1);
+        var to = query.To ?? today;
         var sections = new List<StatementSection>();
         foreach (var type in new[] { AccountType.Income, AccountType.Expense })
         {
-            var section = await LoadStatementSectionAsync(portfolioId, query, type, ct);
+            var section = await LoadStatementSectionAsync(scope, query, type, from, to, ct);
             if (section.Rows.Count > 0)
                 sections.Add(section);
         }
 
-        var totals = await LoadStatementTotalsAsync(portfolioId, query, ct);
+        var totals = await LoadStatementTotalsAsync(scope, query, from, to, ct);
         var netIncome = totals.Income - totals.Expenses;
         return new FinancialStatementResponse
         {
@@ -381,10 +607,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         var totalCount = await entries.CountAsync(ct);
         var skip = query.NormalizedSkip;
         var take = query.NormalizedTake;
-        var page = await entries
-            .OrderBy(entry => entry.EffectiveOn)
-            .ThenBy(entry => entry.PostedAtUtc)
-            .ThenBy(entry => entry.Id)
+        var page = await OrderTenantLedger(entries, query)
             .Skip(skip)
             .Take(take)
             .Select(entry => new TenantLedgerRow
@@ -435,6 +658,24 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     ?? entry.ProviderPaymentAttempt.CheckNumber,
                 AccountLabel = entry.EntryType.ToString(),
                 SourceDocumentContext = entry.SourceStoredFile!.FileName,
+                RelatedTenantLedgerEntryId = entry.RelatedTenantLedgerEntryId,
+                RelatedEntryDescription = entry.RelatedTenantLedgerEntry!.Description,
+                CategoryName = (
+                    from journal in _db.JournalEntries
+                    join line in _db.JournalLines
+                        on journal.Id equals line.JournalEntryId
+                    join account in _db.LedgerAccounts
+                        on line.LedgerAccountId equals account.Id
+                    where journal.PortfolioId == portfolioId
+                        && journal.SourceId == entry.Id
+                        && (journal.SourceType == JournalSourceType.TenantCharge
+                            || journal.SourceType == JournalSourceType.TenantConcession)
+                        && account.AccountType == AccountType.Income
+                    orderby journal.Id descending, line.Id
+                    select account.Name)
+                    .FirstOrDefault(),
+                ServicePeriodStartOn = entry.ServicePeriodStartOn,
+                ServicePeriodEndOn = entry.ServicePeriodEndOn,
                 ReversesEntryId = entry.ReversesEntryId,
                 JournalEntryPublicId = _db.JournalEntries
                     .Where(journal => journal.PortfolioId == portfolioId && journal.SourceId == entry.Id)
@@ -567,15 +808,19 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var from = today.AddMonths(-months);
-        var entries = _db.TenantLedgerEntries.AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId
-                && entry.EffectiveOn >= from && entry.EffectiveOn <= today);
-        var currency = await entries.Select(entry => entry.Currency).Distinct().SingleOrDefaultAsync(ct);
+        var currency = await _db.TenantAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId && account.Id == tenantAccountId)
+            .Select(account => account.Currency)
+            .SingleOrDefaultAsync(ct);
         if (currency is null)
             return null;
 
+        var entries = _db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId
+                && entry.Currency == currency
+                && entry.EffectiveOn >= from && entry.EffectiveOn <= today);
+
         var totals = await entries
-            .Where(entry => entry.Currency == currency)
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -592,11 +837,17 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             })
             .SingleOrDefaultAsync(ct);
         if (totals is null)
-            return null;
+        {
+            return new TenantLedgerPeriodSummary
+            {
+                PeriodMonths = months,
+                Currency = currency,
+            };
+        }
 
         // Aging buckets remain SQL-side; each amount is a conditional aggregate over open charges.
         var aging = await entries
-            .Where(entry => entry.Currency == currency && entry.Direction == TenantLedgerDirection.Debit)
+            .Where(entry => entry.Direction == TenantLedgerDirection.Debit)
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -678,11 +929,66 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         };
     }
 
-    private IQueryable<JournalLine> FilterStatementLines(
-        int portfolioId, StatementQuery query, DateOnly? from, DateOnly? to)
+    private static IOrderedQueryable<GeneralLedgerRow> OrderGeneralLedger(
+        IQueryable<GeneralLedgerRow> rows,
+        GeneralLedgerQuery query) => query.SortField switch
     {
-        var lines = _db.JournalLines.AsNoTracking()
-            .Where(line => line.JournalEntry!.PortfolioId == portfolioId);
+        "effectiveon" => query.SortDescending
+            ? rows.OrderByDescending(row => row.EffectiveOn)
+                .ThenByDescending(row => row.PostedAtUtc)
+                .ThenByDescending(row => row.LineId)
+            : rows.OrderBy(row => row.EffectiveOn)
+                .ThenBy(row => row.PostedAtUtc)
+                .ThenBy(row => row.LineId),
+        "postedatutc" => query.SortDescending
+            ? rows.OrderByDescending(row => row.PostedAtUtc)
+                .ThenByDescending(row => row.EffectiveOn)
+                .ThenByDescending(row => row.LineId)
+            : rows.OrderBy(row => row.PostedAtUtc)
+                .ThenBy(row => row.EffectiveOn)
+                .ThenBy(row => row.LineId),
+        "accountcode" => query.SortDescending
+            ? rows.OrderByDescending(row => row.AccountCode)
+                .ThenByDescending(row => row.EffectiveOn)
+                .ThenByDescending(row => row.PostedAtUtc)
+                .ThenByDescending(row => row.LineId)
+            : rows.OrderBy(row => row.AccountCode)
+                .ThenBy(row => row.EffectiveOn)
+                .ThenBy(row => row.PostedAtUtc)
+                .ThenBy(row => row.LineId),
+        _ => rows.OrderByDescending(row => row.EffectiveOn)
+            .ThenByDescending(row => row.PostedAtUtc)
+            .ThenByDescending(row => row.LineId),
+    };
+
+    private static IOrderedQueryable<TenantLedgerEntry> OrderTenantLedger(
+        IQueryable<TenantLedgerEntry> entries,
+        TenantLedgerQuery query) => query.SortField switch
+    {
+        "effectiveon" => query.SortDescending
+            ? entries.OrderByDescending(entry => entry.EffectiveOn)
+                .ThenByDescending(entry => entry.PostedAtUtc)
+                .ThenByDescending(entry => entry.Id)
+            : entries.OrderBy(entry => entry.EffectiveOn)
+                .ThenBy(entry => entry.PostedAtUtc)
+                .ThenBy(entry => entry.Id),
+        "postedatutc" => query.SortDescending
+            ? entries.OrderByDescending(entry => entry.PostedAtUtc)
+                .ThenByDescending(entry => entry.EffectiveOn)
+                .ThenByDescending(entry => entry.Id)
+            : entries.OrderBy(entry => entry.PostedAtUtc)
+                .ThenBy(entry => entry.EffectiveOn)
+                .ThenBy(entry => entry.Id),
+        _ => entries.OrderByDescending(entry => entry.EffectiveOn)
+            .ThenByDescending(entry => entry.PostedAtUtc)
+            .ThenByDescending(entry => entry.Id),
+    };
+
+    private IQueryable<JournalLine> FilterStatementLines(
+        WorkspaceReadScope scope, StatementQuery query, DateOnly? from, DateOnly? to)
+    {
+        var lines = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
+            _db, scope, CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow);
         if (from is DateOnly start)
             lines = lines.Where(line => line.JournalEntry!.EffectiveOn >= start);
         if (to is DateOnly end)
@@ -697,112 +1003,84 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     private async Task<StatementSection> LoadStatementSectionAsync(
-        int portfolioId, StatementQuery query, AccountType accountType, CancellationToken ct)
+        WorkspaceReadScope scope,
+        StatementQuery query,
+        AccountType accountType,
+        DateOnly? from,
+        DateOnly? to,
+        CancellationToken ct)
     {
-        // Grouping, account-balance arithmetic, and the section subtotal all stay in one SQL
-        // statement. The window aggregate repeats the SQL subtotal on each bounded result row so
-        // the response can expose it without summing materialized rows in application code.
-        var rows = await _db.Database.SqlQuery<StatementSqlRow>($$"""
-            WITH grouped AS (
-                SELECT account."Id" AS "AccountId",
-                       account."Code" AS "AccountCode",
-                       account."Name" AS "AccountName",
-                       entry."Currency" AS "Currency",
-                       SUM(CASE WHEN account."NormalBalance" = 'Debit'
-                                THEN line."DebitAmount" - line."CreditAmount"
-                                ELSE line."CreditAmount" - line."DebitAmount" END) AS "Amount"
-                FROM "JournalLines" AS line
-                JOIN "JournalEntries" AS entry
-                  ON entry."Id" = line."JournalEntryId"
-                JOIN "LedgerAccounts" AS account
-                  ON account."Id" = line."LedgerAccountId"
-                JOIN "Portfolios" AS portfolio
-                  ON portfolio."Id" = entry."PortfolioId"
-                 AND portfolio."DeletedAt" IS NULL
-                WHERE entry."PortfolioId" = {{portfolioId}}
-                  AND account."AccountType" = {{accountType.ToString()}}
-                  AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
-                  AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
-                  AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
-                  AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
-                  AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
-                GROUP BY account."Id", account."Code", account."Name",
-                         account."NormalBalance", entry."Currency"
-            ), with_subtotal AS (
-                SELECT grouped.*,
-                       SUM(grouped."Amount") OVER () AS "SectionSubtotal"
-                FROM grouped
-            )
-            SELECT "AccountId", "AccountCode", "AccountName", "Currency", "Amount", "SectionSubtotal"
-            FROM with_subtotal
-            ORDER BY "AccountCode", "Currency"
-            """).ToListAsync(ct);
+        var sectionLines = FilterStatementLines(scope, query, from, to)
+            .Where(line => line.LedgerAccount!.AccountType == accountType);
+        var rows = await sectionLines
+            .GroupBy(line => new
+            {
+                line.LedgerAccountId,
+                line.LedgerAccount!.Code,
+                line.LedgerAccount.Name,
+                line.LedgerAccount.NormalBalance,
+                line.JournalEntry!.Currency,
+            })
+            .Select(group => new FinancialStatementRow
+            {
+                AccountId = group.Key.LedgerAccountId,
+                AccountCode = group.Key.Code,
+                AccountName = group.Key.Name,
+                Amount = group.Sum(line => group.Key.NormalBalance == NormalBalance.Debit
+                    ? line.DebitAmount - line.CreditAmount
+                    : line.CreditAmount - line.DebitAmount),
+                Currency = group.Key.Currency,
+            })
+            .OrderBy(row => row.AccountCode)
+            .ThenBy(row => row.Currency)
+            .ToListAsync(ct);
+        var subtotal = await sectionLines.SumAsync(line =>
+            line.LedgerAccount!.NormalBalance == NormalBalance.Debit
+                ? line.DebitAmount - line.CreditAmount
+                : line.CreditAmount - line.DebitAmount, ct);
         return new StatementSection
         {
             Label = accountType.ToString(),
-            Rows = rows.Select(row => new FinancialStatementRow
-            {
-                AccountId = row.AccountId,
-                AccountCode = row.AccountCode,
-                AccountName = row.AccountName,
-                Amount = row.Amount,
-                Currency = row.Currency,
-            }).ToArray(),
-            Subtotal = rows.FirstOrDefault()?.SectionSubtotal ?? 0m,
+            Rows = rows,
+            Subtotal = subtotal,
         };
     }
 
-    private sealed class StatementSqlRow
-    {
-        public int AccountId { get; init; }
-        public string AccountCode { get; init; } = string.Empty;
-        public string AccountName { get; init; } = string.Empty;
-        public string Currency { get; init; } = string.Empty;
-        public decimal Amount { get; init; }
-        public decimal SectionSubtotal { get; init; }
-    }
-
     private async Task<StatementTotalsSqlRow> LoadStatementTotalsAsync(
-        int portfolioId, StatementQuery query, CancellationToken ct)
+        WorkspaceReadScope scope,
+        StatementQuery query,
+        DateOnly? from,
+        DateOnly? to,
+        CancellationToken ct)
     {
-        var totals = await _db.Database.SqlQuery<StatementTotalsSqlRow>($$"""
-            SELECT
-                COALESCE(SUM(CASE WHEN account."AccountType" = 'Asset'
-                    THEN CASE WHEN account."NormalBalance" = 'Debit'
-                              THEN line."DebitAmount" - line."CreditAmount"
-                              ELSE line."CreditAmount" - line."DebitAmount" END
-                    ELSE 0 END), 0) AS "Assets",
-                COALESCE(SUM(CASE WHEN account."AccountType" IN ('Liability', 'Equity')
-                    THEN CASE WHEN account."NormalBalance" = 'Debit'
-                              THEN line."DebitAmount" - line."CreditAmount"
-                              ELSE line."CreditAmount" - line."DebitAmount" END
-                    ELSE 0 END), 0) AS "LiabilitiesAndEquity",
-                COALESCE(SUM(CASE WHEN account."AccountType" = 'Income'
-                    THEN CASE WHEN account."NormalBalance" = 'Debit'
-                              THEN line."DebitAmount" - line."CreditAmount"
-                              ELSE line."CreditAmount" - line."DebitAmount" END
-                    ELSE 0 END), 0) AS "Income",
-                COALESCE(SUM(CASE WHEN account."AccountType" = 'Expense'
-                    THEN CASE WHEN account."NormalBalance" = 'Debit'
-                              THEN line."DebitAmount" - line."CreditAmount"
-                              ELSE line."CreditAmount" - line."DebitAmount" END
-                    ELSE 0 END), 0) AS "Expenses"
-            FROM "JournalLines" AS line
-            JOIN "JournalEntries" AS entry
-              ON entry."Id" = line."JournalEntryId"
-            JOIN "LedgerAccounts" AS account
-              ON account."Id" = line."LedgerAccountId"
-            JOIN "Portfolios" AS portfolio
-              ON portfolio."Id" = entry."PortfolioId"
-             AND portfolio."DeletedAt" IS NULL
-            WHERE entry."PortfolioId" = {{portfolioId}}
-              AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= {{query.From}})
-              AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= {{query.To}})
-              AND (CAST({{query.Currency}} AS text) IS NULL OR entry."Currency" = {{query.Currency}})
-              AND (CAST({{query.PropertyId}} AS integer) IS NULL OR line."PropertyId" = {{query.PropertyId}})
-              AND (CAST({{query.UnitId}} AS integer) IS NULL OR line."UnitId" = {{query.UnitId}})
-            """).SingleAsync(ct);
-        return totals;
+        return await FilterStatementLines(scope, query, from, to)
+            .GroupBy(_ => 1)
+            .Select(group => new StatementTotalsSqlRow
+            {
+                Assets = group.Sum(line => line.LedgerAccount!.AccountType == AccountType.Asset
+                    ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? line.DebitAmount - line.CreditAmount
+                        : line.CreditAmount - line.DebitAmount
+                    : 0m),
+                LiabilitiesAndEquity = group.Sum(line =>
+                    line.LedgerAccount!.AccountType == AccountType.Liability ||
+                    line.LedgerAccount.AccountType == AccountType.Equity
+                        ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                            ? line.DebitAmount - line.CreditAmount
+                            : line.CreditAmount - line.DebitAmount
+                        : 0m),
+                Income = group.Sum(line => line.LedgerAccount!.AccountType == AccountType.Income
+                    ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? line.DebitAmount - line.CreditAmount
+                        : line.CreditAmount - line.DebitAmount
+                    : 0m),
+                Expenses = group.Sum(line => line.LedgerAccount!.AccountType == AccountType.Expense
+                    ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
+                        ? line.DebitAmount - line.CreditAmount
+                        : line.CreditAmount - line.DebitAmount
+                    : 0m),
+            })
+            .SingleOrDefaultAsync(ct) ?? new StatementTotalsSqlRow();
     }
 
     private sealed class StatementTotalsSqlRow
@@ -811,6 +1089,92 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         public decimal LiabilitiesAndEquity { get; init; }
         public decimal Income { get; init; }
         public decimal Expenses { get; init; }
+    }
+
+    private sealed class MoneyPositionSqlRow
+    {
+        public decimal TotalCashOnHand { get; init; }
+        public decimal TenantDepositsHeld { get; init; }
+        public decimal RentStillOwed { get; init; }
+        public decimal LoanBalance { get; init; }
+        public decimal Assets { get; init; }
+        public decimal Liabilities { get; init; }
+        public decimal ProfitOrLoss { get; init; }
+    }
+
+    private sealed class DepositPositionSqlRow
+    {
+        public decimal TenantDepositsHeld { get; init; }
+    }
+
+    private sealed class CashMovementSqlRow
+    {
+        public decimal CashReceived { get; init; }
+        public decimal CashPaid { get; init; }
+    }
+
+    private async Task<IReadOnlyList<int>> GetSourceDocumentIdsAsync(
+        int portfolioId,
+        JournalSourceType sourceType,
+        long sourceId,
+        CancellationToken ct)
+    {
+        var entityType = sourceType switch
+        {
+            JournalSourceType.TenantCharge or
+            JournalSourceType.TenantReceipt or
+            JournalSourceType.ProviderSettlement or
+            JournalSourceType.TenantConcession or
+            JournalSourceType.ReceivableWriteOff => nameof(TenantLedgerEntry),
+            JournalSourceType.SecurityDepositReceipt or
+            JournalSourceType.SecurityDepositRefund or
+            JournalSourceType.SecurityDepositApplication => nameof(SecurityDepositEntry),
+            JournalSourceType.ExpensePayment or
+            JournalSourceType.BillIncurred or
+            JournalSourceType.BillPayment => nameof(Expense),
+            JournalSourceType.BankTransfer => nameof(BankTransaction),
+            JournalSourceType.LoanPayment => nameof(LoanPayment),
+            JournalSourceType.CapitalPurchase or
+            JournalSourceType.Depreciation => nameof(CapitalAsset),
+            JournalSourceType.OwnerContribution => nameof(OwnerContribution),
+            JournalSourceType.OwnerDistribution => nameof(OwnerDistribution),
+            _ => null,
+        };
+
+        IQueryable<int> documentIds = _db.StoredFiles.AsNoTracking()
+            .Where(file =>
+                entityType != null &&
+                file.PortfolioId == portfolioId &&
+                file.EntityType == entityType &&
+                file.EntityId == sourceId &&
+                file.DeletedAt == null)
+            .Select(file => file.Id);
+        if (sourceType is JournalSourceType.TenantCharge or
+            JournalSourceType.TenantReceipt or
+            JournalSourceType.ProviderSettlement or
+            JournalSourceType.TenantConcession or
+            JournalSourceType.ReceivableWriteOff)
+        {
+            documentIds = documentIds.Union(_db.TenantLedgerEntries.AsNoTracking()
+                .Where(entry =>
+                    entry.PortfolioId == portfolioId &&
+                    entry.Id == sourceId &&
+                    entry.SourceStoredFileId != null)
+                .Select(entry => entry.SourceStoredFileId!.Value));
+        }
+        else if (sourceType is JournalSourceType.SecurityDepositReceipt or
+                 JournalSourceType.SecurityDepositRefund or
+                 JournalSourceType.SecurityDepositApplication)
+        {
+            documentIds = documentIds.Union(_db.SecurityDepositEntries.AsNoTracking()
+                .Where(entry =>
+                    entry.PortfolioId == portfolioId &&
+                    entry.Id == sourceId &&
+                    entry.SourceStoredFileId != null)
+                .Select(entry => entry.SourceStoredFileId!.Value));
+        }
+
+        return await documentIds.Distinct().OrderBy(id => id).ToListAsync(ct);
     }
 
     private async Task<BankReconciliationEvidence?> GetBankEvidenceAsync(

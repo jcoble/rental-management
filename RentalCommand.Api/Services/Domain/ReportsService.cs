@@ -65,6 +65,46 @@ public class ReportsService : IReportsService
                     [
                         new ReportCatalogEntry
                         {
+                            Key = "accounting-profit-and-loss",
+                            Title = "Profit & Loss",
+                            Description = "Income, expenses, and net income for the selected period.",
+                            Endpoint = "/api/v1/accounting/income-statement",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-balance-sheet",
+                            Title = "Balance Sheet",
+                            Description = "What the portfolio owns, owes, and has in equity as of a date.",
+                            Endpoint = "/api/v1/accounting/balance-sheet",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-trial-balance",
+                            Title = "Trial Balance",
+                            Description = "A check that account debits and credits balance as of a date.",
+                            Endpoint = "/api/v1/accounting/trial-balance",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-general-ledger",
+                            Title = "General Ledger",
+                            Description = "Review posted accounting activity by account, property, and source.",
+                            Endpoint = "/api/v1/accounting/general-ledger",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "accounting-cash-flow",
+                            Title = "Cash Flow",
+                            Description = "See operating cash received, cash paid, debt service, and net cash flow.",
+                            Endpoint = "/api/v1/accounting/cash-flow",
+                            External = true,
+                        },
+                        new ReportCatalogEntry
+                        {
                             Key = "income-expense-statement",
                             Title = "Income / Expense Statement (P&L)",
                             Description = "Profit & loss with monthly columns over the selected range.",
@@ -81,9 +121,9 @@ public class ReportsService : IReportsService
                         },
                         new ReportCatalogEntry
                         {
-                            Key = "general-ledger",
-                            Title = "General Ledger / Account Transactions",
-                            Description = "Every payment and expense in date order with a running balance.",
+                            Key = "cash-and-operating-activity",
+                            Title = "Cash and operating activity",
+                            Description = "Payments and expenses in date order with a running balance.",
                             Endpoint = "/api/v1/reports/general-ledger",
                             Params = [ReportParamKeys.From, ReportParamKeys.To, ReportParamKeys.PropertyId],
                         },
@@ -889,6 +929,7 @@ public class ReportsService : IReportsService
             {
                 PropertyId = (int?)management.PropertyId,
                 Amount = allocation.Amount,
+                EffectiveOn = receipt.EffectiveOn,
             };
 
         var applicationIncomeQuery = _db.ApplicationFinancialEntries
@@ -904,6 +945,7 @@ public class ReportsService : IReportsService
                 Amount = entry.Direction == ApplicationFinancialDirection.Increase
                     ? entry.Amount
                     : -entry.Amount,
+                entry.EffectiveOn,
             });
 
         var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
@@ -952,6 +994,49 @@ public class ReportsService : IReportsService
             })
             .ToListAsync(ct);
 
+        var expenseDetails = await expenseProjection
+            .Where(e => e.PropertyId != null && propertyQuery.Any(p => p.Id == e.PropertyId.Value))
+            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
+            .Select(g => new { g.Key.PropertyId, Label = g.Key.Category.ToString(), Amount = g.Sum(e => e.Amount) })
+            .ToListAsync(ct);
+        var debtDetails = await LoanPaymentEffectiveQuery.From(_db)
+            .Where(lp => lp.PortfolioId == portfolioId && lp.Status == LoanPaymentStatus.Paid &&
+                lp.PaidDate != null && lp.PaidDate >= from && lp.PaidDate <= to)
+            .Join(_db.Loans.AsNoTracking().Where(l => propertyQuery.Any(p => p.Id == l.PropertyId)),
+                lp => lp.LoanId, loan => loan.Id,
+                (lp, loan) => new { loan.PropertyId, loan.Lender, lp.TotalAmount })
+            .GroupBy(row => new { row.PropertyId, row.Lender })
+            .Select(g => new { g.Key.PropertyId, Label = g.Key.Lender, Amount = g.Sum(row => row.TotalAmount) })
+            .ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            row.OperatingExpenseDetails = expenseDetails.Where(x => x.PropertyId == row.PropertyId)
+                .Select(x => new CashFlowDetailRow { Label = x.Label, Amount = x.Amount }).ToList();
+            row.DebtServiceDetails = debtDetails.Where(x => x.PropertyId == row.PropertyId)
+                .Select(x => new CashFlowDetailRow { Label = x.Label, Amount = x.Amount }).ToList();
+        }
+
+        var monthlyIncome = await incomeQuery
+            .GroupBy(x => new { x.EffectiveOn.Year, x.EffectiveOn.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(x => x.Amount) }).ToListAsync(ct);
+        var monthlyExpenses = await expenseProjection
+            .Where(e => e.PropertyId != null && propertyQuery.Any(p => p.Id == e.PropertyId.Value))
+            .GroupBy(e => new { e.EffectiveAt.Year, e.EffectiveAt.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(e => e.Amount) }).ToListAsync(ct);
+        var monthlyDebt = await LoanPaymentEffectiveQuery.From(_db)
+            .Where(lp => lp.PortfolioId == portfolioId && lp.Status == LoanPaymentStatus.Paid && lp.PaidDate != null &&
+                lp.PaidDate >= from && lp.PaidDate <= to && _db.Loans.Any(l => l.Id == lp.LoanId && propertyQuery.Any(p => p.Id == l.PropertyId)))
+            .GroupBy(lp => new { lp.PaidDate!.Value.Year, lp.PaidDate.Value.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(lp => lp.TotalAmount) }).ToListAsync(ct);
+        var months = Enumerable.Range(0, ((to.Year - from.Year) * 12) + to.Month - from.Month + 1)
+            .Select(offset => new DateTime(from.Year, from.Month, 1).AddMonths(offset))
+            .Select(month => {
+                var income = monthlyIncome.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
+                var expenses = monthlyExpenses.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
+                var debt = monthlyDebt.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
+                return new MonthlyCashFlow { Month = month.ToString("yyyy-MM"), Income = income, OperatingExpenses = expenses, DebtService = debt, CashFlow = income - expenses - debt };
+            }).ToList();
+
         var propertyTotals = await rowQuery
             .GroupBy(_ => 1)
             .Select(g => new
@@ -981,6 +1066,7 @@ public class ReportsService : IReportsService
             From = from,
             To = to,
             Properties = rows,
+            Months = months,
             TotalIncome = totalIncome,
             TotalOperatingExpenses = totalOperatingExpenses,
             TotalNoi = totalNoi,

@@ -9082,8 +9082,17 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("uuid")
                         .HasDefaultValueSql("gen_random_uuid()");
 
+                    b.Property<long?>("RelatedTenantLedgerEntryId")
+                        .HasColumnType("bigint");
+
                     b.Property<long?>("ReversesEntryId")
                         .HasColumnType("bigint");
+
+                    b.Property<DateOnly?>("ServicePeriodEndOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("ServicePeriodStartOn")
+                        .HasColumnType("date");
 
                     b.Property<int?>("SourceStoredFileId")
                         .HasColumnType("integer");
@@ -9126,12 +9135,16 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId", "LeaseAgreementId", "EffectiveOn")
                         .HasFilter("\"LeaseAgreementId\" IS NOT NULL");
 
+                    b.HasIndex("PortfolioId", "TenantAccountId", "RelatedTenantLedgerEntryId");
+
                     b.HasIndex("PortfolioId", "TransferPublicId", "EntryType")
                         .IsUnique()
                         .HasFilter("\"TransferPublicId\" IS NOT NULL");
 
                     b.HasIndex("ProviderPaymentAttemptId", "TenantAccountId", "PortfolioId")
                         .IsUnique();
+
+                    b.HasIndex("RelatedTenantLedgerEntryId", "TenantAccountId", "PortfolioId");
 
                     b.HasIndex("ReversesEntryId", "TenantAccountId", "PortfolioId");
 
@@ -9156,6 +9169,8 @@ namespace RentalCommand.Data.Migrations
                             t.HasCheckConstraint("CK_TenantLedgerEntry_Provenance", "(\"EntryType\" <> 'RentCharge' OR \"LeaseAgreementId\" IS NOT NULL) AND (\"EntryType\" <> 'AddendumCharge' OR \"LeaseAddendumId\" IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_TenantLedgerEntry_ReversalReference", "(\"EntryType\" = 'Reversal') = (\"ReversesEntryId\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_TenantLedgerEntry_ServicePeriod", "(\"ServicePeriodStartOn\" IS NULL OR \"ServicePeriodEndOn\" IS NULL OR \"ServicePeriodEndOn\" >= \"ServicePeriodStartOn\")");
 
                             t.HasCheckConstraint("CK_TenantLedgerEntry_TransferProvenance", "(\"EntryType\" IN ('TransferIn','TransferOut')) = (\"TransferPublicId\" IS NOT NULL)");
 
@@ -13991,6 +14006,12 @@ namespace RentalCommand.Data.Migrations
                         .HasPrincipalKey("RentalCommand.Core.Entities.TenantPaymentAttempt", "Id", "TenantAccountId", "PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("RentalCommand.Core.Entities.TenantLedgerEntry", "RelatedTenantLedgerEntry")
+                        .WithMany("RelatedTenantLedgerEntries")
+                        .HasForeignKey("RelatedTenantLedgerEntryId", "TenantAccountId", "PortfolioId")
+                        .HasPrincipalKey("Id", "TenantAccountId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.TenantLedgerEntry", "ReversesEntry")
                         .WithMany("ReversalEntries")
                         .HasForeignKey("ReversesEntryId", "TenantAccountId", "PortfolioId")
@@ -14006,6 +14027,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
 
                     b.Navigation("ProviderPaymentAttempt");
+
+                    b.Navigation("RelatedTenantLedgerEntry");
 
                     b.Navigation("ReversesEntry");
 
@@ -14890,6 +14913,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("CreditAllocations");
 
                     b.Navigation("DebitAllocations");
+
+                    b.Navigation("RelatedTenantLedgerEntries");
 
                     b.Navigation("ReversalEntries");
 

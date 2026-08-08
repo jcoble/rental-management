@@ -13,7 +13,7 @@ public class SimWorkerRegistryTests
     public void RunDueSequence_IsInM4DependencyOrder()
     {
         SimWorkerKeys.RunDueSequence.Should().Equal(
-            "rent-charge", "tenant-notice-candidates", "notice-draft", "late-fee",
+            "rent-charge", "recurring-tenant-charge", "tenant-notice-candidates", "notice-draft", "late-fee",
             "autopay", "debt-service", "recurring-expense", "recurring-maintenance");
 
         // daily-briefing is intentionally NOT part of run-due.
@@ -34,6 +34,7 @@ public class SimWorkerRegistryTests
 
     [Theory]
     [InlineData(SimWorkerKeys.RentCharge)]
+    [InlineData(SimWorkerKeys.RecurringTenantCharge)]
     [InlineData(SimWorkerKeys.NoticeDraft)]
     [InlineData(SimWorkerKeys.TenantNoticeCandidates)]
     [InlineData(SimWorkerKeys.LateFee)]
@@ -83,6 +84,7 @@ public class SimWorkerRegistryTests
     private static int CountFor(string key) => key switch
     {
         SimWorkerKeys.RentCharge => 1,
+        SimWorkerKeys.RecurringTenantCharge => 11,
         SimWorkerKeys.NoticeDraft => 2,
         SimWorkerKeys.TenantNoticeCandidates => 3,
         SimWorkerKeys.LateFee => 4,
@@ -104,6 +106,12 @@ public class SimWorkerRegistryTests
             .Callback(() => order.Add(SimWorkerKeys.RentCharge))
             .ReturnsAsync(CountFor(SimWorkerKeys.RentCharge));
         services.AddSingleton(rentCharge.Object);
+
+        var recurringTenantCharge = new Mock<IRecurringTenantChargeGenerationService>();
+        recurringTenantCharge.Setup(s => s.GenerateAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add(SimWorkerKeys.RecurringTenantCharge))
+            .ReturnsAsync(CountFor(SimWorkerKeys.RecurringTenantCharge));
+        services.AddSingleton(recurringTenantCharge.Object);
 
         var notice = new Mock<INoticeDraftGenerationService>();
         notice.Setup(s => s.GenerateAllAsync(It.IsAny<CancellationToken>()))

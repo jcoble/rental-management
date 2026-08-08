@@ -9,6 +9,7 @@ namespace RentalCommand.Core.Time;
 public static class SimWorkerKeys
 {
     public const string RentCharge = "rent-charge";
+    public const string RecurringTenantCharge = "recurring-tenant-charge";
     public const string NoticeDraft = "notice-draft";
     public const string TenantNoticeCandidates = "tenant-notice-candidates";
     public const string LateFee = "late-fee";
@@ -25,7 +26,7 @@ public static class SimWorkerKeys
     /// <summary>All individual worker keys (excludes <see cref="RunDue"/>).</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
-        RentCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
+        RentCharge, RecurringTenantCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
         DebtService, RecurringExpense, RecurringMaintenance, DailyBriefing, ScanProcessing,
     };
 
@@ -36,7 +37,7 @@ public static class SimWorkerKeys
     /// </summary>
     public static readonly IReadOnlyList<string> RunDueSequence = new[]
     {
-        RentCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
+        RentCharge, RecurringTenantCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
         DebtService, RecurringExpense, RecurringMaintenance,
     };
 

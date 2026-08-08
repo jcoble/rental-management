@@ -30,10 +30,15 @@ describe('staff create dialog validation clearing', () => {
 		assert.match(recurringPage, /clearRecurringError\('nextDueDate'\)/);
 	});
 
-	it('clears vendor, accounting expense, and unit rent errors as corrected fields change', () => {
+	it('keeps vendor and expense clearing while tenant-money sheets own canonical validation', () => {
 		const vendorsPage = source('../../routes/(protected)/vendors/+page.svelte');
 		const accountingPage = source('../../routes/(protected)/accounting/+page.svelte');
 		const rentTab = source('../components/unit/tabs/RentTab.svelte');
+		const tenantLedgerPanel = source('../components/accounting/TenantLedgerPanel.svelte');
+		const paymentSheet = source('../components/accounting/RecordPaymentSheet.svelte');
+		const chargeSheet = source('../components/accounting/OneTimeChargeSheet.svelte');
+		const creditSheet = source('../components/accounting/TenantCreditSheet.svelte');
+		const recurringSheet = source('../components/accounting/RecurringChargeSheet.svelte');
 
 		assert.match(vendorsPage, /function clearVendorError\(field: string\)/);
 		assert.match(vendorsPage, /clearVendorError\('name'\)/);
@@ -41,10 +46,20 @@ describe('staff create dialog validation clearing', () => {
 		assert.match(accountingPage, /function clearExpenseError\(field: string\)/);
 		assert.match(accountingPage, /clearExpenseError\('description'\)/);
 		assert.match(accountingPage, /clearExpenseError\('amount'\)/);
-		assert.match(rentTab, /function clearCreateError\(field: string\)/);
-		assert.match(rentTab, /clearCreateError\('amount'\)/);
-		assert.match(rentTab, /clearCreateError\('effectiveOn'\)/);
-		assert.match(rentTab, /clearCreateError\('method'\)/);
-		assert.match(rentTab, /clearCreateError\('dueOn'\)/);
+		assert.match(rentTab, /TenantLedgerPanel/);
+		assert.doesNotMatch(rentTab, /clearCreateError/);
+		for (const sheet of ['RecordPaymentSheet', 'OneTimeChargeSheet', 'TenantCreditSheet', 'RecurringChargeSheet']) {
+			assert.match(tenantLedgerPanel, new RegExp(`import ${sheet}`));
+		}
+		for (const [sheet, fields] of [
+			[paymentSheet, ['amount', 'effectiveOn', 'method']],
+			[chargeSheet, ['amount', 'effectiveOn', 'dueOn', 'description']],
+			[creditSheet, ['amount', 'effectiveOn', 'reason']],
+			[recurringSheet, ['displayName', 'amount', 'category', 'start', 'end', 'dueDay']]
+		] as const) {
+			assert.match(sheet, /function validate\(\): boolean/);
+			assert.match(sheet, /errors = \{\}/);
+			for (const field of fields) assert.match(sheet, new RegExp(`errors\\.${field}`));
+		}
 	});
 });

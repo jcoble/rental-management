@@ -1,7 +1,7 @@
 <!--
   Reports Hub — catalog. Grouped cards (one per report) from GET /reports/catalog.
   Clicking a non-external report opens the generic viewer at /reports/[key]; external reports
-  (Schedule E / Owner Statement / Year-End Packet) deep-link to their existing pages.
+  (accounting surfaces, Schedule E / Owner Statement / Year-End Packet) deep-link to their existing pages.
   A "Need a report you don't see?" card opens the user's email client (mailto) with the request
   pre-filled — there is no server-side intake yet, so it never claims a request was recorded.
 -->
@@ -32,6 +32,8 @@
 		Lightbulb
 	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import {
 		reportCategoryTitle,
 		reportDescription,
@@ -48,9 +50,14 @@
 
 	// Icon per report key (fallback per category) — purely cosmetic; the catalog is data-driven.
 	const reportIcons: Record<string, IconType> = {
+		'accounting-profit-and-loss': TrendingUp,
+		'accounting-balance-sheet': FileBarChart,
+		'accounting-trial-balance': ClipboardList,
+		'accounting-general-ledger': ScrollText,
+		'accounting-cash-flow': Wallet,
 		'income-expense-statement': TrendingUp,
 		'property-pnl-summary': Building2,
-		'general-ledger': ScrollText,
+		'cash-and-operating-activity': ScrollText,
 		'cash-flow': Wallet,
 		'schedule-e': Receipt,
 		'year-end-packet': FileText,
@@ -78,6 +85,11 @@
 
 	// External reports deep-link to their existing pages (the hub references, never reimplements).
 	const externalLinks: Record<string, string> = {
+		'accounting-profit-and-loss': '/accounting/profit-and-loss',
+		'accounting-balance-sheet': '/accounting/balance-sheet',
+		'accounting-trial-balance': '/accounting/trial-balance',
+		'accounting-general-ledger': '/accounting?tab=general-ledger',
+		'accounting-cash-flow': '/accounting?tab=cash-flow',
 		'schedule-e': '/tax',
 		'year-end-packet': '/tax',
 		'owner-statement': '/owners-report',
@@ -136,13 +148,21 @@
 		description="Pick a report, set the dates and properties, then export or print."
 		data-testid="reports-header"
 	>
-		<a
-			href="/docs/reports"
-			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-			data-testid="reports-help-link"
-		>
-			How reports work
-		</a>
+		<div class="mt-3 flex items-center gap-1.5">
+			<a
+				href="/docs/reports"
+				class="inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="reports-help-link"
+			>
+				How reports work
+			</a>
+			<HelpPopover
+				title={ACCOUNTING_HELP.reports.title}
+				summary={ACCOUNTING_HELP.reports.summary}
+				learnMoreUrl={ACCOUNTING_HELP.reports.href}
+				testid="reports-catalog-help"
+			/>
+		</div>
 	</PageHeader>
 
 	{#if catalogQuery.isLoading}

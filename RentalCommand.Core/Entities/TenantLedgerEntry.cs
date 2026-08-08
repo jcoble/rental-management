@@ -24,6 +24,9 @@ public class TenantLedgerEntry : IPortfolioScoped
     public int? LeaseAgreementId { get; set; }
     public int? LeaseAddendumId { get; set; }
     public long? ReversesEntryId { get; set; }
+    public long? RelatedTenantLedgerEntryId { get; set; }
+    public DateOnly? ServicePeriodStartOn { get; set; }
+    public DateOnly? ServicePeriodEndOn { get; set; }
     public long? ProviderPaymentAttemptId { get; set; }
     public int? SourceStoredFileId { get; set; }
     public int CreatedByUserId { get; set; }
@@ -33,10 +36,12 @@ public class TenantLedgerEntry : IPortfolioScoped
     public LeaseAgreement? LeaseAgreement { get; set; }
     public LeaseAddendum? LeaseAddendum { get; set; }
     public TenantLedgerEntry? ReversesEntry { get; set; }
+    public TenantLedgerEntry? RelatedTenantLedgerEntry { get; set; }
     public TenantPaymentAttempt? ProviderPaymentAttempt { get; set; }
     public StoredFile? SourceStoredFile { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }
     public List<TenantLedgerEntry> ReversalEntries { get; set; } = [];
+    public List<TenantLedgerEntry> RelatedTenantLedgerEntries { get; set; } = [];
     public List<TenantLedgerAllocation> DebitAllocations { get; set; } = [];
     public List<TenantLedgerAllocation> CreditAllocations { get; set; } = [];
     public List<SecurityDepositEntry> SecurityDepositEntries { get; set; } = [];

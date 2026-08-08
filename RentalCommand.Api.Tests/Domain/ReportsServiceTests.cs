@@ -1508,6 +1508,32 @@ public class ReportsServiceTests : IAsyncLifetime
         var all = catalog.Categories.SelectMany(c => c.Reports).ToList();
         all.Should().Contain(r => r.Key == "rent-roll" && r.Endpoint == "/api/v1/reports/rent-roll");
 
+        all.Should().Contain(r => r.Key == "accounting-profit-and-loss"
+            && r.Title == "Profit & Loss"
+            && r.Endpoint == "/api/v1/accounting/income-statement"
+            && r.External);
+        all.Should().Contain(r => r.Key == "accounting-balance-sheet"
+            && r.Title == "Balance Sheet"
+            && r.Endpoint == "/api/v1/accounting/balance-sheet"
+            && r.External);
+        all.Should().Contain(r => r.Key == "accounting-trial-balance"
+            && r.Title == "Trial Balance"
+            && r.Endpoint == "/api/v1/accounting/trial-balance"
+            && r.External);
+        all.Should().Contain(r => r.Key == "accounting-general-ledger"
+            && r.Title == "General Ledger"
+            && r.Endpoint == "/api/v1/accounting/general-ledger"
+            && r.External);
+        all.Should().Contain(r => r.Key == "accounting-cash-flow"
+            && r.Title == "Cash Flow"
+            && r.Endpoint == "/api/v1/accounting/cash-flow"
+            && r.External);
+
+        var cashActivity = all.Single(r => r.Key == "cash-and-operating-activity");
+        cashActivity.Title.Should().Be("Cash and operating activity");
+        cashActivity.Endpoint.Should().Be("/api/v1/reports/general-ledger");
+        cashActivity.External.Should().BeFalse();
+
         // External reports deep-link to their existing endpoints and are flagged External.
         var scheduleE = all.Single(r => r.Key == "schedule-e");
         scheduleE.External.Should().BeTrue();

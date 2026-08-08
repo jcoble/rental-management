@@ -390,6 +390,29 @@ class OwnerReportsRepository {
     }
   }
 
+  Future<List<OwnerDistribution>> listContributions({
+    required int ownerEntityId,
+    required int year,
+  }) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/owner-contributions',
+        queryParameters: {
+          'ownerEntityId': ownerEntityId,
+          'year': year,
+          'take': 200,
+          'sort': '-date',
+        },
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(OwnerDistribution.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<OwnerDistribution> createDistribution(
     CreateOwnerDistributionInput input,
   ) async {
@@ -577,6 +600,16 @@ final ownerDistributionsProvider = FutureProvider.autoDispose
           );
     });
 
+final ownerContributionsProvider = FutureProvider.autoDispose
+    .family<List<OwnerDistribution>, OwnerDistributionQuery>(
+      (ref, query) => ref
+          .watch(ownerReportsRepositoryProvider)
+          .listContributions(
+            ownerEntityId: query.ownerEntityId,
+            year: query.year,
+          ),
+    );
+
 class MonthlyReportsNotifier extends Notifier<MonthlyReportsState> {
   static const _requiredCloseReportKeys = <String>{
     'income-expense-statement',
@@ -646,10 +679,7 @@ class MonthlyReportsNotifier extends Notifier<MonthlyReportsState> {
     final nextSkip = current.skip + (pageDelta * current.take);
     final updatedPaging = current.copyWith(skip: nextSkip < 0 ? 0 : nextSkip);
     state = state.copyWith(
-      pagingByReportKey: {
-        ...state.pagingByReportKey,
-        reportKey: updatedPaging,
-      },
+      pagingByReportKey: {...state.pagingByReportKey, reportKey: updatedPaging},
     );
     return load(month: state.month);
   }

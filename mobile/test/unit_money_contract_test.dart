@@ -100,17 +100,21 @@ void main() {
   });
 
   test(
-    'Unit Money uses independent server pages and persisted SingleRental gating',
+    'Unit Money wires the canonical tenant ledger and keeps server-owned pages',
     () async {
       final source = File(
         'lib/features/units/unit_command_center_screen.dart',
       ).readAsStringSync();
 
-      expect(source, contains('unitMoneyActivityPageProvider'));
-      expect(source, contains('unitMoneyChargesPageProvider'));
-      expect(source, contains('unitMoneyDepositsPageProvider'));
+      expect(source, contains('TenantLedgerView('));
+      expect(source, contains('embedded: true'));
+      expect(source, contains("initialTargetEntityType: 'Payment'"));
+      expect(source, contains('onDepositTap'));
       expect(source, contains('expensesPageProvider'));
       expect(source, contains('unitMoneyFinancingPageProvider'));
+      expect(source, isNot(contains('unitMoneyActivityPageProvider')));
+      expect(source, isNot(contains('unitMoneyChargesPageProvider')));
+      expect(source, isNot(contains('unitMoneyDepositsPageProvider')));
       expect(
         source,
         contains(
@@ -121,49 +125,39 @@ void main() {
     },
   );
 
-  test(
-    'Unit Command Center translates wire labels at the presentation boundary',
-    () {
-      final source = File(
-        'lib/features/units/unit_command_center_screen.dart',
-      ).readAsStringSync();
+  test('Unit Command Center leaves tenant-ledger copy to the ledger view', () {
+    final source = File(
+      'lib/features/units/unit_command_center_screen.dart',
+    ).readAsStringSync();
 
-      expect(source, contains("label: 'Tenant account'"));
-      expect(source, contains('tenantLedgerEntryLabel(entry.entryType)'));
-      expect(source, contains("title: 'Rent charges'"));
-      expect(source, contains('Charge amount:'));
-      expect(source, contains('Still due:'));
-      expect(source, isNot(contains('Charge allocation and open amount')));
-      expect(source, isNot(contains('allocated of')));
-      expect(
-        source,
-        isNot(contains("value: '#\${dashboard.tenantAccountId}'")),
-      );
+    expect(source, contains("label: 'Tenant account'"));
+    expect(source, contains('TenantLedgerView('));
+    expect(source, isNot(contains('tenantLedgerEntryLabel(entry.entryType)')));
+    expect(source, isNot(contains("title: 'Rent charges'")));
+    expect(source, isNot(contains('Charge amount:')));
+    expect(source, isNot(contains('Still due:')));
+    expect(source, isNot(contains('Charge allocation and open amount')));
+    expect(source, isNot(contains('allocated of')));
+    expect(source, isNot(contains("value: '#\${dashboard.tenantAccountId}'")));
 
-      for (final call in const [
-        'plainEnglishLabel(dashboard.occupancyPossession.status)',
-        'plainEnglishLabel(dashboard.marketingAvailability.status)',
-        'plainEnglishLabel(dashboard.tenantAccountCondition.status)',
-        'plainEnglishLabel(dashboard.legalNoticeCondition.status)',
-        'plainEnglishLabel(dashboard.maintenanceTurnover.status)',
-        'plainEnglishLabel(deposit.status)',
-        'plainEnglishLabel(inspection.type)',
-        'plainEnglishLabel(inspection.status)',
-        'plainEnglishLabel(item.type)',
-        'plainEnglishLabel(item.status)',
-        'plainEnglishLabel(item.priority',
-        'plainEnglishLabel(turnover.status)',
-        'plainEnglishLabel(status)',
-        'plainEnglishLabel(option)',
-      ]) {
-        expect(
-          source,
-          contains(call),
-          reason: 'Missing translator call: $call',
-        );
-      }
-    },
-  );
+    for (final call in const [
+      'plainEnglishLabel(dashboard.occupancyPossession.status)',
+      'plainEnglishLabel(dashboard.marketingAvailability.status)',
+      'plainEnglishLabel(dashboard.tenantAccountCondition.status)',
+      'plainEnglishLabel(dashboard.legalNoticeCondition.status)',
+      'plainEnglishLabel(dashboard.maintenanceTurnover.status)',
+      'plainEnglishLabel(inspection.type)',
+      'plainEnglishLabel(inspection.status)',
+      'plainEnglishLabel(item.type)',
+      'plainEnglishLabel(item.status)',
+      'plainEnglishLabel(item.priority',
+      'plainEnglishLabel(turnover.status)',
+      'plainEnglishLabel(status)',
+      'plainEnglishLabel(option)',
+    ]) {
+      expect(source, contains(call), reason: 'Missing translator call: $call');
+    }
+  });
 
   test('Money repository sends paging to canonical account owners', () async {
     final adapter = _RecordingAdapter(

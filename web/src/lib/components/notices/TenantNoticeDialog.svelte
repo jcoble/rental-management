@@ -16,12 +16,14 @@
 	let {
 		open = $bindable(false),
 		recipientTenantId = 0,
+		leaseManagementId = 0,
 		tenantName = 'this tenant',
 		activeLeaseCount = 0,
 		initialNoticeType,
 	}: {
 		open: boolean;
 		recipientTenantId?: number;
+		leaseManagementId?: number;
 		tenantName?: string;
 		activeLeaseCount?: number;
 		initialNoticeType?: string;
@@ -38,7 +40,7 @@
 	let previewingDraftId = $state<number | null>(null);
 	let lastOpenKey: string | null = null;
 
-	const hasNoticeScope = $derived(recipientTenantId > 0);
+	const hasNoticeScope = $derived(recipientTenantId > 0 || leaseManagementId > 0);
 
 	const noticeEmptyState = $derived(
 		getTenantNoticeEmptyState({
@@ -138,6 +140,7 @@
 	function generateRequest(noticeType?: string) {
 		return {
 			...(recipientTenantId > 0 ? { recipientTenantId } : {}),
+			...(leaseManagementId > 0 ? { leaseManagementId } : {}),
 			...(noticeType ? { noticeType } : {}),
 		};
 	}
@@ -153,7 +156,7 @@
 			return;
 		}
 
-		const openKey = `${recipientTenantId}:${initialNoticeType ?? 'due'}`;
+		const openKey = `${recipientTenantId}:${leaseManagementId}:${initialNoticeType ?? 'due'}`;
 		if (lastOpenKey === openKey) return;
 		lastOpenKey = openKey;
 		generateNoticeDrafts(initialNoticeType);

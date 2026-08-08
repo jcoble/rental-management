@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,7 @@ import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../applications/applications_repository.dart';
 import '../applications/applications_shared.dart';
+import '../deposits/deposits_screen.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
@@ -33,6 +35,7 @@ import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../money/tenant_ledger_view.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_repository.dart';
@@ -444,7 +447,6 @@ class _UnitAreaSurface extends StatefulWidget {
     required this.children,
     required this.activeView,
     this.initialView,
-    this.header,
     this.fillViewport,
   }) : assert(labels.length == views.length),
        assert(views.length == children.length),
@@ -456,7 +458,6 @@ class _UnitAreaSurface extends StatefulWidget {
   final List<Widget> children;
   final ValueNotifier<UnitCommandCenterView?> activeView;
   final UnitCommandCenterView? initialView;
-  final Widget? header;
   final List<bool>? fillViewport;
 
   @override
@@ -549,7 +550,9 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
     return LayoutBuilder(
       builder: (context, constraints) => ListView(
         controller: _scrollController,
-        cacheExtent: constraints.maxHeight * widget.children.length,
+        scrollCacheExtent: ScrollCacheExtent.pixels(
+          constraints.maxHeight * widget.children.length,
+        ),
         padding: const EdgeInsets.only(bottom: 32),
         children: [
           for (var index = 0; index < widget.children.length; index++)
@@ -557,7 +560,6 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
               key: _sectionKeys[index],
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (index == 0 && widget.header != null) widget.header!,
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                   child: Text(
@@ -2483,9 +2485,6 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
   static const _pageSize = 10;
   final _tenantAccountKey = GlobalKey();
   final _operatingCostsKey = GlobalKey();
-  int _activityPage = 0;
-  int _chargePage = 0;
-  int _depositPage = 0;
   int _unitExpensePage = 0;
   int _propertyExpensePage = 0;
   int _financingPage = 0;
@@ -2517,47 +2516,11 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
   @override
   Widget build(BuildContext context) {
     final dashboard = widget.dashboard;
-    final lease = dashboard.currentLease;
-    final accountId = dashboard.tenantAccountId;
     final propertyAsync = ref.watch(
       propertyDetailProvider(dashboard.unit.propertyId),
     );
     final isSingleRental =
         propertyAsync.value?.rentalStructure == RentalStructure.singleRental;
-    final key = accountId == null
-        ? null
-        : (
-            tenantAccountId: accountId,
-            propertyId: dashboard.unit.propertyId,
-            unitId: dashboard.unit.id,
-            skip: _activityPage * _pageSize,
-            take: _pageSize,
-          );
-    final activityAsync = key == null
-        ? null
-        : ref.watch(unitMoneyActivityPageProvider(key));
-    final chargesAsync = key == null
-        ? null
-        : ref.watch(
-            unitMoneyChargesPageProvider((
-              tenantAccountId: accountId!,
-              propertyId: dashboard.unit.propertyId,
-              unitId: dashboard.unit.id,
-              skip: _chargePage * _pageSize,
-              take: _pageSize,
-            )),
-          );
-    final depositsAsync = key == null
-        ? null
-        : ref.watch(
-            unitMoneyDepositsPageProvider((
-              tenantAccountId: accountId!,
-              propertyId: dashboard.unit.propertyId,
-              unitId: dashboard.unit.id,
-              skip: _depositPage * _pageSize,
-              take: _pageSize,
-            )),
-          );
     final unitExpensesAsync = ref.watch(
       expensesPageProvider(
         ExpenseListQuery(
@@ -2594,133 +2557,27 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
       children: [
         KeyedSubtree(
           key: _tenantAccountKey,
-          child: _SurfacePanel(
-            children: [
-              _MetricRow(
-                icon: Symbols.account_balance_wallet_rounded,
-                label: 'Tenant balance',
-                value: _formatCurrency(dashboard.header.outstandingRentBalance),
-              ),
-              _MetricRow(
-                icon: Symbols.payments_rounded,
-                label: 'Market rent',
-                value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
-              ),
-              if (lease != null)
-                _MetricRow(
-                  icon: Symbols.description_rounded,
-                  label: 'Tenant account',
-                  value: lease.leaseNumber,
-                ),
-              if (lease == null && dashboard.tenantAccountId != null)
-                _MetricRow(
-                  icon: Symbols.description_rounded,
-                  label: 'Tenant account',
-                  value: 'Available',
-                ),
-            ],
+          child: TenantLedgerView(
+            dashboard: dashboard,
+            embedded: true,
+            onScan: () => openMobileScan(
+              context,
+              initialTargetEntityType: 'Payment',
+              lockTargetEntityType: true,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              leaseManagementId: dashboard.leaseManagementId,
+              leaseAgreementId: dashboard.currentLease?.id,
+              tenantAccountId: dashboard.tenantAccountId,
+              sourceLabel: 'Unit · Tenant ledger',
+            ),
+            onSaved: () =>
+                ref.invalidate(unitDashboardProvider(dashboard.unit.id)),
+            onDepositTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(builder: (_) => const DepositsScreen()),
+            ),
           ),
         ),
-        const SizedBox(height: 14),
-        _PaymentsSection(items: dashboard.overview.recentPayments),
-        const SizedBox(height: 14),
-        if (activityAsync == null)
-          const _Section(
-            title: 'Account activity',
-            empty: 'No tenant account exists for this rental.',
-            children: [],
-          )
-        else
-          activityAsync.when(
-            loading: () => const _LoadingSection(title: 'Account activity'),
-            error: (e, _) => _RetrySection(
-              title: 'Account activity',
-              message: e is ApiException ? e.message : e.toString(),
-              onRetry: () =>
-                  ref.invalidate(unitMoneyActivityPageProvider(key!)),
-            ),
-            data: (page) => _Section(
-              title: 'Account activity',
-              empty: 'No account activity',
-              children: [
-                for (final entry in page.items)
-                  _CompactRow(
-                    icon: Symbols.receipt_long_rounded,
-                    title: entry.description,
-                    subtitle:
-                        '${tenantLedgerEntryLabel(entry.entryType)} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
-                  ),
-                _MoneyPager(
-                  page: _activityPage,
-                  hasPrevious: page.hasPrevious,
-                  hasNext: page.hasNext,
-                  onPrevious: () => setState(() => _activityPage--),
-                  onNext: () => setState(() => _activityPage++),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 14),
-        if (chargesAsync != null)
-          chargesAsync.when(
-            loading: () => const _LoadingSection(title: 'Rent charges'),
-            error: (e, _) => _RetrySection(
-              title: 'Rent charges',
-              message: e is ApiException ? e.message : e.toString(),
-              onRetry: () => setState(() {}),
-            ),
-            data: (page) => _Section(
-              title: 'Rent charges',
-              empty: 'No charges',
-              children: [
-                for (final charge in page.items)
-                  _CompactRow(
-                    icon: Symbols.request_quote_rounded,
-                    title: charge.description,
-                    subtitle:
-                        'Charge amount: ${_formatCurrency(charge.originalAmount)} · '
-                        'Still due: ${_formatCurrency(charge.openAmount)}',
-                  ),
-                _MoneyPager(
-                  page: _chargePage,
-                  hasPrevious: page.hasPrevious,
-                  hasNext: page.hasNext,
-                  onPrevious: () => setState(() => _chargePage--),
-                  onNext: () => setState(() => _chargePage++),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 14),
-        if (depositsAsync != null)
-          depositsAsync.when(
-            loading: () => const _LoadingSection(title: 'Deposits'),
-            error: (e, _) => _RetrySection(
-              title: 'Deposits',
-              message: e is ApiException ? e.message : e.toString(),
-              onRetry: () => setState(() {}),
-            ),
-            data: (page) => _Section(
-              title: 'Deposits',
-              empty: 'No deposits',
-              children: [
-                for (final deposit in page.items)
-                  _CompactRow(
-                    icon: Symbols.savings_rounded,
-                    title: deposit.accountNumber,
-                    subtitle:
-                        '${plainEnglishLabel(deposit.status)} · ${_formatCurrency(deposit.heldBalance)} held',
-                  ),
-                _MoneyPager(
-                  page: _depositPage,
-                  hasPrevious: page.hasPrevious,
-                  hasNext: page.hasNext,
-                  onPrevious: () => setState(() => _depositPage--),
-                  onNext: () => setState(() => _depositPage++),
-                ),
-              ],
-            ),
-          ),
         const SizedBox(height: 14),
         KeyedSubtree(
           key: _operatingCostsKey,
@@ -2939,7 +2796,7 @@ class _UnitResidentsSection extends StatelessWidget {
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
                     builder: (_) =>
-                        TenantDetailLoaderScreen(tenantId: selected!),
+                        TenantDetailLoaderScreen(tenantId: selected),
                   ),
                 ),
               ),

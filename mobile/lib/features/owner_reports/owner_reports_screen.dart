@@ -8,6 +8,8 @@ import '../../core/time/app_clock.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../accounting/accounting_repository.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_impact_card.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'owner_reports_repository.dart';
 
@@ -80,7 +82,9 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
       await ref.read(monthlyReportsProvider.notifier).load(month: month);
     } on DioException catch (error) {
       if (!mounted) return;
-      setState(() => _clockError = ApiException.fromDioException(error).message);
+      setState(
+        () => _clockError = ApiException.fromDioException(error).message,
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _clockError = error.toString());
@@ -606,7 +610,10 @@ List<OwnerReportDisplaySection> ownerReportDisplaySections(
       ),
     ],
     'rent-roll' => [
-      _section('Rentals', _maps(result.data['rows']).map(_rentRollRow).toList()),
+      _section(
+        'Rentals',
+        _maps(result.data['rows']).map(_rentRollRow).toList(),
+      ),
     ],
     'rent-ledger' => [
       _section('Leases', _rentLedgerRows(_maps(result.data['leases']))),
@@ -880,7 +887,9 @@ class _ReportPagingControls extends ConsumerWidget {
     final hasNext = total == null ? true : paging.skip + paging.take < total;
     final pageEnd = total == null
         ? paging.skip + paging.take
-        : (paging.skip + paging.take > total ? total : paging.skip + paging.take);
+        : (paging.skip + paging.take > total
+              ? total
+              : paging.skip + paging.take);
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Row(
@@ -1377,6 +1386,9 @@ class _StatementBody extends ConsumerWidget {
     final distributionsAsync = ref.watch(
       ownerDistributionsProvider(_distributionQuery),
     );
+    final contributionsAsync = ref.watch(
+      ownerContributionsProvider(_distributionQuery),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1462,6 +1474,9 @@ class _StatementBody extends ConsumerWidget {
         ),
 
         const SizedBox(height: 16),
+        _OwnerContributionsSection(contributionsAsync: contributionsAsync),
+
+        const SizedBox(height: 16),
 
         // Per-property table
         if (statement.properties.isNotEmpty) ...[
@@ -1522,6 +1537,55 @@ class _StatementBody extends ConsumerWidget {
   }
 }
 
+class _OwnerContributionsSection extends StatelessWidget {
+  const _OwnerContributionsSection({required this.contributionsAsync});
+  final AsyncValue<List<OwnerDistribution>> contributionsAsync;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        'Contributions',
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      contributionsAsync.when(
+        loading: () => const _OwnerDistributionSkeleton(),
+        error: (error, _) =>
+            Text(error is ApiException ? error.message : error.toString()),
+        data: (items) => Column(
+          children: [
+            for (final item in items)
+              ExpansionTile(
+                title: Text(_fmtCurrency(item.amount)),
+                subtitle: Text(
+                  '${_fmtDate(item.date)} • ${item.propertyName ?? 'Portfolio'}',
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: AccountingImpactCard(
+                      sourceType: JournalSourceType.ownerContribution,
+                      sourceId: item.id,
+                    ),
+                  ),
+                ],
+              ),
+            if (items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('No owner contributions recorded for this year.'),
+              ),
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
 class _DistributionsSection extends StatelessWidget {
   const _DistributionsSection({
     required this.distributionsAsync,
@@ -1550,7 +1614,13 @@ class _DistributionsSection extends StatelessWidget {
           child: distributionsAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.all(16),
-              child: Center(child: CircularProgressIndicator()),
+              child: Column(
+                children: [
+                  _OwnerDistributionSkeleton(),
+                  SizedBox(height: 8),
+                  _OwnerDistributionSkeleton(),
+                ],
+              ),
             ),
             error: (e, _) => Padding(
               padding: const EdgeInsets.all(16),
@@ -1592,6 +1662,19 @@ class _DistributionsSection extends StatelessWidget {
   }
 }
 
+class _OwnerDistributionSkeleton extends StatelessWidget {
+  const _OwnerDistributionSkeleton();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 64,
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+    ),
+  );
+}
+
 class _DistributionTile extends StatelessWidget {
   const _DistributionTile({required this.distribution, required this.onDelete});
 
@@ -1610,7 +1693,7 @@ class _DistributionTile extends StatelessWidget {
         distribution.propertyName!,
     ];
 
-    return ListTile(
+    return ExpansionTile(
       leading: CircleAvatar(
         backgroundColor: cs.secondaryContainer,
         foregroundColor: cs.onSecondaryContainer,
@@ -1629,14 +1712,21 @@ class _DistributionTile extends StatelessWidget {
             distribution.memo!,
         ].join('\n'),
       ),
-      isThreeLine:
-          distribution.memo != null && distribution.memo!.trim().isNotEmpty,
       trailing: IconButton(
         tooltip: 'Delete distribution',
         icon: const Icon(Icons.delete_outline),
         color: cs.error,
         onPressed: onDelete,
       ),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: AccountingImpactCard(
+            sourceType: JournalSourceType.ownerDistribution,
+            sourceId: distribution.id,
+          ),
+        ),
+      ],
     );
   }
 }

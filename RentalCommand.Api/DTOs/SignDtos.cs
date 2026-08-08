@@ -96,3 +96,9 @@ public sealed class SignActionResponse
     /// <summary>Stable selector for frontend tests.</summary>
     public string TestId => "sign-action";
 }
+
+/// <summary>Management confirmation that one existing signer invitation was queued again.</summary>
+public sealed record ResendNativeEsignInvitationResponse(
+    int SignatureRequestId,
+    int SignatureSignerId,
+    bool Replayed);

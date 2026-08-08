@@ -63,7 +63,10 @@ public sealed record PostTenantChargeCommand(
     long ExpectedAccessRevision,
     string RequiredCapability,
     string BusinessKey,
-    string DeliveryIdempotencyKey) : ITenantMoneyCommand;
+    string DeliveryIdempotencyKey,
+    int? IncomeLedgerAccountId = null,
+    DateOnly? ServicePeriodStartOn = null,
+    DateOnly? ServicePeriodEndOn = null) : ITenantMoneyCommand;
 
 public sealed record ReverseTenantChargeCommand(
     int PortfolioId,
@@ -103,7 +106,9 @@ public sealed record PostTenantCreditCommand(
     long ExpectedAccessRevision,
     string RequiredCapability,
     string BusinessKey,
-    string DeliveryIdempotencyKey) : ITenantMoneyCommand;
+    string DeliveryIdempotencyKey,
+    long? TargetChargeEntryId = null,
+    int? IncomeLedgerAccountId = null) : ITenantMoneyCommand;
 
 public sealed record PostTenantAdjustmentCommand(
     int PortfolioId,

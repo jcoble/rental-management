@@ -15,12 +15,13 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { recordHref } from '$lib/navigation/record-href';
+	import { leaseAgreementStatusLabel, leaseLifecycleLabel } from '$lib/leases/lease-list-labels';
 	import { FilePlus2, ScanLine } from '@lucide/svelte';
 
 	const PAGE_SIZE = 20;
 	const initial = page.url.searchParams;
 	let search = $state(readGridParam(initial, 'q'));
-	let lifecycle = $state(readGridParam(initial, 'lifecycle'));
+	let statusFilter = $state(readGridParam(initial, 'lifecycle'));
 	let gridSort = $state(readGridParam(initial, 'sort') || '-updatedAtUtc');
 	let gridPage = $state(readGridParam(initial, 'page', 1));
 	let showManualLeaseDialog = $state(false);
@@ -28,32 +29,32 @@
 
 	$effect(() => {
 		syncGridUrl(
-			{ q: search, lifecycle, sort: gridSort, page: gridPage },
+			{ q: search, lifecycle: statusFilter, sort: gridSort, page: gridPage },
 			{ sort: '-updatedAtUtc', page: 1 }
 		);
 	});
 
-	const relationshipsQuery = createQuery(() => ({
-		queryKey: ['lease-managements', 'page', debouncedSearch.value, lifecycle, gridSort, gridPage],
+	const leasesQuery = createQuery(() => ({
+		queryKey: ['lease-managements', 'page', debouncedSearch.value, statusFilter, gridSort, gridPage],
 		queryFn: () =>
 			leaseManagements.listPage({
 				search: debouncedSearch.value || undefined,
-				lifecycle: lifecycle || undefined,
+				lifecycle: statusFilter || undefined,
 				sort: gridSort || undefined,
 				skip: (gridPage - 1) * PAGE_SIZE,
 				take: PAGE_SIZE
 			})
 	}));
-	const hasRelationshipFilters = $derived(Boolean(search.trim() || lifecycle));
-	const relationshipEmptyMessage = $derived(
-		hasRelationshipFilters
-			? 'No tenant and lease relationships match these filters.'
-			: 'No tenant and lease relationships yet.'
+	const hasLeaseFilters = $derived(Boolean(search.trim() || statusFilter));
+	const leaseEmptyMessage = $derived(
+		hasLeaseFilters
+			? 'No leases match these filters.'
+			: 'No leases yet.'
 	);
-	const relationshipEmptyDescription = $derived(
-		hasRelationshipFilters
-			? 'Try a different household, rental, agreement number, or relationship stage.'
-			: 'Approve an application and prepare a move-in, or import an existing signed agreement.'
+	const leaseEmptyDescription = $derived(
+		hasLeaseFilters
+			? 'Try a different household, rental, lease number, or status.'
+			: 'Approve an application and prepare a move-in, or import an existing signed lease.'
 	);
 
 	const columns: ColumnDef<LeaseManagementSummary>[] = [
@@ -73,16 +74,18 @@
 		},
 		{
 			key: 'lifecycle',
-			title: 'Relationship',
+			title: 'Status',
+			accessor: (item) => leaseLifecycleLabel(item.lifecycle),
 			sortable: true,
 			mobileRole: 'badge'
 		},
 		{
 			key: 'agreementStatus',
-			title: 'Agreement',
+			title: 'Lease',
 			accessor: (item) => {
-				const current = item.agreementStatus ?? 'No governing agreement';
-				return item.upcomingLeaseAgreementId ? `${current} · Upcoming prepared` : current;
+				const current = leaseAgreementStatusLabel(item.agreementStatus);
+				if (!item.upcomingLeaseAgreementId) return current;
+				return `${current} · Next lease: ${leaseAgreementStatusLabel(item.upcomingAgreementStatus)}`;
 			}
 		},
 		{
@@ -119,12 +122,12 @@
 		tone="violet"
 		eyebrow="Rentals"
 		title="Leases"
-		description="Find a tenant relationship, its governing agreement, upcoming agreement, and account context."
+		description="Find each household's lease, any next lease, and rent account."
 		data-testid="leases-header"
 	>
 		{#snippet actions()}
 			<Button href="/scan" variant="outline" class="gap-2"
-				><ScanLine class="h-4 w-4" /> Import agreement</Button
+				><ScanLine class="h-4 w-4" /> Import signed lease</Button
 			>
 			<Button onclick={() => (showManualLeaseDialog = true)} class="gap-2" data-testid="leases-create-lease">
 				<FilePlus2 class="h-4 w-4" /> Create lease
@@ -132,25 +135,25 @@
 		{/snippet}
 	</PageHeader>
 
-	{#if relationshipsQuery.isError}
+	{#if leasesQuery.isError}
 		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="leases-list-error">
-			<p class="font-medium text-destructive">Could not load tenant and lease relationships.</p>
-			<p class="mt-1 text-sm text-muted-foreground">Try again. The relationship list is temporarily unavailable.</p>
-			<Button class="mt-4" variant="outline" onclick={() => relationshipsQuery.refetch()}>Try again</Button>
+			<p class="font-medium text-destructive">Could not load leases.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The lease list is temporarily unavailable.</p>
+			<Button class="mt-4" variant="outline" onclick={() => leasesQuery.refetch()}>Try again</Button>
 		</div>
 	{:else}
 	<DataGrid
-		data={relationshipsQuery.data?.items ?? []}
+		data={leasesQuery.data?.items ?? []}
 		{columns}
-		loading={relationshipsQuery.isLoading}
-		emptyMessage={relationshipEmptyMessage}
-		emptyDescription={relationshipEmptyDescription}
+		loading={leasesQuery.isLoading}
+		emptyMessage={leaseEmptyMessage}
+		emptyDescription={leaseEmptyDescription}
 		onRowClick={(item) => goto(recordHref('leaseManagement', { id: item.leaseManagementId, unitId: item.unitId }))}
 		getRowKey={(item) => item.leaseManagementId}
 		serverSide
 		page={gridPage}
 		pageSize={PAGE_SIZE}
-		totalCount={relationshipsQuery.data?.totalCount ?? 0}
+		totalCount={leasesQuery.data?.totalCount ?? 0}
 		sort={gridSort}
 		onPageChange={(next) => (gridPage = next)}
 		onSortChange={(next) => {
@@ -161,27 +164,27 @@
 		{#snippet toolbar()}
 			<div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
 				<div class="w-full sm:max-w-md">
-					<SearchInput bind:value={search} placeholder="Search household, rental, or agreement…" />
+					<SearchInput bind:value={search} placeholder="Search household, rental, or lease…" />
 				</div>
-				<Select.Root type="single" bind:value={lifecycle} onValueChange={() => (gridPage = 1)}>
+				<Select.Root type="single" bind:value={statusFilter} onValueChange={() => (gridPage = 1)}>
 					<Select.Trigger class="w-full sm:w-52"
-						><Select.Value placeholder="All relationships" /></Select.Trigger
+						><Select.Value placeholder="All statuses" /></Select.Trigger
 					>
 					<Select.Content>
-						<Select.Item value="">All relationships</Select.Item>
-						<Select.Item value="Preparing">Preparing</Select.Item>
-						<Select.Item value="Upcoming">Upcoming</Select.Item>
-						<Select.Item value="Occupied">Occupied</Select.Item>
-						<Select.Item value="Ending">Ending</Select.Item>
-						<Select.Item value="AccountingCloseout">Accounting closeout</Select.Item>
-						<Select.Item value="Closed">Closed</Select.Item>
-						<Select.Item value="Canceled">Canceled</Select.Item>
+						<Select.Item value="">All statuses</Select.Item>
+						<Select.Item value="Preparing">{leaseLifecycleLabel('Preparing')}</Select.Item>
+						<Select.Item value="Upcoming">{leaseLifecycleLabel('Upcoming')}</Select.Item>
+						<Select.Item value="Occupied">{leaseLifecycleLabel('Occupied')}</Select.Item>
+						<Select.Item value="Ending">{leaseLifecycleLabel('Ending')}</Select.Item>
+						<Select.Item value="AccountingCloseout">{leaseLifecycleLabel('AccountingCloseout')}</Select.Item>
+						<Select.Item value="Closed">{leaseLifecycleLabel('Closed')}</Select.Item>
+						<Select.Item value="Canceled">{leaseLifecycleLabel('Canceled')}</Select.Item>
 					</Select.Content>
 				</Select.Root>
 			</div>
 		{/snippet}
 		{#snippet mobileActions(item)}
-			<StatusBadge status={item.lifecycle} />
+			<StatusBadge status={leaseLifecycleLabel(item.lifecycle)} />
 		{/snippet}
 	</DataGrid>
 	{/if}
