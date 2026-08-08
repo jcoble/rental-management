@@ -1281,6 +1281,21 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                         && file.EntityType == nameof(LeaseAgreement)
                         && file.EntityId == agreement.Id
                         && file.DeletedAt == null)),
+                SignatureRequestId = _db.SignatureRequests
+                    .Where(request =>
+                        request.PortfolioId == agreement.PortfolioId
+                        && request.LeaseAgreementId == agreement.Id
+                        && agreement.IssuedAtUtc != null
+                        && agreement.IssuedArtifactId != null
+                        && request.IssuedArtifactId == agreement.IssuedArtifactId)
+                    .Select(request => (int?)request.Id)
+                    .FirstOrDefault(),
+                HasSignatureRequest = _db.SignatureRequests.Any(request =>
+                    request.PortfolioId == agreement.PortfolioId
+                    && request.LeaseAgreementId == agreement.Id
+                    && agreement.IssuedAtUtc != null
+                    && agreement.IssuedArtifactId != null
+                    && request.IssuedArtifactId == agreement.IssuedArtifactId),
                 IssuedArtifact = agreement.IssuedArtifact == null ? null : new LegalArtifactSummaryResponse
                 {
                     LegalDocumentArtifactId = agreement.IssuedArtifact.Id,
