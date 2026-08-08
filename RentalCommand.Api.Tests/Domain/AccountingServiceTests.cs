@@ -16,18 +16,19 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Services;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
+using Xunit.Abstractions;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-// GetTransactionsAsync is covered separately by AccountingTransactionsViewTests. These service
-// tests use the same migrated PostgreSQL schema and API role as production so provider-specific
-// functions, views, RLS policies, and constraints remain part of the contract.
+// These service tests use the same migrated PostgreSQL schema and API role as production so
+// provider-specific functions, views, RLS policies, and constraints remain part of the contract.
 [Collection(MigratedPostgreSqlCollection.Name)]
 public class AccountingServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly ITestOutputHelper _output;
     private readonly List<string> _commands = [];
     private MigratedPostgreSqlTestContext _context = null!;
     private RentalCommandDbContext _db = null!;
@@ -35,9 +36,10 @@ public class AccountingServiceTests : IAsyncLifetime
     private WorkspaceReadScope _scope;
     private int _nextRelationshipSequence = 1;
 
-    public AccountingServiceTests(MigratedPostgreSqlFixture fixture)
+    public AccountingServiceTests(MigratedPostgreSqlFixture fixture, ITestOutputHelper output)
     {
         _fixture = fixture;
+        _output = output;
     }
 
     public async Task InitializeAsync()
@@ -418,6 +420,110 @@ public class AccountingServiceTests : IAsyncLifetime
         _commands.Should().OnlyContain(sql =>
             sql.Contains("\"TenantLedgerAllocations\"", StringComparison.OrdinalIgnoreCase),
             "both the count and page query must resolve receipt categories from allocations DB-side");
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_EnrichesOnlyPagedExpensesWithReceiptAndBankFacts()
+    {
+        var now = new DateTime(2027, 2, 16, 12, 0, 0, DateTimeKind.Utc);
+        var (property, _) = SeedPropertyAndLease(now);
+        var enrichedExpense = SeedExpense(
+            "Receipt and bank expense",
+            225m,
+            now.AddDays(-1),
+            ScheduleECategory.Repairs,
+            ExpenseStatus.Paid,
+            property.Id);
+        var plainExpense = SeedExpense(
+            "Expense without supporting facts",
+            75m,
+            now.AddDays(-2),
+            ScheduleECategory.CleaningMaintenance,
+            ExpenseStatus.Pending,
+            property.Id);
+        _db.StoredFiles.AddRange(
+            new StoredFile
+            {
+                PortfolioId = PortfolioId,
+                FileName = "receipt.pdf",
+                FilePath = $"accounting/{enrichedExpense.Id}/receipt.pdf",
+                ContentType = "application/pdf",
+                FileSize = 128,
+                EntityType = "Expense",
+                EntityId = enrichedExpense.Id,
+                UploadedAt = now.AddHours(-2),
+            },
+            new StoredFile
+            {
+                PortfolioId = PortfolioId,
+                FileName = "receipt.jpg",
+                FilePath = $"accounting/{enrichedExpense.Id}/receipt.jpg",
+                ContentType = "image/jpeg",
+                FileSize = 256,
+                EntityType = "Expense",
+                EntityId = enrichedExpense.Id,
+                UploadedAt = now.AddHours(-1),
+            });
+        _db.SaveChanges();
+
+        var clearedAt = now.AddMinutes(-30);
+        SeedBankTransaction(
+            "Cleared repair",
+            "Repair vendor",
+            -225m,
+            clearedAt,
+            "Withdrawal",
+            "Matched",
+            matchedExpenseId: enrichedExpense.Id);
+        _commands.Clear();
+
+        var result = await _sut.GetTransactionsAsync(
+            _scope,
+            new AccountingTransactionsQuery
+            {
+                Kind = "Expense",
+                Take = 20,
+            },
+            CancellationToken.None);
+        foreach (var (sql, index) in _commands.Select((sql, index) => (sql, index)))
+        {
+            _output.WriteLine($"--- ACCOUNTING TRANSACTIONS STATEMENT {index + 1} ---");
+            _output.WriteLine(sql);
+        }
+
+        result.TotalCount.Should().Be(2);
+        var enriched = result.Items.Single(row => row.Id == enrichedExpense.Id);
+        enriched.HasReceipt.Should().BeTrue();
+        enriched.ReceiptIsImage.Should().BeTrue("the newest active receipt is an image");
+        enriched.Reconciled.Should().BeTrue();
+        enriched.ClearedBankName.Should().Be("Sandbox Bank");
+        enriched.ClearedAt.Should().Be(clearedAt);
+
+        var plain = result.Items.Single(row => row.Id == plainExpense.Id);
+        plain.HasReceipt.Should().BeFalse();
+        plain.ReceiptIsImage.Should().BeFalse();
+        plain.Reconciled.Should().BeFalse();
+        plain.ClearedBankName.Should().BeNull();
+        plain.ClearedAt.Should().BeNull();
+
+        _commands.Should().HaveCount(4,
+            "the grid uses count + slim page + page-keyed receipt facts + page-keyed bank facts");
+        var pageSql = _commands[1];
+        pageSql.Should().Contain("UNION ALL").And.Contain("ORDER BY").And.Contain("LIMIT");
+        pageSql.Should().NotContain("\"StoredFiles\"")
+            .And.NotContain("\"BankTransactions\"",
+                "receipt and bank tables must not be re-entered by each output-row projection");
+
+        var receiptSql = _commands.Single(sql => sql.Contains("\"StoredFiles\""));
+        receiptSql.Should().Contain("GROUP BY")
+            .And.Contain("array_agg")
+            .And.NotContain("EXISTS")
+            .And.Contain("UploadedAt",
+                "receipt presence and newest-receipt type must be computed DB-side for page expense ids");
+        var bankSql = _commands.Single(sql => sql.Contains("\"BankTransactions\""));
+        bankSql.Should().Contain("\"BankConnections\"")
+            .And.NotContain("UNION ALL",
+                "bank facts must be fetched once for page expense ids, outside the base union");
     }
 
     [Fact]
