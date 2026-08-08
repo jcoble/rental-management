@@ -70,6 +70,36 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dashboard_GroupsKpisAndPreservesKpiValues()
+    {
+        SeedActivityGraph();
+
+        _executedSql.Clear();
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Occupancy.TotalUnits.Should().Be(1);
+        dashboard.Occupancy.OccupiedUnits.Should().Be(0);
+        dashboard.Occupancy.VacantUnits.Should().Be(1);
+        dashboard.Occupancy.ReservedUnits.Should().Be(0);
+        dashboard.Occupancy.OccupancyRate.Should().Be(0);
+        dashboard.Maintenance.OpenCount.Should().Be(1);
+        dashboard.Maintenance.EmergencyCount.Should().Be(0);
+        dashboard.Maintenance.InProgressCount.Should().Be(0);
+        dashboard.Leasing.TotalLeases.Should().Be(1);
+        dashboard.Leasing.ActiveLeases.Should().Be(0);
+        dashboard.Leasing.ByStatus.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, int>("Preparing", 1));
+        dashboard.Accounting.DueThisMonthAmount.Should().Be(0m);
+        dashboard.Accounting.PaidThisMonthAmount.Should().Be(0m);
+        dashboard.Accounting.OverdueAmount.Should().Be(0m);
+        dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(0m);
+        dashboard.Accounting.NetThisMonth.Should().Be(0m);
+
+        _executedSql.Should().HaveCountLessThanOrEqualTo(5,
+            "the dashboard should use one header/KPI statement plus accounting, expiring leases, activity, and appointments");
+    }
+
+    [Fact]
     public async Task RecentActivity_ExcludesRowsWithoutAnAuthorizedPropertyPath()
     {
         SeedActivityGraph();
@@ -97,6 +127,8 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         auditQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
         auditQueries[0].Should().Contain("ORDER BY");
         auditQueries[0].Should().Contain("LIMIT");
+        auditQueries[0].Should().Contain("UNION ALL");
+        auditQueries[0].Should().Contain("LEFT JOIN");
         auditQueries[0].Should().Contain("Tenants");
         auditQueries[0].Should().Contain("TenantAccounts");
     }
