@@ -497,7 +497,7 @@ public class DashboardService : IDashboardService
             .Select(property => new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Property),
-                EntityId = property.Id,
+                EntityId = (long)property.Id,
                 Label = property.Name,
                 UnitId = null,
             });
@@ -513,7 +513,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Unit),
-                EntityId = unit.Id,
+                EntityId = (long)unit.Id,
                 Label = property == null ? null : property.Name + " · Unit " + unit.UnitNumber,
                 UnitId = unit.Id,
             };
@@ -529,7 +529,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Tenant),
-                EntityId = tenant.Id,
+                EntityId = (long)tenant.Id,
                 Label = tenant.FirstName + " " + tenant.LastName,
                 UnitId = tenantUnit == null ? null : tenantUnit.UnitId,
             };
@@ -540,7 +540,7 @@ public class DashboardService : IDashboardService
             .Select(management => new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(LeaseManagement),
-                EntityId = management.Id,
+                EntityId = (long)management.Id,
                 Label = management.RelationshipNumber,
                 UnitId = management.UnitId,
             });
@@ -556,7 +556,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(LeaseAgreement),
-                EntityId = agreement.Id,
+                EntityId = (long)agreement.Id,
                 Label = agreement.AgreementNumber,
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -572,7 +572,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(LeaseAddendum),
-                EntityId = addendum.Id,
+                EntityId = (long)addendum.Id,
                 Label = addendum.AddendumNumber,
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -588,7 +588,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(TenantAccount),
-                EntityId = account.Id,
+                EntityId = (long)account.Id,
                 Label = account.AccountNumber,
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -617,7 +617,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(TenantLedgerEntry),
-                EntityId = (int)entry.Id,
+                EntityId = entry.Id,
                 Label = entry.Description,
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -646,7 +646,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(SecurityDepositAccount),
-                EntityId = deposit.Id,
+                EntityId = (long)deposit.Id,
                 Label = account == null ? null : account.AccountNumber + " deposit",
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -696,7 +696,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(SecurityDepositEntry),
-                EntityId = (int)entry.Id,
+                EntityId = entry.Id,
                 Label = entry.Description,
                 UnitId = management == null ? null : management.UnitId,
             };
@@ -707,7 +707,7 @@ public class DashboardService : IDashboardService
             .Select(workOrder => new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(WorkOrder),
-                EntityId = workOrder.Id,
+                EntityId = (long)workOrder.Id,
                 Label = workOrder.Title,
                 UnitId = workOrder.UnitId,
             });
@@ -723,7 +723,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Expense),
-                EntityId = expense.Id,
+                EntityId = (long)expense.Id,
                 Label = expense.Description,
                 UnitId = expense.UnitId ?? (workOrder == null ? null : workOrder.UnitId),
             };
@@ -734,7 +734,7 @@ public class DashboardService : IDashboardService
             .Select(appointment => new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Appointment),
-                EntityId = appointment.Id,
+                EntityId = (long)appointment.Id,
                 Label = appointment.Title,
                 UnitId = appointment.UnitId,
             });
@@ -750,7 +750,7 @@ public class DashboardService : IDashboardService
             select new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(Inspection),
-                EntityId = inspection.Id,
+                EntityId = (long)inspection.Id,
                 Label = property == null ? null : property.Name,
                 UnitId = inspection.UnitId,
             };
@@ -761,7 +761,7 @@ public class DashboardService : IDashboardService
             .Select(application => new DashboardActivityEntityReadRow
             {
                 EntityType = nameof(RentalApplication),
-                EntityId = application.Id,
+                EntityId = (long)application.Id,
                 Label = application.FirstName + " " + application.LastName,
                 UnitId = application.UnitId,
             });
@@ -789,7 +789,7 @@ public class DashboardService : IDashboardService
 
         return from audit in audits
                join entity in entityRows
-                   on new { Type = audit.EntityType, Id = audit.EntityId }
+                   on new { Type = audit.EntityType, Id = (long)audit.EntityId }
                    equals new { Type = entity.EntityType, Id = entity.EntityId }
                    into entityJoin
                from entity in entityJoin.DefaultIfEmpty()
@@ -815,7 +815,7 @@ public class DashboardService : IDashboardService
     private sealed class DashboardActivityEntityReadRow
     {
         public string EntityType { get; set; } = string.Empty;
-        public int EntityId { get; set; }
+        public long EntityId { get; set; }
         public string? Label { get; set; }
         public int? UnitId { get; set; }
     }

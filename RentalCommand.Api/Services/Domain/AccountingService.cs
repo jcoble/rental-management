@@ -774,7 +774,10 @@ public class AccountingService : IAccountingService
                         ExpenseId = latestFiles.Key,
                         HasReceipt = true,
                         ReceiptIsImage = EF.Functions.ArrayAgg(
-                            latestFiles.Select(file => file.ContentType.StartsWith("image/")))[0],
+                            latestFiles
+                                .OrderByDescending(file => file.UploadedAt)
+                                .ThenByDescending(file => file.Id)
+                                .Select(file => file.ContentType.StartsWith("image/")))[0],
                     })
                 .ToListAsync(ct);
             receiptFactsByExpenseId = receiptFacts.ToDictionary(fact => fact.ExpenseId);
@@ -787,6 +790,7 @@ public class AccountingService : IAccountingService
                     bank.MatchedExpenseId.HasValue &&
                     expenseIds.Contains(bank.MatchedExpenseId.Value))
                 .OrderByDescending(bank => bank.PostedAt)
+                .ThenByDescending(bank => bank.Id)
                 .Select(bank => new ExpenseBankFact
                 {
                     ExpenseId = bank.MatchedExpenseId!.Value,
