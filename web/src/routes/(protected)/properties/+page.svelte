@@ -153,6 +153,7 @@
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state(createEmptyPropertyDraft());
+	let inServiceDateInvalid = $state(false);
 	let formErrors = $state<Record<string, string>>({});
 	let propertyStep = $state(0);
 	let completedPropertySteps = $state<number[]>([]);
@@ -252,6 +253,7 @@
 		};
 		initialOwnerEntityId = form.ownerEntityId;
 		selectedOwnerLabel = p.ownerships.length === 1 ? p.ownerships[0].ownerName : null;
+		inServiceDateInvalid = false;
 		formErrors = {};
 		propertyStep = 0;
 		completedPropertySteps = [];
@@ -263,6 +265,7 @@
 		editingId = null;
 		selectedOwnerLabel = null;
 		initialOwnerEntityId = '';
+		inServiceDateInvalid = false;
 		formErrors = {};
 		propertyStep = 0;
 		completedPropertySteps = [];
@@ -307,6 +310,12 @@
 	function submitProperty() {
 		if (!canManageRentals) return;
 		if (editingId == null) return;
+		if (inServiceDateInvalid) {
+			formErrors = { ...formErrors, inServiceDate: 'Enter a valid in-service date.' };
+			propertyStep = propertySteps.length - 1;
+			markPropertyStepInvalid(propertyStep);
+			return;
+		}
 		const result = parseForm(propertySchema, form);
 		const operations = parseForm(propertyOperationsSchema, form);
 		const basis = parseForm(propertyBasisSchema, form);
@@ -593,7 +602,7 @@
 					</div>
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">In-service date</span>
-						<DatePicker id="property-in-service-date-input" testid="property-in-service-date-input" bind:value={form.inServiceDate} />
+						<DatePicker id="property-in-service-date-input" testid="property-in-service-date-input" bind:value={form.inServiceDate} bind:invalid={inServiceDateInvalid} />
 						{#if formErrors.inServiceDate}<p class="mt-1 text-xs text-destructive">{formErrors.inServiceDate}</p>{/if}
 					</div>
 					<div>
@@ -616,7 +625,7 @@
 					onclick={nextPropertyStep}
 				/>
 			{:else}
-				<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
+				<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending || inServiceDateInvalid}>
 					{savePropertyMutation.isPending ? 'Saving…' : 'Save property'}
 				</Button>
 			{/if}

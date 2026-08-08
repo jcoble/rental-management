@@ -28,6 +28,7 @@
     todayValue? string  ISO `yyyy-MM-dd` — override for the Today shortcut.
     testid?     string  applied as data-testid on the text input for E2E.
     id?         string  id for the text input (label `for=` association).
+    invalid?    boolean (bindable) reflects invalid typed or out-of-range text.
 -->
 <script lang="ts">
 	import { Calendar } from '$lib/components/ui/calendar';
@@ -51,6 +52,7 @@
 
 	let {
 		value = $bindable(''),
+		invalid = $bindable(false),
 		onchange,
 		placeholder = 'MM/DD/YYYY',
 		disabled = false,
@@ -61,6 +63,7 @@
 		id
 	}: {
 		value?: string;
+		invalid?: boolean;
 		onchange?: (iso: string) => void;
 		placeholder?: string;
 		disabled?: boolean;
@@ -76,7 +79,6 @@
 	// Text the user is currently typing. Re-synced from `value` whenever the bound
 	// value changes from the outside (form load, calendar pick, clear).
 	let text = $state(formatIsoToUsInput(value));
-	let invalid = $state(false);
 	let lastSyncedValue = $state(value);
 
 	$effect(() => {

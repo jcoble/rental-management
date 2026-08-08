@@ -550,16 +550,23 @@
 	error: string | undefined,
 	control: import('svelte').Snippet,
 	editing: boolean,
-	morphName: string
+	morphName: string,
+	readonlySurface: boolean = false
 )}
 	<div data-testid={`${testid}-field`} style:view-transition-name={morphName || null}>
-		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${testid}-input`}>{label}</label>
 		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${testid}-input`}>{label}</label>
 			{@render control()}
 			{#if error}
 				<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>
 			{/if}
+		{:else if readonlySurface}
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${testid}-value`}>
+				<span class="m3-readonly-field__label">{label}</span>
+				<span class="m3-readonly-field__value mt-1">{display === '' ? '-' : display}</span>
+			</div>
 		{:else}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${testid}-input`}>{label}</label>
 			<p
 				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
 				data-testid={`${testid}-value`}
@@ -775,7 +782,7 @@
 			<DetailCard title="Tax basis" icon={Info} accent="muted" testid="property-detail-tax-basis-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-detail-purchase-price" morphName="vt-prop-purchase-price" />
 				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-detail-land-value" morphName="vt-prop-land-value" />
-				{@render inlineFieldWrap('property-detail-in-service-date', 'In-service date', property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—', propertyFormErrors.inServiceDate, propertyInServiceDateControl, editingProperty, 'vt-prop-in-service-date')}
+				{@render inlineFieldWrap('property-detail-in-service-date', 'In-service date', property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—', propertyFormErrors.inServiceDate, propertyInServiceDateControl, editingProperty, 'vt-prop-in-service-date', true)}
 				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-detail-manual-depreciation" morphName="vt-prop-manual-depreciation" />
 				<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={fmtMoney(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-detail-accumulated-depreciation" class="sm:col-span-2" morphName="vt-prop-accumulated-depreciation" />
 			</DetailCard>
