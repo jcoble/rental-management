@@ -628,6 +628,8 @@ export interface LeaseAgreementSummary {
 	isGoverning: boolean;
 	signerCount: number;
 	hasSourceScan: boolean;
+	signatureRequestId?: number | null;
+	hasSignatureRequest: boolean;
 	issuedArtifact?: LegalDocumentArtifactSummary | null;
 	executedArtifact?: LegalDocumentArtifactSummary | null;
 	issuedAtUtc?: string | null;
