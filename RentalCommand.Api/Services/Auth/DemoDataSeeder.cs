@@ -213,6 +213,17 @@ public class DemoDataSeeder
             _db.ChangeTracker.Clear();
         }
 
+        await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                DemoLeaseAddendumTemplateCommandHandler.CommandType,
+                $"portfolio:{portfolioId}:standard-lease-addendum-template:v1"),
+            new EnsureDemoLeaseAddendumTemplateCommand(
+                portfolioId,
+                actorUserId,
+                _timeProvider.UtcNow()),
+            DemoLeaseAddendumTemplateCommandHandler.ResultCodec,
+            ct);
+
         _logger.LogInformation(
             "Demo legal-document reconciliation completed for portfolio {PortfolioId}: {FinalizedCount} finalized, {SkippedCount} skipped.",
             portfolioId,
@@ -1483,6 +1494,141 @@ public class DemoDataSeeder
         string ExecutedFileName,
         long ExecutedLength,
         string ExecutedHash);
+}
+
+public sealed class DemoLeaseAddendumTemplateCommandHandler
+    : IAtomicCommandHandler<EnsureDemoLeaseAddendumTemplateCommand, EnsureDemoLeaseAddendumTemplateResult>
+{
+    internal const string CommandType = "sandbox.demo-addendum-template";
+    internal const string TemplateName = "Standard lease addendum page";
+
+    internal static readonly AtomicJsonResultCodec<EnsureDemoLeaseAddendumTemplateResult> ResultCodec =
+        new("demo-lease-addendum-template-result:v1");
+
+    private readonly RentalCommandDbContext _db;
+
+    public DemoLeaseAddendumTemplateCommandHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<EnsureDemoLeaseAddendumTemplateResult> HandleAsync(
+        EnsureDemoLeaseAddendumTemplateCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await AuthorizeAsync(command, _db, ct);
+        await context.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+
+        var existingTemplateId = await _db.DocumentTemplates
+            .AsNoTracking()
+            .Where(template => template.PortfolioId == command.PortfolioId
+                && template.Name == TemplateName)
+            .OrderBy(template => template.Id)
+            .Select(template => (int?)template.Id)
+            .FirstOrDefaultAsync(ct);
+        if (existingTemplateId.HasValue)
+        {
+            return new(
+                command.PortfolioId,
+                existingTemplateId,
+                AlreadyPresent: true,
+                ReusedIssuedLeasePdf: false);
+        }
+
+        var issuedLeaseFileId = await (
+            from artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+            join storedFile in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, artifact.StoredFileId }
+                equals new { storedFile.PortfolioId, StoredFileId = storedFile.Id }
+            where artifact.PortfolioId == command.PortfolioId
+                && artifact.ArtifactKind == LegalDocumentArtifactKind.IssuedAgreement
+                && storedFile.DeletedAt == null
+            orderby artifact.Id
+            select (int?)storedFile.Id)
+            .FirstOrDefaultAsync(ct);
+        if (!issuedLeaseFileId.HasValue)
+        {
+            throw new InvalidOperationException(
+                $"Demo portfolio {command.PortfolioId} has no issued lease PDF to reuse for the addendum template.");
+        }
+
+        var template = new DocumentTemplate
+        {
+            PortfolioId = command.PortfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Status = DocumentTemplateStatus.Active,
+            Name = TemplateName,
+            Description = "Demo-seeded source for creating lease addendum drafts.",
+            OriginalStoredFileId = issuedLeaseFileId.Value,
+            DefaultForPortfolio = false,
+            IsSandboxSeeded = true,
+            PropertyId = null,
+            Version = 1,
+            CreatedAtUtc = command.BusinessNowUtc,
+            UpdatedAtUtc = command.BusinessNowUtc,
+            ArchivedAtUtc = null,
+        };
+        _db.DocumentTemplates.Add(template);
+        context.UseDatabaseWallClockForAudit(command.BusinessNowUtc);
+        context.BindSemanticAudit(template, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(DocumentTemplate),
+            0,
+            AuditLogOperation.Created,
+            UserId: command.ActorUserId,
+            ChangeReason: "Created the demo Lease-kind template used by Addendum drafts."));
+        await context.FlushBusinessAsync(ct);
+
+        return new(
+            command.PortfolioId,
+            template.Id,
+            AlreadyPresent: false,
+            ReusedIssuedLeasePdf: true);
+    }
+
+    public Task AuthorizeReplayAsync(
+        EnsureDemoLeaseAddendumTemplateCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        Validate(command);
+        return AuthorizeAsync(command, _db, ct);
+    }
+
+    private static async Task AuthorizeAsync(
+        EnsureDemoLeaseAddendumTemplateCommand command,
+        RentalCommandDbContext db,
+        CancellationToken ct)
+    {
+        var authorized = await db.Set<Portfolio>()
+            .AsNoTracking()
+            .AnyAsync(portfolio =>
+                portfolio.Id == command.PortfolioId
+                && db.Set<WorkspaceMembership>().Any(membership =>
+                    membership.PortfolioId == command.PortfolioId
+                    && membership.AccessContext!.UserId == command.ActorUserId
+                    && membership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+                    && membership.AccessContext.SuspendedAtUtc == null
+                    && membership.AccessContext.RevokedAtUtc == null
+                    && membership.Status == WorkspaceMembershipStatus.Active
+                    && membership.SuspendedAtUtc == null
+                    && membership.RevokedAtUtc == null), ct);
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The demo addendum template cannot be seeded in this portfolio.");
+        }
+    }
+
+    private static void Validate(EnsureDemoLeaseAddendumTemplateCommand command)
+    {
+        if (command.PortfolioId <= 0
+            || command.ActorUserId <= 0
+            || command.BusinessNowUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new DomainValidationException("A valid demo addendum-template seed command is required.");
+        }
+    }
 }
 
 public sealed class DemoSeedCommandHandler

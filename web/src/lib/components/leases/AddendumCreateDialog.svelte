@@ -174,7 +174,7 @@
 		else if (!effectiveFromOn) validationError = 'Effective date is required.';
 		else if (effectiveThroughOn && effectiveThroughOn < effectiveFromOn)
 			validationError = 'Effective-through date cannot be before the effective date.';
-		else if (!documentTemplateId) validationError = 'Choose an active lease template.';
+		else if (!documentTemplateId) validationError = 'Choose an active addendum template.';
 		else if (signers.length === 0) validationError = 'At least one signer is required.';
 		else if (signers.some((signer) => !signer.nameSnapshot.trim() || !signer.emailSnapshot.trim()))
 			validationError = 'Every signer needs a name and email snapshot.';
@@ -256,6 +256,12 @@
 				<label class="space-y-1"><span class="text-sm font-medium">Change ends (optional)</span><DatePicker bind:value={effectiveThroughOn} /></label>
 			</div>
 			{#if templatesQuery.isError}<p class="text-sm text-destructive">Active templates could not be loaded. Retry this dialog before creating a draft.</p>{/if}
+			{#if !templatesQuery.isLoading && !templatesQuery.isError && templatesQuery.data?.items.length === 0}
+				<p class="text-sm text-muted-foreground" data-testid="addendum-create-empty-templates">
+					No addendum templates exist yet.
+					<a class="font-medium underline underline-offset-2" href="/lease-templates" target="_blank" rel="noreferrer">Open Lease Templates</a>
+				</p>
+			{/if}
 			{#if currentPartiesQuery.isError}<p class="text-sm text-destructive">Current relationship parties could not be loaded. Retry this dialog before creating a draft.</p>{/if}
 
 			<div class="space-y-3">
