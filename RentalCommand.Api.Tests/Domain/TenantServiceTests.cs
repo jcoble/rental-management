@@ -214,6 +214,40 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_UnitFilterKeepsCurrentOccupantWhenPropertyFilterDiffers()
+    {
+        var (currentProperty, targetUnit, _) = SeedPropertyWithUnits();
+        var otherProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Different Property",
+            AddressLine1 = "200 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Properties.Add(otherProperty);
+        _ctx.Db.SaveChanges();
+
+        var tenant = SeedTenant("Jordan", "Occupant", activeRelationshipCount: 0);
+        SeedRelationshipOnUnit(tenant, currentProperty, targetUnit, occupying: true);
+
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            UnitId = targetUnit.Id,
+            PropertyId = otherProperty.Id,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(1);
+        result.Items.Should().ContainSingle(t => t.Id == tenant.Id);
+    }
+
+    [Fact]
     public async Task ListPageAsync_TokenizesHyphenatedSearchTermsInSql()
     {
         SeedTenant("Avery", "Ellis", activeRelationshipCount: 0);

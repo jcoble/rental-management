@@ -368,9 +368,7 @@ public class TenantService : ITenantService
                     .Count(),
                 HasCurrentRelationship = current.Any(),
                 HasCurrentUnitMatch = unitId.HasValue
-                    && current.Any(row =>
-                        row.UnitId == targetUnitId
-                        && (!propertyId.HasValue || row.PropertyId == targetPropertyId)),
+                    && current.Any(row => row.UnitId == targetUnitId),
                 HasCurrentPropertyMatch = propertyId.HasValue
                     && current.Any(row => row.PropertyId == targetPropertyId),
             };
