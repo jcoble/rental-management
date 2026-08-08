@@ -414,36 +414,64 @@ public class DashboardService : IDashboardService
         WorkspaceReadScope scope,
         CancellationToken ct)
     {
-        // Authorization, supported entity-path filtering, stable ordering, the 10-row limit, actor
-        // resolution, label resolution, and Unit context are all part of this one translated reader
-        // statement. Only enum/string presentation remains after materialization.
-        var rows = await BuildRecentActivityProjectionQuery(scope).ToListAsync(ct);
-
-        return rows
-            .Select(row => new DashboardActivity
+        // Statement 1 fixes the authorized activity boundary before entity resolution. Extracting
+        // keys from this at-most-ten-row page is bounded orchestration, not business aggregation.
+        var auditPage = await BuildRecentActivityAuditPageQuery(scope).ToListAsync(ct);
+        var keySetsByType = new Dictionary<string, HashSet<long>>(StringComparer.Ordinal);
+        foreach (var row in auditPage)
+        {
+            if (!keySetsByType.TryGetValue(row.Audit.EntityType, out var entityIds))
             {
-                Id = row.Audit.Id,
-                Type = row.Audit.EntityType,
-                EntityId = row.Audit.EntityId,
-                UnitId = row.UnitId,
-                Action = row.Audit.Operation.ToString(),
-                Description = _auditDescriber.Describe(row.Audit),
-                Label = string.IsNullOrWhiteSpace(row.Label) ? null : row.Label.Trim(),
-                Actor = AuditEntryResponse.ResolveActor(row.Audit, row.ResolvedActorName),
-                CreatedAt = row.Audit.Timestamp,
+                entityIds = [];
+                keySetsByType.Add(row.Audit.EntityType, entityIds);
+            }
+
+            entityIds.Add(row.Audit.EntityId);
+        }
+
+        var keysByType = new Dictionary<string, long[]>(keySetsByType.Count, StringComparer.Ordinal);
+        foreach (var (entityType, entityIds) in keySetsByType)
+        {
+            keysByType.Add(entityType, [.. entityIds]);
+        }
+
+        // Statement 2 contains only branches represented on the page, with each base relation
+        // constrained by its page keys before label and Unit-context joins are composed.
+        var entityFacts = await BuildRecentActivityEntityFactQuery(scope, keysByType).ToListAsync(ct);
+        var entityFactsByKey = new Dictionary<(string EntityType, long EntityId), DashboardActivityEntityReadRow>();
+        foreach (var fact in entityFacts)
+        {
+            entityFactsByKey.TryAdd((fact.EntityType, fact.EntityId), fact);
+        }
+
+        return auditPage
+            .Select(row =>
+            {
+                entityFactsByKey.TryGetValue((row.Audit.EntityType, row.Audit.EntityId), out var fact);
+                return new DashboardActivity
+                {
+                    Id = row.Audit.Id,
+                    Type = row.Audit.EntityType,
+                    EntityId = row.Audit.EntityId,
+                    UnitId = fact?.UnitId,
+                    Action = row.Audit.Operation.ToString(),
+                    Description = _auditDescriber.Describe(row.Audit),
+                    Label = string.IsNullOrWhiteSpace(fact?.Label) ? null : fact!.Label!.Trim(),
+                    Actor = AuditEntryResponse.ResolveActor(row.Audit, row.ResolvedActorName),
+                    CreatedAt = row.Audit.Timestamp,
+                };
             })
             .ToList();
     }
 
     /// <summary>
-    /// One SQL projection for the scoped recent-activity widget. The capped audit subquery is joined
-    /// to one set-based entity lookup relation, so labels, Unit context, and actor names are not
-    /// correlated scalar branches evaluated once per activity row.
+    /// Statement 1 for recent activity: authorize, order, and cap the audit relation before the
+    /// optional actor join. The outer ordering keeps the response stable after that join.
     /// </summary>
-    internal IQueryable<DashboardActivityReadRow> BuildRecentActivityProjectionQuery(WorkspaceReadScope scope)
+    internal IQueryable<DashboardActivityAuditPageReadRow> BuildRecentActivityAuditPageQuery(
+        WorkspaceReadScope scope)
     {
         var portfolioId = scope.PortfolioId;
-        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.ReportsRead);
         var audits = _db.AtomicAuditLogs
             .AsNoTracking()
             .WhereAuthorizedForReports(
@@ -453,351 +481,17 @@ public class DashboardService : IDashboardService
             .OrderByDescending(audit => audit.Timestamp)
             .ThenByDescending(audit => audit.Id)
             .Take(10);
-
-        var tenantParties = _db.LeaseManagementParties
-            .AsNoTracking()
-            .Where(party => party.PortfolioId == portfolioId
-                && authorizedProperties.Any(authorized => authorized.Id == party.LeaseManagement!.PropertyId));
-        var tenantLatestDates = tenantParties
-            .GroupBy(party => new { party.PortfolioId, party.TenantId })
-            .Select(group => new
-            {
-                group.Key.PortfolioId,
-                group.Key.TenantId,
-                EffectiveFrom = group.Max(party => party.EffectiveFrom),
-            });
-        var tenantLatestIds =
-            from party in tenantParties
-            join latestDate in tenantLatestDates
-                on new { party.PortfolioId, party.TenantId, party.EffectiveFrom }
-                equals new { latestDate.PortfolioId, latestDate.TenantId, latestDate.EffectiveFrom }
-            group party by new { party.PortfolioId, party.TenantId }
-            into grouped
-            select new
-            {
-                grouped.Key.PortfolioId,
-                grouped.Key.TenantId,
-                PartyId = grouped.Max(party => party.Id),
-            };
-        var tenantUnitLookup =
-            from party in tenantParties
-            join latest in tenantLatestIds
-                on new { party.PortfolioId, party.TenantId, PartyId = party.Id }
-                equals new { latest.PortfolioId, latest.TenantId, latest.PartyId }
-            select new
-            {
-                party.PortfolioId,
-                party.TenantId,
-                UnitId = (int?)party.LeaseManagement!.UnitId,
-            };
-
-        var propertyRows = _db.Properties
-            .AsNoTracking()
-            .Where(property => property.PortfolioId == portfolioId)
-            .Select(property => new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Property),
-                EntityId = (long)property.Id,
-                Label = property.Name,
-                UnitId = null,
-            });
-
-        var unitRows =
-            from unit in _db.Units.AsNoTracking()
-            join property in _db.Properties.AsNoTracking()
-                on new { unit.PortfolioId, Id = unit.PropertyId }
-                equals new { property.PortfolioId, property.Id }
-                into propertyJoin
-            from property in propertyJoin.DefaultIfEmpty()
-            where unit.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Unit),
-                EntityId = (long)unit.Id,
-                Label = property == null ? null : property.Name + " · Unit " + unit.UnitNumber,
-                UnitId = unit.Id,
-            };
-
-        var tenantRows =
-            from tenant in _db.Tenants.AsNoTracking()
-            join tenantUnit in tenantUnitLookup
-                on new { tenant.PortfolioId, tenant.Id }
-                equals new { tenantUnit.PortfolioId, Id = tenantUnit.TenantId }
-                into tenantUnitJoin
-            from tenantUnit in tenantUnitJoin.DefaultIfEmpty()
-            where tenant.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Tenant),
-                EntityId = (long)tenant.Id,
-                Label = tenant.FirstName + " " + tenant.LastName,
-                UnitId = tenantUnit == null ? null : tenantUnit.UnitId,
-            };
-
-        var leaseManagementRows = _db.LeaseManagements
-            .AsNoTracking()
-            .Where(management => management.PortfolioId == portfolioId)
-            .Select(management => new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(LeaseManagement),
-                EntityId = (long)management.Id,
-                Label = management.RelationshipNumber,
-                UnitId = management.UnitId,
-            });
-
-        var leaseAgreementRows =
-            from agreement in _db.LeaseAgreements.AsNoTracking()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { agreement.PortfolioId, agreement.LeaseManagementId }
-                equals new { management.PortfolioId, LeaseManagementId = management.Id }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where agreement.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(LeaseAgreement),
-                EntityId = (long)agreement.Id,
-                Label = agreement.AgreementNumber,
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var leaseAddendumRows =
-            from addendum in _db.LeaseAddenda.AsNoTracking()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { addendum.PortfolioId, addendum.LeaseManagementId }
-                equals new { management.PortfolioId, LeaseManagementId = management.Id }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where addendum.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(LeaseAddendum),
-                EntityId = (long)addendum.Id,
-                Label = addendum.AddendumNumber,
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var tenantAccountRows =
-            from account in _db.TenantAccounts.AsNoTracking()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, account.LeaseManagementId }
-                equals new { management.PortfolioId, LeaseManagementId = management.Id }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where account.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(TenantAccount),
-                EntityId = (long)account.Id,
-                Label = account.AccountNumber,
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var tenantLedgerRows =
-            from entry in _db.TenantLedgerEntries.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { entry.PortfolioId, entry.TenantAccountId }
-                equals new { account.PortfolioId, TenantAccountId = account.Id }
-                into accountJoin
-            from account in accountJoin.DefaultIfEmpty()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new
-                {
-                    PortfolioId = entry.PortfolioId,
-                    LeaseManagementId = account == null ? (int?)null : account.LeaseManagementId,
-                }
-                equals new
-                {
-                    management.PortfolioId,
-                    LeaseManagementId = (int?)management.Id,
-                }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where entry.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(TenantLedgerEntry),
-                EntityId = entry.Id,
-                Label = entry.Description,
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var securityDepositAccountRows =
-            from deposit in _db.SecurityDepositAccounts.AsNoTracking()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { deposit.PortfolioId, deposit.TenantAccountId }
-                equals new { account.PortfolioId, TenantAccountId = account.Id }
-                into accountJoin
-            from account in accountJoin.DefaultIfEmpty()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new
-                {
-                    PortfolioId = deposit.PortfolioId,
-                    LeaseManagementId = account == null ? (int?)null : account.LeaseManagementId,
-                }
-                equals new
-                {
-                    management.PortfolioId,
-                    LeaseManagementId = (int?)management.Id,
-                }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where deposit.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(SecurityDepositAccount),
-                EntityId = (long)deposit.Id,
-                Label = account == null ? null : account.AccountNumber + " deposit",
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var securityDepositAliasRows = securityDepositAccountRows.Select(row => new DashboardActivityEntityReadRow
-        {
-            EntityType = "SecurityDeposit",
-            EntityId = row.EntityId,
-            Label = row.Label,
-            UnitId = row.UnitId,
-        });
-
-        var securityDepositEntryRows =
-            from entry in _db.SecurityDepositEntries.AsNoTracking()
-            join deposit in _db.SecurityDepositAccounts.AsNoTracking()
-                on new { entry.PortfolioId, entry.SecurityDepositAccountId }
-                equals new { deposit.PortfolioId, SecurityDepositAccountId = deposit.Id }
-                into depositJoin
-            from deposit in depositJoin.DefaultIfEmpty()
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new
-                {
-                    PortfolioId = entry.PortfolioId,
-                    TenantAccountId = deposit == null ? (int?)null : deposit.TenantAccountId,
-                }
-                equals new
-                {
-                    account.PortfolioId,
-                    TenantAccountId = (int?)account.Id,
-                }
-                into accountJoin
-            from account in accountJoin.DefaultIfEmpty()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new
-                {
-                    PortfolioId = entry.PortfolioId,
-                    LeaseManagementId = account == null ? (int?)null : account.LeaseManagementId,
-                }
-                equals new
-                {
-                    management.PortfolioId,
-                    LeaseManagementId = (int?)management.Id,
-                }
-                into managementJoin
-            from management in managementJoin.DefaultIfEmpty()
-            where entry.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(SecurityDepositEntry),
-                EntityId = entry.Id,
-                Label = entry.Description,
-                UnitId = management == null ? null : management.UnitId,
-            };
-
-        var workOrderRows = _db.WorkOrders
-            .AsNoTracking()
-            .Where(workOrder => workOrder.PortfolioId == portfolioId)
-            .Select(workOrder => new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(WorkOrder),
-                EntityId = (long)workOrder.Id,
-                Label = workOrder.Title,
-                UnitId = workOrder.UnitId,
-            });
-
-        var expenseRows =
-            from expense in _db.Expenses.AsNoTracking()
-            join workOrder in _db.WorkOrders.AsNoTracking()
-                on new { expense.PortfolioId, WorkOrderId = expense.WorkOrderId }
-                equals new { workOrder.PortfolioId, WorkOrderId = (int?)workOrder.Id }
-                into workOrderJoin
-            from workOrder in workOrderJoin.DefaultIfEmpty()
-            where expense.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Expense),
-                EntityId = (long)expense.Id,
-                Label = expense.Description,
-                UnitId = expense.UnitId ?? (workOrder == null ? null : workOrder.UnitId),
-            };
-
-        var appointmentRows = _db.Appointments
-            .AsNoTracking()
-            .Where(appointment => appointment.PortfolioId == portfolioId)
-            .Select(appointment => new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Appointment),
-                EntityId = (long)appointment.Id,
-                Label = appointment.Title,
-                UnitId = appointment.UnitId,
-            });
-
-        var inspectionRows =
-            from inspection in _db.Inspections.AsNoTracking()
-            join property in _db.Properties.AsNoTracking()
-                on new { inspection.PortfolioId, inspection.PropertyId }
-                equals new { property.PortfolioId, PropertyId = property.Id }
-                into propertyJoin
-            from property in propertyJoin.DefaultIfEmpty()
-            where inspection.PortfolioId == portfolioId
-            select new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(Inspection),
-                EntityId = (long)inspection.Id,
-                Label = property == null ? null : property.Name,
-                UnitId = inspection.UnitId,
-            };
-
-        var rentalApplicationRows = _db.RentalApplications
-            .AsNoTracking()
-            .Where(application => application.PortfolioId == portfolioId)
-            .Select(application => new DashboardActivityEntityReadRow
-            {
-                EntityType = nameof(RentalApplication),
-                EntityId = (long)application.Id,
-                Label = application.FirstName + " " + application.LastName,
-                UnitId = application.UnitId,
-            });
-
-        var entityRows = propertyRows
-            .Concat(unitRows)
-            .Concat(tenantRows)
-            .Concat(leaseManagementRows)
-            .Concat(leaseAgreementRows)
-            .Concat(leaseAddendumRows)
-            .Concat(tenantAccountRows)
-            .Concat(tenantLedgerRows)
-            .Concat(securityDepositAccountRows)
-            .Concat(securityDepositAliasRows)
-            .Concat(securityDepositEntryRows)
-            .Concat(workOrderRows)
-            .Concat(expenseRows)
-            .Concat(appointmentRows)
-            .Concat(inspectionRows)
-            .Concat(rentalApplicationRows);
-
         var actorUsers = _db.Users
             .AsNoTracking()
             .Where(user => user.WorkspaceAccessContexts.Any(context => context.PortfolioId == portfolioId));
 
         return from audit in audits
-               join entity in entityRows
-                   on new { Type = audit.EntityType, Id = (long)audit.EntityId }
-                   equals new { Type = entity.EntityType, Id = entity.EntityId }
-                   into entityJoin
-               from entity in entityJoin.DefaultIfEmpty()
                join user in actorUsers
                    on audit.UserId equals (int?)user.Id
                    into actorJoin
                from user in actorJoin.DefaultIfEmpty()
-               select new DashboardActivityReadRow
+               orderby audit.Timestamp descending, audit.Id descending
+               select new DashboardActivityAuditPageReadRow
                {
                    Audit = audit,
                    ResolvedActorName = audit.ActorLabel != null && audit.ActorLabel != ""
@@ -807,23 +501,408 @@ public class DashboardService : IDashboardService
                            : user.DisplayName != null && user.DisplayName != ""
                                ? user.DisplayName
                                : user.Email,
-                   Label = entity == null ? null : entity.Label,
-                   UnitId = entity == null ? null : entity.UnitId,
                };
     }
 
-    private sealed class DashboardActivityEntityReadRow
+    /// <summary>
+    /// Statement 2 for recent activity: resolve labels and Unit context only for entity keys present
+    /// in the bounded audit page. Branches absent from the page are not composed into the SQL union.
+    /// </summary>
+    internal IQueryable<DashboardActivityEntityReadRow> BuildRecentActivityEntityFactQuery(
+        WorkspaceReadScope scope,
+        IReadOnlyDictionary<string, long[]> keysByType)
     {
-        public string EntityType { get; set; } = string.Empty;
-        public long EntityId { get; set; }
-        public string? Label { get; set; }
-        public int? UnitId { get; set; }
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.ReportsRead);
+        IQueryable<DashboardActivityEntityReadRow>? entityRows = null;
+
+        static void Append(
+            ref IQueryable<DashboardActivityEntityReadRow>? target,
+            IQueryable<DashboardActivityEntityReadRow> branch) =>
+            target = target == null ? branch : target.Concat(branch);
+
+        if (keysByType.TryGetValue(nameof(Property), out var propertyIds) && propertyIds.Length > 0)
+        {
+            var propertyRows = authorizedProperties
+                .Where(property => propertyIds.Contains((long)property.Id))
+                .Select(property => new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Property),
+                    EntityId = property.Id,
+                    Label = property.Name,
+                    UnitId = null,
+                });
+            Append(ref entityRows, propertyRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(Unit), out var unitIds) && unitIds.Length > 0)
+        {
+            var pageUnits = _db.Units
+                .AsNoTracking()
+                .Where(unit => unit.PortfolioId == portfolioId
+                    && unitIds.Contains((long)unit.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == unit.PropertyId));
+            var unitRows =
+                from unit in pageUnits
+                join property in _db.Properties.AsNoTracking()
+                    on new { unit.PortfolioId, Id = unit.PropertyId }
+                    equals new { property.PortfolioId, property.Id }
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Unit),
+                    EntityId = unit.Id,
+                    Label = property.Name + " · Unit " + unit.UnitNumber,
+                    UnitId = unit.Id,
+                };
+            Append(ref entityRows, unitRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(Tenant), out var tenantIds) && tenantIds.Length > 0)
+        {
+            var tenantParties =
+                from party in _db.LeaseManagementParties.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { party.PortfolioId, Id = party.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                where party.PortfolioId == portfolioId
+                    && tenantIds.Contains((long)party.TenantId)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new
+                {
+                    party.PortfolioId,
+                    party.TenantId,
+                    party.EffectiveFrom,
+                    party.Id,
+                    management.UnitId,
+                };
+            var latestTenantParties = tenantParties
+                .GroupBy(party => new { party.PortfolioId, party.TenantId })
+                .Select(group => new
+                {
+                    group.Key.PortfolioId,
+                    group.Key.TenantId,
+                    UnitId = EF.Functions.ArrayAgg(
+                        group
+                            .OrderByDescending(party => party.EffectiveFrom)
+                            .ThenByDescending(party => party.Id)
+                            .Select(party => (int?)party.UnitId))[0],
+                });
+            var pageTenants = _db.Tenants
+                .AsNoTracking()
+                .Where(tenant => tenant.PortfolioId == portfolioId
+                    && tenantIds.Contains((long)tenant.Id));
+            var tenantRows =
+                from tenant in pageTenants
+                join latestParty in latestTenantParties
+                    on new { tenant.PortfolioId, tenant.Id }
+                    equals new { latestParty.PortfolioId, Id = latestParty.TenantId }
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Tenant),
+                    EntityId = tenant.Id,
+                    Label = tenant.FirstName + " " + tenant.LastName,
+                    UnitId = latestParty.UnitId,
+                };
+            Append(ref entityRows, tenantRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(LeaseManagement), out var managementIds) && managementIds.Length > 0)
+        {
+            var managementRows = _db.LeaseManagements
+                .AsNoTracking()
+                .Where(management => management.PortfolioId == portfolioId
+                    && managementIds.Contains((long)management.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId))
+                .Select(management => new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(LeaseManagement),
+                    EntityId = management.Id,
+                    Label = management.RelationshipNumber,
+                    UnitId = management.UnitId,
+                });
+            Append(ref entityRows, managementRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(LeaseAgreement), out var agreementIds) && agreementIds.Length > 0)
+        {
+            var agreementRows =
+                from agreement in _db.LeaseAgreements.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { agreement.PortfolioId, agreement.LeaseManagementId }
+                    equals new { management.PortfolioId, LeaseManagementId = management.Id }
+                where agreement.PortfolioId == portfolioId
+                    && agreementIds.Contains((long)agreement.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(LeaseAgreement),
+                    EntityId = agreement.Id,
+                    Label = agreement.AgreementNumber,
+                    UnitId = management.UnitId,
+                };
+            Append(ref entityRows, agreementRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(LeaseAddendum), out var addendumIds) && addendumIds.Length > 0)
+        {
+            var addendumRows =
+                from addendum in _db.LeaseAddenda.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { addendum.PortfolioId, addendum.LeaseManagementId }
+                    equals new { management.PortfolioId, LeaseManagementId = management.Id }
+                where addendum.PortfolioId == portfolioId
+                    && addendumIds.Contains((long)addendum.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(LeaseAddendum),
+                    EntityId = addendum.Id,
+                    Label = addendum.AddendumNumber,
+                    UnitId = management.UnitId,
+                };
+            Append(ref entityRows, addendumRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(TenantAccount), out var accountIds) && accountIds.Length > 0)
+        {
+            var accountRows =
+                from account in _db.TenantAccounts.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { account.PortfolioId, account.LeaseManagementId }
+                    equals new { management.PortfolioId, LeaseManagementId = management.Id }
+                where account.PortfolioId == portfolioId
+                    && accountIds.Contains((long)account.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(TenantAccount),
+                    EntityId = account.Id,
+                    Label = account.AccountNumber,
+                    UnitId = management.UnitId,
+                };
+            Append(ref entityRows, accountRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(TenantLedgerEntry), out var ledgerEntryIds)
+            && ledgerEntryIds.Length > 0)
+        {
+            var ledgerRows =
+                from entry in _db.TenantLedgerEntries.AsNoTracking()
+                join account in _db.TenantAccounts.AsNoTracking()
+                    on new { entry.PortfolioId, entry.TenantAccountId }
+                    equals new { account.PortfolioId, TenantAccountId = account.Id }
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { account.PortfolioId, account.LeaseManagementId }
+                    equals new { management.PortfolioId, LeaseManagementId = management.Id }
+                where entry.PortfolioId == portfolioId
+                    && ledgerEntryIds.Contains(entry.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(TenantLedgerEntry),
+                    EntityId = entry.Id,
+                    Label = entry.Description,
+                    UnitId = management.UnitId,
+                };
+            Append(ref entityRows, ledgerRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(SecurityDepositAccount), out var depositAccountIds)
+            && depositAccountIds.Length > 0)
+        {
+            var depositAccountRows = BuildSecurityDepositAccountFactQuery(
+                portfolioId,
+                depositAccountIds,
+                nameof(SecurityDepositAccount),
+                authorizedProperties);
+            Append(ref entityRows, depositAccountRows);
+        }
+
+        if (keysByType.TryGetValue("SecurityDeposit", out var depositAliasIds)
+            && depositAliasIds.Length > 0)
+        {
+            var depositAliasRows = BuildSecurityDepositAccountFactQuery(
+                portfolioId,
+                depositAliasIds,
+                "SecurityDeposit",
+                authorizedProperties);
+            Append(ref entityRows, depositAliasRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(SecurityDepositEntry), out var depositEntryIds)
+            && depositEntryIds.Length > 0)
+        {
+            var depositEntryRows =
+                from entry in _db.SecurityDepositEntries.AsNoTracking()
+                join deposit in _db.SecurityDepositAccounts.AsNoTracking()
+                    on new { entry.PortfolioId, entry.SecurityDepositAccountId }
+                    equals new { deposit.PortfolioId, SecurityDepositAccountId = deposit.Id }
+                join account in _db.TenantAccounts.AsNoTracking()
+                    on new { deposit.PortfolioId, deposit.TenantAccountId }
+                    equals new { account.PortfolioId, TenantAccountId = account.Id }
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { account.PortfolioId, account.LeaseManagementId }
+                    equals new { management.PortfolioId, LeaseManagementId = management.Id }
+                where entry.PortfolioId == portfolioId
+                    && depositEntryIds.Contains(entry.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(SecurityDepositEntry),
+                    EntityId = entry.Id,
+                    Label = entry.Description,
+                    UnitId = management.UnitId,
+                };
+            Append(ref entityRows, depositEntryRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(WorkOrder), out var workOrderIds) && workOrderIds.Length > 0)
+        {
+            var workOrderRows = _db.WorkOrders
+                .AsNoTracking()
+                .Where(workOrder => workOrder.PortfolioId == portfolioId
+                    && workOrderIds.Contains((long)workOrder.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == workOrder.PropertyId))
+                .Select(workOrder => new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(WorkOrder),
+                    EntityId = workOrder.Id,
+                    Label = workOrder.Title,
+                    UnitId = workOrder.UnitId,
+                });
+            Append(ref entityRows, workOrderRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(Expense), out var expenseIds) && expenseIds.Length > 0)
+        {
+            var expenseRows =
+                from expense in _db.Expenses.AsNoTracking()
+                join workOrder in _db.WorkOrders.AsNoTracking()
+                    on new { expense.PortfolioId, WorkOrderId = expense.WorkOrderId }
+                    equals new { workOrder.PortfolioId, WorkOrderId = (int?)workOrder.Id }
+                    into workOrderJoin
+                from workOrder in workOrderJoin.DefaultIfEmpty()
+                where expense.PortfolioId == portfolioId
+                    && expenseIds.Contains((long)expense.Id)
+                    && ((expense.PropertyId != null
+                            && authorizedProperties.Any(authorized => authorized.Id == expense.PropertyId.Value))
+                        || (expense.PropertyId == null
+                            && workOrder != null
+                            && authorizedProperties.Any(authorized => authorized.Id == workOrder.PropertyId)))
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Expense),
+                    EntityId = expense.Id,
+                    Label = expense.Description,
+                    UnitId = expense.UnitId ?? (workOrder == null ? null : workOrder.UnitId),
+                };
+            Append(ref entityRows, expenseRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(Appointment), out var appointmentIds)
+            && appointmentIds.Length > 0)
+        {
+            var appointmentRows = _db.Appointments
+                .AsNoTracking()
+                .Where(appointment => appointment.PortfolioId == portfolioId
+                    && appointmentIds.Contains((long)appointment.Id)
+                    && appointment.PropertyId != null
+                    && authorizedProperties.Any(authorized => authorized.Id == appointment.PropertyId.Value))
+                .Select(appointment => new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Appointment),
+                    EntityId = appointment.Id,
+                    Label = appointment.Title,
+                    UnitId = appointment.UnitId,
+                });
+            Append(ref entityRows, appointmentRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(Inspection), out var inspectionIds) && inspectionIds.Length > 0)
+        {
+            var pageInspections = _db.Inspections
+                .AsNoTracking()
+                .Where(inspection => inspection.PortfolioId == portfolioId
+                    && inspectionIds.Contains((long)inspection.Id)
+                    && authorizedProperties.Any(authorized => authorized.Id == inspection.PropertyId));
+            var inspectionRows =
+                from inspection in pageInspections
+                join property in _db.Properties.AsNoTracking()
+                    on new { inspection.PortfolioId, inspection.PropertyId }
+                    equals new { property.PortfolioId, PropertyId = property.Id }
+                select new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(Inspection),
+                    EntityId = inspection.Id,
+                    Label = property.Name,
+                    UnitId = inspection.UnitId,
+                };
+            Append(ref entityRows, inspectionRows);
+        }
+
+        if (keysByType.TryGetValue(nameof(RentalApplication), out var applicationIds)
+            && applicationIds.Length > 0)
+        {
+            var applicationRows = _db.RentalApplications
+                .AsNoTracking()
+                .Where(application => application.PortfolioId == portfolioId
+                    && applicationIds.Contains((long)application.Id)
+                    && application.PropertyId != null
+                    && authorizedProperties.Any(authorized => authorized.Id == application.PropertyId.Value))
+                .Select(application => new DashboardActivityEntityReadRow
+                {
+                    EntityType = nameof(RentalApplication),
+                    EntityId = application.Id,
+                    Label = application.FirstName + " " + application.LastName,
+                    UnitId = application.UnitId,
+                });
+            Append(ref entityRows, applicationRows);
+        }
+
+        return entityRows ?? _db.Database.SqlQuery<DashboardActivityEntityReadRow>(
+            $"""
+            SELECT ''::text AS "EntityType", 0::bigint AS "EntityId",
+                   NULL::text AS "Label", NULL::integer AS "UnitId"
+            WHERE FALSE
+            """);
     }
 
-    internal sealed class DashboardActivityReadRow
+    private IQueryable<DashboardActivityEntityReadRow> BuildSecurityDepositAccountFactQuery(
+        int portfolioId,
+        long[] depositIds,
+        string entityType,
+        IQueryable<Property> authorizedProperties)
+    {
+        return
+            from deposit in _db.SecurityDepositAccounts.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { deposit.PortfolioId, deposit.TenantAccountId }
+                equals new { account.PortfolioId, TenantAccountId = account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, account.LeaseManagementId }
+                equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            where deposit.PortfolioId == portfolioId
+                && depositIds.Contains((long)deposit.Id)
+                && authorizedProperties.Any(authorized => authorized.Id == management.PropertyId)
+            select new DashboardActivityEntityReadRow
+            {
+                EntityType = entityType,
+                EntityId = deposit.Id,
+                Label = account.AccountNumber + " deposit",
+                UnitId = management.UnitId,
+            };
+    }
+
+    internal sealed class DashboardActivityAuditPageReadRow
     {
         public AtomicAuditLog Audit { get; set; } = null!;
         public string? ResolvedActorName { get; set; }
+    }
+
+    internal sealed class DashboardActivityEntityReadRow
+    {
+        public string EntityType { get; set; } = string.Empty;
+        public long EntityId { get; set; }
         public string? Label { get; set; }
         public int? UnitId { get; set; }
     }

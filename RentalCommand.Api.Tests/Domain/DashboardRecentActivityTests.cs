@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -12,8 +13,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <summary>
 /// Pins the enriched dashboard "Recent Activity" feed: every row must carry the touched entity's
 /// <c>EntityId</c> (for deep-linking) and a human <c>Label</c> naming the specific record, and the
-/// labels, authorization, ordering, and the row limit must be resolved by ONE translated audit
-/// projection — never a materialize/ID-set/follow-up lookup (the hard data-access rule).
+/// labels must be resolved from one page-keyed entity-fact statement after the authorized, stably
+/// ordered ten-row audit page. No entity branch may scan beyond the keys in that bounded page.
 /// </summary>
 [Collection(MigratedPostgreSqlCollection.Name)]
 public class DashboardRecentActivityTests : IAsyncLifetime
@@ -67,6 +68,40 @@ public class DashboardRecentActivityTests : IAsyncLifetime
 
         // Every row still carries the touched entity's id so the web can deep-link to it.
         dashboard.RecentActivity.Should().OnlyContain(r => r.EntityId > 0);
+    }
+
+    [Fact]
+    public async Task RecentActivity_ResolvesLabelsAndUnitIdsForRemainingSupportedTypes()
+    {
+        var seeded = SeedActivityGraph();
+        var additional = SeedRemainingActivityEntities(seeded);
+
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard.Should().NotBeNull();
+        var byKey = dashboard!.RecentActivity.ToDictionary(row => (row.Type, row.EntityId));
+        byKey[(nameof(LeaseAgreement), additional.Agreement.Id)].Should().Match<DashboardActivity>(row =>
+            row.Label == "AGR-ACTIVITY" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(LeaseAddendum), additional.Addendum.Id)].Should().Match<DashboardActivity>(row =>
+            row.Label == "ADD-ACTIVITY" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(TenantLedgerEntry), checked((int)additional.LedgerEntry.Id))]
+            .Should().Match<DashboardActivity>(row =>
+                row.Label == "Activity ledger entry" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(SecurityDepositAccount), additional.DepositAccount.Id)]
+            .Should().Match<DashboardActivity>(row =>
+                row.Label == "TA-1A deposit" && row.UnitId == seeded.Unit.Id);
+        byKey[("SecurityDeposit", additional.DepositAccount.Id)]
+            .Should().Match<DashboardActivity>(row =>
+                row.Label == "TA-1A deposit" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(SecurityDepositEntry), checked((int)additional.DepositEntry.Id))]
+            .Should().Match<DashboardActivity>(row =>
+                row.Label == "Activity deposit entry" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(Appointment), additional.Appointment.Id)].Should().Match<DashboardActivity>(row =>
+            row.Label == "Activity appointment" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(Inspection), additional.Inspection.Id)].Should().Match<DashboardActivity>(row =>
+            row.Label == "Maple" && row.UnitId == seeded.Unit.Id);
+        byKey[(nameof(RentalApplication), additional.Application.Id)].Should().Match<DashboardActivity>(row =>
+            row.Label == "Avery Applicant" && row.UnitId == seeded.Unit.Id);
     }
 
     [Fact]
@@ -192,8 +227,8 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(0m);
         dashboard.Accounting.NetThisMonth.Should().Be(0m);
 
-        _executedSql.Should().HaveCountLessThanOrEqualTo(5,
-            "the dashboard should use one header/KPI statement plus accounting, expiring leases, activity, and appointments");
+        _executedSql.Should().HaveCount(6,
+            "the dashboard should use header/KPI, expiring, accounting, audit-page, page-keyed entity-fact, and appointment statements");
     }
 
     [Fact]
@@ -208,7 +243,7 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RecentActivity_Uses_One_Authorized_Projection_With_No_Label_Followups()
+    public async Task RecentActivity_Uses_Two_PageKeyed_Statements_With_No_Label_Followups()
     {
         SeedActivityGraph();
 
@@ -220,14 +255,63 @@ public class DashboardRecentActivityTests : IAsyncLifetime
             .ToList();
 
         auditQueries.Should().ContainSingle(
-            "recent activity plus every correlated label/Unit lookup must execute as one reader command");
+            "recent activity must fetch the authorized, stably ordered ten-row audit page first");
         auditQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
         auditQueries[0].Should().Contain("ORDER BY");
         auditQueries[0].Should().Contain("LIMIT");
-        auditQueries[0].Should().Contain("UNION ALL");
-        auditQueries[0].Should().Contain("LEFT JOIN");
-        auditQueries[0].Should().Contain("Tenants");
-        auditQueries[0].Should().Contain("TenantAccounts");
+
+        var entityFactQueries = _executedSql
+            .Where(command =>
+                !command.Contains("AtomicAuditLogs", StringComparison.OrdinalIgnoreCase) &&
+                command.Contains("AS \"EntityType\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        entityFactQueries.Should().ContainSingle(
+            "all labels and Unit ids must be resolved in one bounded entity-fact statement");
+        var entityFacts = entityFactQueries[0];
+        entityFacts.Should().Contain("UNION ALL");
+        entityFacts.Should().Contain("= ANY",
+            "each generated entity branch must carry its page-ID predicate in SQL");
+        entityFacts.Should().Contain("array_agg");
+        entityFacts.Should().Contain("\"EffectiveFrom\" DESC");
+        entityFacts.Should().Contain("\"Id\" DESC",
+            "tenant Unit context must use the latest party by EffectiveFrom and then Id");
+        entityFacts.Should().NotContain("\"Appointments\"");
+        entityFacts.Should().NotContain("\"Inspections\"");
+        entityFacts.Should().NotContain("\"RentalApplications\"");
+        entityFacts.Should().NotContain("\"SecurityDepositEntries\"",
+            "entity types absent from the audit page must not generate union branches");
+
+        _executedSql.Should().HaveCount(6,
+            "recent activity contributes exactly two statements and never performs per-row lookups");
+    }
+
+    [Fact]
+    public async Task RecentActivity_Uses_Stable_TopTen_Timestamp_Then_Id_Order()
+    {
+        var seeded = SeedActivityGraph();
+        var sharedTimestamp = new DateTime(2026, 1, 11, 12, 0, 0, DateTimeKind.Utc);
+        var newest = Enumerable.Range(0, 12)
+            .Select(_ => Audit(
+                nameof(Property),
+                seeded.Property.Id,
+                AuditLogOperation.Updated,
+                sharedTimestamp,
+                0))
+            .ToList();
+        _db.AtomicAuditLogs.AddRange(newest);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.RecentActivity.Should().HaveCount(10);
+        dashboard.RecentActivity.Select(row => row.Id).Should().Equal(
+            newest.OrderByDescending(audit => audit.Id).Take(10).Select(audit => audit.Id));
+        dashboard.RecentActivity.Should().OnlyContain(row =>
+            row.Type == nameof(Property) &&
+            row.EntityId == seeded.Property.Id &&
+            row.Label == "Maple");
     }
 
     [Fact]
@@ -402,6 +486,159 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         return new SeededActivityGraph(property, unit, tenant1, tenant2, tenant3, relationship, account, workOrder, expense);
     }
 
+    private SeededRemainingActivityEntities SeedRemainingActivityEntities(SeededActivityGraph seeded)
+    {
+        var now = new DateTime(2026, 1, 11, 12, 0, 0, DateTimeKind.Utc);
+        var sourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(PortfolioId, 1, now);
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-ACTIVITY",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now),
+            BaseRentAmount = 1_200m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_200m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = sourceVersion,
+            CreatedAtUtc = now,
+            CreatedByUserId = seeded.Relationship.CreatedByUserId,
+            UpdatedAtUtc = now,
+        };
+        _db.LeaseAgreements.Add(agreement);
+        _db.SaveChanges();
+
+        var addendum = new LeaseAddendum
+        {
+            PublicId = Guid.NewGuid(),
+            SeriesPublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            BaseAgreementId = agreement.Id,
+            VersionNumber = 1,
+            AddendumNumber = "ADD-ACTIVITY",
+            Purpose = LeaseAddendumPurpose.Other,
+            EffectiveFromOn = DateOnly.FromDateTime(now),
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = sourceVersion.Id,
+            CreatedAtUtc = now,
+            CreatedByUserId = seeded.Relationship.CreatedByUserId,
+            UpdatedAtUtc = now,
+        };
+        var ledgerEntry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Activity ledger entry",
+            BusinessKey = "dashboard-activity-ledger",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = seeded.Relationship.CreatedByUserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            OriginatingAgreementId = agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = now,
+            CreatedByUserId = seeded.Relationship.CreatedByUserId,
+        };
+        var appointment = new Appointment
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = seeded.Property.Id,
+            UnitId = seeded.Unit.Id,
+            LeaseManagementId = seeded.Relationship.Id,
+            Title = "Activity appointment",
+            ScheduledStart = now.AddDays(1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var inspection = new Inspection
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = seeded.Property.Id,
+            UnitId = seeded.Unit.Id,
+            LeaseManagementId = seeded.Relationship.Id,
+            LeaseAgreementId = agreement.Id,
+            ScheduledFor = now.AddDays(2),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var application = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = seeded.Property.Id,
+            UnitId = seeded.Unit.Id,
+            FirstName = "Avery",
+            LastName = "Applicant",
+            SubmittedAtUtc = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(addendum, ledgerEntry, depositAccount, appointment, inspection, application);
+        _db.SaveChanges();
+
+        var depositEntry = new SecurityDepositEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt,
+            Direction = SecurityDepositDirection.Increase,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            BusinessKey = "dashboard-activity-deposit",
+            Description = "Activity deposit entry",
+            LeaseAgreementId = agreement.Id,
+            CreatedByUserId = seeded.Relationship.CreatedByUserId,
+        };
+        _db.SecurityDepositEntries.Add(depositEntry);
+        _db.SaveChanges();
+
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(LeaseAgreement), agreement.Id, AuditLogOperation.Created, now, 0),
+            Audit(nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Created, now, 1),
+            Audit(nameof(TenantLedgerEntry), checked((int)ledgerEntry.Id), AuditLogOperation.Created, now, 2),
+            Audit(nameof(SecurityDepositAccount), depositAccount.Id, AuditLogOperation.Created, now, 3),
+            Audit("SecurityDeposit", depositAccount.Id, AuditLogOperation.Updated, now, 4),
+            Audit(nameof(SecurityDepositEntry), checked((int)depositEntry.Id), AuditLogOperation.Created, now, 5),
+            Audit(nameof(Appointment), appointment.Id, AuditLogOperation.Created, now, 6),
+            Audit(nameof(Inspection), inspection.Id, AuditLogOperation.Created, now, 7),
+            Audit(nameof(RentalApplication), application.Id, AuditLogOperation.Created, now, 8));
+        _db.SaveChanges();
+
+        return new SeededRemainingActivityEntities(
+            agreement,
+            addendum,
+            ledgerEntry,
+            depositAccount,
+            depositEntry,
+            appointment,
+            inspection,
+            application);
+    }
+
     private static LeaseManagementParty Party(
         Tenant tenant,
         LeaseManagementPartyRole role,
@@ -465,4 +702,14 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         TenantAccount Account,
         WorkOrder WorkOrder,
         Expense Expense);
+
+    private sealed record SeededRemainingActivityEntities(
+        LeaseAgreement Agreement,
+        LeaseAddendum Addendum,
+        TenantLedgerEntry LedgerEntry,
+        SecurityDepositAccount DepositAccount,
+        SecurityDepositEntry DepositEntry,
+        Appointment Appointment,
+        Inspection Inspection,
+        RentalApplication Application);
 }

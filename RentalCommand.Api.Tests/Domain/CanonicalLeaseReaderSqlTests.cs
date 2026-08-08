@@ -751,7 +751,14 @@ public sealed class CanonicalLeaseReaderSqlTests
             Mock.Of<RentalCommand.Core.Time.IAppTimeZoneProvider>(),
             TimeProvider.System);
 
-        var dashboardSql = dashboard.BuildRecentActivityProjectionQuery(ReadScope())
+        var dashboardAuditSql = dashboard.BuildRecentActivityAuditPageQuery(ReadScope())
+            .ToQueryString();
+        var dashboardEntitySql = dashboard.BuildRecentActivityEntityFactQuery(
+                ReadScope(),
+                new Dictionary<string, long[]>(StringComparer.Ordinal)
+                {
+                    [nameof(RentalCommand.Core.Entities.TenantAccount)] = [42L],
+                })
             .ToQueryString();
         var auditSql = audit.BuildPageProjectionQuery(
                 ReadScope(),
@@ -761,7 +768,7 @@ public sealed class CanonicalLeaseReaderSqlTests
                 query: new ListQuery { Take = 20 })
             .ToQueryString();
 
-        foreach (var sql in new[] { dashboardSql, auditSql })
+        foreach (var sql in new[] { dashboardEntitySql, auditSql })
         {
             sql.Should().Contain("TenantAccounts");
             sql.Should().Contain("LeaseManagements");
@@ -770,16 +777,82 @@ public sealed class CanonicalLeaseReaderSqlTests
             sql.Should().NotContain("\"Leases\"");
         }
 
-        dashboardSql.Should().Contain("AtomicAuditLogs");
+        dashboardAuditSql.Should().Contain("AtomicAuditLogs");
         // This reader also carries the all-property assignment guard for unsupported/global audit rows.
         AssertCanonicalPropertyAuthorization(
-            dashboardSql,
+            dashboardAuditSql,
             expectedCallCount: null,
             expectMembershipRoleAssignments: true);
-        dashboardSql.Should().Contain("reports.read");
-        dashboardSql.Should().Contain("AccountNumber");
+        dashboardAuditSql.Should().Contain("reports.read");
+        dashboardEntitySql.Should().Contain("AccountNumber");
+        dashboardEntitySql.Should().Contain("= ANY");
         auditSql.Should().Contain("AtomicAuditLogs");
         auditSql.Should().Contain("LIMIT");
+    }
+
+    [Fact]
+    public void Dashboard_tenant_activity_facts_use_page_keys_and_one_ordered_party_aggregate()
+    {
+        using var db = NewContext();
+        var dashboard = new DashboardService(db, new AuditDescriber(), TimeProvider.System);
+
+        var sql = dashboard.BuildRecentActivityEntityFactQuery(
+                ReadScope(),
+                new Dictionary<string, long[]>(StringComparer.Ordinal)
+                {
+                    [nameof(RentalCommand.Core.Entities.Tenant)] = [42L, 43L],
+                })
+            .ToQueryString();
+
+        sql.Should().Contain("Tenants");
+        sql.Should().Contain("LeaseManagementParties");
+        sql.Should().Contain("= ANY");
+        sql.Should().Contain("array_agg");
+        sql.Should().Contain("\"EffectiveFrom\" DESC");
+        sql.Should().Contain("\"Id\" DESC");
+        sql.Should().NotContain("max(",
+            "the latest tenant party must not rebuild portfolio-wide latest-date/latest-id relations");
+    }
+
+    [Theory]
+    [InlineData("Property", "Properties")]
+    [InlineData("Unit", "Units")]
+    [InlineData("LeaseManagement", "LeaseManagements")]
+    [InlineData("LeaseAgreement", "LeaseAgreements")]
+    [InlineData("LeaseAddendum", "LeaseAddenda")]
+    [InlineData("TenantAccount", "TenantAccounts")]
+    [InlineData("TenantLedgerEntry", "TenantLedgerEntries")]
+    [InlineData("SecurityDepositAccount", "SecurityDepositAccounts")]
+    [InlineData("SecurityDeposit", "SecurityDepositAccounts")]
+    [InlineData("SecurityDepositEntry", "SecurityDepositEntries")]
+    [InlineData("WorkOrder", "WorkOrders")]
+    [InlineData("Expense", "Expenses")]
+    [InlineData("Appointment", "Appointments")]
+    [InlineData("Inspection", "Inspections")]
+    [InlineData("RentalApplication", "RentalApplications")]
+    public void Dashboard_activity_fact_branch_is_authorized_page_keyed_and_excludes_absent_types(
+        string entityType,
+        string expectedTable)
+    {
+        using var db = NewContext();
+        var dashboard = new DashboardService(db, new AuditDescriber(), TimeProvider.System);
+
+        var sql = dashboard.BuildRecentActivityEntityFactQuery(
+                ReadScope(),
+                new Dictionary<string, long[]>(StringComparer.Ordinal)
+                {
+                    [entityType] = [42L],
+                })
+            .ToQueryString();
+
+        sql.Should().Contain($"\"{expectedTable}\"");
+        sql.Should().Contain("= ANY",
+            "the entity key restriction must remain in the generated branch");
+        sql.Should().Contain("public.rc_api_effective_capability_scopes");
+        sql.Should().Contain("reports.read");
+        sql.Should().NotContain("AtomicAuditLogs");
+        sql.Should().NotContain("UNION ALL",
+            "a page with one entity type must not generate branches for absent types");
     }
 
     private static LeaseManagementQueryService NewLeaseManagementQueryService(RentalCommandDbContext db) =>
