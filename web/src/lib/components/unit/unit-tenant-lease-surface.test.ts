@@ -8,6 +8,10 @@ const unitPageSource = readFileSync(
 	new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 	'utf8',
 );
+const leaseManagementDetailSource = readFileSync(
+	new URL('../leases/LeaseManagementDetail.svelte', import.meta.url),
+	'utf8',
+);
 
 describe('Unit Tenant & lease surface', () => {
 	it('keeps the six approved top-level Unit destinations with a subordinate tenant section switcher', () => {
@@ -54,6 +58,27 @@ describe('Unit Tenant & lease surface', () => {
 		assert.match(
 			unitPageSource,
 			/<LeaseManagementDetail leaseManagementId=\{selectedLeaseManagementId\} \/>/,
+		);
+	});
+
+	it('offers the shared notice workflow for the current tenant in the selected relationship', () => {
+		assert.match(
+			leaseManagementDetailSource,
+			/import TenantNoticeDialog from '\$lib\/components\/notices\/TenantNoticeDialog\.svelte'/,
+		);
+		assert.match(
+			leaseManagementDetailSource,
+			/detail\.parties\.find\(\(party\) => party\.isCurrent && party\.tenantId === detail\.summary\.primaryTenantId\)/,
+		);
+		assert.match(
+			leaseManagementDetailSource,
+			/const canManageTenantNotices = \$derived\(activeCapabilities\.has\('notifications\.tenant-notices\.manage'\)\)/,
+		);
+		assert.match(leaseManagementDetailSource, /data-testid="lease-lifecycle-actions"/);
+		assert.match(leaseManagementDetailSource, /data-testid="lease-create-send-notice"/);
+		assert.match(
+			leaseManagementDetailSource,
+			/<TenantNoticeDialog[\s\S]*leaseManagementId=\{leaseManagementId\}[\s\S]*recipientTenantId=\{currentNoticeParty\.tenantId\}/,
 		);
 	});
 
