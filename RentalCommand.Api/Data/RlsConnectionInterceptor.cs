@@ -17,7 +17,38 @@ internal readonly record struct RlsSessionState(
     int? AccessContextId = null,
     long? AccessRevision = null,
     string? PublicApplicationToken = null,
-    string? PublicSigningTokenHash = null);
+    string? PublicSigningTokenHash = null,
+    string? DemoSeedIdempotencyKey = null);
+
+internal static class DemoSeedStartupScope
+{
+    private static readonly AsyncLocal<string?> CurrentKey = new();
+
+    public static string? IdempotencyKey => CurrentKey.Value;
+
+    public static IDisposable Begin(string idempotencyKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        if (idempotencyKey.Length > 160 ||
+            idempotencyKey.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not ':' and not '-'))
+        {
+            throw new ArgumentException("The demo-seed startup identity is invalid.", nameof(idempotencyKey));
+        }
+        if (CurrentKey.Value is not null)
+        {
+            throw new InvalidOperationException("A demo-seed startup scope is already active.");
+        }
+
+        CurrentKey.Value = idempotencyKey;
+        return new ScopeLease();
+    }
+
+    private sealed class ScopeLease : IDisposable
+    {
+        public void Dispose() => CurrentKey.Value = null;
+    }
+}
 
 /// <summary>
 /// Sets PostgreSQL RLS coordinates from the middleware-validated canonical access context and
@@ -121,7 +152,7 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
 
         // This also permits the canonical resolver to read the non-portfolio authority tables before
         // it has validated the context, while every portfolio-scoped table remains invisible.
-        return new RlsSessionState(0);
+        return new RlsSessionState(0, DemoSeedIdempotencyKey: DemoSeedStartupScope.IdempotencyKey);
     }
 
     internal static string BuildSql(RlsSessionState state) =>
@@ -131,7 +162,8 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         $"set_config('app.current_access_context_id', '{state.AccessContextId?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.access_revision', '{state.AccessRevision?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.public_application_token', '{state.PublicApplicationToken ?? string.Empty}', false), " +
-        $"set_config('app.public_signing_token_hash', '{state.PublicSigningTokenHash ?? string.Empty}', false);";
+        $"set_config('app.public_signing_token_hash', '{state.PublicSigningTokenHash ?? string.Empty}', false), " +
+        $"set_config('app.demo_seed_idempotency_key', '{state.DemoSeedIdempotencyKey ?? string.Empty}', false);";
 
     private static bool IsPublicApplicationToken(string token) =>
         IsOpaquePublicToken(token);

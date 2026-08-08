@@ -50,8 +50,21 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         CancellationToken ct = default)
     {
         var rows = BuildGlobalEntryQuery(scope, query);
-        var totalCount = await rows.CountAsync(ct);
-        var items = await ApplyGlobalEntrySort(rows, query)
+        var shaped = rows.Select(row => new TenantLedgerEntryGlobalResponse
+        {
+            FilteredTotalCount = rows.Count(),
+            MonthCharges = rows.Where(other => other.EffectiveOn.Year == row.EffectiveOn.Year && other.EffectiveOn.Month == row.EffectiveOn.Month && other.Direction == TenantLedgerDirection.Debit).Sum(other => other.Amount),
+            MonthPaymentsAndCredits = rows.Where(other => other.EffectiveOn.Year == row.EffectiveOn.Year && other.EffectiveOn.Month == row.EffectiveOn.Month && other.Direction == TenantLedgerDirection.Credit).Sum(other => other.Amount),
+            TenantAccountId = row.TenantAccountId, LeaseManagementId = row.LeaseManagementId,
+            PropertyId = row.PropertyId, PropertyName = row.PropertyName, UnitId = row.UnitId, UnitNumber = row.UnitNumber,
+            AccountNumber = row.AccountNumber, RelationshipNumber = row.RelationshipNumber, PrimaryTenantName = row.PrimaryTenantName,
+            TenantLedgerEntryId = row.TenantLedgerEntryId, PublicId = row.PublicId, EntryType = row.EntryType, Direction = row.Direction,
+            Amount = row.Amount, Currency = row.Currency, EffectiveOn = row.EffectiveOn, DueOn = row.DueOn, PostedAtUtc = row.PostedAtUtc,
+            Description = row.Description, BusinessKey = row.BusinessKey, TransferPublicId = row.TransferPublicId,
+            LeaseAgreementId = row.LeaseAgreementId, LeaseAddendumId = row.LeaseAddendumId, ReversesEntryId = row.ReversesEntryId,
+            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId, SourceStoredFileId = row.SourceStoredFileId, CreatedByUserId = row.CreatedByUserId,
+        });
+        var items = await ApplyGlobalEntrySort(shaped, query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -59,7 +72,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         return new TenantLedgerEntryGlobalPageResponse
         {
             Items = items,
-            TotalCount = totalCount,
+            TotalCount = items.FirstOrDefault()?.FilteredTotalCount ?? 0,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
@@ -299,6 +312,14 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         if (query.TenantAccountId.HasValue)
         {
             rows = rows.Where(row => row.TenantAccountId == query.TenantAccountId.Value);
+        }
+        if (query.PropertyId.HasValue)
+        {
+            rows = rows.Where(row => row.PropertyId == query.PropertyId.Value);
+        }
+        if (query.UnitId.HasValue)
+        {
+            rows = rows.Where(row => row.UnitId == query.UnitId.Value);
         }
         if (query.EntryType.HasValue)
         {

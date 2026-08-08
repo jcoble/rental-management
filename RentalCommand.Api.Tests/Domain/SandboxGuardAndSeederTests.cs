@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
@@ -27,8 +28,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Sandbox guard + parameterized seeder coverage:
 ///   * <see cref="SandboxGuard"/> — the Stripe money-moving guard: true only for a sandbox portfolio;
 ///     false for live/unknown/null.
-///   * <see cref="DemoDataSeeder.SeedPortfolioAsync"/> — seeds an ARBITRARY portfolio id and never
-///     touches the sandbox flag, so the existing dev/e2e portfolio stays Live.
+///   * <see cref="DemoDataSeeder.SeedPortfolioAsync"/> — seeds a fresh arbitrary portfolio id,
+///     reconciles only recognized DEMO-LM facts, and never touches the sandbox flag.
 ///   * Stripe checkout is suppressed (NotEnabled, no Stripe call) while a portfolio is sandbox.
 /// </summary>
 [Collection(MigratedPostgreSqlCollection.Name)]
@@ -36,6 +37,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
 {
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<ServiceProvider> _atomicProviders = [];
+    private readonly DemoPortfolioDiscoveryCommandInterceptor _demoPortfolioDiscovery = new();
     private MigratedPostgreSqlTestContext _ctx = null!;
 
     public SandboxGuardAndSeederTests(MigratedPostgreSqlFixture fixture) =>
@@ -44,7 +46,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         var now = DateTime.UtcNow;
-        _ctx = await _fixture.CreateContextAsync();
+        _ctx = await _fixture.CreateContextAsync([_demoPortfolioDiscovery]);
         _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
         {
             UserId = 1,
@@ -151,7 +153,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
 
         var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -242,6 +244,40 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         noAgreementDemo.Agreements.Should().NotContain(agreement =>
             agreement.FullyExecutedAtUtc != null && agreement.ExecutedArtifactId != null);
 
+        var possessionWithoutGoverningAgreement = await (
+            from lifecycle in _ctx.Db.LeaseManagementLifecycleProjections
+            join relationship in _ctx.Db.LeaseManagements
+                on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                equals new { relationship.PortfolioId, relationship.Id }
+            where lifecycle.PortfolioId == 2
+                && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
+                && lifecycle.HasPossessionWithoutGoverningAgreement
+            select relationship.RelationshipNumber)
+            .ToListAsync();
+        possessionWithoutGoverningAgreement.Should().Equal("DEMO-LM-ACTIVE-017");
+
+        var unintendedCurrentAgreementGaps = await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+            agreement.PortfolioId == 2
+            && agreement.LeaseManagement!.RelationshipNumber.StartsWith("DEMO-LM-ACTIVE-")
+            && agreement.LeaseManagement.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+            && agreement.LeaseManagement.PossessionGivenAtUtc != null
+            && agreement.LeaseManagement.PossessionReturnedAtUtc == null
+            && agreement.BaseRentAmount > 0
+            && (agreement.IssuedArtifactId == null
+                || agreement.ExecutedArtifactId == null
+                || agreement.FullyExecutedAtUtc == null));
+        unintendedCurrentAgreementGaps.Should().Be(0,
+            "every non-exception current demo relationship with scheduled rent terms must have immutable executed evidence");
+
+        var scheduledRentSourcesWithoutExecutedArtifacts = await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+            agreement.PortfolioId == 2
+            && agreement.LeaseManagement!.RelationshipNumber.StartsWith("DEMO-LM-ACTIVE-")
+            && agreement.LeaseManagement.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+            && agreement.BaseRentAmount > 0
+            && agreement.FullyExecutedAtUtc != null
+            && agreement.ExecutedArtifactId == null);
+        scheduledRentSourcesWithoutExecutedArtifacts.Should().Be(0);
+
         var contradictoryCurrentRelationships = await _ctx.Db.LeaseManagements.CountAsync(relationship =>
             relationship.PortfolioId == 2
             && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
@@ -268,7 +304,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     public async Task SeedPortfolio_ExactOperationRetryReplaysOnce()
     {
         var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
-        var (atomic, atomicContext) = BuildAtomicServices(_ctx.Db);
+        var (atomic, atomicContext, _) = BuildAtomicServices(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -294,6 +330,194 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             && receipt.IdempotencyKey == "portfolio:1:seed-idempotency")).Should().Be(1);
         (await _ctx.Db.OutboxMessages.CountAsync(message =>
             message.IdempotencyKey == "demo-seed/1/seed-idempotency")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_PopulatedNonDemoPortfolioIsRejectedWithoutMutation()
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            PortfolioId = 1,
+            Name = "Existing live property",
+            AddressLine1 = "1 Existing Way",
+            City = "Town",
+            State = "ST",
+            PostalCode = "00000",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        var receiptCount = await _ctx.Db.AtomicCommandReceipts.CountAsync();
+        var outboxCount = await _ctx.Db.OutboxMessages.CountAsync();
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "reject-populated-nondemo", CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*populated non-demo portfolio*");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.Properties.CountAsync(property => property.PortfolioId == 1)).Should().Be(1);
+        (await _ctx.Db.LeaseManagements.CountAsync(relationship =>
+            relationship.PortfolioId == 1
+            && relationship.RelationshipNumber.StartsWith("DEMO-LM-"))).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(receiptCount);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(outboxCount);
+    }
+
+    [Fact]
+    public async Task SeedAsync_ReconcilesEveryDemoPortfolio_AndSkipsPopulatedNonDemoPortfolio()
+    {
+        var now = DateTime.UtcNow;
+        var demoPortfolio = new Portfolio
+        {
+            Id = 2,
+            Name = "Second demo portfolio",
+            ManagementCompanyName = "Second Demo Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var nonDemoPortfolio = new Portfolio
+        {
+            Id = 3,
+            Name = "Existing live portfolio",
+            ManagementCompanyName = "Existing Live Co",
+            TimeZone = "UTC",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Portfolios.AddRange(demoPortfolio, nonDemoPortfolio);
+        _ctx.Db.WorkspaceAccessContexts.Add(new WorkspaceAccessContext
+        {
+            UserId = 1,
+            Portfolio = demoPortfolio,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            Membership = new WorkspaceMembership
+            {
+                PortfolioId = 2,
+                Status = WorkspaceMembershipStatus.Active,
+                DefaultExperience = WorkspaceExperience.Management,
+                EffectiveFromUtc = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            },
+        });
+        _ctx.Db.Properties.Add(new Property
+        {
+            Portfolio = nonDemoPortfolio,
+            Name = "Existing live property",
+            AddressLine1 = "3 Existing Way",
+            City = "Town",
+            State = "ST",
+            PostalCode = "00003",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var (firstPreparationSeeder, firstLegalDocuments) = BuildSeeder(_ctx.Db);
+        firstLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => firstPreparationSeeder.SeedPortfolioAsync(
+                1, "prepare-startup-demo-one", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var (secondPreparationSeeder, secondLegalDocuments) = BuildSeeder(_ctx.Db);
+        secondLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => secondPreparationSeeder.SeedPortfolioAsync(
+                2, "prepare-startup-demo-two", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        foreach (var portfolioId in new[] { 1, 2 })
+        {
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.ExecutedArtifactId == null))
+                .Should().BeGreaterThan(0);
+        }
+        var nonDemoPropertyCount = await _ctx.Db.Properties.CountAsync(property =>
+            property.PortfolioId == 3);
+        var nonDemoReceiptCount = await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.IdempotencyKey.StartsWith("portfolio:3:"));
+
+        var (startupSeeder, _) = BuildSeeder(_ctx.Db);
+        await FluentActions.Awaiting(() => startupSeeder.SeedAsync(CancellationToken.None))
+            .Should().NotThrowAsync();
+        _demoPortfolioDiscovery.UsedFunction.Should().BeTrue(
+            "Npgsql startup discovery must use the RLS-safe database function");
+
+        _ctx.Db.ChangeTracker.Clear();
+        foreach (var portfolioId in new[] { 1, 2 })
+        {
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && (agreement.ExecutedArtifactId == null
+                    || agreement.FullyExecutedAtUtc == null)))
+                .Should().Be(0);
+            (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
+                agreement.PortfolioId == portfolioId
+                && agreement.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && agreement.ExecutedArtifactId != null
+                && agreement.FullyExecutedAtUtc != null))
+                .Should().BeGreaterThan(0);
+        }
+        (await _ctx.Db.Properties.CountAsync(property => property.PortfolioId == 3))
+            .Should().Be(nonDemoPropertyCount);
+        (await _ctx.Db.LeaseManagements.CountAsync(relationship => relationship.PortfolioId == 3))
+            .Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.IdempotencyKey.StartsWith("portfolio:3:")))
+            .Should().Be(nonDemoReceiptCount);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_FirstPassUsesContentAddressedLegalUploadRegistrations()
+    {
+        var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "seed-first-pass-content-addressed", CancellationToken.None);
+
+        await action.Should().NotThrowAsync<UploadOperationConflictException>();
+        legalDocuments.OperationIdsByPurpose.Should().ContainKey("demo-legal-issued");
+        legalDocuments.OperationIdsByPurpose["demo-legal-issued"]
+            .Should().EndWith(legalDocuments.AdmissionsByPurpose["demo-legal-issued"].RequestFingerprint);
+        legalDocuments.OperationIdsByPurpose.Should().ContainKey("demo-legal-executed");
+        legalDocuments.OperationIdsByPurpose["demo-legal-executed"]
+            .Should().EndWith(legalDocuments.AdmissionsByPurpose["demo-legal-executed"].RequestFingerprint);
+        await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_FreshPostgreSqlDatabaseSucceedsOnFirstPassWithRealPendingUploadStore()
+    {
+        var legalDocuments = new DemoLegalTestDependencies(_ctx.Db);
+        var (atomic, atomicContext, pendingUploads) = BuildAtomicServices(_ctx.Db);
+        var seeder = new DemoDataSeeder(
+            _ctx.Db,
+            NullLogger<DemoDataSeeder>.Instance,
+            TimeProvider.System,
+            atomic,
+            atomicContext,
+            legalDocuments,
+            legalDocuments,
+            legalDocuments,
+            pendingUploads,
+            legalDocuments);
+
+        var action = () => seeder.SeedPortfolioAsync(
+            1, "seed-first-pass-real-pending-store", CancellationToken.None);
+
+        await action.Should().NotThrowAsync<UploadOperationConflictException>();
+        await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
 
     [Fact]
@@ -323,6 +547,100 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BuildLegalDocumentIntents_PartiallyBoundAgreementIsExcluded()
+    {
+        var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
+        legalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => seeder.SeedPortfolioAsync(
+                1, "prepare-partially-bound-candidate", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var agreement = await _ctx.Db.LeaseAgreements
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .FirstAsync();
+        var issuedArtifact = await BindRealIssuedArtifactAsync(_ctx.Db, agreement);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var actorUserId = await _ctx.Db.Users.OrderBy(user => user.Id).Select(user => user.Id).FirstAsync();
+        var intents = await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentsAsync(
+            _ctx.Db, 1, actorUserId, CancellationToken.None);
+
+        intents.Should().NotContain(intent => intent.AgreementId == agreement.Id);
+        intents.Should().Contain(intent => intent.AgreementId != agreement.Id,
+            "fully unbound demo drafts still need deterministic legal-document backfill");
+        var preservedAgreement = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == agreement.Id);
+        preservedAgreement.IssuedArtifactId.Should().Be(issuedArtifact.Id);
+        preservedAgreement.ExecutedArtifactId.Should().BeNull();
+        preservedAgreement.FullyExecutedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_ReconcileFinalizesUnboundDraftsAndPreservesPartiallyBoundAgreement()
+    {
+        var (preparationSeeder, preparationLegalDocuments) = BuildSeeder(_ctx.Db);
+        preparationLegalDocuments.FailUploadAttempt = 1;
+        await FluentActions.Awaiting(() => preparationSeeder.SeedPortfolioAsync(
+                1, "prepare-mixed-legal-reconcile", CancellationToken.None))
+            .Should().ThrowAsync<IOException>();
+
+        var partiallyBoundAgreementId = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .Select(candidate => candidate.Id)
+            .FirstAsync();
+        var unboundAgreementIds = await _ctx.Db.LeaseAgreements
+            .Where(candidate => candidate.PortfolioId == 1
+                && candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && candidate.Id != partiallyBoundAgreementId
+                && candidate.IssuedArtifactId == null
+                && candidate.ExecutedArtifactId == null
+                && candidate.FullyExecutedAtUtc == null)
+            .Select(candidate => candidate.Id)
+            .ToListAsync();
+        unboundAgreementIds.Should().NotBeEmpty();
+
+        var (reconcileSeeder, reconcileLegalDocuments) = BuildSeeder(_ctx.Db);
+        LegalDocumentArtifact? issuedArtifact = null;
+        DateTime? issuedAtUtc = null;
+        reconcileLegalDocuments.BeforeUploadAttemptAsync = async attempt =>
+        {
+            if (attempt != 2)
+            {
+                return;
+            }
+
+            var agreement = await _ctx.Db.LeaseAgreements
+                .SingleAsync(candidate => candidate.Id == partiallyBoundAgreementId);
+            issuedArtifact = await BindRealIssuedArtifactAsync(_ctx.Db, agreement);
+            issuedAtUtc = agreement.IssuedAtUtc;
+            _ctx.Db.ChangeTracker.Clear();
+        };
+        var reconcile = () => reconcileSeeder.SeedPortfolioAsync(
+            1, "reconcile-mixed-legal-bindings", CancellationToken.None);
+
+        await reconcile.Should().NotThrowAsync();
+
+        issuedArtifact.Should().NotBeNull();
+        _ctx.Db.ChangeTracker.Clear();
+        var preservedAgreement = await _ctx.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == partiallyBoundAgreementId);
+        preservedAgreement.IssuedArtifactId.Should().Be(issuedArtifact!.Id);
+        preservedAgreement.IssuedAtUtc.Should().Be(issuedAtUtc);
+        preservedAgreement.ExecutedArtifactId.Should().BeNull();
+        preservedAgreement.FullyExecutedAtUtc.Should().BeNull();
+        (await _ctx.Db.LeaseAgreements.CountAsync(candidate =>
+            unboundAgreementIds.Contains(candidate.Id)
+            && candidate.IssuedArtifactId != null
+            && candidate.ExecutedArtifactId != null
+            && candidate.FullyExecutedAtUtc != null)).Should().Be(unboundAgreementIds.Count);
+    }
+
+    [Fact]
     public async Task SeedPortfolio_SecondUploadFailure_ReusesAdmissionsAndPathsWithoutDuplicates()
     {
         var (seeder, legalDocuments) = BuildSeeder(_ctx.Db);
@@ -332,19 +650,25 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, "seed-second-upload-retry", CancellationToken.None);
         await firstAttempt.Should().ThrowAsync<IOException>();
 
-        var firstAdmissions = legalDocuments.AdmissionsByPurpose.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var firstAdmissions = legalDocuments.AdmissionsByOperationId
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
         firstAdmissions.Should().HaveCount(2);
+        var firstIssuedAdmission = legalDocuments.AdmissionsByPurpose["demo-legal-issued"];
+        var firstExecutedAdmission = legalDocuments.AdmissionsByPurpose["demo-legal-executed"];
         (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
         (await _ctx.Db.LegalDocumentArtifacts.CountAsync()).Should().Be(0);
-        legalDocuments.StoredBytes.Should().ContainKey(firstAdmissions["demo-legal-issued"].StoragePath);
-        legalDocuments.StoredBytes.Should().NotContainKey(firstAdmissions["demo-legal-executed"].StoragePath);
+        legalDocuments.StoredBytes.Should().ContainKey(firstIssuedAdmission.StoragePath);
+        legalDocuments.StoredBytes.Should().NotContainKey(firstExecutedAdmission.StoragePath);
 
         legalDocuments.FailUploadAttempt = null;
         await seeder.SeedPortfolioAsync(
             1, "seed-second-upload-retry", CancellationToken.None);
 
-        legalDocuments.AdmissionsByPurpose.Should().BeEquivalentTo(firstAdmissions);
-        (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
+        foreach (var (operationId, firstAdmission) in firstAdmissions)
+        {
+            legalDocuments.AdmissionsByOperationId.Should().ContainKey(operationId)
+                .WhoseValue.Should().BeEquivalentTo(firstAdmission);
+        }
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
     }
 
@@ -386,7 +710,10 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             1, "seed-before-reconciliation", CancellationToken.None);
         var relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
             candidate.RelationshipNumber == "DEMO-LM-ACTIVE-017");
-        relationship.PlannedMoveOutAtUtc = DateTime.UtcNow.AddMonths(1);
+        var plannedMoveOutAtUtc = DateTime.UtcNow.Date.AddMonths(1).AddHours(16);
+        relationship.PlannedMoveOutAtUtc = plannedMoveOutAtUtc;
+        relationship.PossessionAgreementExceptionReason = null;
+        relationship.PossessionAgreementExceptionAuthorizedByUserId = null;
         await _ctx.Db.SaveChangesAsync();
 
         await seeder.SeedPortfolioAsync(
@@ -395,10 +722,11 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _ctx.Db.ChangeTracker.Clear();
         relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
             candidate.RelationshipNumber == "DEMO-LM-ACTIVE-017");
-        relationship.PlannedMoveOutAtUtc.Should().BeNull();
+        relationship.PlannedMoveOutAtUtc.Should().Be(plannedMoveOutAtUtc);
         relationship.EndingDispositionDecidedAtUtc.Should().BeNull();
         relationship.EndingDispositionDecidedByUserId.Should().BeNull();
         relationship.PossessionAgreementExceptionReason.Should().NotBeNullOrWhiteSpace();
+        relationship.PossessionAgreementExceptionAuthorizedByUserId.Should().NotBeNull();
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "sandbox.demo-seed"
             && (receipt.IdempotencyKey == "portfolio:1:seed-before-reconciliation"
@@ -407,6 +735,43 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             message.IdempotencyKey == "demo-seed/1/seed-before-reconciliation"
             || message.IdempotencyKey == "demo-seed/1/reconcile-existing-demo-facts")).Should().Be(2);
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
+    }
+
+    [Fact]
+    public async Task SeedPortfolio_ReconcilePreservesPendingMoveOutAndUnchangedRowVersion()
+    {
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+        await seeder.SeedPortfolioAsync(
+            1, "seed-before-live-move-out", CancellationToken.None);
+
+        var relationship = await _ctx.Db.LeaseManagements
+            .Where(candidate =>
+                candidate.RelationshipNumber.StartsWith("DEMO-LM-")
+                && candidate.RelationshipNumber != "DEMO-LM-ACTIVE-017"
+                && candidate.PossessionGivenAtUtc != null
+                && candidate.PossessionReturnedAtUtc == null
+                && candidate.EndingDisposition == LeaseManagementEndingDisposition.Undecided
+                && candidate.TenantAccount != null
+                && candidate.TenantAccount.ClosedAtUtc == null)
+            .OrderBy(candidate => candidate.RelationshipNumber)
+            .FirstAsync();
+        relationship.PlannedMoveOutAtUtc = DateTime.UtcNow.Date.AddMonths(1).AddHours(17);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.ChangeTracker.Clear();
+        relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
+            candidate.Id == relationship.Id);
+        var plannedMoveOutAtUtc = relationship.PlannedMoveOutAtUtc;
+        var rowVersion = relationship.RowVersion;
+
+        await seeder.SeedPortfolioAsync(
+            1, "reconcile-after-live-move-out", CancellationToken.None);
+
+        _ctx.Db.ChangeTracker.Clear();
+        relationship = await _ctx.Db.LeaseManagements.SingleAsync(candidate =>
+            candidate.Id == relationship.Id);
+        relationship.PlannedMoveOutAtUtc.Should().Be(plannedMoveOutAtUtc);
+        relationship.RowVersion.Should().Be(rowVersion);
     }
 
     // -----------------------------------------------------------------------
@@ -610,7 +975,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         IEnumerable<IInterceptor>? interceptors = null)
     {
         var legalDocuments = new DemoLegalTestDependencies(db);
-        var (atomic, atomicContext) = BuildAtomicServices(db, interceptors);
+        var (atomic, atomicContext, _) = BuildAtomicServices(db, interceptors);
         return (new DemoDataSeeder(
             db,
             NullLogger<DemoDataSeeder>.Instance,
@@ -624,7 +989,8 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             legalDocuments), legalDocuments);
     }
 
-    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context) BuildAtomicServices(
+    private (IAtomicUnitOfWork Atomic, IAtomicCommandContext Context, IPendingFileUploadStore PendingUploads)
+        BuildAtomicServices(
         RentalCommandDbContext db,
         IEnumerable<IInterceptor>? interceptors = null)
     {
@@ -641,6 +1007,7 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
             FinalizeDemoLegalDocumentCommand,
             FinalizeDemoLegalDocumentResult,
             DemoLegalDocumentFinalizeCommandHandler>();
+        services.AddPendingFileUploadStore();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
         {
             builder.UseNpgsql(db.Database.GetConnectionString());
@@ -654,7 +1021,8 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         _atomicProviders.Add(serviceProvider);
         return (
             serviceProvider.GetRequiredService<IAtomicUnitOfWork>(),
-            serviceProvider.GetRequiredService<IAtomicCommandContext>());
+            serviceProvider.GetRequiredService<IAtomicCommandContext>(),
+            serviceProvider.GetRequiredService<IPendingFileUploadStore>());
     }
 
     private sealed class DemoSeedTestActor : ICurrentActor
@@ -693,29 +1061,119 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
         DemoLegalTestDependencies legalDocuments)
     {
         db.ChangeTracker.Clear();
-        var agreement = await db.LeaseAgreements
+        var agreements = await db.LeaseAgreements
             .Include(candidate => candidate.IssuedArtifact)
             .Include(candidate => candidate.ExecutedArtifact)
-            .SingleAsync(candidate => candidate.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1");
-        agreement.IssuedArtifact.Should().NotBeNull();
-        agreement.ExecutedArtifact.Should().NotBeNull();
-        agreement.FullyExecutedAtUtc.Should().NotBeNull();
+            .Where(candidate => candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber != "DEMO-LM-ACTIVE-017")
+            .OrderBy(candidate => candidate.AgreementNumber)
+            .ToListAsync();
+        agreements.Should().NotBeEmpty();
 
-        var artifacts = new[] { agreement.IssuedArtifact!, agreement.ExecutedArtifact! };
-        foreach (var artifact in artifacts)
+        foreach (var agreement in agreements)
         {
-            var bytes = legalDocuments.StoredBytes[artifact.StorageKey];
-            bytes.Should().StartWith(Encoding.ASCII.GetBytes("%PDF"));
-            artifact.ByteLength.Should().Be(bytes.LongLength);
-            artifact.ContentSha256.Should().Be(
-                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+            agreement.IssuedArtifact.Should().NotBeNull();
+            agreement.ExecutedArtifact.Should().NotBeNull();
+            agreement.FullyExecutedAtUtc.Should().NotBeNull();
+
+            foreach (var artifact in new[] { agreement.IssuedArtifact!, agreement.ExecutedArtifact! })
+            {
+                var bytes = legalDocuments.StoredBytes[artifact.StorageKey];
+                bytes.Should().StartWith(Encoding.ASCII.GetBytes("%PDF"));
+                artifact.ByteLength.Should().Be(bytes.LongLength);
+                artifact.ContentSha256.Should().Be(
+                    Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+            }
         }
 
-        (await db.StoredFiles.CountAsync()).Should().Be(2);
-        (await db.LegalDocumentArtifacts.CountAsync()).Should().Be(2);
-        (await db.PendingFileUploads.CountAsync()).Should().Be(2);
+        var expectedArtifactCount = agreements.Count * 2;
+        (await db.StoredFiles.CountAsync()).Should().Be(expectedArtifactCount);
+        (await db.LegalDocumentArtifacts.CountAsync()).Should().Be(expectedArtifactCount);
+        (await db.PendingFileUploads.CountAsync()).Should().Be(expectedArtifactCount);
         (await db.PendingFileUploads.CountAsync(upload =>
-            upload.State == PendingFileUploadState.Finalized && upload.StoredFileId != null)).Should().Be(2);
+            upload.State == PendingFileUploadState.Finalized && upload.StoredFileId != null))
+            .Should().Be(expectedArtifactCount);
+    }
+
+    private static async Task<LegalDocumentArtifact> BindRealIssuedArtifactAsync(
+        RentalCommandDbContext db,
+        LeaseAgreement agreement)
+    {
+        var issuedAtUtc = DateTime.UtcNow;
+        var fileName = $"real-issued-{agreement.Id}.pdf";
+        var storedFile = new StoredFile
+        {
+            PortfolioId = agreement.PortfolioId,
+            FileName = fileName,
+            FilePath = $"real-esign/{agreement.PortfolioId}/{Guid.NewGuid():N}/{fileName}",
+            ContentType = "application/pdf",
+            FileSize = 1024,
+            ContentSha256 = new string('a', 64),
+            EntityType = nameof(LeaseAgreement),
+            EntityId = agreement.Id,
+            UploadedAt = issuedAtUtc,
+        };
+        db.StoredFiles.Add(storedFile);
+        await db.SaveChangesAsync();
+
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = agreement.PortfolioId,
+            StoredFileId = storedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = storedFile.FilePath,
+            FileName = storedFile.FileName,
+            ContentType = storedFile.ContentType,
+            ByteLength = storedFile.FileSize,
+            ContentSha256 = storedFile.ContentSha256,
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = issuedAtUtc,
+            CreatedByUserId = 1,
+        };
+        db.LegalDocumentArtifacts.Add(artifact);
+        await db.SaveChangesAsync();
+
+        agreement.IssuedArtifactId = artifact.Id;
+        agreement.IssuedAtUtc = issuedAtUtc;
+        agreement.ExecutedArtifactId = null;
+        agreement.FullyExecutedAtUtc = null;
+        await db.SaveChangesAsync();
+        return artifact;
+    }
+}
+
+internal sealed class DemoPortfolioDiscoveryCommandInterceptor : DbCommandInterceptor
+{
+    public bool UsedFunction { get; private set; }
+
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        Record(command);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        Record(command);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+    }
+
+    private void Record(DbCommand command)
+    {
+        if (command.CommandText.Contains(
+                "public.rc_demo_seed_portfolio_ids()",
+                StringComparison.Ordinal))
+        {
+            UsedFunction = true;
+        }
     }
 }
 
@@ -768,8 +1226,13 @@ internal sealed class DemoLegalTestDependencies :
     private int _uploadAttempt;
 
     public int? FailUploadAttempt { get; set; }
+    public Func<int, Task>? BeforeUploadAttemptAsync { get; set; }
     public IReadOnlyDictionary<string, byte[]> StoredBytes => _stored;
     public Dictionary<string, PendingFileUploadAdmission> AdmissionsByPurpose { get; } =
+        new(StringComparer.Ordinal);
+    public Dictionary<string, PendingFileUploadAdmission> AdmissionsByOperationId { get; } =
+        new(StringComparer.Ordinal);
+    public Dictionary<string, string> OperationIdsByPurpose { get; } =
         new(StringComparer.Ordinal);
 
     public DemoLegalTestDependencies(RentalCommandDbContext db) => _db = db;
@@ -815,6 +1278,7 @@ internal sealed class DemoLegalTestDependencies :
         CancellationToken ct = default)
     {
         EnsureOutsideInfrastructure();
+        OperationIdsByPurpose[purpose] = clientOperationId;
         var operationHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(clientOperationId))).ToLowerInvariant();
         var existing = await _db.PendingFileUploads.SingleOrDefaultAsync(upload =>
@@ -849,6 +1313,7 @@ internal sealed class DemoLegalTestDependencies :
             existing.Id, existing.StoragePath, existing.State, existing.StoredFileId,
             existing.RequestFingerprint);
         AdmissionsByPurpose[purpose] = admission;
+        AdmissionsByOperationId[clientOperationId] = admission;
         return admission;
     }
 
@@ -865,6 +1330,8 @@ internal sealed class DemoLegalTestDependencies :
     {
         EnsureOutsideInfrastructure();
         _uploadAttempt++;
+        if (BeforeUploadAttemptAsync is not null)
+            await BeforeUploadAttemptAsync(_uploadAttempt);
         if (FailUploadAttempt == _uploadAttempt)
             throw new IOException($"Injected failure for upload attempt {_uploadAttempt}.");
         using var buffer = new MemoryStream();

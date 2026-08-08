@@ -48,6 +48,14 @@ public sealed class TenantAccountDepositListQuery : ListQuery
 
 public sealed class TenantLedgerEntryGlobalListQuery : ListQuery
 {
+    [FromQuery(Name = "propertyId")]
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
+    [FromQuery(Name = "unitId")]
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+
     [FromQuery(Name = "tenantAccountId")]
     [Range(1, int.MaxValue)]
     public int? TenantAccountId { get; set; }
@@ -137,6 +145,9 @@ public sealed class TenantLedgerEntryGlobalPageResponse
 /// <summary>One authorized entry carrying enough account context for a cross-account staff queue.</summary>
 public sealed class TenantLedgerEntryGlobalResponse
 {
+    public int FilteredTotalCount { get; init; }
+    public decimal MonthCharges { get; init; }
+    public decimal MonthPaymentsAndCredits { get; init; }
     public int TenantAccountId { get; init; }
     public int LeaseManagementId { get; init; }
     public int PropertyId { get; init; }

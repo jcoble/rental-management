@@ -440,6 +440,7 @@ if (migrateOnly)
     await using (var migrationDb = new RentalCommandDbContext(migrationOptions))
     {
         await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
+        await new ChartOfAccountsSeedService(migrationDb).SeedAllWithLockAsync();
     }
 
     await RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ProvisionAsync(
@@ -460,7 +461,16 @@ await using (var seedScope = app.Services.CreateAsyncScope())
     await seedScope.ServiceProvider.GetRequiredService<IdentitySeeder>().SeedAsync();
     if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
     {
-        await seedScope.ServiceProvider.GetRequiredService<DemoDataSeeder>().SeedAsync();
+        try
+        {
+            await seedScope.ServiceProvider.GetRequiredService<DemoDataSeeder>().SeedAsync();
+        }
+        catch (Exception exception)
+        {
+            app.Logger.LogCritical(
+                exception,
+                "Startup demo reconciliation failed; API startup will continue.");
+        }
     }
 }
 

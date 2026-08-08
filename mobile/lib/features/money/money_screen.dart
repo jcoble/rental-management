@@ -1,15 +1,25 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../../core/api/dio_client.dart';
+import '../../core/presentation/plain_english_labels.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/mobile_m3_list.dart';
+import '../accounting/accounting_book_models.dart';
+import '../accounting/accounting_books_repository.dart';
+import '../accounting/accounting_help.dart';
+import '../accounting/accounting_help_tip.dart';
 import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
+import '../accounting/general_ledger_view.dart';
+import '../accounting/journal_detail_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -20,15 +30,178 @@ import 'expense_detail_screen.dart';
 import 'expense_form_sheet.dart';
 import 'money_format.dart';
 import 'money_repository.dart';
-import 'money_snapshot_card.dart';
 import 'overdue_screen.dart';
 import 'transaction_models.dart';
 import 'transactions_controller.dart';
 
-enum MoneyScreenView { insights, ledger, payments, expenses }
+/// The legacy values remain public because shell destinations and existing
+/// deep-link tests still use them. The visible Money surface now uses the four
+/// M1 tabs below.
+enum MoneyScreenView {
+  overview,
+  activity,
+  ledger,
+  reports,
+  insights,
+  payments,
+  expenses,
+}
 
-/// The Money tab starts as a working ledger. The snapshot stays visible as a
-/// compact KPI strip, with the full plain-English card one tap away.
+enum MoneyTab { overview, activity, ledger, reports }
+
+class MoneyPositionRequest {
+  const MoneyPositionRequest({required this.label, this.from, this.to});
+
+  final String label;
+  final DateTime? from;
+  final DateTime? to;
+
+  @override
+  bool operator ==(Object other) =>
+      other is MoneyPositionRequest &&
+      other.label == label &&
+      other.from == from &&
+      other.to == to;
+
+  @override
+  int get hashCode => Object.hash(label, from, to);
+}
+
+final moneyPositionProvider = FutureProvider.autoDispose
+    .family<MoneyPositionResponse, MoneyPositionRequest>((ref, request) {
+      return ref
+          .watch(accountingBooksRepositoryProvider)
+          .moneyPosition(from: request.from, to: request.to);
+    });
+
+final mobileIncomeStatementProvider =
+    FutureProvider.autoDispose<FinancialStatementResponse>((ref) {
+      return ref.watch(accountingBooksRepositoryProvider).incomeStatement();
+    });
+
+final mobileBalanceSheetProvider =
+    FutureProvider.autoDispose<FinancialStatementResponse>((ref) {
+      return ref.watch(accountingBooksRepositoryProvider).balanceSheet();
+    });
+
+final mobileTrialBalanceProvider =
+    FutureProvider.autoDispose<TrialBalanceResponse>((ref) {
+      return ref.watch(accountingBooksRepositoryProvider).trialBalance();
+    });
+
+final mobileCashFlowProvider =
+    FutureProvider.autoDispose<CashFlowSummaryResponse>((ref) {
+      return ref.watch(accountingBooksRepositoryProvider).cashFlow();
+    });
+
+class _ScheduleECategoryAmount {
+  const _ScheduleECategoryAmount({
+    required this.category,
+    required this.amount,
+  });
+
+  final String category;
+  final double amount;
+
+  factory _ScheduleECategoryAmount.fromJson(Map<String, dynamic> json) =>
+      _ScheduleECategoryAmount(
+        category: json['category'] as String? ?? '',
+        amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class _ScheduleEPropertyReport {
+  const _ScheduleEPropertyReport({
+    required this.propertyName,
+    required this.rentalIncome,
+    required this.expensesByCategory,
+    required this.totalExpenses,
+    required this.netIncome,
+  });
+
+  final String propertyName;
+  final double rentalIncome;
+  final List<_ScheduleECategoryAmount> expensesByCategory;
+  final double totalExpenses;
+  final double netIncome;
+
+  factory _ScheduleEPropertyReport.fromJson(Map<String, dynamic> json) =>
+      _ScheduleEPropertyReport(
+        propertyName: json['propertyName'] as String? ?? '',
+        rentalIncome: (json['rentalIncome'] as num?)?.toDouble() ?? 0,
+        expensesByCategory: ((json['expensesByCategory'] as List?) ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(_ScheduleECategoryAmount.fromJson)
+            .toList(growable: false),
+        totalExpenses: (json['totalExpenses'] as num?)?.toDouble() ?? 0,
+        netIncome: (json['netIncome'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class _ScheduleEReport {
+  const _ScheduleEReport({
+    required this.year,
+    required this.properties,
+    required this.expensesByCategory,
+    required this.totalRentalIncome,
+    required this.totalExpenses,
+    required this.netIncome,
+    required this.warning,
+  });
+
+  final int year;
+  final List<_ScheduleEPropertyReport> properties;
+  final List<_ScheduleECategoryAmount> expensesByCategory;
+  final double totalRentalIncome;
+  final double totalExpenses;
+  final double netIncome;
+  final String warning;
+
+  factory _ScheduleEReport.fromJson(Map<String, dynamic> json) {
+    final unallocated = json['unallocatedActivity'];
+    return _ScheduleEReport(
+      year: (json['year'] as num?)?.toInt() ?? DateTime.now().year,
+      properties: ((json['properties'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(_ScheduleEPropertyReport.fromJson)
+          .toList(growable: false),
+      expensesByCategory: ((json['expensesByCategory'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(_ScheduleECategoryAmount.fromJson)
+          .toList(growable: false),
+      totalRentalIncome: (json['totalRentalIncome'] as num?)?.toDouble() ?? 0,
+      totalExpenses: (json['totalExpenses'] as num?)?.toDouble() ?? 0,
+      netIncome: (json['netIncome'] as num?)?.toDouble() ?? 0,
+      warning: unallocated is Map<String, dynamic>
+          ? unallocated['warning'] as String? ?? ''
+          : '',
+    );
+  }
+}
+
+final mobileScheduleEProvider = FutureProvider.autoDispose<_ScheduleEReport>((
+  ref,
+) async {
+  try {
+    final response = await ref
+        .watch(dioProvider)
+        .get<Map<String, dynamic>>(
+          '/accounting/schedule-e',
+          queryParameters: {'year': DateTime.now().year},
+        );
+    final data = response.data;
+    if (data == null) {
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Empty response from server.',
+      );
+    }
+    return _ScheduleEReport.fromJson(data);
+  } on DioException catch (error) {
+    throw ApiException.fromDioException(error);
+  }
+});
+
 class MoneyScreen extends ConsumerStatefulWidget {
   const MoneyScreen({
     super.key,
@@ -44,16 +217,16 @@ class MoneyScreen extends ConsumerStatefulWidget {
 }
 
 class _MoneyScreenState extends ConsumerState<MoneyScreen> {
-  late MoneyScreenView _view;
+  late MoneyTab _tab;
+  late MoneyScreenView _legacyActivityView;
 
   @override
   void initState() {
     super.initState();
-    _view =
-        widget.showTransactionSelector &&
-            widget.initialView == MoneyScreenView.ledger
-        ? MoneyScreenView.payments
-        : widget.initialView;
+    _tab = _tabForInitialView(widget.initialView);
+    _legacyActivityView = widget.initialView == MoneyScreenView.expenses
+        ? MoneyScreenView.expenses
+        : MoneyScreenView.payments;
   }
 
   void _openOverdue() {
@@ -85,6 +258,7 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
   void _refreshAfterManualEntry() {
     ref.invalidate(moneySnapshotProvider);
     ref.invalidate(expensesListProvider);
+    ref.invalidate(moneyPositionProvider);
     ref.read(transactionsProvider.notifier).refresh();
   }
 
@@ -97,29 +271,8 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
     if (result != null && mounted) _refreshAfterManualEntry();
   }
 
-  void _showSnapshotDetails(AsyncValue<MoneySnapshot> snapshotAsync) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-        child: MoneySnapshotCard(
-          snapshotAsync: snapshotAsync,
-          onRetry: () => ref.invalidate(moneySnapshotProvider),
-          onPastDueTap: () {
-            Navigator.of(context).pop();
-            _openOverdue();
-          },
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final moneyAsync = ref.watch(moneySnapshotProvider);
     final auth = ref.watch(authControllerProvider);
     final canAddPayment =
         auth is AuthStateAuthenticated &&
@@ -152,9 +305,17 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
         ),
     ];
 
+    final legacyActivityEntry =
+        widget.showTransactionSelector &&
+        (widget.initialView == MoneyScreenView.payments ||
+            widget.initialView == MoneyScreenView.expenses);
+    final legacyLedgerEntry =
+        !widget.showTransactionSelector &&
+        widget.initialView == MoneyScreenView.ledger;
+
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Money')),
-      floatingActionButton: _view == MoneyScreenView.insights
+      floatingActionButton: _tab == MoneyTab.overview
           ? null
           : MobileQuickActionFab(
               heroTag: 'money-ledger-actions-fab',
@@ -163,32 +324,1067 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
               onRecord: () => openMobileRecord(context),
               onScan: () => openMobileScan(context),
             ),
-      body: Column(
-        children: [
-          if (_view == MoneyScreenView.insights)
-            Expanded(
-              child: _MoneyInsightsTab(
-                snapshotAsync: moneyAsync,
-                onRetry: () => ref.invalidate(moneySnapshotProvider),
-                onDetails: () => _showSnapshotDetails(moneyAsync),
-                onPastDueTap: _openOverdue,
-              ),
-            )
-          else ...[
-            if (widget.showTransactionSelector)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                child: _MoneyViewSelector(
-                  value: _view,
-                  onChanged: (view) => setState(() => _view = view),
+      body: legacyActivityEntry
+          ? Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                  child: _MoneyViewSelector(
+                    value: _legacyActivityView,
+                    onChanged: (view) =>
+                        setState(() => _legacyActivityView = view),
+                  ),
                 ),
-              ),
-            Expanded(child: _LedgerTab(view: _view)),
-          ],
+                Expanded(child: _LedgerTab(view: _legacyActivityView)),
+              ],
+            )
+          : legacyLedgerEntry
+          ? const _LedgerTab(view: MoneyScreenView.ledger)
+          : Column(
+              children: [
+                _MoneyTabBar(
+                  selected: _tab,
+                  onChanged: (tab) => setState(() => _tab = tab),
+                ),
+                Expanded(child: _tabBody()),
+              ],
+            ),
+    );
+  }
+
+  Widget _tabBody() => switch (_tab) {
+    MoneyTab.overview => _OverviewTab(
+      onPastDueTap: _openOverdue,
+      onLegacyRetry: () => ref.invalidate(moneySnapshotProvider),
+    ),
+    MoneyTab.activity => const _LedgerTab(view: MoneyScreenView.activity),
+    MoneyTab.ledger => const GeneralLedgerView(),
+    MoneyTab.reports => const _ReportsTab(),
+  };
+}
+
+MoneyTab _tabForInitialView(MoneyScreenView view) => switch (view) {
+  MoneyScreenView.overview || MoneyScreenView.insights => MoneyTab.overview,
+  MoneyScreenView.activity ||
+  MoneyScreenView.payments ||
+  MoneyScreenView.expenses => MoneyTab.activity,
+  MoneyScreenView.ledger => MoneyTab.ledger,
+  MoneyScreenView.reports => MoneyTab.reports,
+};
+
+class _MoneyTabBar extends StatelessWidget {
+  const _MoneyTabBar({required this.selected, required this.onChanged});
+
+  final MoneyTab selected;
+  final ValueChanged<MoneyTab> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Row(
+        children: [
+          _MoneyTabChip(
+            tab: MoneyTab.overview,
+            selected: selected,
+            label: 'Overview',
+            onChanged: onChanged,
+          ),
+          _MoneyTabChip(
+            tab: MoneyTab.activity,
+            selected: selected,
+            label: 'Activity',
+            onChanged: onChanged,
+          ),
+          _MoneyTabChip(
+            tab: MoneyTab.ledger,
+            selected: selected,
+            label: 'Ledger',
+            onChanged: onChanged,
+          ),
+          _MoneyTabChip(
+            tab: MoneyTab.reports,
+            selected: selected,
+            label: 'Reports',
+            onChanged: onChanged,
+          ),
         ],
       ),
     );
   }
+}
+
+class _MoneyTabChip extends StatelessWidget {
+  const _MoneyTabChip({
+    required this.tab,
+    required this.selected,
+    required this.label,
+    required this.onChanged,
+  });
+
+  final MoneyTab tab;
+  final MoneyTab selected;
+  final String label;
+  final ValueChanged<MoneyTab> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: ChoiceChip(
+        key: Key('money-tab-${tab.name}'),
+        label: Text(label),
+        selected: selected == tab,
+        onSelected: (_) => onChanged(tab),
+      ),
+    );
+  }
+}
+
+class _OverviewTab extends ConsumerStatefulWidget {
+  const _OverviewTab({required this.onPastDueTap, required this.onLegacyRetry});
+
+  final VoidCallback onPastDueTap;
+  final VoidCallback onLegacyRetry;
+
+  @override
+  ConsumerState<_OverviewTab> createState() => _OverviewTabState();
+}
+
+class _OverviewTabState extends ConsumerState<_OverviewTab> {
+  late MoneyPositionRequest _request;
+
+  @override
+  void initState() {
+    super.initState();
+    _request = _thisMonthRequest();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final positionAsync = ref.watch(moneyPositionProvider(_request));
+    final legacyAsync = ref.watch(moneySnapshotProvider);
+
+    if (positionAsync.hasValue && positionAsync.value != null) {
+      final position = positionAsync.value!;
+      return RefreshIndicator(
+        onRefresh: () async => ref.invalidate(moneyPositionProvider(_request)),
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          children: [
+            _CashPositionCard(position: position),
+            const SizedBox(height: 12),
+            _PositionFacts(position: position),
+            const SizedBox(height: 12),
+            _PeriodFacts(
+              position: position,
+              request: _request,
+              onRequestChanged: (request) => setState(() => _request = request),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (legacyAsync.hasValue || positionAsync.hasError) {
+      return _MoneyInsightsTab(
+        snapshotAsync: legacyAsync,
+        onRetry: widget.onLegacyRetry,
+        onDetails: () {},
+        onPastDueTap: widget.onPastDueTap,
+      );
+    }
+
+    if (positionAsync.isLoading) return const _OverviewLoading();
+    return _OverviewError(
+      onRetry: () => ref.invalidate(moneyPositionProvider(_request)),
+    );
+  }
+}
+
+MoneyPositionRequest _thisMonthRequest() {
+  final now = DateTime.now().toUtc();
+  return MoneyPositionRequest(
+    label: 'This month',
+    from: DateTime.utc(now.year, now.month),
+    to: now,
+  );
+}
+
+MoneyPositionRequest _lastMonthRequest() {
+  final now = DateTime.now().toUtc();
+  final currentMonth = DateTime.utc(now.year, now.month);
+  return MoneyPositionRequest(
+    label: 'Last month',
+    from: DateTime.utc(now.year, now.month - 1),
+    to: currentMonth.subtract(const Duration(days: 1)),
+  );
+}
+
+MoneyPositionRequest _yearToDateRequest() {
+  final now = DateTime.now().toUtc();
+  return MoneyPositionRequest(
+    label: 'Year to date',
+    from: DateTime.utc(now.year),
+    to: now,
+  );
+}
+
+class _CashPositionCard extends StatelessWidget {
+  const _CashPositionCard({required this.position});
+
+  final MoneyPositionResponse position;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final depositsExceedCash =
+        position.tenantDepositsHeld > position.totalCashOnHand;
+    return Card(
+      color: cs.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Cash on hand',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: cs.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const AccountingHelpTipButton(
+                  topic: AccountingHelpTopic.cashPosition,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              moneyFmt(position.totalCashOnHand),
+              style: theme.textTheme.displaySmall?.copyWith(
+                color: cs.onPrimaryContainer,
+                fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'As of ${dateFmt(position.asOfUtc.toLocal())}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onPrimaryContainer.withValues(alpha: 0.82),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _CashBridgeRow(
+              label: 'Total cash on hand',
+              value: moneyFmt(position.totalCashOnHand),
+              color: cs.onPrimaryContainer,
+            ),
+            _CashBridgeRow(
+              label: 'Tenant deposits held',
+              value: _signedMoney(-position.tenantDepositsHeld),
+              color: cs.onPrimaryContainer,
+            ),
+            const Divider(height: 20),
+            _CashBridgeRow(
+              label: 'Cash after tenant deposits',
+              value: moneyFmt(position.cashAfterTenantDeposits),
+              color: cs.onPrimaryContainer,
+              emphasized: true,
+            ),
+            if (depositsExceedCash) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cs.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'Tenant deposits held (${moneyFmt(position.tenantDepositsHeld)}) exceed total cash on hand (${moneyFmt(position.totalCashOnHand)}).',
+                  style: TextStyle(color: cs.onTertiaryContainer),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CashBridgeRow extends StatelessWidget {
+  const _CashBridgeRow({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.emphasized = false,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyMedium?.copyWith(
+      color: color,
+      fontWeight: emphasized ? FontWeight.w800 : FontWeight.w600,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: style)),
+          Text(value, style: style),
+        ],
+      ),
+    );
+  }
+}
+
+class _PositionFacts extends ConsumerWidget {
+  const _PositionFacts({required this.position});
+
+  final MoneyPositionResponse position;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(accountingDetailModeProvider);
+    final facts = <({String label, String value, IconData icon})>[
+      (
+        label: 'Rent still owed',
+        value: moneyFmt(position.rentStillOwed),
+        icon: Icons.receipt_long_outlined,
+      ),
+      (
+        label: 'Loan balance',
+        value: moneyFmt(position.loanBalance),
+        icon: Icons.account_balance_outlined,
+      ),
+      if (mode == AccountingDetailMode.advanced)
+        (
+          label: 'Book equity',
+          value: moneyFmt(position.bookEquity),
+          icon: Icons.insights_outlined,
+        ),
+    ];
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: facts.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
+        childAspectRatio: 1.8,
+      ),
+      itemBuilder: (_, index) {
+        final fact = facts[index];
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(fact.icon, size: 18),
+                const Spacer(),
+                Text(fact.label, style: Theme.of(context).textTheme.labelSmall),
+                const SizedBox(height: 2),
+                Text(
+                  fact.value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PeriodFacts extends StatelessWidget {
+  const _PeriodFacts({
+    required this.position,
+    required this.request,
+    required this.onRequestChanged,
+  });
+
+  final MoneyPositionResponse position;
+  final MoneyPositionRequest request;
+  final ValueChanged<MoneyPositionRequest> onRequestChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String>(
+              key: const Key('money-overview-period'),
+              initialValue: request.label,
+              decoration: const InputDecoration(
+                labelText: 'Period facts',
+                suffixIcon: AccountingHelpTipButton(
+                  topic: AccountingHelpTopic.cashFlow,
+                ),
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'This month',
+                  child: Text('This month'),
+                ),
+                DropdownMenuItem(
+                  value: 'Last month',
+                  child: Text('Last month'),
+                ),
+                DropdownMenuItem(
+                  value: 'Year to date',
+                  child: Text('Year to date'),
+                ),
+                DropdownMenuItem(value: 'Custom', child: Text('Custom')),
+              ],
+              onChanged: (value) async {
+                if (value == null) return;
+                if (value == 'This month') {
+                  onRequestChanged(_thisMonthRequest());
+                }
+                if (value == 'Last month') {
+                  onRequestChanged(_lastMonthRequest());
+                }
+                if (value == 'Year to date') {
+                  onRequestChanged(_yearToDateRequest());
+                }
+                if (value == 'Custom') {
+                  final range = await showDateRangePicker(
+                    context: context,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                    initialDateRange: request.from != null && request.to != null
+                        ? DateTimeRange(start: request.from!, end: request.to!)
+                        : null,
+                  );
+                  if (range != null) {
+                    onRequestChanged(
+                      MoneyPositionRequest(
+                        label: 'Custom',
+                        from: range.start,
+                        to: range.end,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+            const SizedBox(height: 12),
+            _FactLine(
+              label: 'Cash received',
+              value: moneyFmt(position.cashReceived),
+            ),
+            _FactLine(
+              label: 'Cash paid',
+              value: _signedMoney(-position.cashPaid),
+            ),
+            _FactLine(
+              label: 'Net cash movement',
+              value: _signedMoney(position.netCashMovement),
+            ),
+            _FactLine(
+              label: 'Profit / loss',
+              value: _signedMoney(position.profitOrLoss),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${dateFmt(position.fromUtc.toLocal())} – ${dateFmt(position.toUtc.toLocal())}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FactLine extends StatelessWidget {
+  const _FactLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Expanded(child: Text(label)),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _OverviewLoading extends StatelessWidget {
+  const _OverviewLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.surfaceContainerHigh;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        Container(height: 270, decoration: _skeletonDecoration(color)),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                height: 132,
+                decoration: _skeletonDecoration(color),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Container(
+                height: 132,
+                decoration: _skeletonDecoration(color),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Container(height: 220, decoration: _skeletonDecoration(color)),
+      ],
+    );
+  }
+}
+
+class _OverviewError extends StatelessWidget {
+  const _OverviewError({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    padding: const EdgeInsets.fromLTRB(16, 80, 16, 24),
+    children: [
+      Icon(Icons.error_outline, color: Theme.of(context).colorScheme.error),
+      const SizedBox(height: 12),
+      const Center(child: Text("Couldn't load the money overview.")),
+      const SizedBox(height: 12),
+      Center(
+        child: FilledButton.tonal(
+          onPressed: onRetry,
+          child: const Text('Retry'),
+        ),
+      ),
+    ],
+  );
+}
+
+BoxDecoration _skeletonDecoration(Color color) =>
+    BoxDecoration(color: color, borderRadius: BorderRadius.circular(18));
+
+String _signedMoney(num value) =>
+    value < 0 ? '-${moneyFmt(value.abs())}' : moneyFmt(value);
+
+enum _MobileReportKind {
+  profitAndLoss,
+  balanceSheet,
+  trialBalance,
+  cashFlow,
+  scheduleE,
+}
+
+class _ReportsTab extends StatefulWidget {
+  const _ReportsTab();
+
+  @override
+  State<_ReportsTab> createState() => _ReportsTabState();
+}
+
+class _ReportsTabState extends State<_ReportsTab> {
+  _MobileReportKind? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = _selected;
+    if (selected != null) {
+      return Column(
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => setState(() => _selected = null),
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('All reports'),
+            ),
+          ),
+          Expanded(child: _ReportDetail(kind: selected)),
+        ],
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      children: [
+        const _ReportsIntro(),
+        const SizedBox(height: 8),
+        for (final report in const [
+          (
+            kind: _MobileReportKind.profitAndLoss,
+            title: 'Profit & Loss',
+            subtitle: 'Income and expenses from the server statement.',
+            icon: Icons.bar_chart_outlined,
+          ),
+          (
+            kind: _MobileReportKind.balanceSheet,
+            title: 'Balance sheet',
+            subtitle: 'Assets, liabilities, and equity as of the server date.',
+            icon: Icons.account_balance_outlined,
+          ),
+          (
+            kind: _MobileReportKind.trialBalance,
+            title: 'Trial balance',
+            subtitle: 'Read-only debit and credit balances.',
+            icon: Icons.fact_check_outlined,
+          ),
+          (
+            kind: _MobileReportKind.cashFlow,
+            title: 'Cash flow',
+            subtitle: 'Cash in, operating costs, debt service, and net cash.',
+            icon: Icons.waterfall_chart_outlined,
+          ),
+          (
+            kind: _MobileReportKind.scheduleE,
+            title: 'Schedule E',
+            subtitle: 'Server-calculated rental income and tax categories.',
+            icon: Icons.receipt_long_outlined,
+          ),
+        ])
+          Card(
+            child: ListTile(
+              key: Key('report-link-${report.kind.name}'),
+              leading: Icon(report.icon),
+              title: Text(report.title),
+              subtitle: Text(report.subtitle),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => setState(() => _selected = report.kind),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ReportsIntro extends StatelessWidget {
+  const _ReportsIntro();
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Text(
+        'Reports are read-only. Open one to view the statement fields returned by the server.',
+        style: Theme.of(context).textTheme.bodyMedium,
+      ),
+    ),
+  );
+}
+
+class _ReportDetail extends ConsumerWidget {
+  const _ReportDetail({required this.kind});
+
+  final _MobileReportKind kind;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return switch (kind) {
+      _MobileReportKind.profitAndLoss => _StatementReportBody(
+        title: 'Profit & Loss',
+        asyncValue: ref.watch(mobileIncomeStatementProvider),
+      ),
+      _MobileReportKind.balanceSheet => _StatementReportBody(
+        title: 'Balance sheet',
+        asyncValue: ref.watch(mobileBalanceSheetProvider),
+      ),
+      _MobileReportKind.trialBalance => _TrialBalanceReportBody(
+        asyncValue: ref.watch(mobileTrialBalanceProvider),
+      ),
+      _MobileReportKind.cashFlow => _CashFlowReportBody(
+        asyncValue: ref.watch(mobileCashFlowProvider),
+      ),
+      _MobileReportKind.scheduleE => _ScheduleEReportBody(
+        asyncValue: ref.watch(mobileScheduleEProvider),
+      ),
+    };
+  }
+}
+
+class _StatementReportBody extends StatelessWidget {
+  const _StatementReportBody({required this.title, required this.asyncValue});
+
+  final String title;
+  final AsyncValue<FinancialStatementResponse> asyncValue;
+
+  @override
+  Widget build(BuildContext context) => asyncValue.when(
+    loading: () => const _ReportLoading(),
+    error: (error, _) => _ReportError(error: error),
+    data: (statement) => ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        for (final section in statement.sections)
+          _StatementSectionView(section: section),
+        _ReportTotal(label: 'Total', value: statement.totals.total),
+        if (statement.totals.isBalanced != null)
+          _ReportStatus(
+            label: statement.totals.isBalanced! ? 'Balanced ✓' : 'Not balanced',
+            positive: statement.totals.isBalanced!,
+          ),
+      ],
+    ),
+  );
+}
+
+class _StatementSectionView extends StatelessWidget {
+  const _StatementSectionView({required this.section});
+
+  final StatementSection section;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(section.label, style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          for (final row in section.rows)
+            _ReportLine(label: row.accountName, value: row.amount),
+          const Divider(height: 18),
+          _ReportLine(
+            label: 'Section total',
+            value: section.subtotal,
+            emphasized: true,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _TrialBalanceReportBody extends StatelessWidget {
+  const _TrialBalanceReportBody({required this.asyncValue});
+
+  final AsyncValue<TrialBalanceResponse> asyncValue;
+
+  @override
+  Widget build(BuildContext context) => asyncValue.when(
+    loading: () => const _ReportLoading(),
+    error: (error, _) => _ReportError(error: error),
+    data: (trial) => ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+      children: [
+        Text('Trial balance', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 12),
+        for (final row in trial.rows)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    row.accountName,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  _ReportLine(label: 'Debit', value: row.debitBalance),
+                  _ReportLine(label: 'Credit', value: row.creditBalance),
+                ],
+              ),
+            ),
+          ),
+        _ReportLine(
+          label: 'Total debits',
+          value: trial.totalDebits,
+          emphasized: true,
+        ),
+        _ReportLine(
+          label: 'Total credits',
+          value: trial.totalCredits,
+          emphasized: true,
+        ),
+        _ReportStatus(
+          label: trial.isBalanced ? 'Balanced ✓' : 'Not balanced',
+          positive: trial.isBalanced,
+        ),
+      ],
+    ),
+  );
+}
+
+class _CashFlowReportBody extends StatelessWidget {
+  const _CashFlowReportBody({required this.asyncValue});
+
+  final AsyncValue<CashFlowSummaryResponse> asyncValue;
+
+  @override
+  Widget build(BuildContext context) => asyncValue.when(
+    loading: () => const _ReportLoading(),
+    error: (error, _) => _ReportError(error: error),
+    data: (cashFlow) => ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+      children: [
+        Text('Cash flow', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 6),
+        Text(
+          '${dateFmt(cashFlow.from.toLocal())} – ${dateFmt(cashFlow.to.toLocal())}',
+        ),
+        const SizedBox(height: 12),
+        _ReportLine(label: 'Operating cash in', value: cashFlow.totalIncome),
+        _ReportLine(
+          label: 'Operating expenses',
+          value: cashFlow.totalOperatingExpenses,
+        ),
+        _ReportLine(
+          label: 'Net operating income',
+          value: cashFlow.totalNoi,
+          emphasized: true,
+        ),
+        _ReportLine(label: 'Debt service', value: cashFlow.totalDebtService),
+        _ReportLine(
+          label: 'Net cash flow',
+          value: cashFlow.totalCashFlow,
+          emphasized: true,
+        ),
+        const SizedBox(height: 12),
+        for (final property in cashFlow.properties)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    property.propertyName,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  _ReportLine(label: 'Cash flow', value: property.cashFlow),
+                ],
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+class _ScheduleEReportBody extends StatelessWidget {
+  const _ScheduleEReportBody({required this.asyncValue});
+
+  final AsyncValue<_ScheduleEReport> asyncValue;
+
+  @override
+  Widget build(BuildContext context) => asyncValue.when(
+    loading: () => const _ReportLoading(),
+    error: (error, _) => _ReportError(error: error),
+    data: (report) => ListView(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+      children: [
+        Text(
+          'Schedule E · ${report.year}',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 12),
+        _ReportLine(label: 'Rental income', value: report.totalRentalIncome),
+        _ReportLine(label: 'Total expenses', value: report.totalExpenses),
+        _ReportLine(
+          label: 'Net income',
+          value: report.netIncome,
+          emphasized: true,
+        ),
+        if (report.warning.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(report.warning),
+          ),
+        for (final property in report.properties)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    property.propertyName,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  _ReportLine(
+                    label: 'Rental income',
+                    value: property.rentalIncome,
+                  ),
+                  for (final category in property.expensesByCategory)
+                    _ReportLine(
+                      label: plainEnglishLabel(category.category),
+                      value: category.amount,
+                    ),
+                  _ReportLine(
+                    label: 'Net income',
+                    value: property.netIncome,
+                    emphasized: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (report.expensesByCategory.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Expense categories',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          for (final category in report.expensesByCategory)
+            _ReportLine(
+              label: plainEnglishLabel(category.category),
+              value: category.amount,
+            ),
+        ],
+      ],
+    ),
+  );
+}
+
+class _ReportLine extends StatelessWidget {
+  const _ReportLine({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+  });
+
+  final String label;
+  final double value;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Expanded(child: Text(label)),
+        Text(
+          _signedMoney(value),
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: emphasized ? FontWeight.w800 : FontWeight.w600,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ReportTotal extends StatelessWidget {
+  const _ReportTotal({required this.label, required this.value});
+
+  final String label;
+  final double value;
+
+  @override
+  Widget build(BuildContext context) =>
+      _ReportLine(label: label, value: value, emphasized: true);
+}
+
+class _ReportStatus extends StatelessWidget {
+  const _ReportStatus({required this.label, required this.positive});
+
+  final String label;
+  final bool positive;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 12),
+    child: Text(
+      label,
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+        color: positive
+            ? Theme.of(context).colorScheme.primary
+            : Theme.of(context).colorScheme.error,
+        fontWeight: FontWeight.w800,
+      ),
+    ),
+  );
+}
+
+class _ReportLoading extends StatelessWidget {
+  const _ReportLoading();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.surfaceContainerHigh;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      children: [
+        for (var index = 0; index < 5; index++)
+          Container(
+            height: 48,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: _skeletonDecoration(color),
+          ),
+      ],
+    );
+  }
+}
+
+class _ReportError extends StatelessWidget {
+  const _ReportError({required this.error});
+
+  final Object error;
+
+  @override
+  Widget build(BuildContext context) => ListView(
+    padding: const EdgeInsets.fromLTRB(16, 80, 16, 24),
+    children: [
+      Center(
+        child: Text(
+          error is ApiException
+              ? (error as ApiException).message
+              : "Couldn't load this report.",
+          textAlign: TextAlign.center,
+        ),
+      ),
+    ],
+  );
 }
 
 class _MoneyInsightsTab extends StatelessWidget {
@@ -604,6 +1800,9 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
   }
 
   String? get _kind => switch (widget.view) {
+    MoneyScreenView.overview => null,
+    MoneyScreenView.activity => null,
+    MoneyScreenView.reports => null,
     MoneyScreenView.insights => null,
     MoneyScreenView.ledger => null,
     MoneyScreenView.payments => 'Payment',
@@ -698,16 +1897,27 @@ class _LedgerLoadingBody extends StatelessWidget {
   const _LedgerLoadingBody();
 
   @override
-  Widget build(BuildContext context) => const Center(
-    child: SizedBox.square(
-      key: Key('ledger-loading'),
-      dimension: 32,
-      child: CircularProgressIndicator(strokeWidth: 3),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.surfaceContainerHigh;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        for (var index = 0; index < 3; index++)
+          Container(
+            key: index == 0 ? const Key('ledger-loading') : null,
+            height: 96,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: _skeletonDecoration(color),
+          ),
+      ],
+    );
+  }
 }
 
 String _emptyMessageFor(MoneyScreenView view) => switch (view) {
+  MoneyScreenView.overview => 'No activity yet.',
+  MoneyScreenView.activity => 'No activity yet.',
+  MoneyScreenView.reports => 'No report activity yet.',
   MoneyScreenView.insights => 'No insights yet.',
   MoneyScreenView.ledger => 'No transactions yet.',
   MoneyScreenView.payments => 'No payments yet.',

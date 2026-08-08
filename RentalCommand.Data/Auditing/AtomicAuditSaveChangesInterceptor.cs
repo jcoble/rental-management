@@ -87,7 +87,8 @@ internal sealed class AtomicAuditSaveChangesInterceptor : SaveChangesInterceptor
         }
 
         var auditable = context.ChangeTracker.Entries()
-            .Where(entry => entry.Entity is IAuditable and IPortfolioScoped
+            .Where(entry => (entry.Entity is IAuditable and IPortfolioScoped
+                    || entry.Entity is Portfolio)
                 && entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
             .ToArray();
         foreach (var entry in auditable)
@@ -110,7 +111,9 @@ internal sealed class AtomicAuditSaveChangesInterceptor : SaveChangesInterceptor
             _pending.Add(new PendingAudit(
                 entry,
                 entry.Entity.GetType().Name,
-                ((IPortfolioScoped)entry.Entity).PortfolioId,
+                entry.Entity is Portfolio portfolio
+                    ? portfolio.Id
+                    : ((IPortfolioScoped)entry.Entity).PortfolioId,
                 operation,
                 oldValues,
                 newValues));

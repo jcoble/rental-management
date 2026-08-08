@@ -88,8 +88,10 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         // Seed two portfolios' data as the owner/superuser (which bypasses RLS for the inserts).
         await using (var ctx = NewContext(_ownerConnString))
         {
-            _scopeA = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio A", "PO-A");
-            _scopeB = await SeedPortfolioWithOverdueChargeAsync(ctx, "Portfolio B", "PO-B");
+            _scopeA = await SeedPortfolioWithOverdueChargeAsync(
+                ctx, "Portfolio A", "DEMO-LM-PO-A");
+            _scopeB = await SeedPortfolioWithOverdueChargeAsync(
+                ctx, "Portfolio B", "DEMO-LM-PO-B");
             _portfolioA = _scopeA.PortfolioId;
             _portfolioB = _scopeB.PortfolioId;
             ctx.PlaidTokenExchangeAttempts.AddRange(
@@ -144,9 +146,50 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
 
         relationships.Should().OnlyContain(relationship => relationship.PortfolioId == _portfolioA,
             "RLS must filter LeaseManagements to the current portfolio even with no app-layer predicate");
-        relationships.Should().Contain(relationship => relationship.RelationshipNumber == "PO-A");
-        relationships.Should().NotContain(relationship => relationship.RelationshipNumber == "PO-B",
+        relationships.Should().Contain(relationship =>
+            relationship.RelationshipNumber == "DEMO-LM-PO-A");
+        relationships.Should().NotContain(relationship =>
+            relationship.RelationshipNumber == "DEMO-LM-PO-B",
             "portfolio A must never see portfolio B's lease relationships — RLS is the security boundary");
+    }
+
+    [SkippableFact]
+    public async Task Rls_DemoSeedPortfolioDiscovery_IsCrossPortfolioForApiOnly()
+    {
+        SkipIfNoDocker();
+
+        await using var api = await OpenDirectRoleAsync(ApiRole, ApiPassword);
+        (await ExecScalarIntAsync(api, """
+            SELECT count(DISTINCT "PortfolioId")
+            FROM public."LeaseManagements"
+            WHERE "RelationshipNumber" LIKE 'DEMO-LM-%'
+            """))
+            .Should().Be(0,
+                "a blank-scope API connection must not bypass LeaseManagements RLS directly");
+
+        var portfolioIds = new List<int>();
+        await using (var command = api.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT "Value"
+                FROM public.rc_demo_seed_portfolio_ids()
+                ORDER BY "Value"
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                portfolioIds.Add(reader.GetInt32(0));
+            }
+        }
+
+        portfolioIds.Should().Equal(_portfolioA, _portfolioB);
+
+        await using var engine = await OpenDirectRoleAsync(EngineRole, EnginePassword);
+        var engineCall = async () => await ExecScalarIntAsync(
+            engine,
+            "SELECT count(*) FROM public.rc_demo_seed_portfolio_ids()");
+        (await engineCall.Should().ThrowAsync<PostgresException>())
+            .Which.SqlState.Should().Be(PostgresErrorCodes.InsufficientPrivilege);
     }
 
     [SkippableFact]
@@ -314,8 +357,8 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             .Select(relationship => relationship.RelationshipNumber)
             .ToListAsync();
 
-        relationshipNumbers.Should().Contain("PO-A");
-        relationshipNumbers.Should().NotContain("PO-B",
+        relationshipNumbers.Should().Contain("DEMO-LM-PO-A");
+        relationshipNumbers.Should().NotContain("DEMO-LM-PO-B",
             "caller-controlled legacy settings are not an authorization mechanism");
     }
 

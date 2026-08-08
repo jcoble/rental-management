@@ -34,7 +34,7 @@ internal static class FoundationBaselinePostgreSql
         AccountingParkedTransactionViewSql.Create,
         CreateWorkOrderResponsibilityInfrastructure,
         BuildRolesAndGrantSql(),
-        RlsAuthorityFunctionSql,
+        RlsAuthorityFunctionSql!,
         GrantApiVendorDispatchAuditChronologyRecoverySql,
         BuildCreateRlsSql(),
         CreateSandboxGraduationGlobalDeleteGuards,
@@ -2755,7 +2755,64 @@ internal static class FoundationBaselinePostgreSql
             "CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(",
             "CREATE OR REPLACE FUNCTION rc_account_bootstrap_audit_allows(");
 
-    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260728;
+    private static readonly string RlsApiScopeAllowsFunctionSqlV20260801 =
+        AddAtomicDemoSeedAdmission(RlsApiScopeAllowsFunctionSqlV20260727);
+
+    private static string AddAtomicDemoSeedAdmission(string authoritySql)
+    {
+        const string finalDenyMarker = "ELSE FALSE";
+        var markerIndex = authoritySql.LastIndexOf(finalDenyMarker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            throw new InvalidOperationException(
+                "The API scope authority SQL must end in an explicit deny branch.");
+        }
+
+        const string admissionSql =
+            """
+            WHEN EXISTS (
+              SELECT 1
+              FROM public."AtomicCommandReceipts" receipt
+              JOIN public."WorkspaceAccessContexts" access_context
+                ON access_context."PortfolioId" = target_portfolio_id
+               AND access_context."Status" = 'Active'
+               AND access_context."SuspendedAtUtc" IS NULL
+               AND access_context."RevokedAtUtc" IS NULL
+              JOIN public."WorkspaceMemberships" membership
+                ON membership."AccessContextId" = access_context."Id"
+               AND membership."PortfolioId" = target_portfolio_id
+               AND membership."Status" = 'Active'
+               AND membership."SuspendedAtUtc" IS NULL
+               AND membership."RevokedAtUtc" IS NULL
+              JOIN public."MembershipRoleAssignments" assignment
+                ON assignment."WorkspaceMembershipId" = membership."Id"
+               AND assignment."PortfolioId" = target_portfolio_id
+               AND assignment."RoleProfileId" = 1
+               AND assignment."Status" = 'Active'
+               AND assignment."ScopeKind" = 'AllProperties'
+               AND assignment."SuspendedAtUtc" IS NULL
+               AND assignment."RevokedAtUtc" IS NULL
+              WHERE receipt."CommandType" IN ('sandbox.demo-seed', 'sandbox.demo-legal-finalize')
+                AND receipt."IdempotencyKey" LIKE
+                    'portfolio:' || target_portfolio_id::text || ':%'
+                AND (receipt.xmin = pg_current_xact_id()::xid
+                  OR receipt."IdempotencyKey" = NULLIF(
+                    current_setting('app.demo_seed_idempotency_key', true), ''))
+            ) THEN TRUE
+            """;
+        return string.Concat(
+            authoritySql[..markerIndex],
+            admissionSql,
+            "\n            ",
+            authoritySql[markerIndex..]);
+    }
+
+    internal static readonly string RlsAuthorityFunctionSqlV20260801 =
+        ReplaceInitialScopeAuthorityFunction(
+            RlsAuthorityFunctionSqlV20260728,
+            RlsApiScopeAllowsFunctionSqlV20260801);
+
+    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260801;
 
     private static string ReplaceInitialScopeAuthorityFunction(
         string historicalAuthoritySql,
@@ -3137,6 +3194,19 @@ internal static class FoundationBaselinePostgreSql
         bool allowAssignedWork = false) => $"""
         CASE
           WHEN session_user = 'rentalcommand_engine' THEN TRUE
+          WHEN session_user = 'rentalcommand_api'
+            AND {portfolioId} IS NOT NULL
+            AND {portfolioId} > 0
+            AND (SELECT rc_api_scope_allows({portfolioId}))
+            AND EXISTS (
+              SELECT 1
+              FROM public."AtomicCommandReceipts" receipt
+              WHERE receipt."CommandType" IN ('sandbox.demo-seed', 'sandbox.demo-legal-finalize')
+                AND receipt."IdempotencyKey" LIKE 'portfolio:' || {portfolioId}::text || ':%'
+                AND (receipt.xmin = pg_current_xact_id()::xid
+                  OR receipt."IdempotencyKey" = NULLIF(
+                    current_setting('app.demo_seed_idempotency_key', true), '')))
+          THEN TRUE
           WHEN session_user IS DISTINCT FROM 'rentalcommand_api'
             OR {portfolioId} IS NULL
             OR {portfolioId} <= 0
@@ -3152,6 +3222,9 @@ internal static class FoundationBaselinePostgreSql
             {allowAssignedWork.ToString().ToUpperInvariant()})
         END
         """;
+
+    internal static string AtomicDemoSeedResourcePoliciesSqlV20260801 =>
+        string.Join(Environment.NewLine, BuildResourcePoliciesSqlV20260719());
 
     private static string CreateResourcePolicySql(
         string table,

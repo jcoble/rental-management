@@ -93,6 +93,17 @@ export interface CreateEvictionCaseRequest {
 	notes?: string | null;
 }
 
+export interface UpdateEvictionCaseRequest {
+	status?: EvictionCaseStatus;
+	filedOnDate?: string | null;
+	hearingDate?: string | null;
+	resolvedOnDate?: string | null;
+	courtName?: string | null;
+	caseNumber?: string | null;
+	resolution?: string | null;
+	notes?: string | null;
+}
+
 export interface CreateEvictionCaseEventRequest {
 	eventType: EvictionEventType;
 	eventDate: string;
@@ -116,7 +127,7 @@ export const evictionCases = {
 		idempotentMutation(`eviction-case:create:${JSON.stringify(data)}`, (key) =>
 			api.post<EvictionCase>('/eviction-cases', data, { headers: { 'Idempotency-Key': key } })
 		),
-	update: (id: number, data: Record<string, unknown>) =>
+	update: (id: number, data: UpdateEvictionCaseRequest) =>
 		idempotentMutation(`eviction-case:update:${id}:${JSON.stringify(data)}`, (key) =>
 			api.patch<EvictionCase>(`/eviction-cases/${id}`, data, {
 				headers: { 'Idempotency-Key': key }

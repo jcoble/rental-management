@@ -51,4 +51,5 @@ public sealed record FinalizeDemoLegalDocumentResult(
     int AgreementId,
     int IssuedArtifactId,
     int ExecutedArtifactId,
-    bool AlreadyFinalized);
+    bool AlreadyFinalized,
+    bool Skipped);

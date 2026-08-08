@@ -11,7 +11,7 @@ const successorDialogSource = readFileSync(
 	'utf8'
 );
 const detailPageSource = readFileSync(
-	new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
+	new URL('../components/leases/LeaseManagementDetail.svelte', import.meta.url),
 	'utf8'
 );
 

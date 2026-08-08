@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import {
 		leaseManagements,
-		type LeaseAgreementSignatureProgressSigner
+		type LeaseAgreementSignatureProgressSigner,
+		type SignatureRequestStatus
 	} from '$lib/api/endpoints/lease-managements';
+	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Loader2, RefreshCw, X } from '@lucide/svelte';
@@ -30,6 +32,26 @@
 		],
 		queryFn: () =>
 			leaseManagements.getAgreementSignatureProgress(leaseManagementId, leaseAgreementId)
+	}));
+	let resendingSignerId = $state<number | null>(null);
+
+	const resendMutation = createMutation(() => ({
+		mutationFn: (signer: LeaseAgreementSignatureProgressSigner) =>
+			leaseManagements.resendAgreementInvitation(
+				leaseManagementId,
+				leaseAgreementId,
+				signer.leaseAgreementSignerId,
+				crypto.randomUUID()
+			),
+		onSuccess: async () => {
+			showSuccess('Invitation queued again.');
+			await progressQuery.refetch();
+		},
+		onError: (error) =>
+			showError(apiErrorMessage(error, 'The invitation could not be queued again.')),
+		onSettled: () => {
+			resendingSignerId = null;
+		}
 	}));
 
 	const packetStatusMap = {
@@ -61,6 +83,26 @@
 		if (!value) return 'Not yet';
 		const date = new Date(value);
 		return Number.isNaN(date.getTime()) ? 'Recorded' : date.toLocaleString();
+	}
+
+	function canResendInvitation(
+		packetStatus: SignatureRequestStatus,
+		signer: LeaseAgreementSignatureProgressSigner
+	): boolean {
+		return (
+			signer.status !== 'Signed' &&
+			signer.status !== 'Declined' &&
+			['AwaitingSignatures', 'Viewed', 'PartiallySigned', 'DeliveryFailed'].includes(packetStatus)
+		);
+	}
+
+	function confirmResend(signer: LeaseAgreementSignatureProgressSigner) {
+		const confirmed = globalThis.confirm(
+			`Resend the signing invitation to ${signer.nameSnapshot} at ${signer.emailSnapshot}? This queues the same secure signing link again.`
+		);
+		if (!confirmed) return;
+		resendingSignerId = signer.leaseAgreementSignerId;
+		resendMutation.mutate(signer);
 	}
 
 	function signerMilestones(signer: LeaseAgreementSignatureProgressSigner) {
@@ -133,12 +175,27 @@
 			</div>
 
 			{#if progress.status === 'DeliveryFailed' || progress.failureCode}
-				<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
+				<div class="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm" data-testid="delivery-failed-resend-actions">
 					<p class="font-medium">Signature delivery needs attention</p>
 					<p class="mt-1 text-muted-foreground">
-						The packet could not advance normally. Retry or internal provider details are intentionally not shown here.
+						Automatic delivery could not complete. Choose an unsigned signer to queue the same secure invitation again.
 					</p>
 					{#if progress.failureCode}<p class="mt-1 text-xs text-muted-foreground">Reference: {progress.failureCode}</p>{/if}
+					{#if progress.status === 'DeliveryFailed'}
+						<div class="mt-3 flex flex-wrap gap-2">
+							{#each progress.signers.filter((signer) => canResendInvitation(progress.status, signer)) as signer (signer.leaseAgreementSignerId)}
+								<Button
+									size="sm"
+									class="gap-2"
+									disabled={resendMutation.isPending}
+									onclick={() => confirmResend(signer)}
+								>
+									{#if resendingSignerId === signer.leaseAgreementSignerId}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+									Resend invitation to {signer.nameSnapshot}
+								</Button>
+							{/each}
+						</div>
+					{/if}
 				</div>
 			{/if}
 
@@ -154,7 +211,21 @@
 								<p class="font-medium">{signer.signingOrder}. {signer.nameSnapshot}</p>
 								<p class="text-xs text-muted-foreground">{signer.emailSnapshot} · {signer.signerRole}{signer.isRequired ? ' · Required' : ' · Optional'}</p>
 							</div>
-							<StatusBadge status={signer.status} />
+							<div class="flex items-center gap-2">
+								<StatusBadge status={signer.status} />
+								{#if canResendInvitation(progress.status, signer)}
+									<Button
+										variant="outline"
+										size="sm"
+										class="gap-2"
+										disabled={resendMutation.isPending}
+										onclick={() => confirmResend(signer)}
+									>
+										{#if resendingSignerId === signer.leaseAgreementSignerId}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+										Resend invitation
+									</Button>
+								{/if}
+							</div>
 						</div>
 						<ol class="mt-4 grid gap-2 sm:grid-cols-5">
 							{#each signerMilestones(signer) as milestone}

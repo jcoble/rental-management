@@ -1,4 +1,8 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
+using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -6,6 +10,14 @@ namespace RentalCommand.Data.Tests;
 
 public sealed class LeaseLifecycleProjectionContractTests
 {
+    private static RentalCommandDbContext CreateDb()
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        return new RentalCommandDbContext(options);
+    }
+
     [Fact]
     public void Effective_clock_materializes_one_statement_instant_and_rejects_deleted_workspaces()
     {
@@ -25,6 +37,24 @@ public sealed class LeaseLifecycleProjectionContractTests
         LeaseAgreementStatusViewSql.Definition.Should().Contain("agreement.\"VoidedAtUtc\" IS NULL");
         LeaseAgreementStatusViewSql.Definition.Should().Contain("agreement.\"DraftCanceledAtUtc\" IS NULL");
         LeaseAgreementStatusViewSql.Definition.Should().Contain("AS \"IsGoverning\"");
+    }
+
+    [Fact]
+    public void Governing_execution_requires_issued_and_executed_artifact_evidence()
+    {
+        using var db = CreateDb();
+        var agreement = db.GetService<IDesignTimeModel>().Model
+            .FindEntityType(typeof(LeaseAgreement))!;
+
+        LeaseManagementLifecycleViewSql.Definition
+            .Should().Contain("agreement.\"FullyExecutedAtUtc\" IS NOT NULL");
+        agreement.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_LeaseAgreement_Execution"
+            && constraint.Sql.Contains("\"FullyExecutedAtUtc\" IS NULL) = (\"ExecutedArtifactId\" IS NULL")
+            && constraint.Sql.Contains("\"FullyExecutedAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NOT NULL"));
+        agreement.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_LeaseAgreement_Issuance"
+            && constraint.Sql == "(\"IssuedAtUtc\" IS NULL) = (\"IssuedArtifactId\" IS NULL)");
     }
 
     [Fact]

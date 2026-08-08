@@ -10,13 +10,19 @@ describe('Unit destination history contract', () => {
 	const ledgerSource = readFileSync(new URL('./tabs/LedgerTab.svelte', import.meta.url), 'utf8');
 	const listingSource = readFileSync(new URL('./tabs/ListingTab.svelte', import.meta.url), 'utf8');
 
-	test('uses subordinate tabs so each destination shows one focused workspace', () => {
+	test('uses subordinate section switchers so each destination shows one focused workspace', () => {
 		for (const surface of ['unit-leasing-surface', 'unit-tenant-lease-surface', 'unit-maintenance-surface', 'unit-documents-history-surface']) {
 			assert.match(pageSource, new RegExp(`data-testid="${surface}"`));
 		}
 		assert.match(ledgerSource, /data-testid="unit-money-surface"/);
-		assert.match(pageSource, /unit-(?:leasing|maintenance|documents-history)-tabs/);
-		assert.match(ledgerSource, /unit-money-tabs/);
+		for (const subnav of ['unit-leasing-subnav', 'unit-tenant-lease-subnav', 'unit-maintenance-subnav', 'unit-documents-history-subnav']) {
+			assert.match(pageSource, new RegExp(`data-testid="${subnav}"`));
+		}
+		assert.match(ledgerSource, /data-testid="unit-money-subnav"/);
+		assert.equal(pageSource.match(/m3-tabs-list/g)?.length, 1);
+		assert.doesNotMatch(ledgerSource, /m3-tabs-(?:list|trigger)/);
+		assert.match(pageSource, /class=\{UNIT_SUBNAV_LIST_CLASS\}/);
+		assert.match(ledgerSource, /class=\{UNIT_SUBNAV_LIST_CLASS\}/);
 		assert.match(ledgerSource, /pushState/);
 	});
 

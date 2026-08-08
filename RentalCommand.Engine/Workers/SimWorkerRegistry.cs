@@ -22,6 +22,7 @@ public sealed class SimWorkerRegistry
         _invokers = new Dictionary<string, Func<IServiceProvider, CancellationToken, Task<int>>>(StringComparer.Ordinal)
         {
             [SimWorkerKeys.RentCharge]           = (sp, ct) => sp.GetRequiredService<IRentChargeService>().GenerateAsync(ct),
+            [SimWorkerKeys.RecurringTenantCharge] = (sp, ct) => sp.GetRequiredService<IRecurringTenantChargeGenerationService>().GenerateAsync(ct),
             [SimWorkerKeys.NoticeDraft]          = (sp, ct) => sp.GetRequiredService<INoticeDraftGenerationService>().GenerateAllAsync(ct),
             [SimWorkerKeys.TenantNoticeCandidates] = (sp, ct) =>
                 sp.GetRequiredService<ITenantNoticeCandidateGenerationService>().GenerateDueAsync(ct),

@@ -90,20 +90,28 @@ void main() {
     expect(history, contains('skip: _accountSkip'));
     expect(history, contains('take: _accountPageSize'));
     expect(history, contains("key: const Key('account-history-current-due')"));
-    expect(history, contains("key: const Key('account-history-period')"));
+    expect(history, contains("key: const Key('tenant-portal-balance-header')"));
+    expect(history, contains("key: const Key('tenant-portal-past-due')"));
+    expect(history, contains("key: const Key('tenant-portal-next-due')"));
+    expect(history, contains("key: const Key('tenant-portal-deposit-held')"));
     expect(
       history,
-      contains("key: const Key('account-history-beginning-balance')"),
+      contains("key: const Key('tenant-portal-share-statement')"),
     );
+    expect(history, contains("key: const Key('account-history-period')"));
     expect(
       history,
       contains("key: const Key('account-history-closing-balance')"),
     );
     expect(history, contains('_period = TenantAccountHistoryPeriod.all'));
     expect(history, contains('Scrollable.ensureVisible'));
-    expect(history, contains('const Divider(height: 1)'));
-    expect(history, isNot(contains('Card(')));
-    expect(history, isNot(contains('ListTile(')));
+    expect(history, contains('tenantPortalStatementHtml'));
+    expect(history, contains('tenantPortalLedgerLabel'));
+    expect(history, isNot(contains('entry.displayType')));
+    expect(history, isNot(contains('entry.description')));
+    expect(history, contains('M3TonalCard('));
+    expect(history, isNot(contains('return Card(')));
+    expect(history, isNot(contains('return ListTile(')));
     expect(home, isNot(contains('.sort(')));
     expect(history, isNot(contains('.sort(')));
     expect(history, isNot(contains('.where(')));

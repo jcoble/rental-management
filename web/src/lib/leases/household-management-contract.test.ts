@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 
 const endpoints = readFileSync(new URL('../api/endpoints/lease-managements.ts', import.meta.url), 'utf8');
 const dialog = readFileSync(new URL('../components/leases/HouseholdManagementDialog.svelte', import.meta.url), 'utf8');
-const page = readFileSync(new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url), 'utf8');
+const page = readFileSync(new URL('../components/leases/LeaseManagementDetail.svelte', import.meta.url), 'utf8');
 const tenantEndpoints = readFileSync(new URL('../api/endpoints/tenants.ts', import.meta.url), 'utf8');
 
 describe('relationship-scoped household management', () => {
@@ -40,5 +40,13 @@ describe('relationship-scoped household management', () => {
 		assert.match(page, /active for/);
 		assert.match(dialog, /passwordless resident account/);
 		assert.doesNotMatch(dialog, /name="password"|type="password"|temporary password/i);
+	});
+
+	it('uses explicit household membership and resident-login action labels', () => {
+		assert.match(page, />Add person</);
+		assert.match(page, />End membership</);
+		assert.match(page, />Create resident login</);
+		assert.match(page, />Revoke resident login</);
+		assert.doesNotMatch(page, />End<|>Create login<|>Revoke login</);
 	});
 });

@@ -588,15 +588,20 @@ public sealed class PostTenantChargeHandler
         if (account is null) throw TenantMoneyCommandSupport.Unauthorized();
         if (!account.SourceAllowed)
             throw new ArgumentException("Charge source provenance must belong to the current portfolio.");
+        var incomeLedgerAccountId = await TenantMoneyCommandSupport.ResolveIncomeAccountIdAsync(
+            _db, command.PortfolioId, command.IncomeLedgerAccountId, ct);
 
         var charge = TenantMoneyCommandSupport.Ledger(
             command, TenantLedgerEntryType.ManualCharge, TenantLedgerDirection.Debit, command.Amount,
             account.Currency, command.EffectiveOn, command.DueOn, command.Description,
-            command.BusinessKey, times.WallClockUtc, sourceStoredFileId: command.SourceStoredFileId);
+            command.BusinessKey, times.WallClockUtc, sourceStoredFileId: command.SourceStoredFileId,
+            servicePeriodStartOn: command.ServicePeriodStartOn,
+            servicePeriodEndOn: command.ServicePeriodEndOn);
         _db.Add(charge);
         await context.FlushBusinessAsync(ct);
         await TenantAccountingPosting.PostTenantChargeAsync(
-            _db, context, charge, command.ActorUserId, ct: ct);
+            _db, context, charge, command.ActorUserId,
+            incomeLedgerAccountId, ct);
 
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(TenantLedgerEntry), charge.Id,
@@ -606,6 +611,8 @@ public sealed class PostTenantChargeHandler
                 charge.Amount,
                 charge.EffectiveOn,
                 charge.DueOn,
+                charge.ServicePeriodStartOn,
+                charge.ServicePeriodEndOn,
                 charge.SourceStoredFileId,
             });
         return new TenantChargeMutationResult(true, true, account.Id, charge.Id, null,
@@ -741,17 +748,74 @@ public sealed class PostTenantCreditHandler
         if (!account.SourceAllowed)
             throw new ArgumentException("Credit source provenance must belong to the current portfolio.");
 
+        int? resolvedIncomeLedgerAccountId;
+        var target = command.TargetChargeEntryId is not long targetChargeEntryId
+            ? null
+            : await _db.Set<TenantLedgerEntry>()
+                .AsNoTracking()
+                .Where(entry => entry.PortfolioId == command.PortfolioId
+                    && entry.TenantAccountId == command.TenantAccountId
+                    && entry.Id == targetChargeEntryId
+                    && entry.Direction == TenantLedgerDirection.Debit
+                    && (entry.EntryType == TenantLedgerEntryType.RentCharge
+                        || entry.EntryType == TenantLedgerEntryType.AddendumCharge
+                        || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                        || entry.EntryType == TenantLedgerEntryType.DepositCharge
+                        || entry.EntryType == TenantLedgerEntryType.ManualCharge))
+                .Select(entry => new
+                {
+                    entry.Id,
+                    entry.EntryType,
+                    AvailableTargetedAmount = entry.Amount
+                        - (_db.Set<TenantLedgerEntry>()
+                            .Where(correction => correction.PortfolioId == entry.PortfolioId
+                                && correction.TenantAccountId == entry.TenantAccountId
+                                && ((correction.EntryType == TenantLedgerEntryType.Reversal
+                                        && correction.ReversesEntryId == entry.Id)
+                                    || (correction.EntryType == TenantLedgerEntryType.Credit
+                                        && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                            .Sum(correction => (decimal?)correction.Amount) ?? 0m),
+                })
+                .SingleOrDefaultAsync(ct);
+        if (command.TargetChargeEntryId is not null && target is null)
+            throw TenantMoneyCommandSupport.Unauthorized();
+        if (target?.EntryType == TenantLedgerEntryType.DepositCharge)
+            throw new ArgumentException(
+                "Generic tenant credits cannot target a security-deposit charge.");
+        if (target is { AvailableTargetedAmount: <= 0m })
+            throw new ArgumentException(
+                "The selected charge has no remaining amount available for targeted credit.");
+        if (target is not null && command.Amount > target.AvailableTargetedAmount)
+            throw new ArgumentException(
+                "A targeted credit cannot exceed the selected charge's remaining amount.");
+        if (target is null)
+        {
+            resolvedIncomeLedgerAccountId = await TenantMoneyCommandSupport.ResolveIncomeAccountIdAsync(
+                _db, command.PortfolioId, command.IncomeLedgerAccountId, ct);
+        }
+        else
+        {
+            resolvedIncomeLedgerAccountId = command.IncomeLedgerAccountId;
+        }
+
         var credit = TenantMoneyCommandSupport.Ledger(
             command, TenantLedgerEntryType.Credit, TenantLedgerDirection.Credit,
             command.Amount, account.Currency, command.EffectiveOn, null,
             command.Description, command.BusinessKey, times.WallClockUtc,
-            sourceStoredFileId: command.SourceStoredFileId);
+            sourceStoredFileId: command.SourceStoredFileId,
+            relatedTenantLedgerEntryId: command.TargetChargeEntryId);
         _db.Add(credit);
         await context.FlushBusinessAsync(ct);
         await TenantAccountingPosting.PostTenantConcessionAsync(
-            _db, context, credit, command.ActorUserId, ct);
+            _db, context, credit, command.ActorUserId,
+            resolvedIncomeLedgerAccountId, ct);
 
-        var allocations = command.AllocateOldestCharges
+        var allocations = command.TargetChargeEntryId is long targetEntryId
+            ? await TenantMoneyCommandSupport.AllocateTargetChargeAsync(
+                _db, command.PortfolioId, command.TenantAccountId, credit.Id, targetEntryId,
+                command.Amount, command.BusinessKey, command.ActorUserId, times.WallClockUtc,
+                context, ct, spillToOtherCharges: false)
+            : command.AllocateOldestCharges
             ? await TenantMoneyCommandSupport.AllocateOldestAsync(
                 _db, command.PortfolioId, command.TenantAccountId, credit.Id, command.Amount,
                 command.BusinessKey, command.ActorUserId, times.WallClockUtc, context, ct)
@@ -763,6 +827,7 @@ public sealed class PostTenantCreditHandler
                 credit.Amount,
                 credit.EffectiveOn,
                 credit.SourceStoredFileId,
+                credit.RelatedTenantLedgerEntryId,
                 allocations.AllocationCount,
                 allocations.AllocatedAmount,
             });
@@ -2081,9 +2146,13 @@ internal static class TenantMoneyCommandSupport
             && (charge.EffectiveOn == default || charge.DueOn == default
                 || string.IsNullOrWhiteSpace(charge.Description)
                 || charge.Description.Trim().Length > 500
-                || charge.SourceStoredFileId is <= 0))
+                || charge.SourceStoredFileId is <= 0
+                || (charge.ServicePeriodStartOn is DateOnly chargeStart
+                    && charge.ServicePeriodEndOn is DateOnly chargeEnd
+                    && chargeEnd < chargeStart)
+                || charge.IncomeLedgerAccountId is <= 0))
             throw new ArgumentException(
-                "Charge dates, description, and valid source provenance are required.");
+                "Charge dates, description, service period, and valid source provenance are required.");
         if (command is ReverseTenantChargeCommand reversal
             && (reversal.ReversesEntryId <= 0 || reversal.EffectiveOn == default
                 || string.IsNullOrWhiteSpace(reversal.Reason)
@@ -2094,7 +2163,9 @@ internal static class TenantMoneyCommandSupport
         if (command is PostTenantCreditCommand credit
             && (credit.EffectiveOn == default || string.IsNullOrWhiteSpace(credit.Description)
                 || credit.Description.Trim().Length > 500
-                || credit.SourceStoredFileId is <= 0))
+                || credit.SourceStoredFileId is <= 0
+                || credit.TargetChargeEntryId is <= 0
+                || credit.IncomeLedgerAccountId is <= 0))
             throw new ArgumentException(
                 "Credit date, description, and valid source provenance are required.");
         if (command is PostTenantAdjustmentCommand adjustment
@@ -2165,7 +2236,8 @@ internal static class TenantMoneyCommandSupport
         TenantLedgerEntryType type, TenantLedgerDirection direction, decimal amount,
         string currency, DateOnly effectiveOn, DateOnly? dueOn, string description,
         string businessKey, DateTime now, long? providerAttemptId = null,
-        int? sourceStoredFileId = null) => new()
+        int? sourceStoredFileId = null, long? relatedTenantLedgerEntryId = null,
+        DateOnly? servicePeriodStartOn = null, DateOnly? servicePeriodEndOn = null) => new()
     {
         PortfolioId = command.PortfolioId,
         TenantAccountId = command.TenantAccountId,
@@ -2178,6 +2250,9 @@ internal static class TenantMoneyCommandSupport
         PostedAtUtc = now,
         Description = description.Trim(),
         BusinessKey = businessKey,
+        RelatedTenantLedgerEntryId = relatedTenantLedgerEntryId,
+        ServicePeriodStartOn = servicePeriodStartOn,
+        ServicePeriodEndOn = servicePeriodEndOn,
         ProviderPaymentAttemptId = providerAttemptId,
         SourceStoredFileId = sourceStoredFileId,
         CreatedByUserId = command.ActorUserId,
@@ -2234,11 +2309,32 @@ internal static class TenantMoneyCommandSupport
         RentalCommandDbContext db,
         int portfolioId, int accountId, long receiptId, long targetChargeEntryId,
         decimal available, string businessKey, int actorUserId, DateTime now,
-        IAtomicCommandContext context, CancellationToken ct)
+        IAtomicCommandContext context, CancellationToken ct, bool spillToOtherCharges = true)
     {
         return TenantMoneyPersistence.AllocateTargetChargeAsync(db, context,
             portfolioId, accountId, receiptId, targetChargeEntryId, available,
-            businessKey, actorUserId, now, ct);
+            businessKey, actorUserId, now, ct, spillToOtherCharges);
+    }
+
+    internal static async Task<int> ResolveIncomeAccountIdAsync(
+        RentalCommandDbContext db, int portfolioId, int? incomeLedgerAccountId,
+        CancellationToken ct)
+    {
+        if (incomeLedgerAccountId is not int selectedAccountId)
+        {
+            return await AccountingPostingSupport.RequireSystemAccountIdAsync(
+                db, portfolioId, "rental-income", ct);
+        }
+
+        var valid = await db.Set<LedgerAccount>().AnyAsync(account =>
+            account.Id == selectedAccountId
+            && account.PortfolioId == portfolioId
+            && account.AccountType == AccountType.Income
+            && account.IsActive, ct);
+        if (!valid)
+            throw new ArgumentException(
+                "The selected income ledger account must be an active income account in the current portfolio.");
+        return selectedAccountId;
     }
 
     internal static void StageMutation(IAtomicCommandContext context, ITenantMoneyCommand command,

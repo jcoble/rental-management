@@ -1,6 +1,8 @@
-using System.Text.Json;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core;
@@ -23,9 +25,9 @@ namespace RentalCommand.Api.Services.Auth;
 /// canonical lease relationships, agreement drafts, tenant/deposit ledgers, expenses, work orders,
 /// appointments, and inspections) for a given portfolio so every report and analytics screen has realistic data.
 ///
-/// Two callers: startup (seeds portfolio 1 = the dev admin when <c>Seed:DemoData=true</c>), and new
-/// signups (each new portfolio is seeded as a Sandbox to explore). Every row is parameterized on the
-/// passed portfolio id; nothing is hardcoded to portfolio 1.
+/// Two callers: startup (seeds portfolio 1 = the dev admin and reconciles every other demo-marked
+/// portfolio when <c>Seed:DemoData=true</c>), and new signups (each new portfolio is seeded as a
+/// Sandbox to explore). Every row is parameterized on the passed portfolio id.
 /// </summary>
 public class DemoDataSeeder
 {
@@ -64,13 +66,83 @@ public class DemoDataSeeder
         _fileStorage = fileStorage;
     }
 
-    /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
-    public Task SeedAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Seeds the dev-admin portfolio (id 1), then reconciles every other portfolio that already
+    /// contains canonical demo lease-management facts.
+    /// </summary>
+    public async Task SeedAsync(CancellationToken ct = default)
     {
-        // Each application start is a new reconciliation action. One key is created for this
-        // invocation and reused by every exact retry within the action.
-        var operationKey = $"startup:{Guid.NewGuid():N}";
-        return SeedPortfolioAsync(1, operationKey, ct);
+        var failures = new List<Exception>();
+        var successfulPortfolioCount = 0;
+
+        async Task SeedOneAsync(int portfolioId)
+        {
+            // Each portfolio reconciliation is an independent startup action with its own receipt.
+            var operationKey = $"startup:portfolio:{portfolioId}:{Guid.NewGuid():N}";
+            try
+            {
+                await SeedStartupPortfolioAsync(portfolioId, operationKey, ct);
+                successfulPortfolioCount++;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+                _logger.LogError(
+                    exception,
+                    "Startup demo reconciliation failed for portfolio {PortfolioId}.",
+                    portfolioId);
+            }
+        }
+
+        await SeedOneAsync(1);
+
+        var otherDemoPortfolioIds = _db.Database.IsNpgsql()
+            ? await _db.QuerySqlAsync<int>($$"""
+                SELECT discovery."Value"
+                FROM public.rc_demo_seed_portfolio_ids() AS discovery
+                WHERE discovery."Value" <> 1
+                ORDER BY discovery."Value"
+                """, ct)
+            : await _db.LeaseManagements
+                .AsNoTracking()
+                .Where(relationship => relationship.PortfolioId != 1
+                    && EF.Functions.Like(relationship.RelationshipNumber, "DEMO-LM-%"))
+                .Select(relationship => relationship.PortfolioId)
+                .Distinct()
+                .OrderBy(portfolioId => portfolioId)
+                .ToListAsync(ct);
+
+        foreach (var portfolioId in otherDemoPortfolioIds)
+        {
+            await SeedOneAsync(portfolioId);
+        }
+
+        if (successfulPortfolioCount > 0 || failures.Count == 0)
+        {
+            return;
+        }
+
+        if (failures.Count == 1)
+        {
+            ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
+
+        throw new AggregateException(
+            "Startup demo reconciliation failed for every eligible portfolio.",
+            failures);
+    }
+
+    private async Task SeedStartupPortfolioAsync(
+        int portfolioId,
+        string operationKey,
+        CancellationToken ct)
+    {
+        using var startupScope = DemoSeedStartupScope.Begin($"portfolio:{portfolioId}:{operationKey}");
+        await SeedPortfolioAsync(portfolioId, operationKey, ct);
     }
 
     /// <summary>
@@ -93,7 +165,7 @@ public class DemoDataSeeder
             requirePendingSandboxOnboarding,
             businessNowUtc,
             operationKey);
-        var seedOutcome = await _atomic.ExecuteAsync(
+        await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "sandbox.demo-seed",
                 $"portfolio:{portfolioId}:{operationKey}"),
@@ -102,46 +174,50 @@ public class DemoDataSeeder
             ct);
         await CompleteLegalArtifactsAsync(
             portfolioId,
-            ct,
-            seedOutcome.Value.LegalAgreementId,
-            businessNowUtc);
+            ct);
     }
 
     public async Task CompleteLegalArtifactsAsync(
         int portfolioId,
-        CancellationToken ct = default,
-        int? knownLegalAgreementId = null,
-        DateTime? preparedAtUtc = null)
+        CancellationToken ct = default)
     {
-        var businessNowUtc = preparedAtUtc ?? _timeProvider.UtcNow();
         var actorUserId = await ResolveActorUserIdAsync(portfolioId, ct);
-        var legalAgreementId = knownLegalAgreementId
-            ?? await _db.LeaseAgreements
-                .AsNoTracking()
-                .Where(agreement =>
-                    agreement.PortfolioId == portfolioId
-                    && agreement.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1")
-                .Select(agreement => (int?)agreement.Id)
-                .SingleOrDefaultAsync(ct);
-        var legalIntent = legalAgreementId is null
-            ? null
-            : await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentAsync(
-                _db, portfolioId, actorUserId, businessNowUtc, ct);
+        var legalIntents = await CanonicalDemoLeaseSeeder.BuildLegalDocumentIntentsAsync(
+            _db, portfolioId, actorUserId, ct);
         _db.ChangeTracker.Clear();
+        var finalizedCount = 0;
+        var skippedCount = 0;
 
-        var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
-        if (prepared is not null)
+        foreach (var legalIntent in legalIntents)
         {
+            var prepared = await PrepareLegalDocumentAsync(legalIntent, ct);
             var finalizeCommand = ToFinalizeCommand(prepared);
-            await _atomic.ExecuteAsync(
+            var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity(
                     "sandbox.demo-legal-finalize",
                     $"portfolio:{portfolioId}:agreement:{finalizeCommand.AgreementId}:v1"),
                 finalizeCommand,
                 DemoLegalDocumentFinalizeCommandHandler.ResultCodec,
                 ct);
+            if (outcome.Value.Skipped)
+            {
+                skippedCount++;
+                _logger.LogWarning(
+                    "Skipped demo legal-document finalization for agreement {AgreementNumber} because it is already bound to different artifacts.",
+                    legalIntent.RenderData.AgreementNumber);
+            }
+            else
+            {
+                finalizedCount++;
+            }
             _db.ChangeTracker.Clear();
         }
+
+        _logger.LogInformation(
+            "Demo legal-document reconciliation completed for portfolio {PortfolioId}: {FinalizedCount} finalized, {SkippedCount} skipped.",
+            portfolioId,
+            finalizedCount,
+            skippedCount);
     }
 
     internal static async Task<SeedDemoPortfolioResult> SeedPortfolioCoreAsync(
@@ -202,11 +278,20 @@ public class DemoDataSeeder
         // artifact intent is resumed.
         if (await db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
         {
+            var isExistingDemoPortfolio = await db.LeaseManagements.AnyAsync(relationship =>
+                relationship.PortfolioId == portfolioId
+                && relationship.RelationshipNumber.StartsWith("DEMO-LM-"), ct);
+            if (!isExistingDemoPortfolio)
+            {
+                throw new InvalidOperationException(
+                    $"Demo seeding refused populated non-demo portfolio {portfolioId}.");
+            }
+
             var reconciled = await CanonicalDemoLeaseSeeder.ReconcileAsync(
                 db, attempt, portfolioId, actorUserId, now, ct);
             await attempt.FlushBusinessAsync(ct);
             return Result(portfolioId, true, reconciled, legalAgreementId:
-                reconciled.LegalDocumentIntent?.AgreementId);
+                reconciled.LegalDocumentIntents.FirstOrDefault()?.AgreementId);
         }
 
         // ── 1. OwnerEntities ──────────────────────────────────────────────────────────
@@ -955,7 +1040,7 @@ public class DemoDataSeeder
             woList.Count,
             appts.Count,
             inspections.Count,
-            leaseSeed.LegalDocumentIntent?.AgreementId);
+            leaseSeed.LegalDocumentIntents.FirstOrDefault()?.AgreementId);
     }
 
     private async Task<int> ResolveActorUserIdAsync(int portfolioId, CancellationToken ct) =>
@@ -1014,14 +1099,10 @@ public class DemoDataSeeder
             prepared.Intent.IssuedAtUtc,
             prepared.Intent.ExecutedAtUtc);
 
-    private async Task<PreparedDemoLegalDocument?> PrepareLegalDocumentAsync(
-        CanonicalDemoLegalDocumentIntent? intent,
+    private async Task<PreparedDemoLegalDocument> PrepareLegalDocumentAsync(
+        CanonicalDemoLegalDocumentIntent intent,
         CancellationToken ct)
     {
-        if (intent is null)
-        {
-            return null;
-        }
         EnsureProviderIoIsOutsideAtomicAttempt();
 
         var issued = await _agreementRenderer.RenderExactAsync(
@@ -1032,7 +1113,8 @@ public class DemoDataSeeder
             ct);
         EnsurePdf(issued.PdfBytes, "issued");
         var issuedHash = Sha256(issued.PdfBytes);
-        var issuedFileName = "DEMO-AGR-ACTIVE-001-V1-issued.pdf";
+        var agreementNumber = intent.RenderData.AgreementNumber;
+        var issuedFileName = $"{agreementNumber}-issued.pdf";
         var issuanceFingerprint = LegalDocumentIssuanceBinding.Create(
             nameof(LeaseAgreement),
             intent.PortfolioId,
@@ -1076,7 +1158,7 @@ public class DemoDataSeeder
                     },
                 ],
                 LandlordName = intent.RenderData.LandlordName,
-                EnvelopeId = $"demo-{intent.PortfolioId}-DEMO-AGR-ACTIVE-001-V1",
+                EnvelopeId = $"demo-{intent.PortfolioId}-{agreementNumber}",
                 DocumentName = issuedFileName,
                 OriginalDocumentBytes = issued.PdfBytes,
                 TemplateFieldSnapshotJson = issued.TemplateFieldSnapshotJson,
@@ -1085,13 +1167,13 @@ public class DemoDataSeeder
             issuedHash);
         EnsurePdf(executedBytes, "executed");
         var executedHash = Sha256(executedBytes);
-        var executedFileName = "DEMO-AGR-ACTIVE-001-V1-executed.pdf";
+        var executedFileName = $"{agreementNumber}-executed.pdf";
 
         var issuedAdmission = await _pendingUploads.PrepareAsync(
             intent.PortfolioId,
             intent.ActorUserId,
             "demo-legal-issued",
-            $"demo-legal/{intent.PortfolioId}/DEMO-AGR-ACTIVE-001-V1/issued/v1",
+            $"demo-legal/{intent.PortfolioId}/{agreementNumber}/issued/v2/{issuanceFingerprint}",
             issuanceFingerprint,
             issuedFileName,
             "application/pdf",
@@ -1104,7 +1186,7 @@ public class DemoDataSeeder
             intent.PortfolioId,
             intent.ActorUserId,
             "demo-legal-executed",
-            $"demo-legal/{intent.PortfolioId}/DEMO-AGR-ACTIVE-001-V1/executed/v1",
+            $"demo-legal/{intent.PortfolioId}/{agreementNumber}/executed/v2/{executedHash}",
             executedHash,
             executedFileName,
             "application/pdf",
@@ -1156,7 +1238,10 @@ public class DemoDataSeeder
             .Include(candidate => candidate.LeaseManagement)
             .SingleAsync(candidate => candidate.PortfolioId == command.PortfolioId
                 && candidate.Id == command.AgreementId
-                && candidate.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1", ct);
+                && candidate.AgreementNumber.StartsWith("DEMO-AGR-ACTIVE-")
+                && candidate.LeaseManagement!.RelationshipNumber.StartsWith("DEMO-LM-ACTIVE-")
+                && candidate.LeaseManagement.RelationshipNumber
+                    != CanonicalDemoLeaseSeeder.PossessionExceptionRelationshipNumber, ct);
 
         var pendingById = await LockPendingUploadsAsync(
             db,
@@ -1212,7 +1297,13 @@ public class DemoDataSeeder
         if (agreement.IssuedArtifactId is not null && agreement.IssuedArtifactId != issuedArtifact.Id
             || agreement.ExecutedArtifactId is not null && agreement.ExecutedArtifactId != executedArtifact.Id)
         {
-            throw new InvalidOperationException("The deterministic demo Agreement is already bound to different artifacts.");
+            return new FinalizeDemoLegalDocumentResult(
+                command.PortfolioId,
+                command.AgreementId,
+                issuedArtifact.Id,
+                executedArtifact.Id,
+                AlreadyFinalized: false,
+                Skipped: true);
         }
 
         agreement.IssuedArtifactId = issuedArtifact.Id;
@@ -1255,7 +1346,8 @@ public class DemoDataSeeder
             command.AgreementId,
             issuedArtifact.Id,
             executedArtifact.Id,
-            alreadyFinalized);
+            alreadyFinalized,
+            Skipped: false);
     }
 
     private static async Task<IReadOnlyDictionary<Guid, PendingFileUpload>> LockPendingUploadsAsync(
@@ -1522,7 +1614,7 @@ public sealed class DemoLegalDocumentFinalizeCommandHandler
     public DemoLegalDocumentFinalizeCommandHandler(RentalCommandDbContext db) => _db = db;
 
     internal static readonly AtomicJsonResultCodec<FinalizeDemoLegalDocumentResult> ResultCodec =
-        new("demo-legal-document-finalize-result:v1");
+        new("demo-legal-document-finalize-result:v2");
 
     public async Task<FinalizeDemoLegalDocumentResult> HandleAsync(
         FinalizeDemoLegalDocumentCommand command,

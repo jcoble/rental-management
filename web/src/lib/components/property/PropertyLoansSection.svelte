@@ -10,6 +10,7 @@
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
+	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
@@ -389,6 +390,13 @@
 										{/if}
 									</td>
 								</tr>
+								{#if row.status === 'Paid'}
+									<tr data-testid={`loan-payment-accounting-impact-${row.id}`}>
+										<td colspan="8" class="py-2">
+											<AccountingImpactCard sourceType="LoanPayment" sourceId={row.id} />
+										</td>
+									</tr>
+								{/if}
 								{#if row.paymentDoesNotCoverInterest}
 									<tr>
 										<td colspan="8" class="pb-1 text-xs text-amber-600">

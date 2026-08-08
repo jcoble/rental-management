@@ -477,7 +477,7 @@
 					<div class="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4" data-testid="agreement-issue-confirmation">
 						<div><p class="font-medium">Issue this exact revision for signature?</p><p class="text-sm text-muted-foreground">The server will render and fingerprint the PDF, then freeze the agreement and signer snapshots.</p></div>
 						<label class="space-y-1"><span class="text-sm font-medium">Signature request subject</span><Input bind:value={issueSubject} /></label>
-						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (issueConfirmationOpen = false)} disabled={issueMutation.isPending}>Not yet</Button><Button onclick={issueAgreement} disabled={!issueSubject.trim() || issueMutation.isPending} class="gap-2">{#if issueMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Preparing &amp; issuing…{:else}<FileSignature class="h-4 w-4" /> Issue for signature{/if}</Button></div>
+						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (issueConfirmationOpen = false)} disabled={issueMutation.isPending}>Not yet</Button><Button onclick={issueAgreement} disabled={!issueSubject.trim() || issueMutation.isPending} class="gap-2">{#if issueMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Preparing and issuing…{:else}<FileSignature class="h-4 w-4" /> Prepare and issue{/if}</Button></div>
 					</div>
 				{/if}
 				{#if cancelConfirmationOpen}
@@ -494,7 +494,7 @@
 			<Button variant="outline" onclick={onclose} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}>Close</Button>
 			{#if draftQuery.data && form}
 				{#if canCancel}<Button variant="destructive" class="gap-2" onclick={() => (cancelConfirmationOpen = true)} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}><Trash2 class="h-4 w-4" /> Cancel draft</Button>{/if}
-				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare &amp; issue</Button>
+				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare and issue</Button>
 				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending}>{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
 			{/if}
 		</Dialog.Footer>

@@ -12,7 +12,7 @@ const successorDialogSource = readFileSync(
 	'utf8',
 );
 const detailPageSource = readFileSync(
-	new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
+	new URL('../components/leases/LeaseManagementDetail.svelte', import.meta.url),
 	'utf8',
 );
 const possessionActionsSource = readFileSync(
@@ -53,6 +53,13 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.doesNotMatch(draftDialogSource, /bind:checked=\{signer\.isRequired\}/);
 	});
 
+	it('uses the mobile-approved prepare-and-issue wording without weakening revision confirmation', () => {
+		assert.match(draftDialogSource, /Issue this exact revision for signature\?/);
+		assert.match(draftDialogSource, /> Prepare and issue</);
+		assert.match(draftDialogSource, /Preparing and issuing…/);
+		assert.doesNotMatch(draftDialogSource, /Prepare &amp; issue|> Issue for signature/);
+	});
+
 	it('creates each supported successor and opens the returned draft', () => {
 		for (const changeType of ['Correction', 'Restatement', 'Renewal', 'MonthToMonth']) {
 			assert.match(detailPageSource, new RegExp(`changeType: '${changeType}'`));
@@ -62,6 +69,52 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(successorDialogSource, /sourceAddendumSeriesPublicId: series\.seriesPublicId/);
 		assert.doesNotMatch(successorDialogSource, /addendumDecisionBlocked/);
 		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
+		for (const label of [
+			'Create correction',
+			'Create restatement',
+			'Create renewal',
+			'Create month-to-month'
+		]) {
+			assert.match(detailPageSource, new RegExp(`>${label}<`));
+		}
+	});
+
+	it('puts every current, upcoming, and ending fact in the first-read summary', () => {
+		for (const label of [
+			'Current status',
+			'Current agreement',
+			'Agreement status',
+			'Term',
+			'Base rent',
+			'Upcoming agreement',
+			'Ending plan',
+			'Decision recorded',
+			'Planned move-out'
+		]) {
+			assert.match(detailPageSource, new RegExp(`>${label}<`));
+		}
+		assert.match(detailPageSource, /money\(summary\.baseRentAmount\)/);
+		assert.match(detailPageSource, /summary\.upcomingAgreementNumber/);
+		assert.match(detailPageSource, /summary\.endingDispositionDecidedAtUtc/);
+		assert.match(detailPageSource, /summary\.plannedMoveOutAtUtc/);
+	});
+
+	it('links the tenant account card to the existing Unit Money ledger route', () => {
+		assert.match(
+			detailPageSource,
+			/href=\{`\/units\/\$\{summary\.unitId\}\?tab=money&view=tenant-account&tenantAccount=\$\{summary\.tenantAccountId\}`\}/
+		);
+		assert.match(detailPageSource, />View tenant account</);
+		assert.match(detailPageSource, /Continues across renewals and corrections/);
+	});
+
+	it('uses one source-backed draft review action while keeping the scan reachable', () => {
+		assert.match(
+			detailPageSource,
+			/agreement\.hasSourceScan\s*\? downloadSourceScan\(agreement\)\s*:\s*openAgreementDraft\(agreement\)/
+		);
+		assert.match(detailPageSource, /View draft/);
+		assert.match(detailPageSource, /downloadSourceScan\(agreement\)/);
 	});
 
 	it('requires an active lease template only for imported-source successor drafts', () => {
@@ -132,11 +185,11 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(detailPageSource, /import \{ formatDateOnly \} from '\$lib\/utils\/date';/);
 		assert.match(
 			detailPageSource,
-			/Possession planned \$\{formatDateOnly\(summary\.plannedPossessionAtUtc\)\}/
+			/Planned \$\{formatDateOnly\(summary\.plannedPossessionAtUtc\)\}/
 		);
 		assert.match(
 			detailPageSource,
-			/Move-out planned \{formatDateOnly\(summary\.plannedMoveOutAtUtc\)\}/
+			/formatDateOnly\(summary\.plannedMoveOutAtUtc\)/
 		);
 		assert.doesNotMatch(
 			detailPageSource,
@@ -158,6 +211,9 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(endingDispositionSource, /plannedMoveOutAtUtc/);
 		assert.match(endingDispositionSource, /decisionReason/);
 		assert.match(endingDispositionSource, /does not change the signed lease/i);
+		assert.match(endingDispositionSource, /Record lease ending plan/);
+		assert.match(endingDispositionSource, /Renew \/ continue with a new fixed term/);
+		assert.match(endingDispositionSource, /Move out \/ end the relationship/);
 		assert.match(detailPageSource, /<EndingDispositionDialog/);
 	});
 });
