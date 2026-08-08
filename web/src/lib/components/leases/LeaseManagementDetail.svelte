@@ -504,10 +504,12 @@
 										{:else if agreement.hasSourceScan}
 											<Button size="sm" variant="outline" class="gap-2" onclick={() => downloadSourceScan(agreement)}><ScanLine class="h-4 w-4" /> {agreement.agreementStatus === 'Draft' ? 'View draft' : 'Source scan'}</Button>
 										{/if}
-										{#if issuedArtifact}
+										{#if issuedArtifact && agreement.hasSignatureRequest}
 											<Button size="sm" variant="outline" onclick={() => (signatureProgressAgreementId = signatureProgressAgreementId === agreement.leaseAgreementId ? null : agreement.leaseAgreementId)}>
 												{signatureProgressAgreementId === agreement.leaseAgreementId ? 'Hide signing progress' : 'View signing progress'}
 											</Button>
+										{:else if issuedArtifact && !agreement.hasSignatureRequest}
+											<span class="text-xs text-muted-foreground">Signed outside e-sign — no signing links to track.</span>
 										{/if}
 										{#if canPrepareAgreements && issuedArtifact && !agreement.fullyExecutedAtUtc && !agreement.hasLiveReissue}
 											<Button size="sm" variant={agreement.voidedAtUtc ? 'default' : 'destructive'} onclick={() => (issuedRecoverySource = agreement)}>
@@ -517,7 +519,7 @@
 									</div>
 								</div>
 
-								{#if signatureProgressAgreementId === agreement.leaseAgreementId}
+								{#if signatureProgressAgreementId === agreement.leaseAgreementId && agreement.hasSignatureRequest}
 									<AgreementSignatureProgress leaseManagementId={leaseManagementId} leaseAgreementId={agreement.leaseAgreementId} agreementNumber={agreement.agreementNumber} onclose={() => (signatureProgressAgreementId = null)} />
 								{/if}
 

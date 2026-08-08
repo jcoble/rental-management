@@ -127,6 +127,8 @@ public sealed class LeaseAgreementHistoryResponse
     public bool IsGoverning { get; init; }
     public int SignerCount { get; init; }
     public bool HasSourceScan { get; init; }
+    public int? SignatureRequestId { get; init; }
+    public bool HasSignatureRequest { get; init; }
     public LegalArtifactSummaryResponse? IssuedArtifact { get; init; }
     public LegalArtifactSummaryResponse? ExecutedArtifact { get; init; }
     public DateTime? IssuedAtUtc { get; init; }
