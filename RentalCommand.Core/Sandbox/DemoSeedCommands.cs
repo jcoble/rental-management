@@ -53,3 +53,14 @@ public sealed record FinalizeDemoLegalDocumentResult(
     int ExecutedArtifactId,
     bool AlreadyFinalized,
     bool Skipped);
+
+public sealed record EnsureDemoLeaseAddendumTemplateCommand(
+    int PortfolioId,
+    int ActorUserId,
+    [property: AtomicFingerprintIgnore] DateTime BusinessNowUtc) : IAtomicCommandData;
+
+public sealed record EnsureDemoLeaseAddendumTemplateResult(
+    int PortfolioId,
+    int? DocumentTemplateId,
+    bool AlreadyPresent,
+    bool ReusedIssuedLeasePdf);
