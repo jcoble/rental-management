@@ -50,29 +50,38 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         CancellationToken ct = default)
     {
         var rows = BuildGlobalEntryQuery(scope, query);
-        var shaped = rows.Select(row => new TenantLedgerEntryGlobalResponse
-        {
-            FilteredTotalCount = rows.Count(),
-            MonthCharges = rows.Where(other => other.EffectiveOn.Year == row.EffectiveOn.Year && other.EffectiveOn.Month == row.EffectiveOn.Month && other.Direction == TenantLedgerDirection.Debit).Sum(other => other.Amount),
-            MonthPaymentsAndCredits = rows.Where(other => other.EffectiveOn.Year == row.EffectiveOn.Year && other.EffectiveOn.Month == row.EffectiveOn.Month && other.Direction == TenantLedgerDirection.Credit).Sum(other => other.Amount),
-            TenantAccountId = row.TenantAccountId, LeaseManagementId = row.LeaseManagementId,
-            PropertyId = row.PropertyId, PropertyName = row.PropertyName, UnitId = row.UnitId, UnitNumber = row.UnitNumber,
-            AccountNumber = row.AccountNumber, RelationshipNumber = row.RelationshipNumber, PrimaryTenantName = row.PrimaryTenantName,
-            TenantLedgerEntryId = row.TenantLedgerEntryId, PublicId = row.PublicId, EntryType = row.EntryType, Direction = row.Direction,
-            Amount = row.Amount, Currency = row.Currency, EffectiveOn = row.EffectiveOn, DueOn = row.DueOn, PostedAtUtc = row.PostedAtUtc,
-            Description = row.Description, BusinessKey = row.BusinessKey, TransferPublicId = row.TransferPublicId,
-            LeaseAgreementId = row.LeaseAgreementId, LeaseAddendumId = row.LeaseAddendumId, ReversesEntryId = row.ReversesEntryId,
-            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId, SourceStoredFileId = row.SourceStoredFileId, CreatedByUserId = row.CreatedByUserId,
-        });
-        var items = await ApplyGlobalEntrySort(shaped, query)
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
+        var totalCount = await rows.CountAsync(ct);
+        var monthTotals = await rows
+            .GroupBy(row => new { row.EffectiveOn.Year, row.EffectiveOn.Month })
+            .Select(group => new
+            {
+                group.Key.Year,
+                group.Key.Month,
+                Charges = group
+                    .Where(row => row.Direction == TenantLedgerDirection.Debit)
+                    .Sum(row => row.Amount),
+                Credits = group
+                    .Where(row => row.Direction == TenantLedgerDirection.Credit)
+                    .Sum(row => row.Amount),
+            })
             .ToListAsync(ct);
+        var totalsByMonth = monthTotals.ToDictionary(
+            total => (total.Year, total.Month),
+            total => (total.Charges, total.Credits));
+        var pageRows = await BuildGlobalEntryPageQuery(scope, query).ToListAsync(ct);
+        var items = pageRows
+            .Select(row => AttachGlobalEntryTotals(
+                row,
+                totalCount,
+                totalsByMonth.TryGetValue((row.EffectiveOn.Year, row.EffectiveOn.Month), out var totals)
+                    ? totals
+                    : (0m, 0m)))
+            .ToList();
 
         return new TenantLedgerEntryGlobalPageResponse
         {
             Items = items,
-            TotalCount = items.FirstOrDefault()?.FilteredTotalCount ?? 0,
+            TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
@@ -357,10 +366,85 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
 
     internal IQueryable<TenantLedgerEntryGlobalResponse> BuildGlobalEntryPageQuery(
         WorkspaceReadScope scope,
-        TenantLedgerEntryGlobalListQuery query) =>
-        ApplyGlobalEntrySort(BuildGlobalEntryQuery(scope, query), query)
+        TenantLedgerEntryGlobalListQuery query)
+    {
+        var page = ApplyGlobalEntrySort(BuildGlobalEntryQuery(scope, query), query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake);
+
+        return page.Select(row => new TenantLedgerEntryGlobalResponse
+        {
+            TenantAccountId = row.TenantAccountId,
+            LeaseManagementId = row.LeaseManagementId,
+            PropertyId = row.PropertyId,
+            PropertyName = row.PropertyName,
+            UnitId = row.UnitId,
+            UnitNumber = row.UnitNumber,
+            AccountNumber = row.AccountNumber,
+            RelationshipNumber = row.RelationshipNumber,
+            PrimaryTenantName = row.PrimaryTenantName,
+            TenantLedgerEntryId = row.TenantLedgerEntryId,
+            PublicId = row.PublicId,
+            EntryType = row.EntryType,
+            Direction = row.Direction,
+            Amount = row.Amount,
+            Currency = row.Currency,
+            EffectiveOn = row.EffectiveOn,
+            DueOn = row.DueOn,
+            PostedAtUtc = row.PostedAtUtc,
+            Description = row.Description,
+            BusinessKey = row.BusinessKey,
+            TransferPublicId = row.TransferPublicId,
+            LeaseAgreementId = row.LeaseAgreementId,
+            LeaseAddendumId = row.LeaseAddendumId,
+            ReversesEntryId = row.ReversesEntryId,
+            HasReversal = _db.TenantLedgerEntries.AsNoTracking().Any(reversal =>
+                reversal.PortfolioId == scope.PortfolioId
+                && reversal.Id != row.TenantLedgerEntryId
+                && reversal.ReversesEntryId == row.TenantLedgerEntryId),
+            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId,
+            SourceStoredFileId = row.SourceStoredFileId,
+            CreatedByUserId = row.CreatedByUserId,
+        });
+    }
+
+    private static TenantLedgerEntryGlobalResponse AttachGlobalEntryTotals(
+        TenantLedgerEntryGlobalResponse row,
+        int totalCount,
+        (decimal Charges, decimal Credits) monthTotals) => new()
+        {
+            FilteredTotalCount = totalCount,
+            MonthCharges = monthTotals.Charges,
+            MonthPaymentsAndCredits = monthTotals.Credits,
+            TenantAccountId = row.TenantAccountId,
+            LeaseManagementId = row.LeaseManagementId,
+            PropertyId = row.PropertyId,
+            PropertyName = row.PropertyName,
+            UnitId = row.UnitId,
+            UnitNumber = row.UnitNumber,
+            AccountNumber = row.AccountNumber,
+            RelationshipNumber = row.RelationshipNumber,
+            PrimaryTenantName = row.PrimaryTenantName,
+            TenantLedgerEntryId = row.TenantLedgerEntryId,
+            PublicId = row.PublicId,
+            EntryType = row.EntryType,
+            Direction = row.Direction,
+            Amount = row.Amount,
+            Currency = row.Currency,
+            EffectiveOn = row.EffectiveOn,
+            DueOn = row.DueOn,
+            PostedAtUtc = row.PostedAtUtc,
+            Description = row.Description,
+            BusinessKey = row.BusinessKey,
+            TransferPublicId = row.TransferPublicId,
+            LeaseAgreementId = row.LeaseAgreementId,
+            LeaseAddendumId = row.LeaseAddendumId,
+            ReversesEntryId = row.ReversesEntryId,
+            HasReversal = row.HasReversal,
+            ProviderPaymentAttemptId = row.ProviderPaymentAttemptId,
+            SourceStoredFileId = row.SourceStoredFileId,
+            CreatedByUserId = row.CreatedByUserId,
+        };
 
     internal IQueryable<TenantAccountDepositListItemResponse> BuildDepositListQuery(
         WorkspaceReadScope scope,
