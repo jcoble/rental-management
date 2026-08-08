@@ -846,7 +846,17 @@
 		</Dialog.Header>
 		<div class="grid gap-3" data-testid="expense-capitalize-form">
 			<InlineField label="Description" bind:value={capitalizeForm.description} editing type="text" error={capitalizeErrors.description} testid="expense-capitalize-description" />
-			<InlineField label="In-service date" bind:value={capitalizeForm.inServiceDate} editing type="date" error={capitalizeErrors.inServiceDate} testid="expense-capitalize-in-service-date" />
+			<div data-testid="expense-capitalize-in-service-date-field">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-capitalize-in-service-date-input">In-service date</label>
+				<DatePicker
+					id="expense-capitalize-in-service-date-input"
+					testid="expense-capitalize-in-service-date-input"
+					bind:value={capitalizeForm.inServiceDate}
+				/>
+				{#if capitalizeErrors.inServiceDate}
+					<p class="mt-1 text-xs text-destructive" data-testid="expense-capitalize-in-service-date-error">{capitalizeErrors.inServiceDate}</p>
+				{/if}
+			</div>
 			<div class="grid grid-cols-3 gap-3">
 				<InlineField label="Method" bind:value={capitalizeForm.method} editing type="select" options={depreciationMethodOptions} error={capitalizeErrors.method} testid="expense-capitalize-method" />
 				<InlineField label="Life" bind:value={capitalizeForm.recoveryYears} editing type="select" options={recoveryOptions} error={capitalizeErrors.recoveryYears} testid="expense-capitalize-recovery-years" />

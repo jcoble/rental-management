@@ -16,6 +16,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
@@ -538,6 +539,33 @@
 	</div>
 {/snippet}
 
+{#snippet dateTimeField(opts: {
+	label: string;
+	value: string;
+	setValue: (value: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+			<DateTimePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
+				<span class="m3-readonly-field__label">{opts.label}</span>
+				<span class="m3-readonly-field__value mt-1">{opts.display === '' ? '-' : opts.display}</span>
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>{wo?.title ?? 'Work Order'} - Rental Command</title>
 </svelte:head>
@@ -862,10 +890,10 @@
 		<DetailCard title="Costs & timing" icon={Coins} accent="muted" testid="work-order-detail-costs" class="mt-6" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
 			{@render dateField({ label: 'Requested', value: form.requestedAt, setValue: (v) => (form.requestedAt = v), display: formatDateOnly(wo.requestedAt), error: formErrors.requestedAt, testid: 'work-order-detail-requested' })}
 			{#if editing || wo.scheduledFor}
-				<InlineField label="Scheduled start" type="datetime-local" bind:value={form.scheduledFor} display={wo.scheduledFor ? formatDateTime(wo.scheduledFor) : ''} {editing} error={formErrors.scheduledFor} testid="work-order-detail-scheduled" />
+				{@render dateTimeField({ label: 'Scheduled start', value: form.scheduledFor, setValue: (value) => (form.scheduledFor = value), display: wo.scheduledFor ? formatDateTime(wo.scheduledFor) : '', error: formErrors.scheduledFor, testid: 'work-order-detail-scheduled' })}
 			{/if}
 			{#if editing || wo.scheduledWindowEnd}
-				<InlineField label="Service window end" type="datetime-local" bind:value={form.scheduledWindowEnd} display={wo.scheduledWindowEnd ? formatDateTime(wo.scheduledWindowEnd) : ''} {editing} error={formErrors.scheduledWindowEnd} testid="work-order-detail-scheduled-window-end" />
+				{@render dateTimeField({ label: 'Service window end', value: form.scheduledWindowEnd, setValue: (value) => (form.scheduledWindowEnd = value), display: wo.scheduledWindowEnd ? formatDateTime(wo.scheduledWindowEnd) : '', error: formErrors.scheduledWindowEnd, testid: 'work-order-detail-scheduled-window-end' })}
 			{/if}
 			{#if editing || wo.completedAt}
 				{@render dateField({ label: 'Completed', value: form.completedAt, setValue: (v) => (form.completedAt = v), display: wo.completedAt ? formatDateOnly(wo.completedAt) : '', error: formErrors.completedAt, testid: 'work-order-detail-completed' })}

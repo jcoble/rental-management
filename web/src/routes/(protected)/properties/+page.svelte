@@ -24,6 +24,7 @@
 	import { Plus, Pencil, Trash2, Building } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { page } from '$app/state';
 	import type { WorkspaceExperience } from '$lib/types/user';
@@ -592,7 +593,7 @@
 					</div>
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">In-service date</span>
-						<Input data-testid="property-in-service-date-input" bind:value={form.inServiceDate} type="date" />
+						<DatePicker id="property-in-service-date-input" testid="property-in-service-date-input" bind:value={form.inServiceDate} />
 						{#if formErrors.inServiceDate}<p class="mt-1 text-xs text-destructive">{formErrors.inServiceDate}</p>{/if}
 					</div>
 					<div>

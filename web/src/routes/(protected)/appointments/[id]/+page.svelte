@@ -15,6 +15,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -188,6 +189,33 @@
 	}
 </script>
 
+{#snippet dateTimeField(opts: {
+	label: string;
+	value: string;
+	setValue: (value: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+			<DateTimePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
+				<span class="m3-readonly-field__label">{opts.label}</span>
+				<span class="m3-readonly-field__value mt-1">{opts.display === '' ? '-' : opts.display}</span>
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>{appt ? appt.title : 'Appointment'} - Rental Command</title>
 </svelte:head>
@@ -306,8 +334,8 @@
 				<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2" />
 				<InlineField label="Type" bind:value={form.type} display={labelForType(appt.type)} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
 				<InlineField label="Status" bind:value={form.status} display={appointmentDetailStatusLabel(appt.status)} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
-				<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
-				<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
+				{@render dateTimeField({ label: 'Start', value: form.scheduledStart, setValue: (value) => (form.scheduledStart = value), display: fmtDateTime(appt.scheduledStart), error: formErrors.scheduledStart, testid: 'appointment-detail-start' })}
+				{@render dateTimeField({ label: 'End', value: form.scheduledEnd, setValue: (value) => (form.scheduledEnd = value), display: appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : '', error: formErrors.scheduledEnd, testid: 'appointment-detail-end' })}
 			</DetailCard>
 
 			<DetailCard title="Who" icon={Users} accent="muted" testid="appointment-detail-who" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">

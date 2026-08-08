@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { CalendarCheck, KeyRound, Loader2, Undo2 } from '@lucide/svelte';
 
 	let {
@@ -312,13 +313,12 @@
 		</Dialog.Header>
 		<div class="space-y-2">
 			<label for="historical-possession-date" class="text-sm font-medium">Possession date</label>
-			<Input
+			<DatePicker
 				id="historical-possession-date"
-				type="date"
+				testid="historical-possession-date"
 				bind:value={historicalPossessionDate}
 				max={summary.businessDate}
-				data-testid="historical-possession-date"
-				oninput={() => (historicalValidationError = '')}
+				onchange={() => (historicalValidationError = '')}
 			/>
 			<p class="text-xs text-muted-foreground">The date must be inside the executed agreement term.</p>
 		</div>

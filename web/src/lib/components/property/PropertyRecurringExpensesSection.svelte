@@ -11,6 +11,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -228,7 +229,11 @@
 				<InlineField label="Amount" bind:value={form.amount} editing type="number" error={formErrors.amount} testid="recurring-expense-amount" />
 				<InlineField label="Frequency" bind:value={form.frequency} editing type="select" options={frequencyOptions} error={formErrors.frequency} testid="recurring-expense-frequency" />
 			</div>
-			<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="recurring-expense-start" />
+			<div data-testid="recurring-expense-start-field">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="recurring-expense-start-input">Start date</label>
+				<DatePicker id="recurring-expense-start-input" testid="recurring-expense-start-input" bind:value={form.startDate} />
+				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="recurring-expense-start-error">{formErrors.startDate}</p>{/if}
+			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeForm}>Cancel</Button>
