@@ -56,7 +56,7 @@ describe('management route error contract', () => {
 		assert.match(sources.units, /emptyMessage=\{emptyStateCopy\.message\}/);
 		assert.match(sources.tenants, /emptyMessage=\{emptyCopy\.message\}/);
 		assert.match(sources.owners, /emptyMessage=\{ownerEmptyMessage\}/);
-		assert.match(sources.leases, /emptyMessage=\{relationshipEmptyMessage\}/);
+		assert.match(sources.leases, /emptyMessage=\{leaseEmptyMessage\}/);
 		assert.match(sources.applications, /\{emptyMessage\}/);
 		assert.match(tenantLedgerPanel, /data-testid="tenant-ledger-empty"/);
 		assert.match(tenantLedgerPanel, /No charges or payments yet\. Record the first payment or charge above\./);
@@ -69,7 +69,7 @@ describe('management route error contract', () => {
 		assert.match(sources.tenants, /hasActiveFilters/);
 		assert.match(sources.applications, /formatApplicationsEmptyMessage/);
 		assert.match(sources.owners, /hasOwnerSearch/);
-		assert.match(sources.leases, /hasRelationshipFilters/);
+		assert.match(sources.leases, /hasLeaseFilters/);
 
 		for (const [name] of managementRoutes) {
 			assert.match(
