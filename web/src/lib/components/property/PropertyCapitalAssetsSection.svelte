@@ -14,6 +14,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -248,7 +249,11 @@
 			<InlineField label="Description" bind:value={form.description} editing type="text" error={formErrors.description} testid="capital-asset-description" />
 			<div class="grid grid-cols-2 gap-3">
 				<InlineField label="Cost basis" bind:value={form.costBasis} editing type="number" error={formErrors.costBasis} testid="capital-asset-cost-basis" />
-				<InlineField label="In-service date" bind:value={form.inServiceDate} editing type="date" error={formErrors.inServiceDate} testid="capital-asset-in-service-date" />
+				<div data-testid="capital-asset-in-service-date-field">
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="capital-asset-in-service-date-input">In-service date</label>
+					<DatePicker id="capital-asset-in-service-date-input" testid="capital-asset-in-service-date-input" bind:value={form.inServiceDate} />
+					{#if formErrors.inServiceDate}<p class="mt-1 text-xs text-destructive" data-testid="capital-asset-in-service-date-error">{formErrors.inServiceDate}</p>{/if}
+				</div>
 			</div>
 			<div class="grid grid-cols-3 gap-3">
 				<InlineField label="Method" bind:value={form.method} editing type="select" options={methodOptions} error={formErrors.method} testid="capital-asset-method" />

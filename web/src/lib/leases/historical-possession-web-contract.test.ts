@@ -77,4 +77,20 @@ describe('historical possession reconciliation web contract', () => {
 			/Given \{formatBusinessDate\(summary\.possessionGivenAtUtc\)\}/
 		);
 	});
+
+	it('blocks stale historical-date submission while the picker text is invalid', () => {
+		assert.match(possessionActionsSource, /let historicalDateInvalid = \$state\(false\);/);
+		assert.match(possessionActionsSource, /<DatePicker[\s\S]*?bind:invalid=\{historicalDateInvalid\}/);
+		assert.match(
+			possessionActionsSource,
+			/disabled=\{historicalMutation\.isPending \|\| historicalDateInvalid\}/
+		);
+		const submitHistorical = possessionActionsSource.match(
+			/function submitHistorical\(\) \{[\s\S]*?\n\t\}\n\n\tasync function openReturn/
+		)?.[0] ?? '';
+		assert.match(submitHistorical, /if \(historicalDateInvalid\) \{[\s\S]*?return;/);
+		const invalidGuardIndex = submitHistorical.indexOf('if (historicalDateInvalid)');
+		const mutationIndex = submitHistorical.indexOf('historicalMutation.mutate');
+		assert.ok(invalidGuardIndex >= 0 && invalidGuardIndex < mutationIndex);
+	});
 });
