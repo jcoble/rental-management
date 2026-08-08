@@ -24,13 +24,14 @@
 	import EndingDispositionDialog from '$lib/components/leases/EndingDispositionDialog.svelte';
 	import HouseholdManagementDialog from '$lib/components/leases/HouseholdManagementDialog.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
+	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { CalendarClock, Eye, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
+	import { BellRing, CalendarClock, Eye, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { money } from '$lib/components/unit/money';
@@ -57,6 +58,7 @@
 	let createAddendumBase = $state<AddendumBaseAgreement | null>(null);
 	let correctionAddendum = $state<LeaseAddendumHistoryItem | null>(null);
 	let endingDispositionOpen = $state(false);
+	let noticeDialogOpen = $state(false);
 	type HouseholdAction = { mode: 'add' | 'change' | 'end' | 'grant' | 'revoke'; party?: LeaseManagementParty; access?: ReturnPossessionActiveTenantUserAccess };
 	let householdAction = $state<HouseholdAction | null>(null);
 	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
@@ -67,6 +69,7 @@
 	));
 	const canManageHousehold = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.onboarding.manage'));
 	const canPrepareAgreements = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.agreements.prepare'));
+	const canManageTenantNotices = $derived(activeCapabilities.has('notifications.tenant-notices.manage'));
 
 	function endingDispositionLabel(value: string) {
 		switch (value) {
@@ -82,6 +85,14 @@
 		queryFn: () => leaseManagements.get(leaseManagementId),
 		enabled: Number.isInteger(leaseManagementId) && leaseManagementId > 0
 	}));
+	const currentNoticeParty = $derived.by(() => {
+		const detail = relationshipQuery.data;
+		if (!detail) return null;
+
+		return detail.parties.find((party) => party.isCurrent && party.tenantId === detail.summary.primaryTenantId)
+			?? detail.parties.find((party) => party.isCurrent && (party.role === 'PrimaryTenant' || party.role === 'CoTenant'))
+			?? null;
+	});
 	const agreementsQuery = createQuery(() => ({
 		queryKey: ['lease-managements', leaseManagementId, 'agreements', agreementSkip],
 		queryFn: () =>
@@ -349,10 +360,27 @@
 								</div>
 							{/if}
 						</dl>
-						{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
-							<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
-								<CalendarClock class="h-4 w-4" /> Record decision
-							</Button>
+						{#if canManageTenantNotices || (canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc)}
+							<div class="flex flex-wrap gap-2" data-testid="lease-lifecycle-actions">
+								{#if canManageTenantNotices}
+									<Button
+										variant="outline"
+										size="sm"
+										class="gap-2"
+										disabled={!currentNoticeParty}
+										title={currentNoticeParty ? `Create a notice for ${currentNoticeParty.tenantName}` : 'A current tenant is required'}
+										onclick={() => (noticeDialogOpen = true)}
+										data-testid="lease-create-send-notice"
+									>
+										<BellRing class="h-4 w-4" /> Create / Send notice
+									</Button>
+								{/if}
+								{#if canPrepareAgreements && summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
+									<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
+										<CalendarClock class="h-4 w-4" /> Record decision
+									</Button>
+								{/if}
+							</div>
 						{/if}
 					</CardContent>
 				</Card>
@@ -605,5 +633,14 @@
 	{/if}
 	{#if householdAction}
 		<HouseholdManagementDialog mode={householdAction.mode} {summary} party={householdAction.party} parties={householdContextQuery.data?.parties ?? []} agreements={agreementsQuery.data?.items ?? []} accessId={householdAction.access?.tenantUserAccessId} onclose={() => (householdAction = null)} onchanged={refreshLease} />
+	{/if}
+	{#if currentNoticeParty && canManageTenantNotices}
+		<TenantNoticeDialog
+			bind:open={noticeDialogOpen}
+			leaseManagementId={leaseManagementId}
+			recipientTenantId={currentNoticeParty.tenantId}
+			tenantName={currentNoticeParty.tenantName}
+			activeLeaseCount={1}
+		/>
 	{/if}
 {/if}
