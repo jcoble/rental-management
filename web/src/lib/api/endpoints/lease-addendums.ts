@@ -2,7 +2,8 @@ import type {
 	LeaseAddendumFinancialEffectType,
 	LeaseAddendumPurpose,
 	LeaseLegalSignerRole,
-	LegalDocumentIssuancePreparation
+	LegalDocumentIssuancePreparation,
+	ResendNativeEsignInvitationResponse
 } from './lease-managements';
 import type { LegalDocumentArtifactSummary } from '$lib/types';
 import { api, downloadFile, fetchApi } from '../client';
@@ -232,6 +233,18 @@ export const leaseAddendums = {
 			`/lease-managements/${leaseManagementId}/addenda/${leaseAddendumId}/issue`,
 			'POST',
 			request,
+			operationKey
+		),
+	resendInvitation: (
+		leaseManagementId: number,
+		leaseAddendumId: number,
+		leaseAddendumSignerId: number,
+		operationKey: string
+	) =>
+		idempotentJson<ResendNativeEsignInvitationResponse>(
+			`/lease-managements/${leaseManagementId}/addenda/${leaseAddendumId}/signers/${leaseAddendumSignerId}/resend-invitation`,
+			'POST',
+			{},
 			operationKey
 		),
 	downloadArtifact: (

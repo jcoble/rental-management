@@ -26,6 +26,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
         new("lease-agreement.issue.v1");
+    private static readonly AtomicJsonResultCodec<ResendNativeEsignInvitationResult> ResendInvitationCodec =
+        new("native-esign.invitation-resend.v1");
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
         new("lease-agreement.void.v1");
     private readonly IAtomicUnitOfWork _atomic;
@@ -439,6 +441,49 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseAgreementId:int}/signers/{leaseAgreementSignerId:int}/resend-invitation")]
+    [ProducesResponseType(typeof(ResendNativeEsignInvitationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ResendInvitation(
+        int leaseManagementId,
+        int leaseAgreementId,
+        int leaseAgreementSignerId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        var command = new ResendNativeEsignInvitationCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            NativeEsignInvitationParentKind.LeaseAgreement,
+            leaseAgreementId,
+            leaseAgreementSignerId,
+            envelope.UserId,
+            envelope.SessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            envelope.KeyDigest);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-agreement.esign-invitation.resend",
+                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{leaseAgreementSignerId}:{envelope.KeyDigest}"),
+                command,
+                ResendInvitationCodec,
+                ct);
+            return Ok(new ResendNativeEsignInvitationResponse(
+                outcome.Value.SignatureRequestId,
+                outcome.Value.SignatureSignerId,
+                outcome.Disposition == AtomicCommandDisposition.Replayed));
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
     }
 
     [HttpPost("{leaseAgreementId:int}/void")]
