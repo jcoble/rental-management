@@ -497,13 +497,25 @@ public class AccountingService : IAccountingService
         // ledger entries, expenses, bank movements, and the separate application-fee subledger.
         // Posted ledger debits are negative and credits are positive; no mutable Payment status is
         // consulted and security-deposit receipts remain visibly typed rather than misreported as rent.
-        IQueryable<AccountingTransactionView> rows = _db.TenantLedgerEntries
-            .AsNoTracking()
-            .Where(entry =>
-                entry.PortfolioId == portfolioId &&
-                authorizedProperties.Any(property =>
-                    property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId))
-            .Select(entry => new AccountingTransactionView
+        IQueryable<AccountingTransactionView> rows =
+            from entry in _db.TenantLedgerEntries.AsNoTracking()
+            join account in _db.TenantAccounts.AsNoTracking()
+                on new { entry.PortfolioId, Id = entry.TenantAccountId }
+                equals new { account.PortfolioId, account.Id }
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join property in _db.Properties.AsNoTracking()
+                on new { management.PortfolioId, Id = management.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { entry.PortfolioId, LeaseManagementId = management.Id }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                into lifecycleRows
+            from lifecycle in lifecycleRows.DefaultIfEmpty()
+            where entry.PortfolioId == portfolioId
+                && authorizedProperties.Any(authorizedProperty => authorizedProperty.Id == management.PropertyId)
+            select new AccountingTransactionView
             {
                 Kind = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
                     ? KindPayment
@@ -518,22 +530,20 @@ public class AccountingService : IAccountingService
                 Status = entry.Direction == TenantLedgerDirection.Credit ? "Credit" : "Debit",
                 Amount = entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : -entry.Amount,
                 TenantAccountId = entry.TenantAccountId,
-                PropertyId = entry.TenantAccount!.LeaseManagement!.PropertyId,
-                UnitId = entry.TenantAccount.LeaseManagement.UnitId,
-                PropertyName = entry.TenantAccount.LeaseManagement.Property!.Name,
-                Counterparty = _db.LeaseManagementLifecycleProjections
-                    .Where(lifecycle => lifecycle.PortfolioId == entry.PortfolioId
-                        && lifecycle.LeaseManagementId == entry.TenantAccount.LeaseManagementId)
-                    .Select(lifecycle => lifecycle.CurrentPrimaryTenantName)
-                    .FirstOrDefault(),
-                Reference = entry.TenantAccount.AccountNumber,
+                PropertyId = management.PropertyId,
+                UnitId = management.UnitId,
+                PropertyName = property.Name,
+                Counterparty = lifecycle == null ? null : lifecycle.CurrentPrimaryTenantName,
+                Reference = account.AccountNumber,
                 Notes = null,
                 HasReceipt = false,
                 ReceiptIsImage = false,
                 Reconciled = false,
                 ClearedBankName = null,
                 ClearedAt = null,
-            })
+            };
+
+        rows = rows
             .Concat(_db.Expenses.AsNoTracking()
                 .Where(expense =>
                     expense.PortfolioId == portfolioId &&
@@ -558,40 +568,11 @@ public class AccountingService : IAccountingService
                     Counterparty = expense.Vendor == null ? null : expense.Vendor.Name,
                     Reference = expense.WorkOrder == null ? null : expense.WorkOrder.Title,
                     Notes = expense.Notes,
-                    HasReceipt = _db.StoredFiles.Any(file =>
-                        file.PortfolioId == expense.PortfolioId &&
-                        file.EntityType == "Expense" &&
-                        file.EntityId == expense.Id &&
-                        file.DeletedAt == null),
-                    ReceiptIsImage = _db.StoredFiles
-                        .Where(file =>
-                            file.PortfolioId == expense.PortfolioId &&
-                            file.EntityType == "Expense" &&
-                            file.EntityId == expense.Id &&
-                            file.DeletedAt == null)
-                        .OrderByDescending(file => file.UploadedAt)
-                        .Select(file => file.ContentType.StartsWith("image/"))
-                        .FirstOrDefault(),
-                    Reconciled = _db.BankTransactions.Any(bank =>
-                        bank.PortfolioId == expense.PortfolioId &&
-                        bank.MatchStatus == "Matched" &&
-                        bank.MatchedExpenseId == expense.Id),
-                    ClearedBankName = _db.BankTransactions
-                        .Where(bank =>
-                            bank.PortfolioId == expense.PortfolioId &&
-                            bank.MatchStatus == "Matched" &&
-                            bank.MatchedExpenseId == expense.Id)
-                        .OrderByDescending(bank => bank.PostedAt)
-                        .Select(bank => bank.BankConnection!.InstitutionName)
-                        .FirstOrDefault(),
-                    ClearedAt = _db.BankTransactions
-                        .Where(bank =>
-                            bank.PortfolioId == expense.PortfolioId &&
-                            bank.MatchStatus == "Matched" &&
-                            bank.MatchedExpenseId == expense.Id)
-                        .OrderByDescending(bank => bank.PostedAt)
-                        .Select(bank => (DateTime?)bank.PostedAt)
-                        .FirstOrDefault(),
+                    HasReceipt = false,
+                    ReceiptIsImage = false,
+                    Reconciled = false,
+                    ClearedBankName = null,
+                    ClearedAt = null,
                 }))
             .Concat(_db.ApplicationFinancialEntries
                 .IgnoreQueryFilters()
@@ -758,10 +739,75 @@ public class AccountingService : IAccountingService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
+        var expenseIds = pageRows
+            .Where(row => row.Kind == KindExpense)
+            .Select(row => row.Id)
+            .ToArray();
+        var receiptFactsByExpenseId = new Dictionary<long, ExpenseReceiptFact>();
+        var bankFactsByExpenseId = new Dictionary<long, ExpenseBankFact>();
+        if (expenseIds.Length > 0)
+        {
+            var pageReceipts = _db.StoredFiles
+                .AsNoTracking()
+                .Where(file =>
+                    file.PortfolioId == portfolioId &&
+                    file.EntityType == KindExpense &&
+                    file.EntityId.HasValue &&
+                    expenseIds.Contains(file.EntityId.Value) &&
+                    file.DeletedAt == null);
+            var latestReceiptTimes = pageReceipts
+                .GroupBy(file => file.EntityId!.Value)
+                .Select(files => new
+                {
+                    ExpenseId = files.Key,
+                    UploadedAt = files.Max(file => file.UploadedAt),
+                });
+            var receiptFacts = await (
+                    from file in pageReceipts
+                    join latest in latestReceiptTimes
+                        on new { ExpenseId = file.EntityId!.Value, file.UploadedAt }
+                        equals new { latest.ExpenseId, latest.UploadedAt }
+                    group file by latest.ExpenseId
+                    into latestFiles
+                    select new ExpenseReceiptFact
+                    {
+                        ExpenseId = latestFiles.Key,
+                        HasReceipt = true,
+                        ReceiptIsImage = EF.Functions.ArrayAgg(
+                            latestFiles.Select(file => file.ContentType.StartsWith("image/")))[0],
+                    })
+                .ToListAsync(ct);
+            receiptFactsByExpenseId = receiptFacts.ToDictionary(fact => fact.ExpenseId);
+
+            var bankFacts = await _db.BankTransactions
+                .AsNoTracking()
+                .Where(bank =>
+                    bank.PortfolioId == portfolioId &&
+                    bank.MatchStatus == "Matched" &&
+                    bank.MatchedExpenseId.HasValue &&
+                    expenseIds.Contains(bank.MatchedExpenseId.Value))
+                .OrderByDescending(bank => bank.PostedAt)
+                .Select(bank => new ExpenseBankFact
+                {
+                    ExpenseId = bank.MatchedExpenseId!.Value,
+                    Reconciled = true,
+                    ClearedBankName = bank.BankConnection!.InstitutionName,
+                    ClearedAt = bank.PostedAt,
+                })
+                .ToListAsync(ct);
+            foreach (var fact in bankFacts)
+            {
+                bankFactsByExpenseId.TryAdd((long)fact.ExpenseId, fact);
+            }
+        }
+
         return new AccountingTransactionsResponse
         {
             Items = pageRows.Select(r =>
             {
+                var expenseFactKey = r.Kind == KindExpense ? r.Id : -1L;
+                receiptFactsByExpenseId.TryGetValue(expenseFactKey, out var receiptFact);
+                bankFactsByExpenseId.TryGetValue(expenseFactKey, out var bankFact);
                 var item = new AccountingTransactionResponse
                 {
                     Kind = r.Kind,
@@ -779,11 +825,11 @@ public class AccountingService : IAccountingService
                     PropertyName = r.PropertyName,
                     Counterparty = r.Counterparty,
                     DetailHref = DetailHrefFor(r.Kind, r.Id, r.TenantAccountId),
-                    HasReceipt = r.HasReceipt,
-                    ReceiptIsImage = r.ReceiptIsImage,
-                    Reconciled = r.Reconciled,
-                    ClearedBankName = r.ClearedBankName,
-                    ClearedAt = r.ClearedAt,
+                    HasReceipt = receiptFact?.HasReceipt ?? false,
+                    ReceiptIsImage = receiptFact?.ReceiptIsImage ?? false,
+                    Reconciled = bankFact?.Reconciled ?? false,
+                    ClearedBankName = bankFact?.ClearedBankName,
+                    ClearedAt = bankFact?.ClearedAt,
                 };
 
                 return item;
@@ -1617,6 +1663,21 @@ public class AccountingService : IAccountingService
         public decimal Amount { get; set; }
         public int PropertyId { get; set; }
         public int UnitId { get; set; }
+    }
+
+    private sealed class ExpenseReceiptFact
+    {
+        public long ExpenseId { get; set; }
+        public bool HasReceipt { get; set; }
+        public bool ReceiptIsImage { get; set; }
+    }
+
+    private sealed class ExpenseBankFact
+    {
+        public int ExpenseId { get; set; }
+        public bool Reconciled { get; set; }
+        public string? ClearedBankName { get; set; }
+        public DateTime? ClearedAt { get; set; }
     }
 
     private sealed class CurrentTenantBalanceRow
