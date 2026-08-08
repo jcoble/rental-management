@@ -1,5 +1,11 @@
 export const UNIT_TABS = ['summary', 'leasing', 'tenant-lease', 'money', 'maintenance', 'documents-history'] as const;
 
+export const UNIT_SUBNAV_LIST_CLASS =
+	'inline-flex min-w-max items-center gap-0.5 rounded-lg bg-muted/55 p-1';
+
+export const UNIT_SUBNAV_ITEM_CLASS =
+	'min-h-9 rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-150 hover:bg-background/70 hover:text-foreground active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm';
+
 export type UnitTab = (typeof UNIT_TABS)[number];
 
 export type UnitView =

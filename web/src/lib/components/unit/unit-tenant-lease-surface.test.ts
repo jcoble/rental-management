@@ -10,9 +10,15 @@ const unitPageSource = readFileSync(
 );
 
 describe('Unit Tenant & lease surface', () => {
-	it('keeps the six approved top-level Unit destinations with a focused tenant sub-tab list', () => {
+	it('keeps the six approved top-level Unit destinations with a subordinate tenant section switcher', () => {
 		assert.equal(UNIT_TABS.length, 6);
-		assert.match(unitPageSource, /unit-tenant-lease-tabs/);
+		assert.match(unitPageSource, /aria-label="Tenant and lease sections"/);
+		assert.match(unitPageSource, /data-testid="unit-tenant-lease-subnav"/);
+		assert.match(unitPageSource, /class=\{UNIT_SUBNAV_LIST_CLASS\}/);
+		assert.match(unitPageSource, /aria-current=\{activeView === 'agreements' \? 'page' : undefined\}/);
+		assert.doesNotMatch(unitPageSource, /unit-tenant-lease-tabs/);
+		assert.equal(unitPageSource.match(/m3-tabs-list/g)?.length, 1);
+		assert.equal(unitPageSource.match(/class="m3-tabs-trigger"/g)?.length, UNIT_TABS.length);
 		assert.match(unitPageSource, /data-testid="unit-tenant-lease-surface"/);
 	});
 
