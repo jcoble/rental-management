@@ -147,6 +147,8 @@ JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment
 // --- Database ---
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
+var apiConnectionString = RentalCommand.Api.Data.ApiDatabaseConnectionString
+    .WithJitDisabled(connectionString);
 var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection");
 var migrateOnly = args.Any(argument =>
     string.Equals(argument, "--migrate-only", StringComparison.OrdinalIgnoreCase));
@@ -173,7 +175,7 @@ else if (!string.IsNullOrWhiteSpace(migratorConnectionString))
 if (!migrateOnly)
 {
     RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
-        connectionString,
+        apiConnectionString,
         RentalCommand.Data.Security.DatabaseRuntimeIdentity.ApiRole,
         allowDevelopmentDefault: builder.Environment.IsDevelopment());
 }
@@ -207,7 +209,7 @@ builder.Services.AddScoped<
 builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
 {
-    options.UseNpgsql(migrateOnly ? migratorConnectionString! : connectionString)
+    options.UseNpgsql(migrateOnly ? migratorConnectionString! : apiConnectionString)
         .UseAtomicPersistenceKernel(sp);
     if (!migrateOnly)
     {
