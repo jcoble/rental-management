@@ -113,6 +113,156 @@ public sealed class AuditDiffBuilderTests
     }
 
     [Fact]
+    public void Build_CreatedAndDeleted_SkipsNullSnapshotValues()
+    {
+        var created = new AtomicAuditLog
+        {
+            EntityType = "Expense",
+            Operation = AuditLogOperation.Created,
+            NewValues = "{\"Amount\":50,\"Notes\":null}",
+        };
+        var deleted = new AtomicAuditLog
+        {
+            EntityType = "Expense",
+            Operation = AuditLogOperation.Deleted,
+            OldValues = "{\"Amount\":50,\"Notes\":null}",
+        };
+
+        _builder.Build(created).Should().ContainSingle(c => c.Field == "Amount");
+        _builder.Build(deleted).Should().ContainSingle(c => c.Field == "Amount");
+    }
+
+    [Fact]
+    public void Build_CreatedSnapshot_FailsClosedForUnknownAndSensitiveFields()
+    {
+        var row = new AtomicAuditLog
+        {
+            EntityType = "OwnerEntity",
+            Operation = AuditLogOperation.Created,
+            NewValues = """
+                {
+                  "Name": "Oak Street Holdings",
+                  "TaxId": "12-3456789",
+                  "SSN": "111-22-3333",
+                  "DateOfBirth": "1980-01-01",
+                  "PasswordHash": "hash",
+                  "Secret": "value",
+                  "ApiKey": "key",
+                  "RoutingNumber": "021000021",
+                  "AccountNumber": "12345",
+                  "InternalOnly": "do not show"
+                }
+                """,
+        };
+
+        var changes = _builder.Build(row);
+
+        changes.Should().ContainSingle(c => c.Field == "Name");
+        changes.Select(c => c.Field).Should().NotContain("Tax id");
+        changes.Select(c => c.Field).Should().NotContain("SSN");
+        changes.Select(c => c.Field).Should().NotContain("Date of birth");
+        changes.Select(c => c.Field).Should().NotContain("Password hash");
+        changes.Select(c => c.Field).Should().NotContain("Secret");
+        changes.Select(c => c.Field).Should().NotContain("Api key");
+        changes.Select(c => c.Field).Should().NotContain("Routing number");
+        changes.Select(c => c.Field).Should().NotContain("Account number");
+        changes.Select(c => c.Field).Should().NotContain("Internal only");
+
+        var deleted = new AtomicAuditLog
+        {
+            EntityType = row.EntityType,
+            Operation = AuditLogOperation.Deleted,
+            OldValues = row.NewValues,
+        };
+
+        var deletedChanges = _builder.Build(deleted);
+        deletedChanges.Should().ContainSingle(c => c.Field == "Name");
+        deletedChanges.Select(c => c.Field).Should().NotContain("Tax id");
+        deletedChanges.Select(c => c.Field).Should().NotContain("Account number");
+        deletedChanges.Select(c => c.Field).Should().NotContain("Internal only");
+    }
+
+    [Fact]
+    public void Build_RentalApplicationSnapshot_SuppressesContactExtractionAndConsentIp()
+    {
+        var row = new AtomicAuditLog
+        {
+            EntityType = "RentalApplication",
+            Operation = AuditLogOperation.Created,
+            NewValues = """
+                {
+                  "Status": "Submitted",
+                  "DesiredMoveInDate": "2026-09-01",
+                  "FirstName": "Avery",
+                  "LastName": "Applicant",
+                  "Email": "avery@example.com",
+                  "Phone": "555-0100",
+                  "CurrentAddress": "1 Main Street",
+                  "DateOfBirth": "1990-01-01",
+                  "DOB": "1990-01-01",
+                  "IdExtractedFields": "{\"Email\":{\"value\":\"avery@example.com\"}}",
+                  "PayStubJson": "{\"gross\":9000}",
+                  "ConsentIpAddress": "203.0.113.44"
+                }
+                """,
+        };
+
+        var changes = _builder.Build(row);
+
+        changes.Should().Contain(c => c.Field == "Status");
+        changes.Should().Contain(c => c.Field == "Desired move in date");
+        changes.Select(c => c.Field).Should().NotContain("First name");
+        changes.Select(c => c.Field).Should().NotContain("Last name");
+        changes.Select(c => c.Field).Should().NotContain("Email");
+        changes.Select(c => c.Field).Should().NotContain("Phone");
+        changes.Select(c => c.Field).Should().NotContain("Current address");
+        changes.Select(c => c.Field).Should().NotContain("Date of birth");
+        changes.Select(c => c.Field).Should().NotContain("DOB");
+        changes.Select(c => c.Field).Should().NotContain("Id extracted fields");
+        changes.Select(c => c.Field).Should().NotContain("Pay stub json");
+        changes.Select(c => c.Field).Should().NotContain("Consent ip address");
+    }
+
+    [Fact]
+    public void Build_TenantAccountSnapshot_SuppressesAccountNumber()
+    {
+        var row = new AtomicAuditLog
+        {
+            EntityType = "TenantAccount",
+            Operation = AuditLogOperation.Created,
+            NewValues = """
+                {
+                  "Currency": "USD",
+                  "AccountNumber": "TA-0001",
+                  "OpenedAtUtc": "2026-08-09T00:00:00Z",
+                  "CloseReasonCode": "MovedOut"
+                }
+                """,
+        };
+
+        var changes = _builder.Build(row);
+
+        changes.Should().Contain(c => c.Field == "Currency");
+        changes.Should().Contain(c => c.Field == "Opened at utc");
+        changes.Should().Contain(c => c.Field == "Close reason code");
+        changes.Should().NotContain(c => c.Field == "Account number");
+    }
+
+    [Fact]
+    public void Build_CreatedSnapshot_WithNullLegacyPayload_ReturnsEmpty()
+    {
+        var row = new AtomicAuditLog
+        {
+            EntityType = "Expense",
+            Operation = AuditLogOperation.Created,
+            OldValues = null,
+            NewValues = null,
+        };
+
+        _builder.Build(row).Should().BeEmpty();
+    }
+
+    [Fact]
     public void Build_MalformedJson_ReturnsEmptyWithoutThrowing()
     {
         _builder.Build(Updated("{not json", "also not json")).Should().BeEmpty();

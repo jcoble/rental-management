@@ -24,8 +24,9 @@ public sealed class AuditFieldChange
 
 /// <summary>
 /// Wire shape for one <see cref="AtomicAuditLog"/> row in the unified audit viewer. The trail is
-/// append-only, so this is a read-only projection. Captured audit detail is nullable because older
-/// rows may not have a reason, IP address, or before/after snapshot.
+/// append-only, so this is a read-only projection. Only the portfolio-user-authored reason and the
+/// server-built sanitized change lines cross this landlord-facing boundary; IP addresses and raw
+/// before/after snapshots stay on the admin-only forensic projection.
 /// </summary>
 public class AuditEntryResponse
 {
@@ -52,15 +53,6 @@ public class AuditEntryResponse
 
     /// <summary>Optional reason captured by the write path for this change.</summary>
     public string? ChangeReason { get; set; }
-
-    /// <summary>Optional client IP captured by the write path.</summary>
-    public string? IpAddress { get; set; }
-
-    /// <summary>Raw before-change JSON, when the audit writer captured it.</summary>
-    public string? OldValues { get; set; }
-
-    /// <summary>Raw after-change JSON, when the audit writer captured it.</summary>
-    public string? NewValues { get; set; }
 
     /// <summary>Stable selector for frontend tests, e.g. <c>audit-1</c>.</summary>
     public string TestId => $"audit-{Id}";
@@ -90,9 +82,6 @@ public class AuditEntryResponse
             DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
             ChangeReason = e.ChangeReason,
-            IpAddress = e.IpAddress,
-            OldValues = e.OldValues,
-            NewValues = e.NewValues,
             Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
         };
 
