@@ -70,7 +70,8 @@ public class AuditQueryService : IAuditQueryService
                 r.Audit,
                 _describer,
                 r.ResolvedActorName,
-                r.UnitId))
+                r.UnitId,
+                diff: _diff))
             .ToList();
     }
 
@@ -104,7 +105,8 @@ public class AuditQueryService : IAuditQueryService
                 row.Audit,
                 _describer,
                 row.ResolvedActorName,
-                row.UnitId);
+                row.UnitId,
+                diff: _diff);
         }
     }
 
