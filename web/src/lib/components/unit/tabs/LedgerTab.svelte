@@ -4,6 +4,7 @@
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import {
+		resolveUnitUrlDestination,
 		UNIT_SUBNAV_ITEM_CLASS,
 		UNIT_SUBNAV_LIST_CLASS,
 	} from '$lib/components/unit/unit-tabs';
@@ -19,11 +20,15 @@
 	} = $props();
 
 	const unitId = $derived(dashboard.unit.id);
-	const activeView = $derived(
-		(page.state.unitView ?? page.url.searchParams.get('view')) === 'operating-costs'
-			? 'operating-costs'
-			: 'tenant-account'
-	);
+	const activeView = $derived.by(() => {
+		const urlResolution = resolveUnitUrlDestination(page.url);
+		if (urlResolution.hasExplicitViewOrRecord) {
+			return urlResolution.destination.view === 'operating-costs' ? 'operating-costs' : 'tenant-account';
+		}
+
+		const rememberedView = page.state.unitPathname === page.url.pathname ? page.state.unitView : null;
+		return rememberedView === 'operating-costs' ? 'operating-costs' : 'tenant-account';
+	});
 
 	function ledgerUrl(view: 'tenant-account' | 'operating-costs') {
 		const url = new URL(`/units/${unitId}`, page.url.origin);

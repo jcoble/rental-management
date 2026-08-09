@@ -59,6 +59,11 @@ const CONTEXT_OWNER_BY_PARAM: Partial<Record<(typeof UNIT_CONTEXTUAL_PARAMS)[num
 	action: { tab: 'tenant-lease', view: 'agreements' },
 };
 
+export interface UnitUrlDestination {
+	destination: UnitDestination;
+	hasExplicitViewOrRecord: boolean;
+}
+
 const DEFAULT_VIEWS: Partial<Record<UnitTab, UnitView>> = {
 	leasing: 'listing',
 	'tenant-lease': 'agreements',
@@ -86,6 +91,35 @@ export function resolveUnitDestination(
 	const requestedView = normalizedView && validViews?.includes(normalizedView) ? normalizedView : undefined;
 	const view = requestedView && validViews?.includes(requestedView) ? requestedView : DEFAULT_VIEWS[tab];
 	return view ? { tab, view } : { tab };
+}
+
+/**
+ * Resolves a Unit destination from URL context without consulting shallow
+ * state. A view or record parameter is an explicit deep link and therefore
+ * always outranks remembered tab state. Record parameters also supply the
+ * canonical nested view when `view` is omitted.
+ */
+export function resolveUnitUrlDestination(url: URL): UnitUrlDestination {
+	const tabValue = url.searchParams.get('tab');
+	const urlDestination = resolveUnitDestination(tabValue, url.searchParams.get('view'));
+	if (url.searchParams.has('view')) {
+		return { destination: urlDestination, hasExplicitViewOrRecord: true };
+	}
+
+	const explicitTab = tabValue?.trim().toLowerCase();
+	const owner = Object.entries(CONTEXT_OWNER_BY_PARAM).find(([param, candidate]) => {
+		if (param === 'view' || !candidate || !url.searchParams.has(param)) return false;
+		if (!explicitTab) return true;
+		return candidate.tab === urlDestination.tab;
+	})?.[1];
+	if (owner) {
+		return {
+			destination: { tab: owner.tab, view: owner.view },
+			hasExplicitViewOrRecord: true,
+		};
+	}
+
+	return { destination: urlDestination, hasExplicitViewOrRecord: false };
 }
 
 /**

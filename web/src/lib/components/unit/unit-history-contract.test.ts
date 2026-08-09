@@ -7,6 +7,7 @@ describe('Unit destination history contract', () => {
 		new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 		'utf8',
 	);
+	const navigationSource = readFileSync(new URL('./unit-tab-navigation.ts', import.meta.url), 'utf8');
 	const ledgerSource = readFileSync(new URL('./tabs/LedgerTab.svelte', import.meta.url), 'utf8');
 	const listingSource = readFileSync(new URL('./tabs/ListingTab.svelte', import.meta.url), 'utf8');
 
@@ -30,28 +31,35 @@ describe('Unit destination history contract', () => {
 		for (const section of ['applications', 'residents', 'inspections', 'recurring', 'turnover', 'history']) {
 			assert.match(pageSource, new RegExp(`data-testid="unit-${section}-section"`));
 		}
-		assert.match(ledgerSource, /page\.url\.searchParams\.get\('view'\)/);
+		assert.match(ledgerSource, /resolveUnitUrlDestination\(page\.url\)/);
 		assert.match(ledgerSource, /operating-costs/);
-		assert.match(pageSource, /pushState\(`\$\{url\.pathname\}\$\{url\.search\}`, \{/);
-		assert.match(pageSource, /unitTab: destination\.tab/);
-		assert.match(pageSource, /unitView: destination\.view \?\? null/);
+		assert.match(pageSource, /createUnitTabNavigationHandler/);
+		assert.match(navigationSource, /buildUnitTabNavigation/);
+		assert.match(navigationSource, /pushState\(`\$\{nextUrl\.pathname\}\$\{nextUrl\.search\}`, nextState\)/);
+		assert.match(navigationSource, /unitTab: destination\.tab/);
+		assert.match(navigationSource, /unitView: destination\.view \?\? null/);
+		assert.match(navigationSource, /unitPathname: current\.url\.pathname/);
+		assert.match(navigationSource, /unitViewByPath/);
 		assert.doesNotMatch(pageSource, /scrollIntoView/);
 	});
 
-	test('uses validated shallow state with the landing URL as its fallback authority', () => {
+	test('uses explicit URL context as authority and keys shallow state by Unit pathname', () => {
 		assert.match(pageSource, /import \{ untrack \} from 'svelte';/);
-		assert.match(pageSource, /const activeDestination = \$derived\(resolveUnitDestination\(/);
+		assert.match(pageSource, /const activeDestination = \$derived\(resolveUnitPageDestination\(/);
 		assert.match(pageSource, /const activeTab = \$derived\(activeDestination\.tab\);/);
 		assert.match(pageSource, /const activeView = \$derived\(activeDestination\.view\);/);
-		assert.match(pageSource, /page\.state\.unitTab \?\? page\.url\.searchParams\.get\('tab'\)/);
-		assert.match(pageSource, /page\.state\.unitView \?\? page\.url\.searchParams\.get\('view'\)/);
+		assert.match(pageSource, /page\.url,/);
+		assert.match(pageSource, /synchronizeUnitTabState\(page\.url/);
+		assert.doesNotMatch(pageSource, /page\.state\.unitTab \?\? page\.url\.searchParams\.get\('tab'\)/);
+		assert.doesNotMatch(pageSource, /page\.state\.unitView \?\? page\.url\.searchParams\.get\('view'\)/);
 		assert.doesNotMatch(pageSource, /import \* as Tabs/);
 		assert.doesNotMatch(pageSource, /<Tabs\.(?:Root|Content)/);
 		assert.doesNotMatch(pageSource, /let activeTab = \$state/);
 		assert.doesNotMatch(pageSource, /let activeView = \$state/);
 		assert.doesNotMatch(pageSource, /activeTab = destination\.tab/);
 		assert.doesNotMatch(pageSource, /activeView = destination\.view/);
-		assert.match(pageSource, /if \(`\$\{url\.pathname\}\$\{url\.search\}` === `\$\{page\.url\.pathname\}\$\{page\.url\.search\}`\) return;/);
+		assert.match(navigationSource, /if \(`\$\{nextUrl\.pathname\}\$\{nextUrl\.search\}` === `\$\{current\.url\.pathname\}\$\{current\.url\.search\}`\) \{/);
+		assert.match(navigationSource, /replaceState\(`\$\{nextUrl\.pathname\}\$\{nextUrl\.search\}`, nextState\)/);
 	});
 
 	test('keeps the move-in action guard outside its own reactive dependency', () => {
