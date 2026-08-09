@@ -349,6 +349,50 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SeedPortfolio_ArchivedSameNameTemplateGetsUsableCompanionWithoutDuplicates()
+    {
+        var archivedAtUtc = DateTime.UtcNow.AddDays(-1);
+        var archivedTemplate = new DocumentTemplate
+        {
+            PortfolioId = 1,
+            Kind = DocumentTemplateKind.Lease,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Status = DocumentTemplateStatus.Archived,
+            Name = "Standard lease addendum page",
+            IsSandboxSeeded = false,
+            PropertyId = null,
+            Version = 1,
+            CreatedAtUtc = archivedAtUtc.AddDays(-1),
+            UpdatedAtUtc = archivedAtUtc,
+            ArchivedAtUtc = archivedAtUtc,
+        };
+        _ctx.Db.DocumentTemplates.Add(archivedTemplate);
+        await _ctx.Db.SaveChangesAsync();
+
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+        await seeder.SeedPortfolioAsync(1, "seed-archived-template", CancellationToken.None);
+        await seeder.SeedPortfolioAsync(1, "seed-archived-template", CancellationToken.None);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var templates = await _ctx.Db.DocumentTemplates.IgnoreQueryFilters()
+            .Where(template => template.PortfolioId == 1
+                && template.Name == "Standard lease addendum page")
+            .OrderBy(template => template.Id)
+            .ToListAsync();
+
+        templates.Should().HaveCount(2);
+        templates.Should().ContainSingle(template =>
+            template.Status == DocumentTemplateStatus.Active
+            && template.ArchivedAtUtc == null
+            && template.Kind == DocumentTemplateKind.Lease
+            && template.PropertyId == null);
+        templates.Should().ContainSingle(template =>
+            template.Id == archivedTemplate.Id
+            && template.Status == DocumentTemplateStatus.Archived
+            && template.ArchivedAtUtc == archivedAtUtc);
+    }
+
+    [Fact]
     public async Task SeedPortfolio_PopulatedNonDemoPortfolioIsRejectedWithoutMutation()
     {
         var now = DateTime.UtcNow;
