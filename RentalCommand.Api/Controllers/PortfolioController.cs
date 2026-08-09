@@ -66,7 +66,7 @@ public class PortfolioController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<GettingStartedSignalsResponse>> GettingStarted(CancellationToken ct)
     {
-        var signals = await _service.GetGettingStartedSignalsAsync(GetPortfolioId(), ct);
+        var signals = await _service.GetGettingStartedSignalsAsync(GetPortfolioId(), GetUserId(), ct);
         return signals == null ? NotFound(new { error = "Portfolio not found" }) : Ok(signals);
     }
 

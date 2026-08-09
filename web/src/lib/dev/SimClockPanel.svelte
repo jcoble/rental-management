@@ -109,8 +109,8 @@
 <style>
 	.sim-panel {
 		position: fixed;
-		left: 12px;
-		bottom: 12px;
+		top: calc(3.5rem + 12px);
+		right: 12px;
 		z-index: 99999;
 		width: 224px;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -191,10 +191,5 @@
 	.sim-date {
 		flex: 2;
 		min-width: 0;
-	}
-	@media (min-width: 768px) {
-		.sim-panel {
-			left: calc(15rem + 12px);
-		}
 	}
 </style>

@@ -26,6 +26,7 @@
     min?        string  ISO `yyyy-MM-dd` — earliest selectable date (inclusive).
     max?        string  ISO `yyyy-MM-dd` — latest selectable date (inclusive).
     todayValue? string  ISO `yyyy-MM-dd` — override for the Today shortcut.
+    showToday?  boolean show the Today shortcut. Default true.
     testid?     string  applied as data-testid on the text input for E2E.
     id?         string  id for the text input (label `for=` association).
     invalid?    boolean (bindable) reflects invalid typed or out-of-range text.
@@ -59,6 +60,7 @@
 		min,
 		max,
 		todayValue,
+		showToday = true,
 		testid,
 		id
 	}: {
@@ -70,6 +72,7 @@
 		min?: string;
 		max?: string;
 		todayValue?: string;
+		showToday?: boolean;
 		testid?: string;
 		id?: string;
 	} = $props();
@@ -217,19 +220,21 @@
 		)}
 	/>
 	<div class="date-picker-actions absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
-		<button
-			type="button"
-			{disabled}
-			aria-label="Use today's date"
-			data-testid={testid ? `${testid}-today` : undefined}
-			onclick={setToday}
-			class={cn(
-				buttonVariants({ variant: 'ghost', size: 'sm' }),
-				'date-picker-today h-8 whitespace-nowrap px-2 text-xs text-muted-foreground hover:bg-transparent'
-			)}
-		>
-			<span class="date-picker-today-label">Today</span>
-		</button>
+		{#if showToday}
+			<button
+				type="button"
+				{disabled}
+				aria-label="Use today's date"
+				data-testid={testid ? `${testid}-today` : undefined}
+				onclick={setToday}
+				class={cn(
+					buttonVariants({ variant: 'ghost', size: 'sm' }),
+					'date-picker-today h-8 whitespace-nowrap px-2 text-xs text-muted-foreground hover:bg-transparent'
+				)}
+			>
+				<span class="date-picker-today-label">Today</span>
+			</button>
+		{/if}
 		<Popover.Root bind:open>
 			<Popover.Trigger
 				{disabled}

@@ -53,6 +53,7 @@ public class PortfolioService : IPortfolioService
 
     public async Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(
         int portfolioId,
+        int userId,
         CancellationToken ct = default)
     {
         if (portfolioId <= 0)
@@ -75,7 +76,7 @@ public class PortfolioService : IPortfolioService
                 TenantCount = _db.Tenants.Count(tenant => tenant.PortfolioId == p.Id),
                 LeaseCount = _db.LeaseManagements.Count(management => management.PortfolioId == p.Id),
                 HasNotificationEmail = _db.UserAlertPreferences.Any(pref =>
-                    pref.PortfolioId == p.Id && pref.EnableEmail),
+                    pref.PortfolioId == p.Id && pref.UserId == userId && pref.EnableEmail),
                 HasTexting = _db.MessagingProviderSettings.Any(settings =>
                     settings.PortfolioId == p.Id &&
                     settings.SmsProvider != null && settings.SmsProvider != string.Empty),
