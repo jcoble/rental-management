@@ -249,8 +249,8 @@
 
 		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
 			<h2 class="mb-1 text-base font-semibold">History</h2>
-			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this payment, including corrections.</p>
-			<RecordHistory entityType="TenantLedgerEntry" entityId={tenantLedgerEntryId} />
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change on this tenant's account.</p>
+			<RecordHistory entityType="TenantAccount" entityId={tenantAccountId} />
 		</div>
 	{/if}
 </div>
