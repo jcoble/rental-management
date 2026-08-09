@@ -21,9 +21,11 @@
 	} = $props();
 
 	const tenantAccountId = $derived(dashboard.tenantAccountId ?? null);
-	const selectedReceipt = $derived(
-		page.state.unitPaymentId ?? (Number(page.url.searchParams.get('payment')) || null)
-	);
+	const selectedReceipt = $derived.by(() => {
+		const explicitPayment = page.url.searchParams.get('payment');
+		if (explicitPayment !== null) return Number(explicitPayment) || null;
+		return page.state.unitPathname === page.url.pathname ? page.state.unitPaymentId ?? null : null;
+	});
 
 	function unitUrl(payment?: number): string {
 		const url = new URL(`/units/${dashboard.unit.id}`, page.url.origin);

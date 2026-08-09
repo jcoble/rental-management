@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	createUnitTabNavigationHandler,
+	resolveUnitPageDestination,
 	type UnitTabNavigationState,
 } from './unit-tab-navigation.ts';
 
@@ -9,13 +10,16 @@ type NavigationContainer = {
 	url: URL;
 	state: UnitTabNavigationState;
 	history: Array<{ url: URL; state: UnitTabNavigationState }>;
+	cursor: number;
 };
 
 function createContainer(url: string, state: UnitTabNavigationState): NavigationContainer {
+	const initialUrl = new URL(url);
 	return {
-		url: new URL(url),
+		url: initialUrl,
 		state,
-		history: [],
+		history: [{ url: new URL(initialUrl), state }],
+		cursor: 0,
 	};
 }
 
@@ -25,14 +29,35 @@ function connect(container: NavigationContainer) {
 		pushState: (url, state) => {
 			container.url = new URL(url, container.url);
 			container.state = state;
-			container.history.push({ url: container.url, state });
+			container.history = [
+				...container.history.slice(0, container.cursor + 1),
+				{ url: new URL(container.url), state },
+			];
+			container.cursor += 1;
+		},
+		replaceState: (_url, state) => {
+			container.state = state;
+			container.history[container.cursor] = {
+				url: new URL(container.url),
+				state,
+			};
 		},
 	});
+}
+
+function moveHistoryCursor(container: NavigationContainer, offset: number) {
+	const nextCursor = container.cursor + offset;
+	assert.ok(nextCursor >= 0 && nextCursor < container.history.length, `history cursor ${nextCursor} is out of range`);
+	container.cursor = nextCursor;
+	const entry = container.history[container.cursor];
+	container.url = new URL(entry.url);
+	container.state = entry.state;
 }
 
 describe('unit tab page navigation integration', () => {
 	it('restores Applications when the page state retains the nested view but the URL does not', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
+			unitPathname: '/units/10',
 			unitTab: 'leasing',
 			unitView: 'applications',
 		});
@@ -55,7 +80,7 @@ describe('unit tab page navigation integration', () => {
 	it('keeps the ten contextual parameters and clears only an explicitly selected record key', () => {
 		const container = createContainer(
 			'https://rental.local/units/10?tab=leasing&view=applications&wo=8&app=7&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15',
-			{ unitTab: 'leasing', unitView: 'applications' },
+			{ unitPathname: '/units/10', unitTab: 'leasing', unitView: 'applications' },
 		);
 		const setTab = connect(container);
 
@@ -80,6 +105,7 @@ describe('unit tab page navigation integration', () => {
 
 	it('does not reuse a remembered nested view for a different unit path', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
+			unitPathname: '/units/10',
 			unitTab: 'leasing',
 			unitView: 'applications',
 		});
@@ -93,5 +119,57 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(container.url.searchParams.get('view'), 'listing');
 		assert.equal(container.url.searchParams.get('app'), null);
 		assert.equal(container.state.unitView, 'listing');
+	});
+
+	it('lets an explicit URL view replace stale Applications state and memory', () => {
+		const container = createContainer('https://rental.local/units/10?tab=leasing&view=listing', {
+			unitTab: 'leasing',
+			unitView: 'applications',
+			unitViewByPath: {
+				'/units/10': { leasing: 'applications' },
+			},
+		});
+		const setTab = connect(container);
+
+		// Explicit URL context must remain authoritative even when shallow state
+		// still points at Applications.
+		assert.deepEqual(
+			resolveUnitPageDestination(container.url, container.state),
+			{ tab: 'leasing', view: 'listing' },
+		);
+
+		setTab('leasing');
+		assert.equal(container.state.unitViewByPath?.['/units/10']?.leasing, 'listing');
+
+		setTab('summary');
+		assert.equal(container.state.unitViewByPath?.['/units/10']?.leasing, 'listing');
+	});
+
+	it('starts a different unit on its default Leasing view and traverses exact history URLs with a cursor', () => {
+		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
+			unitPathname: '/units/10',
+			unitTab: 'leasing',
+			unitView: 'applications',
+			unitViewByPath: {
+				'/units/10': { leasing: 'applications' },
+			},
+		});
+		const setTab = connect(container);
+
+		// Direct unit navigation can carry the previous page's shallow state;
+		// it must not inherit Unit 10's Applications view or record.
+		container.url = new URL('https://rental.local/units/11?tab=leasing');
+		setTab('leasing');
+		assert.equal(container.url.searchParams.get('view'), 'listing');
+		assert.equal(container.url.searchParams.get('app'), null);
+
+		setTab('summary');
+		assert.equal(container.history.length, 3);
+		moveHistoryCursor(container, -1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/11?tab=leasing&view=listing');
+		moveHistoryCursor(container, -1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/10?tab=leasing&view=applications&app=7');
+		moveHistoryCursor(container, 2);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/11?tab=summary&view=listing');
 	});
 });
