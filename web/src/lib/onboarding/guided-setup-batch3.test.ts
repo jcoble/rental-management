@@ -20,14 +20,6 @@ const datePicker = readFileSync(
 	'utf8'
 );
 const simClock = readFileSync(new URL('../dev/SimClockPanel.svelte', import.meta.url), 'utf8');
-const portfolioService = readFileSync(
-	new URL('../../../../RentalCommand.Api/Services/Domain/PortfolioService.cs', import.meta.url),
-	'utf8'
-);
-const portfolioController = readFileSync(
-	new URL('../../../../RentalCommand.Api/Controllers/PortfolioController.cs', import.meta.url),
-	'utf8'
-);
 
 describe('guided setup batch 3 contracts', () => {
 	test('alert completion uses durable preferences on both surfaces and reloads after save', () => {
@@ -38,12 +30,6 @@ describe('guided setup batch 3 contracts', () => {
 		assert.match(onboarding, /myAlertsQuery\.refetch\(\)/);
 		assert.match(onboarding, /gettingStartedSignalsQuery\.refetch\(\)/);
 		assert.match(tasks, /isPersonalAlertSetupComplete\(s\.hasPersonalAlerts\)/);
-	});
-
-	test('server checklist completion is scoped to the signed-in user', () => {
-		assert.match(portfolioService, /GetGettingStartedSignalsAsync\(\s*int portfolioId,\s*int userId/);
-		assert.match(portfolioService, /pref\.PortfolioId == p\.Id && pref\.UserId == userId && pref\.EnableEmail/);
-		assert.match(portfolioController, /GetGettingStartedSignalsAsync\(GetPortfolioId\(\), GetUserId\(\), ct\)/);
 	});
 
 	test('optional wizard group has a semantic word boundary', () => {

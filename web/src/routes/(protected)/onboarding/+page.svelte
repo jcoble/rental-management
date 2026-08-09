@@ -49,6 +49,8 @@
 	} from '$lib/onboarding/wizard-steps';
 	import { celebrateMilestone, bigFinale } from '$lib/onboarding/celebrations';
 	import {
+		areOnboardingDetectionQueriesReady,
+		hasOnboardingDetectionQueryFailed,
 		resolveInitialOnboardingState,
 		shouldFinishAfterOptionalStep,
 	} from '$lib/onboarding/onboarding-flow-state';
@@ -297,22 +299,24 @@
 	// requests settle before an earlier query, their proxy never notifies this component and setup
 	// can remain on the detection screen until a manual refetch.
 	const detectionReady = $derived(
-		[
+		areOnboardingDetectionQueriesReady([
 			portfolioQuery.isSuccess,
 			ownersQuery.isSuccess,
 			propertiesQuery.isSuccess,
 			tenantsQuery.isSuccess,
-			leasesQuery.isSuccess
-		].every(Boolean)
+			leasesQuery.isSuccess,
+			gettingStartedSignalsQuery.isSuccess,
+		])
 	);
 	const detectionFailed = $derived(
-		[
+		hasOnboardingDetectionQueryFailed([
 			portfolioQuery.isError,
 			ownersQuery.isError,
 			propertiesQuery.isError,
 			tenantsQuery.isError,
-			leasesQuery.isError
-		].some(Boolean)
+			leasesQuery.isError,
+			gettingStartedSignalsQuery.isError,
+		])
 	);
 	function retryExistingDataDetection() {
 		void portfolioQuery.refetch();
@@ -320,6 +324,7 @@
 		void propertiesQuery.refetch();
 		void tenantsQuery.refetch();
 		void leasesQuery.refetch();
+		void gettingStartedSignalsQuery.refetch();
 	}
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
