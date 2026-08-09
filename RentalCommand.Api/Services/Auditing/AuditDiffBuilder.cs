@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -12,7 +13,7 @@ namespace RentalCommand.Api.Services.Auditing;
 /// landlord-safe list of field-level changes ("amount: $32,423 → $23,423", "status: Pending → Paid")
 /// for the per-record History card. This is the customer-facing, *sanitized* projection: friendly
 /// field names + formatted values, with no raw JSON, no IP, and no plumbing/PII fields. The raw
-/// old→new JSON stays on the Admin-only forensic DTO.
+/// old→new JSON remains separate from this sanitized change list on the audit DTOs.
 ///
 /// <para>The interceptor serializes the changed scalars as a flat <c>{ PropertyName: value }</c>
 /// JSON object captured by the atomic audit interceptor. For an <c>Updated</c>
@@ -26,6 +27,69 @@ public sealed class AuditDiffBuilder
         "UpdatedAt", "CreatedAt", "DeletedAt", "PortfolioId", "Id",
         "ReceiptData", "RowVersion", "ConcurrencyStamp",
     };
+
+    // Snapshot rows are full entity payloads. They are deliberately fail-closed: a field must match
+    // one of these small, human-meaningful patterns or an explicit entity addition below before it
+    // can render. This is separate from Updated behavior, which continues to show changed fields as
+    // it did before this review fix.
+    private static readonly Regex[] SharedSafeSnapshotFieldPatterns =
+    [
+        new("^(?:Amount|Balance|Category|Count|Currency|Description|Frequency|Interest|Interval|LateFee|Method|Name|Operation|PaymentMethod|Percent|Principal|Quantity|Rate|Reason|Rent|Status|Subtotal|Title|Total|Type|UnitNumber|Value)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new("^Is[A-Z][A-Za-z0-9]*$",
+            RegexOptions.CultureInvariant | RegexOptions.Compiled),
+    ];
+
+    private static readonly IReadOnlyDictionary<string, HashSet<string>> EntitySafeSnapshotFields =
+        new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(OwnerEntity)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "OwnerEntityType", "IsPrimary",
+            },
+            [nameof(Property)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "PropertyType", "IsActive",
+            },
+            [nameof(Unit)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "UnitType", "Bedrooms", "Bathrooms", "MonthlyRent", "IsActive",
+            },
+            [nameof(RentalApplication)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Status", "DesiredMoveInDate", "ConsentGiven", "DecisionReason",
+            },
+            [nameof(TenantAccount)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Currency", "RentTrackingStartOn", "OpenedAtUtc", "ClosedAtUtc", "CloseReasonCode", "CloseNote",
+            },
+            [nameof(LeaseManagement)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Status", "StartDate", "EndDate", "MonthlyRent", "SecurityDeposit", "MoveInDate", "MoveOutDate",
+            },
+            [nameof(LeaseAgreement)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Status", "EffectiveOn", "ExpiresOn", "AgreementNumber",
+            },
+            [nameof(WorkOrder)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "Status", "Priority", "Title", "ScheduledFor", "CompletedAt",
+            },
+            [nameof(Expense)] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "ExpenseDate", "BillableToOwner", "PaymentMethod", "VendorId", "PropertyId", "UnitId", "WorkOrderId",
+            },
+            ["Payment"] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                "PaymentDate", "PaymentMethod", "Status", "Reference", "TenantId", "LeaseManagementId",
+            },
+        };
+
+    // Keep this denylist ahead of the allowlist so a future shared pattern or entity addition cannot
+    // accidentally re-enable a known credential, identity, account, birth-date, or contact field.
+    private static readonly Regex SensitiveSnapshotFieldPattern = new(
+        "(?:ssn|taxid|password|secret|token|apikey|routing|account.?number|dateofbirth|birth|dob|ipaddress|email|phone|address|extract|pay.?stub|ocr)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Lazy<IReadOnlyDictionary<string, Type>> EnumPropertyTypes =
         new(BuildEnumPropertyTypes);
@@ -48,13 +112,14 @@ public sealed class AuditDiffBuilder
     };
 
     /// <summary>
-    /// Build the sanitized field-level diff for one audit row. Only meaningful for <c>Updated</c> rows;
-    /// Created/Deleted carry a full snapshot (not a diff) so they return an empty list — the row's
-    /// humanized description already says what happened.
+    /// Build the sanitized field-level diff for one audit row. Updated rows contain old→new values;
+    /// Created rows contain each allowlisted captured field as set to a non-null scalar value; Deleted
+    /// rows contain each allowlisted captured field as having been a non-null scalar value. Plumbing
+    /// fields are omitted in every operation. Updated rows retain their existing changed-field behavior.
     /// </summary>
     public IReadOnlyList<AuditFieldChange> Build(AtomicAuditLog row)
     {
-        if (row.Operation != AuditLogOperation.Updated)
+        if (row.Operation is not (AuditLogOperation.Updated or AuditLogOperation.Created or AuditLogOperation.Deleted))
         {
             return Array.Empty<AuditFieldChange>();
         }
@@ -69,7 +134,14 @@ public sealed class AuditDiffBuilder
         var changes = new List<AuditFieldChange>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var key in newValues.Keys.Concat(oldValues.Keys))
+        var keys = row.Operation switch
+        {
+            AuditLogOperation.Created => newValues.Keys,
+            AuditLogOperation.Deleted => oldValues.Keys,
+            _ => newValues.Keys.Concat(oldValues.Keys),
+        };
+
+        foreach (var key in keys)
         {
             if (!seen.Add(key) || HiddenFields.Contains(key))
             {
@@ -79,11 +151,29 @@ public sealed class AuditDiffBuilder
             oldValues.TryGetValue(key, out var oldEl);
             newValues.TryGetValue(key, out var newEl);
 
-            var oldText = Format(row.EntityType, key, oldEl);
-            var newText = Format(row.EntityType, key, newEl);
+            var isSnapshot = row.Operation is AuditLogOperation.Created or AuditLogOperation.Deleted;
+            if (isSnapshot)
+            {
+                var snapshotValue = row.Operation == AuditLogOperation.Created ? newEl : oldEl;
+                if (snapshotValue.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                    || snapshotValue.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                    || !IsSafeSnapshotField(row.EntityType, key))
+                {
+                    continue;
+                }
+            }
 
-            // No visible change (e.g. only redaction noise) — skip.
-            if (string.Equals(oldText, newText, StringComparison.Ordinal))
+            var oldText = row.Operation == AuditLogOperation.Created
+                ? "—"
+                : Format(row.EntityType, key, oldEl);
+            var newText = row.Operation == AuditLogOperation.Deleted
+                ? "—"
+                : Format(row.EntityType, key, newEl);
+
+            // No visible change (e.g. only redaction noise) — skip updates. Snapshot nulls were
+            // skipped above so they never become noisy "set to —" / "was —" lines.
+            if (row.Operation == AuditLogOperation.Updated
+                && string.Equals(oldText, newText, StringComparison.Ordinal))
             {
                 continue;
             }
@@ -97,6 +187,22 @@ public sealed class AuditDiffBuilder
         }
 
         return changes;
+    }
+
+    private static bool IsSafeSnapshotField(string entityType, string field)
+    {
+        if (SensitiveSnapshotFieldPattern.IsMatch(field))
+        {
+            return false;
+        }
+
+        if (SharedSafeSnapshotFieldPatterns.Any(pattern => pattern.IsMatch(field)))
+        {
+            return true;
+        }
+
+        return EntitySafeSnapshotFields.TryGetValue(entityType, out var additions)
+            && additions.Contains(field);
     }
 
     private static Dictionary<string, JsonElement> Parse(string? json)
