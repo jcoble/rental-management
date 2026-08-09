@@ -54,6 +54,13 @@ function moveHistoryCursor(container: NavigationContainer, offset: number) {
 	container.state = entry.state;
 }
 
+function tryMoveHistoryCursor(container: NavigationContainer, offset: number) {
+	const nextCursor = container.cursor + offset;
+	if (nextCursor < 0 || nextCursor >= container.history.length) return false;
+	moveHistoryCursor(container, offset);
+	return true;
+}
+
 describe('unit tab page navigation integration', () => {
 	it('restores Applications when the page state retains the nested view but the URL does not', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
@@ -67,7 +74,7 @@ describe('unit tab page navigation integration', () => {
 		// normalized to the primary tab while its shallow state still knows the view.
 		container.url = new URL('https://rental.local/units/10?tab=leasing&app=7');
 		setTab('summary');
-		assert.equal(container.url.searchParams.get('view'), 'applications');
+		assert.equal(container.url.searchParams.get('view'), null);
 		assert.equal(container.state.unitView, null);
 
 		setTab('leasing');
@@ -101,6 +108,25 @@ describe('unit tab page navigation integration', () => {
 		})) {
 			assert.equal(container.url.searchParams.get(key), value, `unexpected ${key} value`);
 		}
+	});
+
+	it('restores Maintenance Inspections after a round-trip through Leasing Applications', () => {
+		const container = createContainer('https://rental.local/units/10?tab=maintenance&view=inspections', {
+			unitPathname: '/units/10',
+			unitTab: 'maintenance',
+			unitView: 'inspections',
+			unitViewByPath: {
+				'/units/10': { maintenance: 'inspections' },
+			},
+		});
+		const setTab = connect(container);
+
+		setTab('leasing', 'applications');
+		setTab('maintenance');
+
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('view'), 'inspections');
+		assert.equal(container.state.unitViewByPath?.['/units/10']?.maintenance, 'inspections');
 	});
 
 	it('does not reuse a remembered nested view for a different unit path', () => {
@@ -170,6 +196,28 @@ describe('unit tab page navigation integration', () => {
 		moveHistoryCursor(container, -1);
 		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/10?tab=leasing&view=applications&app=7');
 		moveHistoryCursor(container, 2);
-		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/11?tab=summary&view=listing');
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/11?tab=summary');
+	});
+
+	it('truncates forward history when a new primary-tab navigation is pushed from a back entry', () => {
+		const container = createContainer('https://rental.local/units/10?tab=summary', {
+			unitPathname: '/units/10',
+			unitTab: 'summary',
+			unitView: null,
+		});
+		const setTab = connect(container);
+
+		setTab('leasing');
+		setTab('maintenance');
+		assert.equal(container.history.length, 3);
+		moveHistoryCursor(container, -1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/10?tab=leasing&view=listing');
+
+		setTab('money');
+		assert.equal(container.history.length, 3);
+		assert.equal(container.cursor, 2);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/10?tab=money&view=tenant-account');
+		assert.equal(tryMoveHistoryCursor(container, 1), false);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/10?tab=money&view=tenant-account');
 	});
 });

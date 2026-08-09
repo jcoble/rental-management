@@ -32,6 +32,29 @@ type UnitTabNavigationAdapter = {
 	replaceState?: (url: string, state: UnitTabNavigationState) => void;
 };
 
+function explicitContextBelongsToTab(
+	url: URL,
+	urlResolution: ReturnType<typeof resolveUnitUrlDestination>,
+	tab: UnitTab,
+) {
+	// A view is explicit only when it is valid for the URL's own tab. A stale
+	// view from the tab we are leaving must not block the destination's memory.
+	if (!urlResolution.hasExplicitViewOrRecord) return false;
+
+	const view = url.searchParams.get('view')?.trim().toLowerCase();
+	if (view) {
+		const explicitTab = url.searchParams.get('tab');
+		if (explicitTab) {
+			const destination = resolveUnitDestination(explicitTab, view);
+			return destination.tab === tab && destination.view === view;
+		}
+
+		return urlResolution.destination.tab === tab && urlResolution.destination.view === view;
+	}
+
+	return urlResolution.destination.tab === tab;
+}
+
 /**
  * Resolves the visible destination for the Unit page. Explicit URL context is
  * authoritative; shallow state is only eligible when it was written for this
@@ -66,6 +89,7 @@ export function synchronizeUnitTabState(
 	if (stateBelongsToUnit && !urlResolution.hasExplicitViewOrRecord) return null;
 
 	const destination = urlResolution.destination;
+	const explicitContextBelongsToDestination = explicitContextBelongsToTab(url, urlResolution, destination.tab);
 	const existingMemory = state.unitViewByPath?.[url.pathname] ?? {};
 	const stateAlreadyMatchesUrl =
 		stateBelongsToUnit
@@ -78,7 +102,7 @@ export function synchronizeUnitTabState(
 
 	const unitViewByPath = { ...(state.unitViewByPath ?? {}) };
 	const memoryForPath = { ...(unitViewByPath[url.pathname] ?? {}) };
-	if (destination.view) memoryForPath[destination.tab] = destination.view;
+	if (destination.view && explicitContextBelongsToDestination) memoryForPath[destination.tab] = destination.view;
 	unitViewByPath[url.pathname] = memoryForPath;
 
 	return {
@@ -111,24 +135,43 @@ export function createUnitTabNavigationHandler({
 		const stateBelongsToUnit = baseState.unitPathname === current.url.pathname;
 		const currentDestination = resolveUnitPageDestination(current.url, baseState);
 		const memoryForPath = { ...(baseState.unitViewByPath?.[current.url.pathname] ?? {}) };
-		if (currentDestination.view && (urlResolution.hasExplicitViewOrRecord || stateBelongsToUnit)) {
+		const currentExplicitContextBelongsToCurrentTab = explicitContextBelongsToTab(
+			current.url,
+			urlResolution,
+			currentDestination.tab,
+		);
+		if (
+			currentDestination.view
+			&& ((urlResolution.hasExplicitViewOrRecord && currentExplicitContextBelongsToCurrentTab)
+				|| (!urlResolution.hasExplicitViewOrRecord && stateBelongsToUnit))
+		) {
 			memoryForPath[currentDestination.tab] = currentDestination.view;
 		}
+		const requestedDestination = resolveUnitDestination(tab, view);
+		const currentContextBelongsToRequestedTab = currentDestination.tab === requestedDestination.tab;
+		const incomingExplicitContextBelongsToRequestedTab = explicitContextBelongsToTab(
+			current.url,
+			urlResolution,
+			requestedDestination.tab,
+		);
 
 		// The page state can still carry the active nested view when SvelteKit has
 		// normalized it out of the visible URL. Put it back before building a
-		// primary-tab destination so the contextual `view` key is not lost.
+		// same-primary-tab destination so the contextual `view` key is not lost.
 		const currentUrl = new URL(current.url);
 		if (
 			view === undefined
 			&& stateBelongsToUnit
+			&& currentContextBelongsToRequestedTab
 			&& currentDestination.view
 			&& currentUrl.searchParams.get('view') !== currentDestination.view
 		) {
 			currentUrl.searchParams.set('view', currentDestination.view);
 		}
+		if (view === undefined && !currentContextBelongsToRequestedTab) {
+			currentUrl.searchParams.delete('view');
+		}
 
-		const requestedDestination = resolveUnitDestination(tab, view);
 		const navigation = buildUnitTabNavigation(currentUrl, tab, view);
 		const nextUrl = navigation.url;
 		let destination = navigation.destination;
@@ -136,8 +179,7 @@ export function createUnitTabNavigationHandler({
 		// A primary-tab return uses the last view selected for that tab. This is
 		// separate from explicit sub-navigation: an explicit list click is a
 		// re-entry and keeps the helper's own-record cleanup semantics.
-		const incomingHasExplicitView = current.url.searchParams.has('view') || urlResolution.hasExplicitViewOrRecord;
-		if (view === undefined && requestedDestination.tab !== 'summary' && !incomingHasExplicitView) {
+		if (view === undefined && requestedDestination.tab !== 'summary' && !incomingExplicitContextBelongsToRequestedTab) {
 			const rememberedView = memoryForPath[requestedDestination.tab];
 			if (rememberedView) {
 				nextUrl.searchParams.set('view', rememberedView);
