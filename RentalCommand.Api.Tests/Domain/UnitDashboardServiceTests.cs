@@ -4,6 +4,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
@@ -222,6 +223,191 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         auditSql.Should().Contain("LeaseAddenda");
         auditSql.Should().Contain("SignatureRequests");
         auditSql.Should().Contain("NoticeDrafts");
+    }
+
+    [Fact]
+    public async Task GetTimelineAsync_CorrelatesEveryUnitWriterAndExcludesForeignRows()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = new DateTime(2026, 1, 2, 12, 0, 0, DateTimeKind.Utc);
+        var foreignProperty = seeded.ForeignUnit.Property!;
+        var foreignAgreement = _db.LeaseAgreements.Single(row => row.LeaseManagementId == seeded.ForeignRelationship.Id);
+        var foreignAccount = _db.TenantAccounts.Single(row => row.LeaseManagementId == seeded.ForeignRelationship.Id);
+        var incomeAccount = new LedgerAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            Code = $"4{Guid.NewGuid():N}"[..10],
+            Name = "Timeline recurring income",
+            AccountType = AccountType.Income,
+            NormalBalance = NormalBalance.Credit,
+            IsActive = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _db.Add(incomeAccount);
+        _db.SaveChanges();
+
+        var foreignWorkOrder = WorkOrderFor(
+            seeded.ForeignUnit,
+            foreignProperty,
+            "Foreign unit repair",
+            WorkOrderStatus.InProgress,
+            now);
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Timeline vendor",
+            ServiceType = "General",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var currentInspection = InspectionFor(seeded.Unit, seeded.Property, seeded.Relationship, seeded.Agreement, now);
+        var foreignInspection = InspectionFor(seeded.ForeignUnit, foreignProperty, seeded.ForeignRelationship, foreignAgreement, now);
+        var currentRecurringTenantCharge = RecurringTenantChargeFor(
+            seeded.Unit, seeded.Property, seeded.Account, seeded.Agreement, incomeAccount.Id, now);
+        var foreignRecurringTenantCharge = RecurringTenantChargeFor(
+            seeded.ForeignUnit, foreignProperty, foreignAccount, foreignAgreement, incomeAccount.Id, now);
+        var currentRecurringExpense = RecurringExpenseFor(seeded.Unit, seeded.Property, now);
+        var foreignRecurringExpense = RecurringExpenseFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentCapitalAsset = CapitalAssetFor(seeded.Unit, seeded.Property, now);
+        var foreignCapitalAsset = CapitalAssetFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentApplication = ApplicationFor(seeded.Unit, seeded.Property, now);
+        var foreignApplication = ApplicationFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentListing = ListingFor(seeded.Unit, seeded.Property, now);
+        var foreignListing = ListingFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentScanDraft = ScanDraftFor(seeded.Unit, seeded.Property, now);
+        var foreignScanDraft = ScanDraftFor(seeded.ForeignUnit, foreignProperty, now);
+
+        _db.AddRange(
+            foreignWorkOrder,
+            vendor,
+            currentInspection,
+            foreignInspection,
+            currentRecurringTenantCharge,
+            foreignRecurringTenantCharge,
+            currentRecurringExpense,
+            foreignRecurringExpense,
+            currentCapitalAsset,
+            foreignCapitalAsset,
+            currentApplication,
+            foreignApplication,
+            currentListing,
+            foreignListing,
+            currentScanDraft,
+            foreignScanDraft);
+        _db.SaveChanges();
+
+        var currentInspectionItem = InspectionItemFor(currentInspection, "In-unit checklist item");
+        var foreignInspectionItem = InspectionItemFor(foreignInspection, "Foreign checklist item");
+        var currentScreening = ScreeningFor(currentApplication, "screening-in-unit", now);
+        var foreignScreening = ScreeningFor(foreignApplication, "screening-foreign-unit", now);
+        var currentPublication = ListingPublicationFor(currentListing, "Zillow", now);
+        var foreignPublication = ListingPublicationFor(foreignListing, "Zillow", now);
+        var currentPhoto = ListingPhotoFor(currentListing, now);
+        var foreignPhoto = ListingPhotoFor(foreignListing, now);
+        var currentDispatch = VendorDispatchFor(seeded.WorkOrder, vendor, now);
+        var foreignDispatch = VendorDispatchFor(foreignWorkOrder, vendor, now);
+
+        _db.AddRange(
+            currentInspectionItem,
+            foreignInspectionItem,
+            currentScreening,
+            foreignScreening,
+            currentPublication,
+            foreignPublication,
+            currentPhoto,
+            foreignPhoto,
+            currentDispatch,
+            foreignDispatch);
+        _db.SaveChanges();
+
+        var writerPairs = new (string EntityType, int InUnitId, int ForeignUnitId, string Description)[]
+        {
+            (nameof(RecurringTenantCharge), currentRecurringTenantCharge.Id, foreignRecurringTenantCharge.Id, "Set up a recurring tenant charge"),
+            (nameof(RecurringExpense), currentRecurringExpense.Id, foreignRecurringExpense.Id, "Set up a recurring expense"),
+            (nameof(CapitalAsset), currentCapitalAsset.Id, foreignCapitalAsset.Id, "Recorded a capital asset"),
+            (nameof(RentalApplication), currentApplication.Id, foreignApplication.Id, "Received a rental application"),
+            (nameof(ApplicantScreening), currentScreening.Id, foreignScreening.Id, "Started applicant screening"),
+            (nameof(RentalListing), currentListing.Id, foreignListing.Id, "Created a rental listing"),
+            (nameof(ListingPublication), currentPublication.Id, foreignPublication.Id, "Created a listing publication"),
+            (nameof(ListingPhoto), currentPhoto.Id, foreignPhoto.Id, "Added a listing photo"),
+            (nameof(InspectionItem), currentInspectionItem.Id, foreignInspectionItem.Id, "Added an inspection checklist item"),
+            (nameof(VendorDispatch), currentDispatch.Id, foreignDispatch.Id, "Dispatched a work order to a vendor"),
+            (nameof(ScanDraft), currentScanDraft.Id, foreignScanDraft.Id, "Captured a scan draft"),
+        };
+
+        var audits = writerPairs
+            .SelectMany((pair, index) => new[]
+            {
+                Audit(pair.EntityType, pair.InUnitId, 200 - index * 2),
+                Audit(pair.EntityType, pair.ForeignUnitId, 199 - index * 2),
+            });
+        _db.AtomicAuditLogs.AddRange(audits);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 200, CancellationToken.None);
+
+        foreach (var pair in writerPairs)
+        {
+            rows.Should().Contain(row => row.EntityType == pair.EntityType && row.EntityId == pair.InUnitId,
+                $"{pair.EntityType} must follow its exact unit relationship");
+            rows.Should().NotContain(row => row.EntityType == pair.EntityType && row.EntityId == pair.ForeignUnitId,
+                $"{pair.EntityType} from another unit must not leak");
+            rows.Single(row => row.EntityType == pair.EntityType && row.EntityId == pair.InUnitId)
+                .Description.Should().Be(pair.Description);
+        }
+
+        _executedSql.Should().NotContain(command => IsChildIdPreload(command));
+        var auditSql = _executedSql.Single(command =>
+            command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        foreach (var table in TimelineSubqueryTables)
+        {
+            auditSql.Should().Contain(table, $"{table} must remain a translated DB-side subquery");
+        }
+    }
+
+    [Fact]
+    public async Task GetTimelineAsync_ExcludesGenericTenantFilesAndConversations()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = DateTime.UtcNow;
+        var genericTenantFile = File(nameof(Tenant), seeded.Tenant.Id, "tenant-generic.pdf", now);
+        var genericConversation = new Conversation
+        {
+            PortfolioId = PortfolioId,
+            TenantId = seeded.Tenant.Id,
+            PropertyId = seeded.ForeignUnit.PropertyId,
+            Subject = "Tenant-wide question",
+            CreatedAt = now,
+            LastMessageAt = now,
+            LastMessagePreview = "Not tied to one unit",
+        };
+        var unitConversation = new Conversation
+        {
+            PortfolioId = PortfolioId,
+            TenantId = seeded.Tenant.Id,
+            PropertyId = seeded.Property.Id,
+            WorkOrderId = seeded.WorkOrder.Id,
+            Subject = "Unit repair thread",
+            CreatedAt = now,
+            LastMessageAt = now,
+            LastMessagePreview = "Exact work order scope",
+        };
+        _db.AddRange(genericTenantFile, genericConversation, unitConversation);
+        _db.SaveChanges();
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(StoredFile), genericTenantFile.Id, 4),
+            Audit(nameof(Conversation), genericConversation.Id, 3),
+            Audit(nameof(Conversation), unitConversation.Id, 2));
+        _db.SaveChanges();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 50, CancellationToken.None);
+
+        rows.Should().NotContain(row => row.EntityType == nameof(StoredFile) && row.EntityId == genericTenantFile.Id);
+        rows.Should().NotContain(row => row.EntityType == nameof(Conversation) && row.EntityId == genericConversation.Id);
+        rows.Should().Contain(row => row.EntityType == nameof(Conversation) && row.EntityId == unitConversation.Id);
     }
 
     [Fact]
@@ -930,6 +1116,175 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         UpdatedAt = incurredAt,
     };
 
+    private static Inspection InspectionFor(
+        Unit unit,
+        Property property,
+        LeaseManagement relationship,
+        LeaseAgreement agreement,
+        DateTime scheduledFor) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        LeaseManagementId = relationship.Id,
+        LeaseAgreementId = agreement.Id,
+        ScheduledFor = scheduledFor,
+        CreatedAt = scheduledFor,
+        UpdatedAt = scheduledFor,
+    };
+
+    private static RecurringTenantCharge RecurringTenantChargeFor(
+        Unit unit,
+        Property property,
+        TenantAccount account,
+        LeaseAgreement agreement,
+        int ledgerAccountId,
+        DateTime now) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        TenantAccountId = account.Id,
+        LeaseAgreementId = agreement.Id,
+        DisplayName = "Monthly unit charge",
+        Amount = 25m,
+        Currency = "USD",
+        LedgerAccountId = ledgerAccountId,
+        EffectiveStartOn = DateOnly.FromDateTime(now),
+        MonthlyDueDay = 1,
+        NextRunDate = DateOnly.FromDateTime(now),
+        IsActive = true,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static RecurringExpense RecurringExpenseFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Category = ScheduleECategory.Insurance,
+        Description = "Monthly unit insurance",
+        Amount = 100m,
+        Frequency = RecurringExpenseFrequency.Monthly,
+        StartDate = now,
+        NextRunDate = now,
+        Active = true,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static CapitalAsset CapitalAssetFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Description = "Unit capital asset",
+        CostBasis = 1000m,
+        InServiceDate = now,
+        Method = DepreciationMethod.StraightLine,
+        RecoveryYears = RecoveryClass.ResidentialBuilding,
+        Convention = DepreciationConvention.MidMonth,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static RentalApplication ApplicationFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        FirstName = "Timeline",
+        LastName = "Applicant",
+        Status = ApplicationStatus.Submitted,
+        SubmittedAtUtc = now,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static RentalListing ListingFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Headline = "Unit listing",
+        Description = "Timeline listing",
+        Rent = 1000m,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ScanDraft ScanDraftFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FilePath = $"scan-{unit.Id}.pdf",
+        CapturePropertyId = property.Id,
+        CaptureUnitId = unit.Id,
+        TargetEntityType = nameof(Expense),
+        Status = "Pending",
+        CreatedAt = now,
+    };
+
+    private static InspectionItem InspectionItemFor(Inspection inspection, string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        InspectionId = inspection.Id,
+        Area = "Kitchen",
+        Label = label,
+        Result = InspectionItemResult.Pending,
+        SortOrder = 1,
+    };
+
+    private static ApplicantScreening ScreeningFor(
+        RentalApplication application,
+        string operationKey,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        ApplicationId = application.Id,
+        Mode = ScreeningMode.External,
+        Status = ApplicantScreeningStatus.Created,
+        ProviderDisplayName = "External provider",
+        OperationKey = operationKey,
+        CreatedByUserId = ActorUserId,
+        LastStatusAtUtc = now,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ListingPublication ListingPublicationFor(
+        RentalListing listing,
+        string providerKey,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        RentalListingId = listing.Id,
+        ProviderKey = providerKey,
+        Mode = ListingPublicationMode.Guided,
+        Status = ListingPublicationStatus.Draft,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ListingPhoto ListingPhotoFor(RentalListing listing, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        RentalListingId = listing.Id,
+        Position = 1,
+        Category = "Interior",
+        CreatedAt = now,
+    };
+
+    private static VendorDispatch VendorDispatchFor(WorkOrder workOrder, Vendor vendor, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        WorkOrderId = workOrder.Id,
+        VendorId = vendor.Id,
+        Status = VendorDispatchStatus.Dispatched,
+        DispatchedAtUtc = now,
+    };
+
     private AtomicAuditLog Audit(string entityType, int entityId, int minutesAgo) => new()
     {
         AttemptId = Guid.NewGuid(),
@@ -956,14 +1311,23 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         UploadedAt = uploadedAt,
     };
 
+    private static readonly string[] TimelineSubqueryTables =
+    [
+        "LeaseManagements", "LeaseAgreements", "TenantAccounts", "WorkOrders", "Inspections",
+        "Appointments", "Expenses", "WorkOrderStatusEvents", "EvictionCases", "EvictionCaseEvents",
+        "LeaseManagementParties", "TenantUserAccesses", "UnitOperationalPeriods", "TenantLedgerEntries",
+        "TenantPaymentAttempts", "TenantAccountConditionPeriods", "TenantAutopayEnrollments",
+        "SecurityDepositAccounts", "SecurityDepositEntries", "LeaseAddenda", "LeaseAddendumSigners",
+        "LeaseAddendumFinancialEffects", "LeaseRenewalAddendumDecisions", "LeaseAgreementSigners",
+        "LegalDocumentArtifacts", "StoredFiles", "SignatureRequests", "SignatureSigners", "NoticeDrafts",
+        "RenderedNotices", "NoticeDeliveryEvidence", "TenantNoticeWorkItems", "Conversations",
+        "ConversationMessages", "Notifications", "RecurringTenantCharges", "RecurringExpenses",
+        "CapitalAssets", "RentalApplications", "ApplicantScreenings", "RentalListings", "ListingPublications",
+        "ListingPhotos", "InspectionItems", "VendorDispatches", "ScanDrafts",
+    ];
+
     private static bool IsChildIdPreload(string command) =>
-        IsBareIdSelect(command, "LeaseManagements")
-        || IsBareIdSelect(command, "LeaseAgreements")
-        || IsBareIdSelect(command, "TenantAccounts")
-        || IsBareIdSelect(command, "WorkOrders")
-        || IsBareIdSelect(command, "Inspections")
-        || IsBareIdSelect(command, "Appointments")
-        || IsBareIdSelect(command, "Expenses");
+        TimelineSubqueryTables.Any(table => IsBareIdSelect(command, table));
 
     private static bool IsBareIdSelect(string command, string table) =>
         command.Contains("SELECT \"", StringComparison.OrdinalIgnoreCase)

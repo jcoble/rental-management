@@ -591,6 +591,55 @@ public class UnitDashboardService : IUnitDashboardService
                 && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
             .Select(e => e.Id);
 
+        // These writer scopes stay as correlated IQueryable subqueries. Direct unit ids are preferred;
+        // where a writer has no unit column, follow only a canonical relationship, application, listing,
+        // inspection, or work-order path that is already scoped above.
+        var recurringTenantChargeIds = _db.RecurringTenantCharges.AsNoTracking()
+            .Where(charge => charge.PortfolioId == portfolioId
+                && (charge.UnitId == unitId
+                    || (charge.UnitId == null && accountIds.Contains(charge.TenantAccountId))
+                    || (charge.UnitId == null && agreementIds.Contains(charge.LeaseAgreementId))))
+            .Select(charge => charge.Id);
+
+        var recurringExpenseIds = _db.RecurringExpenses.AsNoTracking()
+            .Where(expense => expense.PortfolioId == portfolioId && expense.UnitId == unitId)
+            .Select(expense => expense.Id);
+
+        var capitalAssetIds = _db.CapitalAssets.AsNoTracking()
+            .Where(asset => asset.PortfolioId == portfolioId
+                && (asset.UnitId == unitId
+                    || (asset.UnitId == null
+                        && asset.SourceExpenseId != null
+                        && expenseIds.Contains(asset.SourceExpenseId.Value))))
+            .Select(asset => asset.Id);
+
+        var applicationIds = _db.RentalApplications.AsNoTracking()
+            .Where(application => application.PortfolioId == portfolioId
+                && (application.UnitId == unitId
+                    || (application.UnitId == null
+                        && application.PreparedLeaseManagementId != null
+                        && relationshipIds.Contains(application.PreparedLeaseManagementId.Value))))
+            .Select(application => application.Id);
+
+        var applicantScreeningIds = _db.ApplicantScreenings.AsNoTracking()
+            .Where(screening => screening.PortfolioId == portfolioId
+                && applicationIds.Contains(screening.ApplicationId))
+            .Select(screening => screening.Id);
+
+        var rentalListingIds = _db.RentalListings.AsNoTracking()
+            .Where(listing => listing.PortfolioId == portfolioId && listing.UnitId == unitId)
+            .Select(listing => listing.Id);
+
+        var listingPublicationIds = _db.ListingPublications.AsNoTracking()
+            .Where(publication => publication.PortfolioId == portfolioId
+                && rentalListingIds.Contains(publication.RentalListingId))
+            .Select(publication => publication.Id);
+
+        var listingPhotoIds = _db.ListingPhotos.AsNoTracking()
+            .Where(photo => photo.PortfolioId == portfolioId
+                && rentalListingIds.Contains(photo.RentalListingId))
+            .Select(photo => photo.Id);
+
         var workOrderStatusEventIds = _db.WorkOrderStatusEvents.AsNoTracking()
             .Where(statusEvent => statusEvent.PortfolioId == portfolioId
                 && workOrderIds.Contains(statusEvent.WorkOrderId))
@@ -628,6 +677,36 @@ public class UnitDashboardService : IUnitDashboardService
             .Where(entry => entry.PortfolioId == portfolioId
                 && accountIds.Contains(entry.TenantAccountId))
             .Select(entry => entry.Id);
+
+        var inspectionItemIds = _db.InspectionItems.AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId
+                && inspectionIds.Contains(item.InspectionId))
+            .Select(item => item.Id);
+
+        var vendorDispatchIds = _db.VendorDispatches.AsNoTracking()
+            .Where(dispatch => dispatch.PortfolioId == portfolioId
+                && workOrderIds.Contains(dispatch.WorkOrderId))
+            .Select(dispatch => dispatch.Id);
+
+        var scanDraftIds = _db.ScanDrafts.AsNoTracking()
+            .Where(draft => draft.PortfolioId == portfolioId
+                && (draft.CaptureUnitId == unitId
+                    || (draft.CaptureUnitId == null && (
+                        (draft.CaptureLeaseManagementId != null
+                            && relationshipIds.Contains(draft.CaptureLeaseManagementId.Value))
+                        || (draft.CaptureLeaseAgreementId != null
+                            && agreementIds.Contains(draft.CaptureLeaseAgreementId.Value))
+                        || (draft.CaptureTenantAccountId != null
+                            && accountIds.Contains(draft.CaptureTenantAccountId.Value))
+                        || (draft.CaptureTenantLedgerEntryId != null
+                            && ledgerEntryIds.Contains(draft.CaptureTenantLedgerEntryId.Value))
+                        || (draft.CaptureWorkOrderId != null
+                            && workOrderIds.Contains(draft.CaptureWorkOrderId.Value))
+                        || (draft.CaptureApplicationId != null
+                            && applicationIds.Contains(draft.CaptureApplicationId.Value))
+                        || (draft.CaptureRentalListingId != null
+                            && rentalListingIds.Contains(draft.CaptureRentalListingId.Value))))))
+            .Select(draft => draft.Id);
 
         var paymentAttemptIds = _db.TenantPaymentAttempts.AsNoTracking()
             .Where(attempt => attempt.PortfolioId == portfolioId
@@ -698,7 +777,6 @@ public class UnitDashboardService : IUnitDashboardService
                 legalArtifactFileIds.Contains(file.Id)
                 || (file.EntityId != null && (
                     (file.EntityType == "Unit" && file.EntityId == unitId)
-                    || (file.EntityType == nameof(Tenant) && tenantIds.Contains((int)file.EntityId.Value))
                     || (file.EntityType == nameof(LeaseAgreement) && agreementIds.Contains((int)file.EntityId.Value))
                     || (file.EntityType == nameof(LeaseAddendum) && addendumIds.Contains((int)file.EntityId.Value))
                     || (file.EntityType == nameof(LegalDocumentArtifact) && legalArtifactIds.Contains((int)file.EntityId.Value))
@@ -744,8 +822,8 @@ public class UnitDashboardService : IUnitDashboardService
 
         var conversationIds = _db.Conversations.AsNoTracking()
             .Where(conversation => conversation.PortfolioId == portfolioId
-                && (tenantIds.Contains(conversation.TenantId)
-                    || (conversation.WorkOrderId != null && workOrderIds.Contains(conversation.WorkOrderId.Value))))
+                && conversation.WorkOrderId != null
+                && workOrderIds.Contains(conversation.WorkOrderId.Value))
             .Select(conversation => conversation.Id);
 
         var conversationMessageIds = _db.ConversationMessages.AsNoTracking()
@@ -819,7 +897,18 @@ public class UnitDashboardService : IUnitDashboardService
                 (a.EntityType == "WorkOrder" && workOrderIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Inspection" && inspectionIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Appointment" && appointmentIds.Contains(a.EntityId)) ||
-                (a.EntityType == "Expense" && expenseIds.Contains(a.EntityId))))
+                (a.EntityType == "Expense" && expenseIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(RecurringTenantCharge) && recurringTenantChargeIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(RecurringExpense) && recurringExpenseIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(CapitalAsset) && capitalAssetIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(RentalApplication) && applicationIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(ApplicantScreening) && applicantScreeningIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(RentalListing) && rentalListingIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(ListingPublication) && listingPublicationIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(ListingPhoto) && listingPhotoIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(InspectionItem) && inspectionItemIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(VendorDispatch) && vendorDispatchIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(ScanDraft) && scanDraftIds.Contains(a.EntityId))))
             .OrderByDescending(a => a.Timestamp)
             .ThenByDescending(a => a.Id)
             .Skip(skip)
