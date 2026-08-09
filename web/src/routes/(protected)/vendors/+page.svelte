@@ -5,7 +5,7 @@
 	import type { Vendor } from '$lib/types';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { vendorSchema, parseForm } from '$lib/schemas';
+	import { isOptionalEmailValid, vendorSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -17,7 +17,7 @@
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import { clearFieldError } from '$lib/forms/form-errors';
+	import { clearFieldError, formErrorsFromApiError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -121,7 +121,7 @@
 		if (vendorForm.serviceType.trim()) clearVendorError('serviceType');
 	});
 	$effect(() => {
-		if (!vendorForm.email.trim() || vendorForm.email.includes('@')) clearVendorError('email');
+		if (isOptionalEmailValid(vendorForm.email)) clearVendorError('email');
 	});
 	$effect(() => {
 		if (isBlankOrValidUrl(vendorForm.website)) clearVendorError('website');
@@ -139,7 +139,19 @@
 			closeVendorForm();
 			invalidateVendors();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				vendorErrors = validationErrors;
+				const firstErrorStep = firstVendorErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					vendorStep = firstErrorStep;
+					markVendorStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteVendorMutation = createMutation(() => ({
@@ -393,30 +405,30 @@
 				{#if vendorStep === 0}
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">Vendor name</span>
-						<Input data-testid="vendor-name-input" bind:value={vendorForm.name} placeholder="Vendor name" />
+						<Input data-testid="vendor-name-input" bind:value={vendorForm.name} placeholder="Vendor name" maxlength={200} />
 						{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
 					</div>
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">Service type</span>
-						<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" />
+						<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" maxlength={120} />
 						{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
 					</div>
 					{:else if vendorStep === 1}
 						<div class="grid gap-3 md:grid-cols-2">
 							<div>
 								<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" />
+							<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" maxlength={200} />
 							{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-								<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+								<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" maxlength={50} />
 							</div>
-							<div class="md:col-span-2">
-								<span class="mb-1 block text-xs font-medium text-muted-foreground">Website</span>
-								<Input data-testid="vendor-website-input" bind:value={vendorForm.website} placeholder="https://example.com" type="url" autocomplete="url" inputmode="url" />
-								{#if vendorErrors.website}<p class="mt-1 text-xs text-destructive" data-testid="vendor-website-error">{vendorErrors.website}</p>{/if}
-							</div>
+						<div class="md:col-span-2">
+							<span class="mb-1 block text-xs font-medium text-muted-foreground">Website</span>
+							<Input data-testid="vendor-website-input" bind:value={vendorForm.website} placeholder="https://example.com" type="url" autocomplete="url" inputmode="url" maxlength={500} />
+							{#if vendorErrors.website}<p class="mt-1 text-xs text-destructive" data-testid="vendor-website-error">{vendorErrors.website}</p>{/if}
+						</div>
 						</div>
 					{:else if vendorStep === 2}
 						<div class="space-y-2">
@@ -431,14 +443,14 @@
 							}}
 						/>
 						<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_8rem_9rem]">
-							<Input data-testid="vendor-city-input" bind:value={vendorForm.city} placeholder="City" />
+							<Input data-testid="vendor-city-input" bind:value={vendorForm.city} placeholder="City" maxlength={120} />
 							<StateSelect
 								testid="vendor-state-input"
 								bind:value={vendorForm.state}
 								placeholder="State"
 							/>
-							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
-							</div>
+							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={20} mask="zip" />
+						</div>
 						</div>
 					{:else}
 					<div class="flex flex-wrap gap-4 text-sm">

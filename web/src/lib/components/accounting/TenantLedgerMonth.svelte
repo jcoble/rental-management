@@ -7,6 +7,7 @@
 		formatAccountingDate
 	} from '$lib/accounting/accounting-display';
 	import { formatMoneyCategoryLabel, formatMoneyEntryLabel } from '$lib/accounting/money-display';
+	import { tenantMonthSummaryReconciles } from '$lib/accounting/tenant-ledger-summary';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Table from '$lib/components/ui/table';
 
@@ -69,7 +70,9 @@
 			<span>Opening <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.openingBalance, summary.currency)}</strong></span>
 			<span>Charges <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.chargeAmount, summary.currency)}</strong></span>
 			<span>Payments <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.paymentAmount, summary.currency)}</strong></span>
+			<span data-testid="tenant-ledger-summary-credits">Credits <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.creditAmount, summary.currency)}</strong></span>
 			<span>Closing <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.closingBalance, summary.currency)}</strong></span>
+			<span data-testid="tenant-ledger-summary-reconciliation" class={tenantMonthSummaryReconciles(summary) ? 'text-emerald-700 dark:text-emerald-300' : 'text-destructive'}>{tenantMonthSummaryReconciles(summary) ? 'Reconciled' : 'Check total'}</span>
 		</div>
 	</div>
 

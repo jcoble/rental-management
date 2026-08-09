@@ -30,7 +30,7 @@ public sealed class CreateAppointmentHandler
                 capability, _db, businessNow, securityNow, ct))
             return new(OperationMutationOutcome.NotFound, 0);
         if (!AppointmentOperationValidation.ValidRange(command.ScheduledStartUtc, command.ScheduledEndUtc))
-            throw new DomainValidationException("The end time must be after the start time.");
+            throw new DomainValidationException("The end time must be at or after the start time.");
         if (!await AppointmentOperationValidation.ReferencesMatchAsync(
                 _db, command.PortfolioId, command.PropertyId, command.UnitId,
                 command.LeaseManagementId, command.RentalApplicationId, command.TenantId, ct))
@@ -142,7 +142,7 @@ public sealed class UpdateAppointmentHandler
         if (command.AssignedTo is not null) entity.AssignedTo = CreateAppointmentHandler.Clean(command.AssignedTo);
         if (command.Notes is not null) entity.Notes = CreateAppointmentHandler.Clean(command.Notes);
         if (!AppointmentOperationValidation.ValidRange(entity.ScheduledStart, entity.ScheduledEnd))
-            throw new DomainValidationException("The end time must be after the start time.");
+            throw new DomainValidationException("The end time must be at or after the start time.");
         if (!hasChanges)
         {
             var currentSnapshot = await AppointmentSnapshot.LoadAsync(
@@ -501,7 +501,7 @@ internal static class AppointmentOperationValidation
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
     }
 
-    internal static bool ValidRange(DateTime start, DateTime? end) => !end.HasValue || end > start;
+    internal static bool ValidRange(DateTime start, DateTime? end) => !end.HasValue || end >= start;
 
     internal static string ManageCapability(AppointmentType type) => type switch
     {

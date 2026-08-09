@@ -7,7 +7,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Appointment } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { appointmentSchema, parseForm } from '$lib/schemas';
+	import { isOptionalEmailValid, appointmentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -35,6 +35,7 @@
 		localWallClockToUtcIso
 	} from './calendar-utils';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { formErrorsFromApiError } from '$lib/forms/form-errors';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -187,10 +188,12 @@
 		if (form.scheduledStart) clearFormError('scheduledStart');
 	});
 	$effect(() => {
-		if (form.scheduledEnd) clearFormError('scheduledEnd');
+		if (form.scheduledEnd && !parseForm(appointmentSchema, form).errors?.scheduledEnd) {
+			clearFormError('scheduledEnd');
+		}
 	});
 	$effect(() => {
-		if (form.prospectEmail) clearFormError('prospectEmail');
+		if (isOptionalEmailValid(form.prospectEmail)) clearFormError('prospectEmail');
 	});
 
 	function invalidate() {
@@ -247,7 +250,19 @@
 			closeForm();
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				formErrors = validationErrors;
+				const firstErrorStep = firstAppointmentErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					appointmentStep = firstErrorStep;
+					markAppointmentStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const rescheduleMutation = createMutation(() => ({
@@ -581,7 +596,7 @@
 						<div class="space-y-4">
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-title">Appointment title</label>
-								<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
+								<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" maxlength={200} />
 								{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
 							</div>
 							<div class="grid gap-4 sm:grid-cols-2">
@@ -622,6 +637,7 @@
 							<div>
 								<span class="mb-2 block text-sm font-medium text-muted-foreground">End</span>
 								<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
+								{#if formErrors.scheduledEnd}<p class="mt-1 text-xs text-destructive" data-testid="appointment-end-error">{formErrors.scheduledEnd}</p>{/if}
 							</div>
 						</div>
 					{:else}
@@ -672,15 +688,15 @@
 							</div>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
-								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
+								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" maxlength={120} />
 							</div>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-name">Prospect name</label>
-								<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
+								<Input id="appointment-prospect-name" data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" maxlength={200} />
 							</div>
 							<div class="sm:col-span-2">
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-prospect-email">Prospect email</label>
-								<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
+								<Input id="appointment-prospect-email" data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" maxlength={200} />
 								{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
 							</div>
 						</div>

@@ -18,20 +18,31 @@ const optionalText = z
 	.transform((v) => (v.length ? v : null))
 	.nullable()
 	.optional();
-const optionalEmail = z
-	.string()
-	.trim()
-	.transform((v) => (v.length ? v : null))
-	.nullable()
-	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
-	.optional();
-const optionalUrl = z
-	.string()
-	.trim()
-	.transform((v) => (v.length ? v : null))
-	.nullable()
-	.refine((v) => v === null || z.string().url().safeParse(v).success, 'Enter a valid URL')
-	.optional();
+const optionalEmailMax = (label: string, max: number) =>
+	z
+		.string()
+		.trim()
+		.max(max, `${label} must be ${max} characters or fewer`)
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
+		.optional();
+const optionalEmail = optionalEmailMax('Email', 200);
+const optionalUrlMax = (label: string, max: number) =>
+	z
+		.string()
+		.trim()
+		.max(max, `${label} must be ${max} characters or fewer`)
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.refine((v) => v === null || z.string().url().safeParse(v).success, 'Enter a valid URL')
+		.optional();
+const optionalUrl = optionalUrlMax('Website', 500);
+
+/** Keep the error-clearing effects in entity forms aligned with the email schema. */
+export function isOptionalEmailValid(value: unknown): boolean {
+	return optionalEmail.safeParse(value ?? '').success;
+}
 /**
  * Optional free text with an upper length bound mirroring a server MaxLength.
  * Behaves like {@link optionalText} ('' → null, missing key tolerated) but rejects
@@ -202,11 +213,11 @@ export const unitSchema = z.object({
 });
 
 export const tenantSchema = z.object({
-	firstName: required('First name'),
-	lastName: required('Last name'),
+	firstName: required('First name').max(100, 'First name must be 100 characters or fewer'),
+	lastName: required('Last name').max(100, 'Last name must be 100 characters or fewer'),
 	email: optionalEmail,
-	phone: optionalText,
-	emergencyContact: optionalText,
+	phone: optionalTextMax('Phone', 50),
+	emergencyContact: optionalTextMax('Emergency contact', 200),
 });
 
 export const leaseSchema = z.object({
@@ -455,7 +466,7 @@ export const propertyBasisSchema = z
 	});
 
 export const appointmentSchema = z.object({
-	title: required('Title'),
+	title: required('Title').max(200, 'Title must be 200 characters or fewer'),
 	type: z.string(),
 	status: z.string(),
 	scheduledStart: required('Start time'),
@@ -464,10 +475,21 @@ export const appointmentSchema = z.object({
 	unitId: idString,
 	tenantId: idString,
 	workOrderId: idString,
-	prospectName: optionalText,
+	prospectName: optionalTextMax('Prospect name', 200),
 	// prospectEmail: server [EmailAddress] optional
 	prospectEmail: optionalEmail,
-	assignedTo: optionalText,
+	assignedTo: optionalTextMax('Assigned to', 120),
+}).superRefine((value, context) => {
+	if (value.scheduledEnd == null) return;
+	const start = Date.parse(value.scheduledStart);
+	const end = Date.parse(value.scheduledEnd);
+	if (Number.isFinite(start) && Number.isFinite(end) && end < start) {
+		context.addIssue({
+			code: 'custom',
+			path: ['scheduledEnd'],
+			message: 'End time must be at or after start time'
+		});
+	}
 });
 
 export const ownerSchema = z.object({
@@ -485,16 +507,16 @@ export const ownerSchema = z.object({
 });
 
 export const vendorSchema = z.object({
-	name: required('Name'),
-	serviceType: required('Service type'),
-	addressLine1: optionalText,
-	city: optionalText,
-	state: optionalText,
-	postalCode: optionalText,
+	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
+	serviceType: required('Service type').max(120, 'Service type must be 120 characters or fewer'),
+	addressLine1: optionalTextMax('Address', 250),
+	city: optionalTextMax('City', 120),
+	state: optionalTextMax('State', 60),
+	postalCode: optionalTextMax('ZIP', 20),
 	// email: server [EmailAddress] optional
 	email: optionalEmail,
-	phone: optionalText,
-	website: optionalUrl,
+	phone: optionalTextMax('Phone', 50),
+	website: optionalUrlMax('Website', 500),
 	is1099Eligible: z.boolean(),
 	w9OnFile: z.boolean(),
 	preferred: z.boolean(),

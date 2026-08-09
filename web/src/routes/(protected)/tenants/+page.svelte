@@ -4,7 +4,7 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import type { Tenant } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { tenantSchema, parseForm } from '$lib/schemas';
+	import { isOptionalEmailValid, tenantSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -12,7 +12,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { clearFieldError } from '$lib/forms/form-errors';
+	import { clearFieldError, formErrorsFromApiError } from '$lib/forms/form-errors';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -97,7 +97,7 @@
 		if (form.lastName.trim()) clearTenantError('lastName');
 	});
 	$effect(() => {
-		if (!form.email.trim() || form.email.includes('@')) clearTenantError('email');
+		if (isOptionalEmailValid(form.email)) clearTenantError('email');
 	});
 
 	function invalidate() {
@@ -112,7 +112,19 @@
 			closeForm();
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				formErrors = validationErrors;
+				const firstErrorStep = firstTenantErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					tenantStep = firstErrorStep;
+					markTenantStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteMutation = createMutation(() => ({
@@ -364,12 +376,12 @@
 					<div class="grid gap-3 md:grid-cols-2">
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
-							<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
+							<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" maxlength={100} />
 							{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
-							<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
+							<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" maxlength={100} />
 							{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
 						</div>
 					</div>
@@ -377,16 +389,16 @@
 					<div class="grid gap-3 md:grid-cols-2">
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" type="email" autocomplete="email" />
+							<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" type="email" autocomplete="email" maxlength={200} />
 							{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" maxlength={50} />
 						</div>
 						<div class="md:col-span-2">
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>
-							<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} placeholder="Emergency contact" />
+							<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} placeholder="Emergency contact" maxlength={200} />
 						</div>
 					</div>
 				{/if}
