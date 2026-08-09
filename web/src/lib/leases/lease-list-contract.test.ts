@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { leaseAgreementStatusLabel, leaseLifecycleLabel } from './lease-list-labels.ts';
+import { leaseAgreementChangeTypeLabel, leaseAgreementStatusLabel, leaseLifecycleLabel } from './lease-list-labels.ts';
 
 const source = readFileSync(
 	new URL('../../routes/(protected)/leases/+page.svelte', import.meta.url),
@@ -69,6 +69,13 @@ test('lease list keeps missing, draft, signature, and signed lease states distin
 
 	assert.equal(new Set(expectedLabels.values()).size, expectedLabels.size);
 	assert.notEqual(leaseAgreementStatusLabel('Draft'), leaseAgreementStatusLabel('Active'));
+});
+
+test('lease agreement change types use landlord-facing labels', () => {
+	assert.deepEqual(
+		['Correction', 'Restatement', 'Renewal', 'MonthToMonth', 'ReissueAsAddendum'].map(leaseAgreementChangeTypeLabel),
+		['Fix a typo', 'Rewrite the whole lease', 'Renew it', 'Switch to month-to-month', 'Add a page']
+	);
 });
 
 test('lease list keeps API lifecycle values while showing plain labels', () => {

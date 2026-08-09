@@ -127,7 +127,7 @@
 	{:else if position}
 		{#if warning}
 			<div class="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100" role="alert" data-testid="money-position-deposit-warning">
-				<strong>Tenant deposits held ({amount(position.tenantDepositsHeld)}) exceed total cash on hand ({amount(position.totalCashOnHand)}).</strong>
+				<strong>Tenant deposits held ({amount(position.tenantDepositsHeld)}) exceed cash available ({amount(position.totalCashOnHand)}).</strong>
 			</div>
 		{/if}
 
@@ -146,7 +146,7 @@
 				</Card.Header>
 				<Card.Content class="space-y-5 px-5 pb-5 pt-0">
 					<div>
-						<p class="text-sm text-muted-foreground">Cash on hand</p>
+						<p class="text-sm text-muted-foreground">Cash available</p>
 						<p class="mt-1 font-mono text-4xl font-semibold tabular-nums" data-testid="money-position-total-cash">
 							{amount(position.totalCashOnHand)}
 						</p>
@@ -154,10 +154,6 @@
 					</div>
 
 					<div class="space-y-3 border-t border-border pt-4 text-sm">
-						<div class="flex items-center justify-between gap-4">
-							<span class="text-muted-foreground">Total cash on hand</span>
-							<span class="font-mono tabular-nums">{amount(position.totalCashOnHand)}</span>
-						</div>
 						<div class="flex items-center justify-between gap-4">
 							<span class="text-muted-foreground">Tenant deposits held</span>
 							<span class="font-mono tabular-nums text-destructive">{decreaseAmount(position.tenantDepositsHeld)}</span>
@@ -176,7 +172,7 @@
 				</Card.Header>
 				<Card.Content class="space-y-4 px-5 pb-5 pt-0 text-sm">
 					<div class="flex items-center justify-between gap-4">
-						<span class="text-muted-foreground">Rent still owed</span>
+						<span class="text-muted-foreground">Who's behind</span>
 						<span class="font-mono tabular-nums">{amount(position.rentStillOwed)}</span>
 					</div>
 					<div class="flex items-center justify-between gap-4">
@@ -229,11 +225,11 @@
 					<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{decreaseAmount(position.cashPaid)}</p>
 				</div>
 				<div>
-					<p class="text-sm text-muted-foreground">Net cash movement</p>
+					<p class="text-sm text-muted-foreground">Kept</p>
 					<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{amount(position.netCashMovement)}</p>
 				</div>
 				<div>
-					<p class="text-sm text-muted-foreground">Profit / loss</p>
+					<p class="text-sm text-muted-foreground">Profit after expenses</p>
 					<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{amount(position.profitOrLoss)}</p>
 				</div>
 			</div>

@@ -27,6 +27,14 @@ const LEASE_LIFECYCLE_LABELS: Record<string, string> = {
 	Canceled: 'Canceled'
 };
 
+const AGREEMENT_CHANGE_TYPE_LABELS: Record<string, string> = {
+	Correction: 'Fix a typo',
+	Restatement: 'Rewrite the whole lease',
+	Renewal: 'Renew it',
+	MonthToMonth: 'Switch to month-to-month',
+	ReissueAsAddendum: 'Add a page'
+};
+
 export function leaseAgreementStatusLabel(status: string | null | undefined): string {
 	if (!status) return 'No signed lease yet';
 	return AGREEMENT_STATUS_LABELS[status] ?? formatStatusLabel(status);
@@ -34,4 +42,9 @@ export function leaseAgreementStatusLabel(status: string | null | undefined): st
 
 export function leaseLifecycleLabel(status: string): string {
 	return LEASE_LIFECYCLE_LABELS[status] ?? formatStatusLabel(status);
+}
+
+export function leaseAgreementChangeTypeLabel(changeType: string | null | undefined): string {
+	if (!changeType) return 'Lease change';
+	return AGREEMENT_CHANGE_TYPE_LABELS[changeType] ?? formatStatusLabel(changeType);
 }

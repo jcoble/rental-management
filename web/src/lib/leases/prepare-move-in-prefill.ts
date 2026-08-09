@@ -23,7 +23,8 @@ export function prepareMoveInHrefForApprovedTenant(
 	if (normalizedApplicationId) params.set('applicationId', normalizedApplicationId);
 	const normalizedUnitId = positiveIntegerString(String(unitId));
 	if (normalizedUnitId) params.set('unitId', normalizedUnitId);
-	return `${basePath}?${params.toString()}`;
+	const separator = basePath.includes('?') ? '&' : '?';
+	return `${basePath}${separator}${params.toString()}`;
 }
 
 export function readPrepareMoveInPrefill(params: URLSearchParams): PrepareMoveInPrefill | null {

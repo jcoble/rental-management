@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	buildUnitTabNavigation,
 	resolveUnitDestination,
 	resolveUnitTab,
 	UNIT_SUBNAV_ITEM_CLASS,
 	UNIT_SUBNAV_LIST_CLASS,
+	UNIT_CONTEXTUAL_PARAMS,
 	UNIT_TABS,
 } from './unit-tabs.ts';
 
@@ -49,5 +51,32 @@ describe('unit tab routing', () => {
 	it('falls back to Summary for missing or invalid destinations', () => {
 		assert.deepEqual(resolveUnitDestination(null), { tab: 'summary' });
 		assert.deepEqual(resolveUnitDestination('unknown'), { tab: 'summary' });
+	});
+
+	it('keeps every contextual key through a primary-tab round trip', () => {
+		const values = Object.fromEntries(UNIT_CONTEXTUAL_PARAMS.map((param) => [param, `value-${param}`]));
+		values.view = 'applications';
+		const startingUrl = new URL('https://rental.local/units/42?tab=leasing');
+		for (const [param, value] of Object.entries(values)) startingUrl.searchParams.set(param, value);
+
+		const summary = buildUnitTabNavigation(startingUrl, 'summary');
+		for (const param of UNIT_CONTEXTUAL_PARAMS) {
+			assert.equal(summary.url.searchParams.get(param), values[param]);
+		}
+
+		const leasing = buildUnitTabNavigation(summary.url, 'leasing');
+		assert.deepEqual(leasing.destination, { tab: 'leasing', view: 'applications' });
+		for (const param of UNIT_CONTEXTUAL_PARAMS) {
+			assert.equal(leasing.url.searchParams.get(param), values[param]);
+		}
+	});
+
+	it('clears only the selected view record when a secondary list is explicitly re-entered', () => {
+		const url = new URL('https://rental.local/units/42?tab=summary&view=applications&app=7&wo=8');
+		const navigation = buildUnitTabNavigation(url, 'leasing', 'applications');
+
+		assert.equal(navigation.url.searchParams.get('app'), null);
+		assert.equal(navigation.url.searchParams.get('wo'), '8');
+		assert.deepEqual(navigation.destination, { tab: 'leasing', view: 'applications' });
 	});
 });

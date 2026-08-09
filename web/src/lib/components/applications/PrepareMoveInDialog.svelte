@@ -137,6 +137,9 @@
 		const unit = unitQuery.data;
 		if (!unit || appliedUnitId === unit.id) return;
 		appliedUnitId = unit.id;
+		if (manualMode && !selectedUnitLabel) {
+			selectedUnitLabel = `Unit ${unit.unitNumber}`;
+		}
 		if (!form.baseRentAmount && Number.isFinite(unit.marketRent)) {
 			form.baseRentAmount = String(unit.marketRent);
 		}

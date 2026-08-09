@@ -7,6 +7,7 @@
 	import { inspections } from '$lib/api/endpoints/inspections';
 	import { recurringMaintenance } from '$lib/api/endpoints/recurring-maintenance';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
+	import type { PrepareMoveInResponse } from '$lib/api/endpoints/lease-managements';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -27,8 +28,11 @@
 	import TurnoverTab from '$lib/components/unit/tabs/TurnoverTab.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
+	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
+	import { readPrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import {
+		buildUnitTabNavigation,
 		resolveUnitDestination,
 		UNIT_SUBNAV_ITEM_CLASS,
 		UNIT_SUBNAV_LIST_CLASS,
@@ -51,6 +55,7 @@
 	));
 	const activeTab = $derived(activeDestination.tab);
 	const activeView = $derived(activeDestination.view);
+	const prepareMoveInPrefill = $derived(readPrepareMoveInPrefill(page.url.searchParams));
 	const selectedLeaseManagementId = $derived.by(() => {
 		const rawValue = page.url.searchParams.get('leaseManagement');
 		if (!rawValue) return null;
@@ -82,25 +87,8 @@
 	let recurringSort = $state('nextDueDate');
 	let recurringSkip = $state(0);
 	const maintenancePageSize = 10;
-	const contextualParams = [
-		'view',
-		'wo',
-		'app',
-		'payment',
-		'expense',
-		'tenantAccount',
-		'leaseManagement',
-		'agreement',
-		'ledger',
-		'action',
-	] as const;
-
 	function setTab(tab: string, view?: UnitView) {
-		const destination = resolveUnitDestination(tab, view);
-		const url = new URL(page.url);
-		for (const param of contextualParams) url.searchParams.delete(param);
-		url.searchParams.set('tab', destination.tab);
-		if (destination.view) url.searchParams.set('view', destination.view);
+		const { url, destination } = buildUnitTabNavigation(page.url, tab, view);
 		if (`${url.pathname}${url.search}` === `${page.url.pathname}${page.url.search}`) return;
 		pushState(`${url.pathname}${url.search}`, {
 			...page.state,
@@ -117,6 +105,23 @@
 
 	function currentUnitReturnTo() {
 		return `${page.url.pathname}${page.url.search}`;
+	}
+
+	function closePrepareMoveIn() {
+		const url = new URL(page.url);
+		url.searchParams.delete('prepareMoveIn');
+		url.searchParams.delete('applicationId');
+		url.searchParams.delete('unitId');
+		url.searchParams.delete('tenantId');
+		void goto(`${url.pathname}${url.search}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
+	}
+
+	function finishPrepareMoveIn(result: PrepareMoveInResponse) {
+		void goto(`/units/${id}?tab=tenant-lease&view=agreements&leaseManagement=${result.leaseManagementId}`);
 	}
 
 	const dashboardQuery = createQuery(() => ({
@@ -570,6 +575,15 @@
 		</div>
 	{/if}
 </div>
+
+{#if prepareMoveInPrefill}
+	<PrepareMoveInDialog
+		prefill={prepareMoveInPrefill}
+		mode="manual"
+		onclose={closePrepareMoveIn}
+		onprepared={finishPrepareMoveIn}
+	/>
+{/if}
 
 <Dialog.Root open={showMoveInDialog} onOpenChange={(v) => { if (!v) closeMoveInDialog(); }}>
 	<Dialog.Content class="max-w-md" data-testid="unit-move-in-dialog">

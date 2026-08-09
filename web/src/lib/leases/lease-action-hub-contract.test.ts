@@ -70,10 +70,10 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.doesNotMatch(successorDialogSource, /addendumDecisionBlocked/);
 		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
 		for (const label of [
-			'Create correction',
-			'Create restatement',
-			'Create renewal',
-			'Create month-to-month'
+			'Fix a typo',
+			'Rewrite the whole lease',
+			'Renew it',
+			'Switch to month-to-month'
 		]) {
 			assert.match(detailPageSource, new RegExp(`>${label}<`));
 		}
@@ -86,7 +86,7 @@ describe('canonical lease lifecycle action hub', () => {
 			'Agreement status',
 			'Term',
 			'Base rent',
-			'Upcoming agreement',
+			'Upcoming lease document',
 			'Ending plan',
 			'Decision recorded',
 			'Planned move-out'

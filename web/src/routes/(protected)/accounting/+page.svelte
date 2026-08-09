@@ -869,7 +869,7 @@
 		tone="mint"
 		eyebrow="Money"
 		title="Money"
-		description="See cash on hand, money still owed, activity, and reports."
+		description="See cash available, rent past due, activity, and reports."
 		data-testid="accounting-header"
 	>
 		<a
