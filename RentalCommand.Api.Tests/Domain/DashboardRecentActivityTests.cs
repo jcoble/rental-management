@@ -232,6 +232,31 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dashboard_Accounting_SeedsAuthorizedAccountsBeforeLedgerFacts()
+    {
+        SeedActivityGraph();
+
+        _executedSql.Clear();
+        await _sut.GetDashboardAsync(_scope);
+
+        var accountingSql = _executedSql.Should().ContainSingle(command =>
+            command.Contains("active_accounts AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)).Subject;
+        accountingSql.Should().NotContain("vw_tenant_account_balances",
+            "receivable work must not expand the whole-portfolio account-balance view");
+        accountingSql.Should().NotContain("vw_tenant_charge_balances",
+            "the canonical charge formula must run only after the authorized active-account seed");
+        accountingSql.Should().Contain(
+            "entry.\"TenantAccountId\" = active_account.\"TenantAccountId\"",
+            "ledger work must be keyed by the bounded authorized account seed");
+        accountingSql.Should().Contain("charge_facts AS MATERIALIZED",
+            "charge, reversal, and allocation facts must be combined without cross-expanding relations");
+        accountingSql.Should().Contain("portfolio.\"DeletedAt\" IS NULL",
+            "raw child joins must preserve the DbContext portfolio visibility filter");
+        accountingSql.Should().Contain("property_row.\"DeletedAt\" IS NULL",
+            "raw property reads must preserve the DbContext property visibility filter");
+    }
+
+    [Fact]
     public async Task RecentActivity_ExcludesRowsWithoutAnAuthorizedPropertyPath()
     {
         SeedActivityGraph();
