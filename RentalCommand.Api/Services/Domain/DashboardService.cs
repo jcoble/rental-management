@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Core.Authorization;
@@ -249,9 +251,7 @@ public class DashboardService : IDashboardService
         DateTime nextMonthStart,
         CancellationToken ct)
     {
-        var portfolioId = scope.PortfolioId;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
         var monthStartOn = DateOnly.FromDateTime(monthStart);
         var nextMonthStartOn = DateOnly.FromDateTime(nextMonthStart);
 
@@ -279,35 +279,24 @@ public class DashboardService : IDashboardService
             utcNow,
             []);
 
+        // Materialize the small authorized active-account boundary before touching immutable
+        // ledger facts. The canonical charge arithmetic is unchanged, but the planner can no
+        // longer expand the portfolio-wide lifecycle, entry, and allocation relations together.
+        var receivablesQuery = BuildDashboardReceivablesQuery(
+            scope,
+            monthStartOn,
+            nextMonthStartOn);
+
         // One PostgreSQL statement derives both receivable KPIs and cash-flow totals from canonical
-        // facts. Billed charges and allocations are immutable; partial payment is reflected by the
-        // balance views; and lifecycle scope determines which current accounts need attention.
-        var accountingTotals = await accountingAnchor
-            .Select(_ => new
+        // facts. Billed charges, reversals, and allocations are immutable, and the current
+        // possession boundary determines which accounts need attention.
+        var accountingTotals = await (
+            from _ in accountingAnchor
+            from receivables in receivablesQuery
+            select new
             {
-                Overdue = (
-                    from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
-                    join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                        on new { balance.PortfolioId, balance.LeaseManagementId }
-                        equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-                    where balance.PortfolioId == portfolioId
-                        && authorizedProperties.Any(property => property.Id == lifecycle.PropertyId)
-                        && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                    select (decimal?)balance.PastDueAmount).Sum() ?? 0m,
-                DueThisMonth = (
-                    from charge in _db.TenantChargeBalanceProjections.AsNoTracking()
-                    join account in _db.TenantAccounts.AsNoTracking()
-                        on new { charge.PortfolioId, charge.TenantAccountId }
-                        equals new { account.PortfolioId, TenantAccountId = account.Id }
-                    join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                        on new { account.PortfolioId, account.LeaseManagementId }
-                        equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-                    where charge.PortfolioId == portfolioId
-                        && authorizedProperties.Any(property => property.Id == lifecycle.PropertyId)
-                        && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                        && charge.DueOn >= monthStartOn
-                        && charge.DueOn < nextMonthStartOn
-                    select (decimal?)(charge.OriginalAmount - charge.ReversedAmount)).Sum() ?? 0m,
+                Overdue = receivables.Overdue ?? 0m,
+                DueThisMonth = receivables.DueThisMonth ?? 0m,
                 Income = accountingIncomeQuery.Sum(row => (decimal?)row.Amount) ?? 0m,
                 Expense = accountingExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m,
             })
@@ -326,6 +315,213 @@ public class DashboardService : IDashboardService
             ExpensesThisMonthAmount = expensesThisMonth,
             NetThisMonth = paidThisMonth - expensesThisMonth,
         };
+    }
+
+    private IQueryable<DashboardReceivableTotalsReadRow> BuildDashboardReceivablesQuery(
+        WorkspaceReadScope scope,
+        DateOnly monthStartOn,
+        DateOnly nextMonthStartOn)
+    {
+        const string sql = """
+            WITH active_portfolio AS MATERIALIZED (
+                SELECT
+                    portfolio."Id" AS "PortfolioId",
+                    effective_time."NowUtc" AS "NowUtc",
+                    (effective_time."NowUtc" AT TIME ZONE
+                        COALESCE(NULLIF(clock_state."TimeZoneId", ''), portfolio."TimeZone"))::date
+                        AS "BusinessDate"
+                FROM "Portfolios" AS portfolio
+                LEFT JOIN "SimulationClocks" AS clock_state
+                    ON clock_state."Id" = 1
+                CROSS JOIN LATERAL (
+                    SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
+                ) AS effective_time
+                WHERE portfolio."Id" = @portfolioId
+                  AND portfolio."DeletedAt" IS NULL
+            ),
+            effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    @portfolioId,
+                    @sessionId,
+                    @userId,
+                    @accessContextId,
+                    @accessRevision,
+                    @capabilityKeys,
+                    @targetKind) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT property_row."Id" AS "PropertyId"
+                FROM "Properties" AS property_row
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = property_row."PortfolioId"
+                WHERE property_row."PortfolioId" = @portfolioId
+                  AND property_row."DeletedAt" IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM effective_scopes
+                      WHERE effective_scopes."ScopeKind" = 'AllProperties'
+                         OR (effective_scopes."ScopeKind" = 'SelectedProperties'
+                             AND effective_scopes."PropertyId" = property_row."Id")
+                  )
+            ),
+            active_accounts AS MATERIALIZED (
+                SELECT
+                    account."PortfolioId" AS "PortfolioId",
+                    account."Id" AS "TenantAccountId",
+                    active_portfolio."BusinessDate" AS "BusinessDate"
+                FROM "TenantAccounts" AS account
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = account."PortfolioId"
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = account."PortfolioId"
+                   AND management."Id" = account."LeaseManagementId"
+                INNER JOIN authorized_properties
+                    ON authorized_properties."PropertyId" = management."PropertyId"
+                WHERE account."PortfolioId" = @portfolioId
+                  AND management."CanceledAtUtc" IS NULL
+                  AND management."AccountClosedAtUtc" IS NULL
+                  AND management."PossessionGivenAtUtc" <= active_portfolio."NowUtc"
+                  AND (management."PossessionReturnedAtUtc" IS NULL
+                       OR management."PossessionReturnedAtUtc" > active_portfolio."NowUtc")
+            ),
+            account_entries AS MATERIALIZED (
+                SELECT
+                    entry."PortfolioId" AS "PortfolioId",
+                    entry."TenantAccountId" AS "TenantAccountId",
+                    entry."Id" AS "TenantLedgerEntryId",
+                    entry."EntryType" AS "EntryType",
+                    entry."Direction" AS "Direction",
+                    entry."EffectiveOn" AS "EffectiveOn",
+                    entry."DueOn" AS "DueOn",
+                    entry."Amount" AS "Amount",
+                    entry."ReversesEntryId" AS "ReversesEntryId",
+                    active_account."BusinessDate" AS "BusinessDate"
+                FROM active_accounts AS active_account
+                INNER JOIN "TenantLedgerEntries" AS entry
+                    ON entry."PortfolioId" = active_account."PortfolioId"
+                   AND entry."TenantAccountId" = active_account."TenantAccountId"
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = entry."PortfolioId"
+                WHERE entry."PortfolioId" = @portfolioId
+            ),
+            debit_allocations AS MATERIALIZED (
+                SELECT
+                    allocation."PortfolioId" AS "PortfolioId",
+                    allocation."TenantAccountId" AS "TenantAccountId",
+                    allocation."DebitEntryId" AS "TenantLedgerEntryId",
+                    sum(allocation."Amount") AS "NetAllocations"
+                FROM active_accounts AS active_account
+                INNER JOIN "TenantLedgerAllocations" AS allocation
+                    ON allocation."PortfolioId" = active_account."PortfolioId"
+                   AND allocation."TenantAccountId" = active_account."TenantAccountId"
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = allocation."PortfolioId"
+                WHERE allocation."PortfolioId" = @portfolioId
+                GROUP BY
+                    allocation."PortfolioId",
+                    allocation."TenantAccountId",
+                    allocation."DebitEntryId"
+            ),
+            charge_facts AS MATERIALIZED (
+                SELECT
+                    entry."PortfolioId" AS "PortfolioId",
+                    entry."TenantAccountId" AS "TenantAccountId",
+                    entry."TenantLedgerEntryId" AS "TenantLedgerEntryId",
+                    entry."DueOn" AS "DueOn",
+                    entry."BusinessDate" AS "BusinessDate",
+                    entry."Amount" AS "OriginalAmount",
+                    0::numeric AS "ReversedAmount",
+                    0::numeric AS "NetAllocations"
+                FROM account_entries AS entry
+                WHERE entry."Direction" = 'Debit'
+                  AND entry."EffectiveOn" <= entry."BusinessDate"
+                  AND entry."EntryType" NOT IN ('Refund', 'Reversal', 'TransferOut')
+
+                UNION ALL
+
+                SELECT
+                    reversal."PortfolioId",
+                    reversal."TenantAccountId",
+                    reversal."ReversesEntryId",
+                    NULL::date,
+                    NULL::date,
+                    0::numeric,
+                    reversal."Amount",
+                    0::numeric
+                FROM account_entries AS reversal
+                WHERE reversal."EntryType" = 'Reversal'
+
+                UNION ALL
+
+                SELECT
+                    allocation."PortfolioId",
+                    allocation."TenantAccountId",
+                    allocation."TenantLedgerEntryId",
+                    NULL::date,
+                    NULL::date,
+                    0::numeric,
+                    0::numeric,
+                    allocation."NetAllocations"
+                FROM debit_allocations AS allocation
+            ),
+            charge_rows AS MATERIALIZED (
+                SELECT
+                    charge_fact."PortfolioId",
+                    charge_fact."TenantAccountId",
+                    charge_fact."TenantLedgerEntryId",
+                    max(charge_fact."DueOn") AS "DueOn",
+                    max(charge_fact."BusinessDate") AS "BusinessDate",
+                    sum(charge_fact."OriginalAmount") AS "OriginalAmount",
+                    sum(charge_fact."ReversedAmount") AS "ReversedAmount",
+                    sum(charge_fact."NetAllocations") AS "NetAllocations"
+                FROM charge_facts AS charge_fact
+                GROUP BY
+                    charge_fact."PortfolioId",
+                    charge_fact."TenantAccountId",
+                    charge_fact."TenantLedgerEntryId"
+            )
+            SELECT
+                COALESCE(sum(
+                    CASE
+                        WHEN charge_row."DueOn" IS NOT NULL
+                         AND charge_row."DueOn" < charge_row."BusinessDate"
+                         AND charge_row."OriginalAmount"
+                             - charge_row."ReversedAmount"
+                             - charge_row."NetAllocations" > 0
+                        THEN GREATEST(
+                            0::numeric,
+                            charge_row."OriginalAmount"
+                                - charge_row."ReversedAmount"
+                                - charge_row."NetAllocations")
+                        ELSE 0::numeric
+                    END), 0::numeric) AS "Overdue",
+                COALESCE(sum(
+                    CASE
+                        WHEN charge_row."DueOn" >= @monthStartOn
+                         AND charge_row."DueOn" < @nextMonthStartOn
+                        THEN charge_row."OriginalAmount" - charge_row."ReversedAmount"
+                        ELSE 0::numeric
+                    END), 0::numeric) AS "DueThisMonth"
+            FROM charge_rows AS charge_row
+            """;
+
+        return _db.Database.SqlQueryRaw<DashboardReceivableTotalsReadRow>(
+            sql,
+            new NpgsqlParameter<int>("portfolioId", scope.PortfolioId),
+            new NpgsqlParameter<Guid>("sessionId", scope.SessionId),
+            new NpgsqlParameter<int>("userId", scope.UserId),
+            new NpgsqlParameter<int>("accessContextId", scope.AccessContextId),
+            new NpgsqlParameter<long>("accessRevision", scope.AccessRevision),
+            new NpgsqlParameter("capabilityKeys", NpgsqlDbType.Array | NpgsqlDbType.Text)
+            {
+                Value = new[] { CapabilityKeys.MoneyBalancesRead },
+            },
+            new NpgsqlParameter<string>(
+                "targetKind",
+                CapabilityAuthorizationTargetKind.Property.ToString()),
+            new NpgsqlParameter("monthStartOn", NpgsqlDbType.Date) { Value = monthStartOn },
+            new NpgsqlParameter("nextMonthStartOn", NpgsqlDbType.Date) { Value = nextMonthStartOn });
     }
 
     private async Task<IReadOnlyList<DashboardExpiringLease>> BuildExpiringLeasesAsync(
@@ -408,6 +604,12 @@ public class DashboardService : IDashboardService
         public string Unit { get; init; } = string.Empty;
         public DateOnly EndOn { get; init; }
         public decimal BaseRentAmount { get; init; }
+    }
+
+    private sealed class DashboardReceivableTotalsReadRow
+    {
+        public decimal? Overdue { get; init; }
+        public decimal? DueThisMonth { get; init; }
     }
 
     private async Task<IReadOnlyList<DashboardActivity>> BuildRecentActivityAsync(

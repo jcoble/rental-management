@@ -178,6 +178,41 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     }
 
     [Fact]
+    public async Task DashboardAccounting_PreservesAllocationAndReversalAwareReceivableValuesOnPostgreSql()
+    {
+        await using var context = await postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            1,
+            nameof(DashboardAccounting_PreservesAllocationAndReversalAwareReceivableValuesOnPostgreSql));
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(context, "Receivables Maple", now);
+        var unit = SeedUnit(context, property, "3C", now);
+        var account = SeedTenantAccount(context, property, unit, now);
+        SeedDashboardReceivables(context, account, now);
+        context.Db.ChangeTracker.Clear();
+
+        await context.ActivateApiScopeAsync(scope);
+        var dashboard = await new DashboardService(
+                context.Db,
+                new AuditDescriber(),
+                new FixedTimeProvider(now))
+            .GetDashboardAsync(scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Accounting.OverdueAmount.Should().Be(60m,
+            "the overdue KPI subtracts allocations and exact reversals from past-due debits");
+        var businessDate = DateOnly.FromDateTime(now);
+        var expectedDueThisMonth = businessDate.AddDays(-2).Month == businessDate.Month
+            ? 300m
+            : 200m;
+        dashboard.Accounting.DueThisMonthAmount.Should().Be(expectedDueThisMonth,
+            "the due KPI includes original less reversed charges without subtracting payments");
+        dashboard.Accounting.PaidThisMonthAmount.Should().Be(40m);
+        dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(0m);
+        dashboard.Accounting.NetThisMonth.Should().Be(40m);
+    }
+
+    [Fact]
     public async Task RentLedger_ExecutesCanonicalCapabilityScopePipelineOnPostgreSql()
     {
         await using var context = await postgres.CreateContextAsync();
@@ -409,6 +444,107 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             Amount = amount,
             AllocatedAtUtc = effectiveAt,
             BusinessKey = $"allocation:{key}:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        });
+        context.Db.SaveChanges();
+    }
+
+    private static void SeedDashboardReceivables(
+        MigratedPostgreSqlTestContext context,
+        TenantAccount account,
+        DateTime now)
+    {
+        var businessDate = DateOnly.FromDateTime(now);
+        var monthEnd = new DateOnly(
+            businessDate.Year,
+            businessDate.Month,
+            DateTime.DaysInMonth(businessDate.Year, businessDate.Month));
+        var pastDue = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = businessDate.AddDays(-3),
+            DueOn = businessDate.AddDays(-2),
+            PostedAtUtc = now,
+            Description = "Partially paid past-due charge",
+            BusinessKey = $"dashboard-past-due:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 40m,
+            Currency = "USD",
+            EffectiveOn = businessDate,
+            PostedAtUtc = now,
+            Description = "Partial payment",
+            BusinessKey = $"dashboard-receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        var reversedCharge = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 25m,
+            Currency = "USD",
+            EffectiveOn = businessDate.AddDays(-3),
+            DueOn = businessDate.AddDays(-2),
+            PostedAtUtc = now,
+            Description = "Reversed charge",
+            BusinessKey = $"dashboard-reversed-charge:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        var futureDue = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 200m,
+            Currency = "USD",
+            EffectiveOn = businessDate,
+            DueOn = monthEnd,
+            PostedAtUtc = now,
+            Description = "Current-month future charge",
+            BusinessKey = $"dashboard-future-charge:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
+        };
+        context.Db.TenantLedgerEntries.AddRange(pastDue, receipt, reversedCharge, futureDue);
+        context.Db.SaveChanges();
+
+        context.Db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.Reversal,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 25m,
+            Currency = "USD",
+            EffectiveOn = businessDate,
+            PostedAtUtc = now,
+            Description = "Exact charge reversal",
+            BusinessKey = $"dashboard-charge-reversal:{Guid.NewGuid():N}",
+            ReversesEntryId = reversedCharge.Id,
+            CreatedByUserId = 1,
+        });
+        context.Db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = pastDue.Id,
+            CreditEntryId = receipt.Id,
+            Amount = 40m,
+            AllocatedAtUtc = now,
+            BusinessKey = $"dashboard-allocation:{Guid.NewGuid():N}",
             CreatedByUserId = 1,
         });
         context.Db.SaveChanges();
