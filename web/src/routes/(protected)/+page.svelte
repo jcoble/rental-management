@@ -120,18 +120,6 @@
 			<div class="space-y-6 lg:col-span-2">
 				<Card.Root class="gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
-						<div class="h-5 w-48 animate-pulse rounded bg-muted"></div>
-					</Card.Header>
-					<Card.Content class="px-4 pb-4 pt-0">
-						<div class="space-y-2">
-							{#each [0, 1, 2] as _}
-								<div class="h-14 w-full animate-pulse rounded border border-border bg-muted"></div>
-							{/each}
-						</div>
-					</Card.Content>
-				</Card.Root>
-				<Card.Root class="gap-0 py-0">
-					<Card.Header class="px-4 pt-4 pb-3">
 						<div class="h-5 w-32 animate-pulse rounded bg-muted"></div>
 					</Card.Header>
 					<Card.Content class="px-4 pb-4 pt-0">

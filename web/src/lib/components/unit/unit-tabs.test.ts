@@ -10,6 +10,53 @@ import {
 	UNIT_TABS,
 } from './unit-tabs.ts';
 
+type UnitHistoryState = {
+	unitTab: string;
+	unitView: string | null;
+	unitPaymentId: number | null;
+	unitExpenseId: number | null;
+};
+
+type UnitHistoryEntry = {
+	url: URL;
+	state: UnitHistoryState;
+};
+
+function historyEntry(input: string | URL): UnitHistoryEntry {
+	const url = typeof input === 'string' ? new URL(input) : new URL(input.href);
+	const destination = resolveUnitDestination(url.searchParams.get('tab'), url.searchParams.get('view'));
+	return {
+		url,
+		state: {
+			unitTab: destination.tab,
+			unitView: destination.view ?? null,
+			unitPaymentId: null,
+			unitExpenseId: null,
+		},
+	};
+}
+
+function reduceUnitTab(entry: UnitHistoryEntry, tab: string, view?: Parameters<typeof buildUnitTabNavigation>[2]): UnitHistoryEntry {
+	const { url, destination } = buildUnitTabNavigation(entry.url, tab, view);
+	return {
+		url,
+		state: {
+			...entry.state,
+			unitTab: destination.tab,
+			unitView: destination.view ?? null,
+			unitPaymentId: null,
+			unitExpenseId: null,
+		},
+	};
+}
+
+function activeDestination(entry: UnitHistoryEntry) {
+	return resolveUnitDestination(
+		entry.state.unitTab ?? entry.url.searchParams.get('tab'),
+		entry.state.unitView ?? entry.url.searchParams.get('view'),
+	);
+}
+
 describe('unit tab routing', () => {
 	it('exposes the six approved Unit Command Center areas', () => {
 		assert.deepEqual(UNIT_TABS, ['summary', 'leasing', 'tenant-lease', 'money', 'maintenance', 'documents-history']);
@@ -78,5 +125,56 @@ describe('unit tab routing', () => {
 		assert.equal(navigation.url.searchParams.get('app'), null);
 		assert.equal(navigation.url.searchParams.get('wo'), '8');
 		assert.deepEqual(navigation.destination, { tab: 'leasing', view: 'applications' });
+	});
+
+	it('restores an Applications detail after visiting another primary tab', () => {
+		const applications = historyEntry('https://rental.local/units/42?tab=leasing&view=applications&app=7');
+		const maintenance = reduceUnitTab(applications, 'maintenance');
+		assert.deepEqual(activeDestination(maintenance), { tab: 'maintenance', view: 'work-orders' });
+
+		const restored = reduceUnitTab(maintenance, 'leasing');
+		assert.deepEqual(activeDestination(restored), { tab: 'leasing', view: 'applications' });
+		assert.equal(restored.url.searchParams.get('view'), 'applications');
+		assert.equal(restored.url.searchParams.get('app'), '7');
+		assert.equal(restored.state.unitPaymentId, null);
+		assert.equal(restored.state.unitExpenseId, null);
+	});
+
+	it('does not carry contextual params into a different unit URL', () => {
+		const previousUnit = historyEntry(
+			'https://rental.local/units/42?tab=leasing&view=applications&app=7&wo=8&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15',
+		);
+		const differentUnit = historyEntry(new URL('/units/43?tab=summary', previousUnit.url));
+		const leasing = reduceUnitTab(differentUnit, 'leasing');
+
+		assert.equal(leasing.url.pathname, '/units/43');
+		assert.deepEqual(activeDestination(leasing), { tab: 'leasing', view: 'listing' });
+		for (const param of UNIT_CONTEXTUAL_PARAMS) {
+			assert.equal(
+				leasing.url.searchParams.get(param),
+				param === 'view' ? 'listing' : null,
+				`different-unit navigation leaked ${param}`,
+			);
+		}
+	});
+
+	it('keeps URL/state history entries coherent for reducer-level back and forward', () => {
+		const applications = historyEntry('https://rental.local/units/42?tab=leasing&view=applications&app=7');
+		const maintenance = reduceUnitTab(applications, 'maintenance');
+		const restored = reduceUnitTab(maintenance, 'leasing');
+		const history = [applications, maintenance, restored];
+		let cursor = history.length - 1;
+
+		const back = history[--cursor];
+		assert.deepEqual(activeDestination(back), { tab: 'maintenance', view: 'work-orders' });
+		assert.equal(back.url.searchParams.get('app'), '7');
+		assert.equal(back.state.unitTab, 'maintenance');
+		assert.equal(back.state.unitView, 'work-orders');
+
+		const forward = history[++cursor];
+		assert.deepEqual(activeDestination(forward), { tab: 'leasing', view: 'applications' });
+		assert.equal(forward.url.searchParams.get('app'), '7');
+		assert.equal(forward.state.unitTab, 'leasing');
+		assert.equal(forward.state.unitView, 'applications');
 	});
 });
