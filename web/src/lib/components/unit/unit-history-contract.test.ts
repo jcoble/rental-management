@@ -44,10 +44,10 @@ describe('Unit destination history contract', () => {
 	});
 
 	test('uses explicit URL context as authority and keys shallow state by Unit pathname', () => {
-		assert.match(pageSource, /import \{ onMount, untrack \} from 'svelte';/);
+		assert.match(pageSource, /import \{ onMount, tick, untrack \} from 'svelte';/);
 		assert.match(pageSource, /normalizeUnitTabNavigationState\(page\.state/);
 		assert.match(pageSource, /let routeStateHydrated = \$state\(false\);/);
-		assert.match(pageSource, /onMount\(\(\) => \{\s*routeStateHydrated = true;/);
+		assert.match(pageSource, /onMount\(\(\) => \{[\s\S]*tick\(\)\.then\(\(\) => \{\s*routeStateHydrated = true;/);
 		assert.match(pageSource, /if \(!routeStateHydrated\) return;/);
 		assert.match(pageSource, /const activeDestination = \$derived\(resolveUnitPageDestination\(/);
 		assert.match(pageSource, /const activeTab = \$derived\(activeDestination\.tab\);/);

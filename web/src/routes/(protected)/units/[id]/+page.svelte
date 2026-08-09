@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto, pushState, replaceState } from '$app/navigation';
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
 	import { inspections } from '$lib/api/endpoints/inspections';
@@ -64,7 +64,13 @@
 	const activeView = $derived(activeDestination.view);
 	let routeStateHydrated = $state(false);
 	onMount(() => {
-		routeStateHydrated = true;
+		// SvelteKit's navigation module installs its root component instance
+		// after the route's mount callbacks are scheduled. Wait one tick before
+		// the first shallow replaceState so cold document loads never reach an
+		// uninitialized navigation root.
+		void tick().then(() => {
+			routeStateHydrated = true;
+		});
 	});
 
 	$effect(() => {
