@@ -4,12 +4,9 @@ import { test } from 'node:test';
 
 const source = readFileSync(new URL('./SimClockPanel.svelte', import.meta.url), 'utf8');
 
-test('desktop simulated-clock panel stays outside the sidebar hit area', () => {
-	assert.match(source, /\.sim-panel\s*\{[\s\S]*?left:\s*12px;/);
-	assert.match(
-		source,
-		/@media\s*\(min-width:\s*768px\)\s*\{[\s\S]*?\.sim-panel\s*\{[\s\S]*?left:\s*calc\(15rem \+ 12px\);/
-	);
+test('simulated-clock panel stays in a compact top-right position', () => {
+	assert.match(source, /\.sim-panel\s*\{[\s\S]*?top:\s*calc\(3\.5rem \+ 12px\);[\s\S]*?right:\s*12px;/);
+	assert.doesNotMatch(source, /\.sim-panel\s*\{[\s\S]*?(?:\n|\s)(?:left|bottom):\s*[^;]+;/);
 	assert.doesNotMatch(source, /pointer-events:\s*none/);
 });
 

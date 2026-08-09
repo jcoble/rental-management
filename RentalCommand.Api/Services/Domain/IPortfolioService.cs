@@ -19,7 +19,10 @@ public interface IPortfolioService
     /// Server-side aggregate facts for the getting-started checklist. Clients use this instead of
     /// downloading properties/tenants/leases/settings to count them locally.
     /// </summary>
-    Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(int portfolioId, CancellationToken ct = default);
+    Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(
+        int portfolioId,
+        int userId,
+        CancellationToken ct = default);
 
     Task<PortfolioResponse?> UpdateAsync(
         WorkspaceReadScope scope, int id, UpdatePortfolioRequest request, string operationKey,

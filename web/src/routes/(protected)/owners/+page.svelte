@@ -367,9 +367,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="owners-page">
 	<PageHeader
 		class="mb-4"
-		band
-		art={9}
-		tone="violet"
+		density="compact"
 		eyebrow="Settings"
 		title="Owners"
 		description="Ownership entities consumed by owner statements. Service providers live under Vendors."
