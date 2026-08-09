@@ -219,6 +219,92 @@ public class UnitServiceListTests : IAsyncLifetime
             "the page-keyed hydration must preserve every value from the canonical health projection");
     }
 
+    [Theory]
+    [InlineData("unitNumber", false)]
+    [InlineData("unitNumber", true)]
+    [InlineData("propertyName", false)]
+    [InlineData("propertyName", true)]
+    [InlineData("openWorkOrderCount", false)]
+    [InlineData("openWorkOrderCount", true)]
+    [InlineData("marketRent", false)]
+    [InlineData("marketRent", true)]
+    [InlineData("status", false)]
+    [InlineData("status", true)]
+    [InlineData("updatedAt", false)]
+    [InlineData("updatedAt", true)]
+    public async Task ListWithHealthPageAsync_OptimizedMatchesCanonicalForEverySortDirection(
+        string sortField,
+        bool descending)
+    {
+        var rows = SeedSortParityRows();
+        await ActivateApiScopeAsync();
+
+        var sort = descending ? $"-{sortField}" : sortField;
+        var optimized = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            Sort = sort,
+            Skip = 0,
+            Take = 20,
+        });
+        var canonical = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            Stage = "unrecognized-stage",
+            Sort = sort,
+            Skip = 0,
+            Take = 20,
+        });
+
+        optimized.TotalCount.Should().Be(rows.Length);
+        canonical.TotalCount.Should().Be(rows.Length);
+        optimized.TotalCount.Should().Be(canonical.TotalCount);
+        optimized.Items.Select(row => row.Id).Should().Equal(canonical.Items.Select(row => row.Id),
+            $"the optimized {sort} row order must match the canonical path");
+        optimized.Items.Select(row => row.UnitNumber).Should().Equal(canonical.Items.Select(row => row.UnitNumber));
+        optimized.Items.Should().Contain(row => row.OpenWorkOrderCount == 0 && row.DocsNeedingReviewCount == 0,
+            "the page must preserve zero work-order and document counts");
+        canonical.Items.Should().Contain(row => row.OpenWorkOrderCount == 0 && row.DocsNeedingReviewCount == 0);
+        optimized.Items.Should().BeEquivalentTo(canonical.Items, options => options.WithStrictOrdering(),
+            "page hydration values must match the canonical health projection");
+    }
+
+    [Fact]
+    public async Task ListWithHealthPageAsync_OptimizedMatchesCanonicalWithPropertyAndSearchFilters()
+    {
+        var rows = SeedSortParityRows();
+        var filtered = rows[1];
+        await ActivateApiScopeAsync();
+
+        var optimized = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            PropertyId = filtered.Property.Id,
+            Search = filtered.Unit.UnitNumber,
+            Sort = "-updatedAt",
+            Skip = 0,
+            Take = 20,
+        });
+        var canonical = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            PropertyId = filtered.Property.Id,
+            Search = filtered.Unit.UnitNumber,
+            Stage = "unrecognized-stage",
+            Sort = "-updatedAt",
+            Skip = 0,
+            Take = 20,
+        });
+
+        optimized.TotalCount.Should().Be(1);
+        canonical.TotalCount.Should().Be(1);
+        optimized.TotalCount.Should().Be(canonical.TotalCount);
+        optimized.Items.Select(row => row.Id).Should().Equal(filtered.Unit.Id);
+        optimized.Items.Select(row => row.Id).Should().Equal(canonical.Items.Select(row => row.Id));
+        optimized.Items.Should().ContainSingle(row =>
+            row.OpenWorkOrderCount == 0 && row.DocsNeedingReviewCount == 0);
+        canonical.Items.Should().ContainSingle(row =>
+            row.OpenWorkOrderCount == 0 && row.DocsNeedingReviewCount == 0);
+        optimized.Items.Should().BeEquivalentTo(canonical.Items, options => options.WithStrictOrdering(),
+            "combined PropertyId and Search filtering must preserve canonical hydration values");
+    }
+
     [Fact]
     public async Task ListWithHealthPageAsync_AppliesStatusAndStageFiltersInSqlWindow()
     {
@@ -424,10 +510,30 @@ public class UnitServiceListTests : IAsyncLifetime
             sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedUnit(string unitNumber, string propertyName, int openWorkOrders)
+    private (Property Property, Unit Unit)[] SeedSortParityRows()
     {
         var now = DateTime.UtcNow;
-        var (property, unit) = SeedUnitShell(unitNumber, propertyName, now);
+        var rows = new[]
+        {
+            SeedUnit("A-20", "Zeta House", openWorkOrders: 2, marketRent: 1800m, updatedAt: now.AddHours(4)),
+            SeedUnit("B-10", "Alpha House", openWorkOrders: 0, marketRent: 1100m, updatedAt: now.AddHours(1)),
+            SeedUnit("C-30", "Midway House", openWorkOrders: 3, marketRent: 1500m, updatedAt: now.AddHours(3)),
+            SeedUnit("D-40", "Beta House", openWorkOrders: 1, marketRent: 1300m, updatedAt: now.AddHours(2)),
+        };
+        var tenant = SeedTenant(now);
+        SeedRelationship(rows[2].Property, rows[2].Unit, tenant, now, now.AddDays(45));
+        return rows;
+    }
+
+    private (Property Property, Unit Unit) SeedUnit(
+        string unitNumber,
+        string propertyName,
+        int openWorkOrders,
+        decimal marketRent = 1250m,
+        DateTime? updatedAt = null)
+    {
+        var now = DateTime.UtcNow;
+        var (property, unit) = SeedUnitShell(unitNumber, propertyName, now, marketRent, updatedAt);
 
         for (var i = 0; i < openWorkOrders; i++)
         {
@@ -458,6 +564,7 @@ public class UnitServiceListTests : IAsyncLifetime
             UpdatedAt = now,
         });
         _ctx.Db.SaveChanges();
+        return (property, unit);
     }
 
     private (LeaseManagement Relationship, LeaseAgreement Agreement) SeedRelationship(
@@ -608,7 +715,9 @@ public class UnitServiceListTests : IAsyncLifetime
     private (Property Property, Unit Unit) SeedUnitShell(
         string unitNumber,
         string propertyName,
-        DateTime now)
+        DateTime now,
+        decimal marketRent = 1250m,
+        DateTime? updatedAt = null)
     {
         var property = new Property
         {
@@ -626,9 +735,9 @@ public class UnitServiceListTests : IAsyncLifetime
             PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = unitNumber,
-            MarketRent = 1250m,
+            MarketRent = marketRent,
             CreatedAt = now,
-            UpdatedAt = now,
+            UpdatedAt = updatedAt ?? now,
         };
 
         _ctx.Db.Units.Add(unit);
