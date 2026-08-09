@@ -509,9 +509,13 @@
 											<Button size="sm" variant="outline" onclick={() => (signatureProgressAgreementId = signatureProgressAgreementId === agreement.leaseAgreementId ? null : agreement.leaseAgreementId)}>
 												{signatureProgressAgreementId === agreement.leaseAgreementId ? 'Hide signing progress' : 'View signing progress'}
 											</Button>
-										{:else if issuedArtifact && !agreement.hasSignatureRequest}
-											<span class="text-xs text-muted-foreground">Signed outside e-sign — no signing links to track.</span>
-										{/if}
+						{:else if issuedArtifact && !agreement.hasSignatureRequest}
+							{#if agreement.fullyExecutedAtUtc}
+								<span class="text-xs text-muted-foreground">Signed outside e-sign — no signing links to track.</span>
+							{:else}
+								<span class="text-xs text-muted-foreground">Signing handled outside e-sign — mark as signed when complete.</span>
+							{/if}
+						{/if}
 										{#if canPrepareAgreements && issuedArtifact && !agreement.fullyExecutedAtUtc && !agreement.hasLiveReissue}
 											<Button size="sm" variant={agreement.voidedAtUtc ? 'default' : 'destructive'} onclick={() => (issuedRecoverySource = agreement)}>
 												{agreement.voidedAtUtc ? 'Create replacement' : 'Void and replace'}

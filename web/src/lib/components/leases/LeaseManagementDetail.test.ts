@@ -11,9 +11,12 @@ describe('agreement signing-progress availability', () => {
 		assert.match(componentSource, /signatureProgressAgreementId === agreement\.leaseAgreementId[\s\S]*agreement\.hasSignatureRequest/);
 	});
 
-	it('explains signed-outside-esign agreements without exposing a broken action', () => {
+	it('explains signed-outside-esign agreements according to execution status', () => {
 		assert.match(componentSource, /issuedArtifact && !agreement\.hasSignatureRequest/);
-		assert.match(componentSource, /Signed outside e-sign — no signing links to track\./);
+		assert.match(
+			componentSource,
+			/{#if agreement\.fullyExecutedAtUtc}[\s\S]*Signed outside e-sign — no signing links to track\.[\s\S]*{:else}[\s\S]*Signing handled outside e-sign — mark as signed when complete\.[\s\S]*{\/if}/
+		);
 	});
 
 	it('mirrors signature request presence and identity in the agreement history type', () => {
