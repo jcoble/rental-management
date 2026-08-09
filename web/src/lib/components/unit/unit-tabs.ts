@@ -27,6 +27,38 @@ export interface UnitDestination {
 	view?: UnitView;
 }
 
+/**
+ * Query-string context carried by Unit workflows. These names are intentionally
+ * kept together because tab changes must not discard a record the landlord is
+ * returning to.
+ */
+export const UNIT_CONTEXTUAL_PARAMS = [
+	'view',
+	'wo',
+	'app',
+	'payment',
+	'expense',
+	'tenantAccount',
+	'leaseManagement',
+	'agreement',
+	'ledger',
+	'action',
+] as const;
+
+type UnitContextOwner = Pick<UnitDestination, 'tab' | 'view'>;
+
+const CONTEXT_OWNER_BY_PARAM: Partial<Record<(typeof UNIT_CONTEXTUAL_PARAMS)[number], UnitContextOwner>> = {
+	wo: { tab: 'maintenance', view: 'work-orders' },
+	app: { tab: 'leasing', view: 'applications' },
+	payment: { tab: 'money', view: 'tenant-account' },
+	expense: { tab: 'money', view: 'operating-costs' },
+	tenantAccount: { tab: 'money', view: 'tenant-account' },
+	leaseManagement: { tab: 'tenant-lease', view: 'agreements' },
+	agreement: { tab: 'tenant-lease', view: 'agreements' },
+	ledger: { tab: 'documents-history', view: 'history' },
+	action: { tab: 'tenant-lease', view: 'agreements' },
+};
+
 const DEFAULT_VIEWS: Partial<Record<UnitTab, UnitView>> = {
 	leasing: 'listing',
 	'tenant-lease': 'agreements',
@@ -54,6 +86,40 @@ export function resolveUnitDestination(
 	const requestedView = normalizedView && validViews?.includes(normalizedView) ? normalizedView : undefined;
 	const view = requestedView && validViews?.includes(requestedView) ? requestedView : DEFAULT_VIEWS[tab];
 	return view ? { tab, view } : { tab };
+}
+
+/**
+ * Builds the shallow-routing destination for a Unit tab.
+ *
+ * An explicit secondary-view click is a list re-entry, so only the selected
+ * view's own record key is cleared. A primary-tab round trip keeps the current
+ * valid view and every other contextual key, allowing a nested detail to be
+ * restored after visiting another tab.
+ */
+export function buildUnitTabNavigation(
+	currentUrl: URL,
+	tabValue: string,
+	viewValue?: UnitView,
+): { url: URL; destination: UnitDestination } {
+	const requestedDestination = resolveUnitDestination(tabValue, viewValue);
+	const url = new URL(currentUrl);
+	url.searchParams.set('tab', requestedDestination.tab);
+
+	if (viewValue !== undefined) {
+		if (requestedDestination.view) url.searchParams.set('view', requestedDestination.view);
+		for (const [param, owner] of Object.entries(CONTEXT_OWNER_BY_PARAM)) {
+			if (owner?.tab === requestedDestination.tab && owner.view === requestedDestination.view) {
+				url.searchParams.delete(param);
+			}
+		}
+	} else if (!url.searchParams.has('view') && requestedDestination.view) {
+		url.searchParams.set('view', requestedDestination.view);
+	}
+
+	return {
+		url,
+		destination: resolveUnitDestination(requestedDestination.tab, url.searchParams.get('view')),
+	};
 }
 
 export function resolveUnitTab(value: string | undefined | null): UnitTab {

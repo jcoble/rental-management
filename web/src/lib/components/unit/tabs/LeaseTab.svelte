@@ -18,6 +18,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
+	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -155,7 +156,7 @@
 <div class="space-y-4" data-testid="unit-lease-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">See who lives here, review the lease, and manage move-in or move-out.</p></div>
-		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
+		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href={prepareMoveInHrefForApprovedTenant('', '', dashboard.unit.id, `/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements`)} class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
 	</div>
 
 	{#if relationshipsQuery.isLoading}

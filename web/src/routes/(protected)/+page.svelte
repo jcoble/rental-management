@@ -12,7 +12,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
 	import { hasCapability } from '$lib/stores/auth.svelte';
-	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { labelForType } from './appointments/calendar-utils';
 	import DashboardBriefing from './DashboardBriefing.svelte';
@@ -121,18 +120,6 @@
 			<div class="space-y-6 lg:col-span-2">
 				<Card.Root class="gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
-						<div class="h-5 w-48 animate-pulse rounded bg-muted"></div>
-					</Card.Header>
-					<Card.Content class="px-4 pb-4 pt-0">
-						<div class="space-y-2">
-							{#each [0, 1, 2] as _}
-								<div class="h-14 w-full animate-pulse rounded border border-border bg-muted"></div>
-							{/each}
-						</div>
-					</Card.Content>
-				</Card.Root>
-				<Card.Root class="gap-0 py-0">
-					<Card.Header class="px-4 pt-4 pb-3">
 						<div class="h-5 w-32 animate-pulse rounded bg-muted"></div>
 					</Card.Header>
 					<Card.Content class="px-4 pb-4 pt-0">
@@ -220,11 +207,11 @@
 					<div class="mt-5 grid grid-cols-2 gap-3">
 						<div class="m3-dashboard-hero-stat" data-testid="dashboard-hero-overdue">
 							<p class="font-mono text-2xl font-semibold leading-none text-foreground">{money(data.accounting.overdueAmount)}</p>
-							<p class="m3-type-body-small mt-1 text-muted-foreground">overdue</p>
+							<p class="m3-type-body-small mt-1 text-muted-foreground">Who's behind</p>
 						</div>
 						<div class="m3-dashboard-hero-stat" data-testid="dashboard-hero-net">
 							<p class="font-mono text-2xl font-semibold leading-none text-foreground">{money(data.accounting.netThisMonth)}</p>
-							<p class="m3-type-body-small mt-1 text-muted-foreground">net this month</p>
+							<p class="m3-type-body-small mt-1 text-muted-foreground">Kept this month</p>
 						</div>
 					</div>
 				</div>
@@ -327,16 +314,16 @@
 			</Card.Root>
 			<Card.Root class="m3-tonal-card m3-tonal-card--coral gap-0 py-0">
 				<Card.Content class="p-4">
-					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
+					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Who's behind</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
-					<p class="text-xs text-muted-foreground">Receivables past due</p>
+					<p class="text-xs text-muted-foreground">Rent past due</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
-					<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Net This Month</div>
+					<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Kept this month</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
-					<p class="text-xs text-muted-foreground">Paid - expenses</p>
+					<p class="text-xs text-muted-foreground">What's left after expenses</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="m3-tonal-card m3-tonal-card--rose gap-0 py-0">
@@ -424,31 +411,6 @@
 
 		<div class="m3-motion-enter grid gap-6 lg:grid-cols-3" style="--m3-motion-index: 5">
 			<div class="space-y-6 lg:col-span-2">
-				<Card.Root class="m3-tonal-card m3-tonal-card--coral gap-0 py-0">
-					<Card.Header class="px-4 pt-4 pb-3">
-						<Card.Title class="text-base font-semibold">Leases Expiring in 60 Days</Card.Title>
-					</Card.Header>
-					<Card.Content class="px-4 pb-4 pt-0">
-						{#if data.leasing.expiringSoon.length === 0}
-							<p class="text-sm text-muted-foreground">No active leases expiring soon.</p>
-						{:else}
-							<div class="space-y-2">
-								{#each data.leasing.expiringSoon as lease}
-									<div class="rounded border border-border bg-background p-3">
-										<div class="flex items-center justify-between gap-2">
-											<div>
-												<p class="text-sm font-medium">{lease.leaseNumber} · {lease.tenant}</p>
-												<p class="text-xs text-muted-foreground">{lease.property} · Unit {lease.unit}</p>
-											</div>
-											<p class="font-mono tabular-nums text-xs text-warning">Ends {formatDateOnly(lease.endDate)}</p>
-										</div>
-									</div>
-								{/each}
-							</div>
-						{/if}
-					</Card.Content>
-				</Card.Root>
-
 				<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
 						<Card.Title class="text-base font-semibold">Recent Activity</Card.Title>

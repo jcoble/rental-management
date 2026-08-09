@@ -18,6 +18,18 @@ const leasesPageSource = readFileSync(
 	new URL('../../routes/(protected)/leases/+page.svelte', import.meta.url),
 	'utf8'
 );
+const unitPageSource = readFileSync(
+	new URL('../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
+	'utf8'
+);
+const unitLeaseTabSource = readFileSync(
+	new URL('../components/unit/tabs/LeaseTab.svelte', import.meta.url),
+	'utf8'
+);
+const unitApplicationsTabSource = readFileSync(
+	new URL('../components/unit/tabs/ApplicationsTab.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('canonical web Prepare move-in workflow', () => {
 	it('posts the complete typed request with an explicit idempotency key', () => {
@@ -56,6 +68,15 @@ describe('canonical web Prepare move-in workflow', () => {
 		assert.match(dialogSource, /application\.approvedTenantId !== requiredTenantId/);
 		assert.doesNotMatch(dialogSource, /leases\.create/);
 		assert.doesNotMatch(dialogSource, /leaseId/);
+	});
+
+	it('keeps Prepare move-in on the unit workflow with unit and application context', () => {
+		assert.doesNotMatch(unitLeaseTabSource, /href="\/applications"/);
+		assert.match(unitLeaseTabSource, /prepareMoveInHrefForApprovedTenant\([^\n]*dashboard\.unit\.id/);
+		assert.match(unitApplicationsTabSource, /prepareMoveInBasePath=\{listUrl\(\{ app: selectedApp \}\)\}/);
+		assert.match(unitPageSource, /readPrepareMoveInPrefill\(page\.url\.searchParams\)/);
+		assert.match(unitPageSource, /mode="manual"/);
+		assert.match(unitPageSource, /tab=tenant-lease&view=agreements&leaseManagement=\$\{result\.leaseManagementId\}/);
 	});
 
 	it('uses server-filtered paged selectors for unresolved approved applications, units, and templates', () => {

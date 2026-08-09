@@ -12,7 +12,7 @@ export const ACCOUNTING_HELP = {
 	},
 	cashPosition: {
 		title: 'Cash and tenant deposits',
-		summary: 'Cash on hand includes deposit cash. Cash after tenant deposits subtracts money still held for tenants, but it is not a promise that the rest is free to spend.',
+		summary: 'Cash available includes deposit cash. Cash after tenant deposits subtracts money still held for tenants, but it is not a promise that the rest is free to spend.',
 		href: '/docs/cash-flow-basics'
 	},
 	cashFlow: {

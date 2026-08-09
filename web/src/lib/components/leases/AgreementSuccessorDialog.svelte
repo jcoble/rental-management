@@ -10,6 +10,7 @@
 	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import type { LeaseAgreementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { leaseAgreementChangeTypeLabel } from '$lib/leases/lease-list-labels';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
@@ -55,9 +56,7 @@
 	let operation: { fingerprint: string; key: string } | null = null;
 
 	const sourceRequiresTemplate = $derived(source.hasSourceScan);
-	const title = $derived(
-		changeType === 'MonthToMonth' ? 'Create month-to-month draft' : `Create ${changeType.toLowerCase()} draft`
-	);
+	const title = $derived(`Change the lease: ${leaseAgreementChangeTypeLabel(changeType)}`);
 	const relationshipQuery = createQuery(() => ({
 		queryKey: ['lease-managements', leaseManagementId, 'successor-template-context'],
 		queryFn: () => leaseManagements.get(leaseManagementId),
@@ -255,7 +254,7 @@
 				operationKey(request)
 			),
 		onSuccess: (result) => {
-			showSuccess(`${changeType === 'MonthToMonth' ? 'Month-to-month' : changeType} draft created.`);
+			showSuccess(`${leaseAgreementChangeTypeLabel(changeType)} draft created.`);
 			oncreated(result);
 		},
 		onError: (error) => showError(apiErrorMessage(error, 'Could not create the successor draft.'))

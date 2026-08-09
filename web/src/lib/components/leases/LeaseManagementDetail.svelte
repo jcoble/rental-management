@@ -36,6 +36,7 @@
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { money } from '$lib/components/unit/money';
+	import { leaseAgreementChangeTypeLabel } from '$lib/leases/lease-list-labels';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
 
@@ -337,7 +338,7 @@
 							</div>
 							{#if summary.upcomingLeaseAgreementId}
 								<div class="space-y-1">
-									<dt class="text-xs font-medium text-muted-foreground">Upcoming agreement</dt>
+									<dt class="text-xs font-medium text-muted-foreground">Upcoming lease document</dt>
 									<dd class="font-medium">
 										{summary.upcomingAgreementNumber ?? `Agreement #${summary.upcomingLeaseAgreementId}`}
 										{summary.upcomingTermStartOn ? ` · starts ${formatDateOnly(summary.upcomingTermStartOn)}` : ''}
@@ -465,19 +466,19 @@
 
 		<Card>
 			<CardHeader>
-				<CardTitle>Agreement versions</CardTitle>
-				<p class="text-sm text-muted-foreground">Draft, signature, governing, source, and immutable artifact history.</p>
+				<CardTitle>The signed lease</CardTitle>
+				<p class="text-sm text-muted-foreground">The current lease document and its earlier versions.</p>
 			</CardHeader>
 			<CardContent class="space-y-4">
 				{#if agreementsQuery.isLoading}
-					<LoadingState label="Loading agreement versions" testid="lease-agreements-loading" />
+					<LoadingState label="Loading the signed lease" testid="lease-agreements-loading" />
 				{:else if agreementsQuery.isError}
 					<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="lease-agreements-error">
-						<p class="text-sm font-medium text-destructive">Agreement history could not be loaded.</p>
+						<p class="text-sm font-medium text-destructive">The signed lease could not be loaded.</p>
 						<Button class="mt-3" variant="outline" size="sm" onclick={() => agreementsQuery.refetch()}>Try again</Button>
 					</div>
 				{:else if (agreementsQuery.data?.items.length ?? 0) === 0}
-					<p class="text-sm text-muted-foreground">No agreement versions yet.</p>
+					<p class="text-sm text-muted-foreground">No signed lease document is attached yet.</p>
 				{:else}
 					<div class="divide-y">
 						{#each agreementsQuery.data?.items ?? [] as agreement}
@@ -489,9 +490,9 @@
 										<div class="flex flex-wrap items-center gap-2">
 											<p class="font-medium">{agreement.agreementNumber} · version {agreement.versionNumber}</p>
 											<StatusBadge status={agreement.agreementStatus} />
-											{#if agreement.isGoverning}<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Governing</span>{/if}
+											{#if agreement.isGoverning}<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Current lease</span>{/if}
 										</div>
-										<p class="text-sm text-muted-foreground">{agreement.changeType} · {agreement.termStartOn} to {agreement.termEndOn ?? 'month-to-month'} · ${agreement.baseRentAmount.toLocaleString()}/month · {agreement.signerCount} signer{agreement.signerCount === 1 ? '' : 's'}</p>
+										<p class="text-sm text-muted-foreground">{leaseAgreementChangeTypeLabel(agreement.changeType)} · {agreement.termStartOn} to {agreement.termEndOn ?? 'month-to-month'} · ${agreement.baseRentAmount.toLocaleString()}/month · {agreement.signerCount} signer{agreement.signerCount === 1 ? '' : 's'}</p>
 										{#if agreement.correctionReason}<p class="text-xs text-muted-foreground">Correction reason: {agreement.correctionReason}</p>{/if}
 										{#if agreement.reissueReason}<p class="text-xs text-muted-foreground">Reissue reason: {agreement.reissueReason}</p>{/if}
 										{#if agreement.draftCancellationReason}<p class="text-xs text-destructive">Draft canceled: {agreement.draftCancellationReason}</p>{/if}
@@ -534,12 +535,12 @@
 
 				{#if canPrepareAgreements && agreement.isGoverning}
 									<div class="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
-										<span class="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create next draft</span>
-										<Button size="sm" onclick={() => (createAddendumBase = agreement)}><FilePlus2 class="mr-1 h-4 w-4" /> Addendum</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Correction' })}>Create correction</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Restatement' })}>Create restatement</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Renewal' })}>Create renewal</Button>
-										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'MonthToMonth' })}>Create month-to-month</Button>
+										<span class="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Change the lease</span>
+										<Button size="sm" onclick={() => (createAddendumBase = agreement)}><FilePlus2 class="mr-1 h-4 w-4" /> Add a page</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Correction' })}>Fix a typo</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Restatement' })}>Rewrite the whole lease</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'Renewal' })}>Renew it</Button>
+										<Button variant="outline" size="sm" onclick={() => (successorSelection = { source: agreement, changeType: 'MonthToMonth' })}>Switch to month-to-month</Button>
 									</div>
 								{/if}
 							</div>
@@ -559,22 +560,22 @@
 		<Card>
 			<CardHeader>
 				<div class="flex flex-wrap items-start justify-between gap-3">
-					<div><CardTitle>Addendum versions</CardTitle><p class="mt-1 text-sm text-muted-foreground">Server-paged draft, signature, correction-series, financial-effect, and immutable artifact history.</p></div>
+					<div><CardTitle>Earlier versions</CardTitle><p class="mt-1 text-sm text-muted-foreground">Earlier lease changes and their signed documents.</p></div>
 					{#if canPrepareAgreements}
-						<Button size="sm" class="gap-2" disabled={!governingAgreement} title={governingAgreement ? `Create an addendum to ${governingAgreement.agreementNumber}` : 'A governing agreement is required'} onclick={() => { if (governingAgreement) createAddendumBase = governingAgreement; }}><FilePlus2 class="h-4 w-4" /> New draft</Button>
+						<Button size="sm" class="gap-2" disabled={!governingAgreement} title={governingAgreement ? `Add a page to ${governingAgreement.agreementNumber}` : 'A current lease document is required'} onclick={() => { if (governingAgreement) createAddendumBase = governingAgreement; }}><FilePlus2 class="h-4 w-4" /> Add a page</Button>
 					{/if}
 				</div>
 			</CardHeader>
 			<CardContent class="space-y-4">
 				{#if addendaQuery.isLoading}
-					<LoadingState label="Loading addendum versions" testid="lease-addenda-loading" />
+					<LoadingState label="Loading earlier versions" testid="lease-addenda-loading" />
 				{:else if addendaQuery.isError}
 					<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="lease-addenda-error">
-						<p class="text-sm font-medium text-destructive">Addendum history could not be loaded.</p>
+						<p class="text-sm font-medium text-destructive">Earlier lease versions could not be loaded.</p>
 						<Button class="mt-3" variant="outline" size="sm" onclick={() => addendaQuery.refetch()}>Try again</Button>
 					</div>
 				{:else if (addendaQuery.data?.items.length ?? 0) === 0}
-					<p class="text-sm text-muted-foreground">No addendum versions yet.</p>
+					<p class="text-sm text-muted-foreground">No earlier lease changes yet.</p>
 				{:else}
 					<div class="divide-y">
 						{#each addendaQuery.data?.items ?? [] as addendum (addendum.leaseAddendumId)}

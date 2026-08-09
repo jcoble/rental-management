@@ -184,6 +184,7 @@
 		onDeleted={clearSelection}
 		expectedUnitId={unitId}
 		onUnitMismatch={clearSelection}
+		prepareMoveInBasePath={listUrl({ app: selectedApp })}
 	/>
 {:else}
 	<form class="flex flex-wrap items-end gap-2" onsubmit={(event) => { event.preventDefault(); submitSearch(); }} data-testid="unit-applications-controls">
