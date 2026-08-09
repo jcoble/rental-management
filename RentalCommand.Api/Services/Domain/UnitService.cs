@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
@@ -187,6 +189,11 @@ public class UnitService : IUnitService
     public async Task<UnitHealthListResponse> ListWithHealthPageAsync(
         WorkspaceReadScope scope, UnitHealthListQuery query, CancellationToken ct = default)
     {
+        if (CanPageBeforeHealthHydration(query))
+        {
+            return await ListWithHealthPageSeededAsync(scope, query, ct);
+        }
+
         var portfolioId = scope.PortfolioId;
         var authorizedProperties = _db.Properties
             .AsNoTracking()
@@ -290,6 +297,521 @@ public class UnitService : IUnitService
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
+    }
+
+    private static bool CanPageBeforeHealthHydration(UnitHealthListQuery query) =>
+        string.IsNullOrWhiteSpace(query.Status)
+        && string.IsNullOrWhiteSpace(query.Stage)
+        && query.SortField is not "openworkordercount" and not "status";
+
+    private async Task<UnitHealthListResponse> ListWithHealthPageSeededAsync(
+        WorkspaceReadScope scope,
+        UnitHealthListQuery query,
+        CancellationToken ct)
+    {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        var seedQuery =
+            from unit in _db.Units.AsNoTracking()
+            where unit.PortfolioId == portfolioId
+                && authorizedProperties.Any(property =>
+                    property.Id == unit.PropertyId && property.PortfolioId == portfolioId)
+            join property in _db.Properties.AsNoTracking()
+                on new { unit.PortfolioId, Id = unit.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            select new UnitHealthPageSeedReadRow
+            {
+                Id = unit.Id,
+                PropertyId = unit.PropertyId,
+                PropertyName = property.Name,
+                UnitNumber = unit.UnitNumber,
+                MarketRent = unit.MarketRent,
+                UpdatedAt = unit.UpdatedAt,
+            };
+
+        if (query.PropertyId.HasValue)
+        {
+            seedQuery = seedQuery.Where(row => row.PropertyId == query.PropertyId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            seedQuery = seedQuery.Where(row =>
+                EF.Functions.ILike(row.UnitNumber, $"%{term}%")
+                || EF.Functions.ILike(row.PropertyName, $"%{term}%"));
+        }
+
+        seedQuery = query.SortField switch
+        {
+            "unitnumber" => query.SortDescending
+                ? seedQuery.OrderByDescending(row => row.UnitNumber)
+                : seedQuery.OrderBy(row => row.UnitNumber),
+            "propertyname" => query.SortDescending
+                ? seedQuery.OrderByDescending(row => row.PropertyName)
+                : seedQuery.OrderBy(row => row.PropertyName),
+            "marketrent" => query.SortDescending
+                ? seedQuery.OrderByDescending(row => row.MarketRent)
+                : seedQuery.OrderBy(row => row.MarketRent),
+            "updatedat" => query.SortDescending
+                ? seedQuery.OrderByDescending(row => row.UpdatedAt)
+                : seedQuery.OrderBy(row => row.UpdatedAt),
+            _ => query.SortDescending
+                ? seedQuery.OrderByDescending(row => row.UnitNumber)
+                : seedQuery.OrderBy(row => row.UnitNumber),
+        };
+
+        var totalCount = await seedQuery.CountAsync(ct);
+        var page = await seedQuery
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+        if (page.Count == 0)
+        {
+            return new UnitHealthListResponse
+            {
+                TotalCount = totalCount,
+                Skip = query.NormalizedSkip,
+                Take = query.NormalizedTake,
+            };
+        }
+
+        var pageUnitIds = page.Select(row => row.Id).ToArray();
+        var healthRows = await LoadUnitHealthPageAsync(scope, pageUnitIds, ct);
+        var healthByUnitId = healthRows.ToDictionary(row => row.Id);
+        var items = new List<UnitHealthResponse>(page.Count);
+        foreach (var seed in page)
+        {
+            if (!healthByUnitId.TryGetValue(seed.Id, out var health))
+            {
+                throw new InvalidOperationException(
+                    $"Unit {seed.Id} disappeared during page health hydration.");
+            }
+
+            items.Add(new UnitHealthResponse
+            {
+                Id = seed.Id,
+                PropertyId = seed.PropertyId,
+                PropertyName = seed.PropertyName,
+                UnitNumber = seed.UnitNumber,
+                Status = ResolveUnitStatus(health).ToString(),
+                CurrentLeaseManagementId = health.CurrentLeaseManagementId,
+                CurrentAgreementId = health.CurrentAgreementId,
+                TenantAccountId = health.TenantAccountId,
+                MarketRent = seed.MarketRent,
+                OpenWorkOrderCount = health.OpenWorkOrderCount,
+                LeaseEndsInDays = health.CurrentAgreementEndOn is { } end
+                    && health.BusinessDate is { } businessDate
+                        ? Math.Max(0, end.DayNumber - businessDate.DayNumber)
+                        : null,
+                DocsNeedingReviewCount = health.DocsNeedingReviewCount,
+                SimpleStage = ComputeSimpleStage(health),
+            });
+        }
+
+        return new UnitHealthListResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private Task<List<UnitHealthHydrationReadRow>> LoadUnitHealthPageAsync(
+        WorkspaceReadScope scope,
+        int[] pageUnitIds,
+        CancellationToken ct)
+    {
+        const string sql = """
+            WITH active_portfolio AS MATERIALIZED (
+                SELECT
+                    portfolio."Id" AS "PortfolioId",
+                    effective_time."NowUtc" AS "NowUtc",
+                    (effective_time."NowUtc" AT TIME ZONE
+                        COALESCE(NULLIF(clock_state."TimeZoneId", ''), portfolio."TimeZone"))::date
+                        AS "BusinessDate"
+                FROM "Portfolios" AS portfolio
+                LEFT JOIN "SimulationClocks" AS clock_state
+                    ON clock_state."Id" = 1
+                CROSS JOIN LATERAL (
+                    SELECT rc_effective_now_utc(portfolio."Id") AS "NowUtc"
+                ) AS effective_time
+                WHERE portfolio."Id" = @portfolioId
+                  AND portfolio."DeletedAt" IS NULL
+            ),
+            effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    @portfolioId,
+                    @sessionId,
+                    @userId,
+                    @accessContextId,
+                    @accessRevision,
+                    @capabilityKeys,
+                    @targetKind) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT property_row."Id" AS "PropertyId"
+                FROM "Properties" AS property_row
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = property_row."PortfolioId"
+                WHERE property_row."PortfolioId" = @portfolioId
+                  AND property_row."DeletedAt" IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM effective_scopes
+                      WHERE effective_scopes."ScopeKind" = 'AllProperties'
+                         OR (effective_scopes."ScopeKind" = 'SelectedProperties'
+                             AND effective_scopes."PropertyId" = property_row."Id")
+                  )
+            ),
+            page_units AS MATERIALIZED (
+                SELECT
+                    unit."PortfolioId" AS "PortfolioId",
+                    unit."PropertyId" AS "PropertyId",
+                    unit."Id" AS "UnitId"
+                FROM "Units" AS unit
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = unit."PortfolioId"
+                INNER JOIN "Properties" AS property_row
+                    ON property_row."PortfolioId" = unit."PortfolioId"
+                   AND property_row."Id" = unit."PropertyId"
+                   AND property_row."DeletedAt" IS NULL
+                INNER JOIN authorized_properties
+                    ON authorized_properties."PropertyId" = unit."PropertyId"
+                WHERE unit."PortfolioId" = @portfolioId
+                  AND unit."DeletedAt" IS NULL
+                  AND unit."Id" = ANY(@unitIds)
+            ),
+            current_possession AS MATERIALIZED (
+                SELECT
+                    page_unit."UnitId" AS "UnitId",
+                    management."Id" AS "LeaseManagementId",
+                    CASE
+                        WHEN management."AccountClosedAtUtc" IS NOT NULL THEN 'Closed'
+                        WHEN management."NoticeGivenAtUtc" IS NOT NULL
+                          OR management."PlannedMoveOutAtUtc" IS NOT NULL THEN 'Ending'
+                        WHEN management."Id" IS NOT NULL THEN 'Occupied'
+                        ELSE NULL
+                    END AS "Lifecycle"
+                FROM page_units AS page_unit
+                LEFT JOIN LATERAL (
+                    SELECT management.*
+                    FROM "LeaseManagements" AS management
+                    INNER JOIN active_portfolio
+                        ON active_portfolio."PortfolioId" = management."PortfolioId"
+                    WHERE management."PortfolioId" = page_unit."PortfolioId"
+                      AND management."PropertyId" = page_unit."PropertyId"
+                      AND management."UnitId" = page_unit."UnitId"
+                      AND management."CanceledAtUtc" IS NULL
+                      AND management."PossessionGivenAtUtc" <= active_portfolio."NowUtc"
+                      AND (management."PossessionReturnedAtUtc" IS NULL
+                           OR management."PossessionReturnedAtUtc" > active_portfolio."NowUtc")
+                    ORDER BY management."PossessionGivenAtUtc" DESC, management."Id" DESC
+                    LIMIT 1
+                ) AS management ON TRUE
+            ),
+            planned_possession AS MATERIALIZED (
+                SELECT
+                    page_unit."UnitId" AS "UnitId",
+                    (management."Id" IS NOT NULL) AS "HasScheduledMoveIn"
+                FROM page_units AS page_unit
+                LEFT JOIN LATERAL (
+                    SELECT management."Id"
+                    FROM "LeaseManagements" AS management
+                    INNER JOIN active_portfolio
+                        ON active_portfolio."PortfolioId" = management."PortfolioId"
+                    WHERE management."PortfolioId" = page_unit."PortfolioId"
+                      AND management."PropertyId" = page_unit."PropertyId"
+                      AND management."UnitId" = page_unit."UnitId"
+                      AND management."CanceledAtUtc" IS NULL
+                      AND management."PossessionGivenAtUtc" IS NULL
+                      AND management."PlannedPossessionAtUtc" IS NOT NULL
+                    ORDER BY management."PlannedPossessionAtUtc", management."Id"
+                    LIMIT 1
+                ) AS management ON TRUE
+            ),
+            operational_flags AS MATERIALIZED (
+                SELECT
+                    page_unit."UnitId" AS "UnitId",
+                    EXISTS (
+                        SELECT 1
+                        FROM "UnitOperationalPeriods" AS period
+                        INNER JOIN active_portfolio
+                            ON active_portfolio."PortfolioId" = period."PortfolioId"
+                        WHERE period."PortfolioId" = page_unit."PortfolioId"
+                          AND period."PropertyId" = page_unit."PropertyId"
+                          AND period."UnitId" = page_unit."UnitId"
+                          AND period."Type" = 'Turnover'
+                          AND period."StartedAtUtc" <= active_portfolio."NowUtc"
+                          AND (period."EndedAtUtc" IS NULL
+                               OR period."EndedAtUtc" > active_portfolio."NowUtc")
+                    ) AS "IsInTurnover",
+                    EXISTS (
+                        SELECT 1
+                        FROM "UnitOperationalPeriods" AS period
+                        INNER JOIN active_portfolio
+                            ON active_portfolio."PortfolioId" = period."PortfolioId"
+                        WHERE period."PortfolioId" = page_unit."PortfolioId"
+                          AND period."PropertyId" = page_unit."PropertyId"
+                          AND period."UnitId" = page_unit."UnitId"
+                          AND period."Type" = 'OutOfService'
+                          AND period."StartedAtUtc" <= active_portfolio."NowUtc"
+                          AND (period."EndedAtUtc" IS NULL
+                               OR period."EndedAtUtc" > active_portfolio."NowUtc")
+                    ) AS "IsOutOfService",
+                    EXISTS (
+                        SELECT 1
+                        FROM "UnitOperationalPeriods" AS period
+                        INNER JOIN active_portfolio
+                            ON active_portfolio."PortfolioId" = period."PortfolioId"
+                        WHERE period."PortfolioId" = page_unit."PortfolioId"
+                          AND period."PropertyId" = page_unit."PropertyId"
+                          AND period."UnitId" = page_unit."UnitId"
+                          AND period."Type" = 'ManagementHold'
+                          AND period."StartedAtUtc" <= active_portfolio."NowUtc"
+                          AND (period."EndedAtUtc" IS NULL
+                               OR period."EndedAtUtc" > active_portfolio."NowUtc")
+                    ) AS "IsOnManagementHold"
+                FROM page_units AS page_unit
+            ),
+            current_agreements AS MATERIALIZED (
+                SELECT
+                    current_possession."UnitId" AS "UnitId",
+                    agreement."Id" AS "CurrentAgreementId",
+                    agreement."TermEndOn" AS "CurrentAgreementEndOn"
+                FROM current_possession
+                LEFT JOIN LATERAL (
+                    SELECT agreement."Id", agreement."TermEndOn"
+                    FROM "LeaseAgreements" AS agreement
+                    INNER JOIN active_portfolio
+                        ON active_portfolio."PortfolioId" = agreement."PortfolioId"
+                    WHERE agreement."PortfolioId" = @portfolioId
+                      AND agreement."LeaseManagementId" = current_possession."LeaseManagementId"
+                      AND agreement."FullyExecutedAtUtc" IS NOT NULL
+                      AND agreement."VoidedAtUtc" IS NULL
+                      AND agreement."DraftCanceledAtUtc" IS NULL
+                      AND active_portfolio."BusinessDate" >= agreement."GoverningFromOn"
+                      AND (agreement."TermEndOn" IS NULL
+                           OR active_portfolio."BusinessDate" < agreement."TermEndOn" + 1)
+                      AND (agreement."SupersededEffectiveOn" IS NULL
+                           OR active_portfolio."BusinessDate" < agreement."SupersededEffectiveOn")
+                    ORDER BY agreement."GoverningFromOn" DESC, agreement."Id" DESC
+                    LIMIT 1
+                ) AS agreement ON TRUE
+            ),
+            current_accounts AS MATERIALIZED (
+                SELECT
+                    current_possession."UnitId" AS "UnitId",
+                    account."Id" AS "TenantAccountId"
+                FROM current_possession
+                LEFT JOIN LATERAL (
+                    SELECT account."Id"
+                    FROM "TenantAccounts" AS account
+                    INNER JOIN active_portfolio
+                        ON active_portfolio."PortfolioId" = account."PortfolioId"
+                    WHERE account."PortfolioId" = @portfolioId
+                      AND account."LeaseManagementId" = current_possession."LeaseManagementId"
+                ) AS account ON TRUE
+            ),
+            open_work_order_counts AS MATERIALIZED (
+                SELECT work_order."UnitId" AS "UnitId", count(*)::integer AS "Count"
+                FROM "WorkOrders" AS work_order
+                INNER JOIN page_units
+                    ON page_units."PortfolioId" = work_order."PortfolioId"
+                   AND page_units."UnitId" = work_order."UnitId"
+                WHERE work_order."PortfolioId" = @portfolioId
+                  AND work_order."DeletedAt" IS NULL
+                  AND work_order."Status" NOT IN (
+                      @completedWorkOrderStatus,
+                      @cancelledWorkOrderStatus,
+                      @archivedWorkOrderStatus)
+                GROUP BY work_order."UnitId"
+            ),
+            document_associations AS MATERIALIZED (
+                SELECT page_unit."UnitId", stored_file."Id" AS "FileId"
+                FROM page_units AS page_unit
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = page_unit."PortfolioId"
+                   AND stored_file."EntityId" = page_unit."UnitId"::bigint
+                WHERE stored_file."DeletedAt" IS NULL
+                  AND stored_file."EntityType" = 'Unit'
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "Expenses" AS expense
+                    ON expense."PortfolioId" = page_unit."PortfolioId"
+                   AND expense."UnitId" = page_unit."UnitId"
+                   AND expense."DeletedAt" IS NULL
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = expense."PortfolioId"
+                   AND stored_file."EntityId" = expense."Id"::bigint
+                WHERE stored_file."DeletedAt" IS NULL
+                  AND stored_file."EntityType" = 'Expense'
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "WorkOrders" AS work_order
+                    ON work_order."PortfolioId" = page_unit."PortfolioId"
+                   AND work_order."UnitId" = page_unit."UnitId"
+                   AND work_order."DeletedAt" IS NULL
+                INNER JOIN "Expenses" AS expense
+                    ON expense."PortfolioId" = work_order."PortfolioId"
+                   AND expense."WorkOrderId" = work_order."Id"
+                   AND expense."DeletedAt" IS NULL
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = expense."PortfolioId"
+                   AND stored_file."EntityId" = expense."Id"::bigint
+                WHERE stored_file."DeletedAt" IS NULL
+                  AND stored_file."EntityType" = 'Expense'
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "WorkOrders" AS work_order
+                    ON work_order."PortfolioId" = page_unit."PortfolioId"
+                   AND work_order."UnitId" = page_unit."UnitId"
+                   AND work_order."DeletedAt" IS NULL
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = work_order."PortfolioId"
+                   AND stored_file."EntityId" = work_order."Id"::bigint
+                WHERE stored_file."DeletedAt" IS NULL
+                  AND stored_file."EntityType" = 'WorkOrder'
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "Inspections" AS inspection
+                    ON inspection."PortfolioId" = page_unit."PortfolioId"
+                   AND inspection."UnitId" = page_unit."UnitId"
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = inspection."PortfolioId"
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = inspection."PortfolioId"
+                   AND stored_file."EntityId" = inspection."Id"::bigint
+                WHERE stored_file."DeletedAt" IS NULL
+                  AND stored_file."EntityType" = 'Inspection'
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = page_unit."PortfolioId"
+                   AND management."UnitId" = page_unit."UnitId"
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = management."PortfolioId"
+                INNER JOIN "LeaseAgreements" AS agreement
+                    ON agreement."PortfolioId" = management."PortfolioId"
+                   AND agreement."LeaseManagementId" = management."Id"
+                INNER JOIN "LegalDocumentArtifacts" AS artifact
+                    ON artifact."PortfolioId" = agreement."PortfolioId"
+                   AND artifact."Id" = agreement."IssuedArtifactId"
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = artifact."PortfolioId"
+                   AND stored_file."Id" = artifact."StoredFileId"
+                   AND stored_file."DeletedAt" IS NULL
+
+                UNION
+
+                SELECT page_unit."UnitId", stored_file."Id"
+                FROM page_units AS page_unit
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = page_unit."PortfolioId"
+                   AND management."UnitId" = page_unit."UnitId"
+                INNER JOIN active_portfolio
+                    ON active_portfolio."PortfolioId" = management."PortfolioId"
+                INNER JOIN "LeaseAgreements" AS agreement
+                    ON agreement."PortfolioId" = management."PortfolioId"
+                   AND agreement."LeaseManagementId" = management."Id"
+                INNER JOIN "LegalDocumentArtifacts" AS artifact
+                    ON artifact."PortfolioId" = agreement."PortfolioId"
+                   AND artifact."Id" = agreement."ExecutedArtifactId"
+                INNER JOIN "StoredFiles" AS stored_file
+                    ON stored_file."PortfolioId" = artifact."PortfolioId"
+                   AND stored_file."Id" = artifact."StoredFileId"
+                   AND stored_file."DeletedAt" IS NULL
+            ),
+            document_counts AS MATERIALIZED (
+                SELECT document_association."UnitId", count(*)::integer AS "Count"
+                FROM document_associations AS document_association
+                GROUP BY document_association."UnitId"
+            )
+            SELECT
+                page_unit."UnitId" AS "Id",
+                (current_possession."LeaseManagementId" IS NOT NULL) AS "IsOccupied",
+                planned_possession."HasScheduledMoveIn" AS "HasScheduledMoveIn",
+                operational_flags."IsInTurnover" AS "IsInTurnover",
+                operational_flags."IsOutOfService" AS "IsOutOfService",
+                operational_flags."IsOnManagementHold" AS "IsOnManagementHold",
+                current_possession."LeaseManagementId" AS "CurrentLeaseManagementId",
+                current_agreement."CurrentAgreementId" AS "CurrentAgreementId",
+                current_account."TenantAccountId" AS "TenantAccountId",
+                current_possession."Lifecycle" AS "Lifecycle",
+                CASE WHEN current_possession."LeaseManagementId" IS NULL
+                    THEN NULL::date ELSE active_portfolio."BusinessDate" END AS "BusinessDate",
+                current_agreement."CurrentAgreementEndOn" AS "CurrentAgreementEndOn",
+                COALESCE(open_work_order_count."Count", 0) AS "OpenWorkOrderCount",
+                COALESCE(document_count."Count", 0) AS "DocsNeedingReviewCount"
+            FROM page_units AS page_unit
+            CROSS JOIN active_portfolio
+            INNER JOIN current_possession
+                ON current_possession."UnitId" = page_unit."UnitId"
+            INNER JOIN planned_possession
+                ON planned_possession."UnitId" = page_unit."UnitId"
+            INNER JOIN operational_flags
+                ON operational_flags."UnitId" = page_unit."UnitId"
+            INNER JOIN current_agreements AS current_agreement
+                ON current_agreement."UnitId" = page_unit."UnitId"
+            INNER JOIN current_accounts AS current_account
+                ON current_account."UnitId" = page_unit."UnitId"
+            LEFT JOIN open_work_order_counts AS open_work_order_count
+                ON open_work_order_count."UnitId" = page_unit."UnitId"
+            LEFT JOIN document_counts AS document_count
+                ON document_count."UnitId" = page_unit."UnitId"
+            """;
+
+        return _db.Database.SqlQueryRaw<UnitHealthHydrationReadRow>(
+                sql,
+                new NpgsqlParameter<int>("portfolioId", scope.PortfolioId),
+                new NpgsqlParameter<Guid>("sessionId", scope.SessionId),
+                new NpgsqlParameter<int>("userId", scope.UserId),
+                new NpgsqlParameter<int>("accessContextId", scope.AccessContextId),
+                new NpgsqlParameter<long>("accessRevision", scope.AccessRevision),
+                new NpgsqlParameter("capabilityKeys", NpgsqlDbType.Array | NpgsqlDbType.Text)
+                {
+                    Value = new[] { CapabilityKeys.RentalsRead },
+                },
+                new NpgsqlParameter<string>(
+                    "targetKind",
+                    CapabilityAuthorizationTargetKind.Property.ToString()),
+                new NpgsqlParameter("unitIds", NpgsqlDbType.Array | NpgsqlDbType.Integer)
+                {
+                    Value = pageUnitIds,
+                },
+                new NpgsqlParameter<int>(
+                    "completedWorkOrderStatus",
+                    (int)WorkOrderStatus.Completed),
+                new NpgsqlParameter<int>(
+                    "cancelledWorkOrderStatus",
+                    (int)WorkOrderStatus.Cancelled),
+                new NpgsqlParameter<int>(
+                    "archivedWorkOrderStatus",
+                    (int)WorkOrderStatus.Archived))
+            .ToListAsync(ct);
     }
 
     /// <summary>
@@ -523,7 +1045,7 @@ public class UnitService : IUnitService
     /// Simplified list badge (NOT the full 9-stage detail derivation): a cheap label from the unit's
     /// occupancy status + current-lease status, formatted from already-projected scalars (no extra query).
     /// </summary>
-    private static string ComputeSimpleStage(UnitHealthReadRow row)
+    private static string ComputeSimpleStage(IUnitHealthFacts row)
     {
         if (row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold)
         {
@@ -550,7 +1072,7 @@ public class UnitService : IUnitService
             : "Vacant";
     }
 
-    private static DerivedUnitStatus ResolveUnitStatus(UnitHealthReadRow row) =>
+    private static DerivedUnitStatus ResolveUnitStatus(IUnitHealthFacts row) =>
         row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold
             ? DerivedUnitStatus.Offline
             : row.IsOccupied
@@ -559,7 +1081,19 @@ public class UnitService : IUnitService
                     ? DerivedUnitStatus.Reserved
                     : DerivedUnitStatus.Vacant;
 
-    internal sealed class UnitHealthReadRow
+    internal interface IUnitHealthFacts
+    {
+        bool IsOccupied { get; }
+        bool HasScheduledMoveIn { get; }
+        bool IsInTurnover { get; }
+        bool IsOutOfService { get; }
+        bool IsOnManagementHold { get; }
+        string? Lifecycle { get; }
+        DateOnly? BusinessDate { get; }
+        DateOnly? CurrentAgreementEndOn { get; }
+    }
+
+    internal sealed class UnitHealthReadRow : IUnitHealthFacts
     {
         public int Id { get; init; }
         public int PropertyId { get; init; }
@@ -579,6 +1113,34 @@ public class UnitService : IUnitService
         public DateOnly? BusinessDate { get; init; }
         public DateOnly? CurrentAgreementEndOn { get; init; }
         public int OpenWorkOrderCount { get; init; }
+    }
+
+    private sealed class UnitHealthPageSeedReadRow
+    {
+        public int Id { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public string UnitNumber { get; init; } = string.Empty;
+        public decimal MarketRent { get; init; }
+        public DateTime UpdatedAt { get; init; }
+    }
+
+    private sealed class UnitHealthHydrationReadRow : IUnitHealthFacts
+    {
+        public int Id { get; init; }
+        public bool IsOccupied { get; init; }
+        public bool HasScheduledMoveIn { get; init; }
+        public bool IsInTurnover { get; init; }
+        public bool IsOutOfService { get; init; }
+        public bool IsOnManagementHold { get; init; }
+        public int? CurrentLeaseManagementId { get; init; }
+        public int? CurrentAgreementId { get; init; }
+        public int? TenantAccountId { get; init; }
+        public string? Lifecycle { get; init; }
+        public DateOnly? BusinessDate { get; init; }
+        public DateOnly? CurrentAgreementEndOn { get; init; }
+        public int OpenWorkOrderCount { get; init; }
+        public int DocsNeedingReviewCount { get; init; }
     }
 
     internal sealed class UnitDocumentAssociationRow
