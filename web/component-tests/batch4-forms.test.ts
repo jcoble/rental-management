@@ -1,7 +1,5 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import TenantFields from '$lib/components/forms/TenantFields.svelte';
-import VendorFields from '$lib/components/forms/VendorFields.svelte';
 import Batch4FormHarness from './Batch4FormHarness.svelte';
 import { appointmentSchema, parseForm } from '$lib/schemas';
 import { validationErrorsToFormErrors } from '$lib/forms/form-errors';
@@ -147,37 +145,65 @@ describe('batch 4 rendered form validation', () => {
 
 	it('enforces the international length-only phone and postal boundaries through rendered tenant and vendor inputs', async () => {
 		const tenant = tenantForm();
-		const tenantView = render(TenantFields, {
-			props: { form: tenant, errors: {}, testidPrefix: 'tenant' },
+		const tenantView = render(Batch4FormHarness, {
+			props: {
+				kind: 'tenant',
+				tenantForm: tenant,
+				statefulForm: true,
+				onformchange: (next) => Object.assign(tenant, next)
+			},
 		});
 		const tenantPhone = tenantView.getByTestId('tenant-phone-input') as HTMLInputElement;
 		const exactPhone = `+${'١'.repeat(49)}`;
+		const overPhone = `${exactPhone}9`;
+		expect(exactPhone).toHaveLength(50);
+		expect(overPhone).toHaveLength(51);
 		await fireEvent.input(tenantPhone, { target: { value: exactPhone } });
 		expect(tenantPhone.value).toBe(exactPhone);
-		await fireEvent.input(tenantPhone, { target: { value: `${exactPhone}9` } });
-		expect(tenantPhone.value).toHaveLength(50);
+		await waitFor(() => expect(tenant.phone).toBe(exactPhone));
+		await fireEvent.input(tenantPhone, { target: { value: overPhone } });
+		expect(tenantPhone.value).toBe(exactPhone);
+		expect(tenant.phone).toBe(exactPhone);
 		cleanup();
 
 		const vendor = vendorForm();
-		const vendorContactView = render(VendorFields, {
-			props: { form: vendor, errors: {}, step: 1, testidPrefix: 'vendor' },
+		const vendorContactView = render(Batch4FormHarness, {
+			props: {
+				kind: 'vendor',
+				vendorForm: vendor,
+				vendorStep: 1,
+				statefulForm: true,
+				onformchange: (next) => Object.assign(vendor, next)
+			},
 		});
 		const vendorPhone = vendorContactView.getByTestId('vendor-phone-input') as HTMLInputElement;
 		await fireEvent.input(vendorPhone, { target: { value: exactPhone } });
 		expect(vendorPhone.value).toBe(exactPhone);
-		await fireEvent.input(vendorPhone, { target: { value: `${exactPhone}9` } });
-		expect(vendorPhone.value).toHaveLength(50);
+		expect(vendor.phone).toBe(exactPhone);
+		await fireEvent.input(vendorPhone, { target: { value: overPhone } });
+		expect(vendorPhone.value).toBe(exactPhone);
+		expect(vendor.phone).toBe(exactPhone);
 		cleanup();
 
-		const vendorAddressView = render(VendorFields, {
-			props: { form: vendor, errors: {}, step: 2, testidPrefix: 'vendor' },
+		const vendorAddressView = render(Batch4FormHarness, {
+			props: {
+				kind: 'vendor',
+				vendorForm: vendor,
+				vendorStep: 2,
+				statefulForm: true,
+				onformchange: (next) => Object.assign(vendor, next)
+			},
 		});
 		const postal = vendorAddressView.getByTestId('vendor-zip-input') as HTMLInputElement;
-		const exactPostal = 'SW1A 1AA 東京';
+		const exactPostal = 'SW1A 1AA 東京 日本 １２３４５';
+		const overPostal = `${exactPostal}國`;
+		expect(exactPostal).toHaveLength(20);
+		expect(overPostal).toHaveLength(21);
 		await fireEvent.input(postal, { target: { value: exactPostal } });
 		expect(postal.value).toBe(exactPostal);
-		const overPostal = `${'國'.repeat(21)}`;
+		expect(vendor.postalCode).toBe(exactPostal);
 		await fireEvent.input(postal, { target: { value: overPostal } });
-		expect(postal.value).toHaveLength(20);
+		expect(postal.value).toBe(exactPostal);
+		expect(vendor.postalCode).toBe(exactPostal);
 	});
 });

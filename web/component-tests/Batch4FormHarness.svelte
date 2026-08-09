@@ -43,7 +43,9 @@
 		appointmentForm = $bindable(),
 		errors = $bindable({}),
 		vendorStep = 0,
-		onsubmit = () => {}
+		onsubmit = () => {},
+		statefulForm = false,
+		onformchange = () => {}
 	}: {
 		kind: 'tenant' | 'vendor' | 'appointment-details' | 'appointment-schedule';
 		tenantForm?: TenantForm;
@@ -52,14 +54,56 @@
 		errors?: Record<string, string>;
 		vendorStep?: number;
 		onsubmit?: (event: SubmitEvent) => void;
+		statefulForm?: boolean;
+		onformchange?: (form: TenantForm | VendorForm) => void;
 	} = $props();
+
+	let tenantState = $state<TenantForm>(
+		tenantForm ?? { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' }
+	);
+	let vendorState = $state<VendorForm>(
+		vendorForm ?? {
+			name: '',
+			serviceType: '',
+			addressLine1: '',
+			city: '',
+			state: '',
+			postalCode: '',
+			email: '',
+			phone: '',
+			website: '',
+			is1099Eligible: false,
+			w9OnFile: false,
+			preferred: false
+		}
+	);
+
+	$effect(() => {
+		if (!statefulForm) return;
+		if (kind === 'tenant') {
+			void tenantState.phone;
+			onformchange(tenantState);
+		} else if (kind === 'vendor') {
+			void vendorState.phone;
+			void vendorState.postalCode;
+			onformchange(vendorState);
+		}
+	});
 </script>
 
 <form data-testid="batch4-form" onsubmit={(event) => { event.preventDefault(); onsubmit(event); }}>
 	{#if kind === 'tenant'}
-		<TenantFields bind:form={tenantForm} bind:errors testidPrefix="tenant" />
+		{#if statefulForm}
+			<TenantFields bind:form={tenantState} bind:errors testidPrefix="tenant" />
+		{:else}
+			<TenantFields bind:form={tenantForm} bind:errors testidPrefix="tenant" />
+		{/if}
 	{:else if kind === 'vendor'}
-		<VendorFields bind:form={vendorForm} bind:errors step={vendorStep} testidPrefix="vendor" />
+		{#if statefulForm}
+			<VendorFields bind:form={vendorState} bind:errors step={vendorStep} testidPrefix="vendor" />
+		{:else}
+			<VendorFields bind:form={vendorForm} bind:errors step={vendorStep} testidPrefix="vendor" />
+		{/if}
 	{:else if kind === 'appointment-details'}
 		<AppointmentDetailsFields bind:form={appointmentForm} bind:errors testidPrefix="appointment" />
 	{:else}
