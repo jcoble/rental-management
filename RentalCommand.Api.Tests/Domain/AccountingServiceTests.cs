@@ -449,6 +449,9 @@ public class AccountingServiceTests : IAsyncLifetime
             (Kind: "Expense", Status: "Paid", Id: (long)paid.Id),
         };
 
+        offeredPairs.Should().HaveCount(4,
+            "the rendered filter offers one Payment status and three Expense statuses");
+
         foreach (var pair in offeredPairs)
         {
             var result = await _sut.GetTransactionsAsync(
@@ -461,12 +464,22 @@ public class AccountingServiceTests : IAsyncLifetime
                 $"{pair.Kind}/{pair.Status} must match a seeded projected row");
         }
 
-        var unsupportedPaymentStatus = await _sut.GetTransactionsAsync(
-            _scope,
-            new AccountingTransactionsQuery { Kind = "Payment", Status = "Paid", Take = 20 },
-            CancellationToken.None);
-        unsupportedPaymentStatus.Items.Should().BeEmpty(
-            "the client must normalize Payment/Paid before issuing the request because the projection exposes Direction");
+        var unsupportedPairs = new[]
+        {
+            (Kind: "Payment", Status: "Pending"),
+            (Kind: "Payment", Status: "Approved"),
+            (Kind: "Payment", Status: "Paid"),
+            (Kind: "Expense", Status: "Credit"),
+        };
+        foreach (var pair in unsupportedPairs)
+        {
+            var unsupported = await _sut.GetTransactionsAsync(
+                _scope,
+                new AccountingTransactionsQuery { Kind = pair.Kind, Status = pair.Status, Take = 20 },
+                CancellationToken.None);
+            unsupported.Items.Should().BeEmpty(
+                $"{pair.Kind}/{pair.Status} is not an offered pair and must be normalized before the client request");
+        }
     }
 
     [Fact]

@@ -17,7 +17,6 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import { Plus, CalendarDays, List as ListIcon } from '@lucide/svelte';
@@ -36,6 +35,8 @@
 	} from './calendar-utils';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { clearFieldErrorWhen, formErrorsFromApiError } from '$lib/forms/form-errors';
+	import AppointmentDetailsFields from '$lib/components/forms/AppointmentDetailsFields.svelte';
+	import AppointmentScheduleFields from '$lib/components/forms/AppointmentScheduleFields.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -174,32 +175,9 @@
 	let selectedWorkOrderLabel = $state<string | null>(null);
 	const calendarInitialDate = $derived(typeof window === 'undefined' ? undefined : new Date());
 
-	function clearFormError(field: string) {
-		const shouldClear =
-			field === 'title'
-				? appointmentSchema.shape.title.safeParse(form.title).success
-				: field === 'scheduledStart'
-					? appointmentSchema.shape.scheduledStart.safeParse(form.scheduledStart).success
-					: field === 'scheduledEnd'
-						? !form.scheduledEnd || !parseForm(appointmentSchema, form).errors?.scheduledEnd
-						: field === 'prospectEmail'
-							? isOptionalEmailValid(form.prospectEmail)
-							: false;
-		const next = clearFieldErrorWhen(formErrors, field, shouldClear);
+	$effect(() => {
+		const next = clearFieldErrorWhen(formErrors, 'prospectEmail', isOptionalEmailValid(form.prospectEmail));
 		if (next !== formErrors) formErrors = next;
-	}
-
-	$effect(() => {
-		clearFormError('title');
-	});
-	$effect(() => {
-		clearFormError('scheduledStart');
-	});
-	$effect(() => {
-		clearFormError('scheduledEnd');
-	});
-	$effect(() => {
-		clearFormError('prospectEmail');
 	});
 
 	function invalidate() {
@@ -599,53 +577,12 @@
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Start with what kind of appointment this is. The date comes next.
 						</div>
-						<div class="space-y-4">
-							<div>
-								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-title">Appointment title</label>
-								<Input id="appointment-title" data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" maxlength={200} />
-								{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
-							</div>
-							<div class="grid gap-4 sm:grid-cols-2">
-								<div>
-									<span class="mb-2 block text-sm font-medium text-muted-foreground">Type</span>
-									<Select.Root type="single" bind:value={form.type}>
-										<Select.Trigger class="w-full" data-testid="appointment-type-input">
-											{form.type ? labelForType(form.type) : 'Select type'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-								<div>
-									<span class="mb-2 block text-sm font-medium text-muted-foreground">Status</span>
-									<Select.Root type="single" bind:value={form.status}>
-										<Select.Trigger class="w-full" data-testid="appointment-status-input">
-											{form.status ? form.status : 'Select status'}
-										</Select.Trigger>
-										<Select.Content>
-											{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-							</div>
-						</div>
+						<AppointmentDetailsFields bind:form bind:errors={formErrors} testidPrefix="appointment" />
 					{:else if appointmentStep === 1}
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Choose the start time first. End time can stay blank for a single-point appointment.
 						</div>
-						<div class="grid gap-4">
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Start</span>
-								<DateTimePicker bind:value={form.scheduledStart} testid="appointment-start-input" />
-								{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
-							</div>
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">End</span>
-								<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
-								{#if formErrors.scheduledEnd}<p class="mt-1 text-xs text-destructive" data-testid="appointment-end-error">{formErrors.scheduledEnd}</p>{/if}
-							</div>
-						</div>
+						<AppointmentScheduleFields bind:form bind:errors={formErrors} testidPrefix="appointment" />
 					{:else}
 						<div class="rounded-lg border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
 							Link this to a property, tenant, prospect, or staff member when you have that context.

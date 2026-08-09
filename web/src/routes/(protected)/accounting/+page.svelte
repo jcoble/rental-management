@@ -29,8 +29,10 @@
 		PAYMENT_STATUSES,
 		TENANT_MONEY_CATEGORY_OPTIONS,
 		normalizeTransactionFilters,
+		normalizeTransactionKind,
 		transactionCategoriesForKind,
-		transactionStatusesForKind
+		transactionStatusesForKind,
+		TRANSACTION_KIND_OPTIONS
 	} from '$lib/accounting/transaction-filter-state';
 	import {
 		formatMoneyCategoryLabel,
@@ -100,7 +102,7 @@
 	const DEFAULT_SORT = '-createdAt';
 
 	let transactionSearch = $state(readGridParam(initialParams, 'q'));
-	const initialTransactionKindFilter = readGridParam(initialParams, 'kind');
+	const initialTransactionKindFilter = normalizeTransactionKind(readGridParam(initialParams, 'kind'));
 	const initialTransactionFilters = normalizeTransactionFilters(
 		initialTransactionKindFilter,
 		readGridParam(initialParams, 'status'),
@@ -116,10 +118,12 @@
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
+	const normalizedTransactionKind = $derived(normalizeTransactionKind(transactionKindFilter));
 	const normalizedTransactionFilters = $derived(
-		normalizeTransactionFilters(transactionKindFilter, transactionStatusFilter, transactionCategoryFilter)
+		normalizeTransactionFilters(normalizedTransactionKind, transactionStatusFilter, transactionCategoryFilter)
 	);
 	$effect(() => {
+		if (normalizedTransactionKind !== transactionKindFilter) transactionKindFilter = normalizedTransactionKind;
 		const normalized = normalizedTransactionFilters;
 		if (normalized.status !== transactionStatusFilter) transactionStatusFilter = normalized.status;
 		if (normalized.category !== transactionCategoryFilter) transactionCategoryFilter = normalized.category;
@@ -164,7 +168,7 @@
 		syncGridUrl(
 			{
 				q: transactionSearch,
-				kind: transactionKindFilter,
+				kind: normalizedTransactionKind,
 				status: transactionStatusFilter,
 				category: transactionCategoryFilter,
 				property: transactionPropertyFilter,
@@ -182,7 +186,7 @@
 			'accounting-transactions',
 			portfolioId,
 			debouncedTransactionSearch.value,
-			transactionKindFilter,
+			normalizedTransactionKind,
 			normalizedTransactionFilters.status,
 			normalizedTransactionFilters.category,
 			transactionPropertyFilter,
@@ -193,7 +197,7 @@
 		],
 		queryFn: () => accounting.transactions({
 			search: debouncedTransactionSearch.value,
-			kind: transactionKindFilter || undefined,
+			kind: normalizedTransactionKind || undefined,
 			status: normalizedTransactionFilters.status || undefined,
 			category: normalizedTransactionFilters.category || undefined,
 			propertyId: selectedPropertyFilter,
@@ -642,7 +646,7 @@
 	const reportYear = $derived(new Date().getFullYear());
 	const transactionRows = $derived(transactionsQuery.data?.items ?? []);
 	const transactionTotalCount = $derived(transactionsQuery.data?.totalCount ?? 0);
-	const transactionStatusOptions = $derived(transactionStatusesForKind(transactionKindFilter));
+	const transactionStatusOptions = $derived(transactionStatusesForKind(normalizedTransactionKind));
 	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
 	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
@@ -1132,9 +1136,9 @@
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All types">All types</Select.Item>
-							<Select.Item value="Payment" label="Payments">Payments</Select.Item>
-							<Select.Item value="Expense" label="Expenses">Expenses</Select.Item>
-							<Select.Item value="Bank" label="Bank activity">Bank activity</Select.Item>
+							{#each TRANSACTION_KIND_OPTIONS as option}
+								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+							{/each}
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionStatusFilter}>
@@ -1154,7 +1158,7 @@
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each transactionCategoriesForKind(transactionKindFilter) as option}
+							{#each transactionCategoriesForKind(normalizedTransactionKind) as option}
 								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>

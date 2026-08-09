@@ -2,11 +2,15 @@ import { EXPENSE_CATEGORY_OPTIONS } from './expense-categories.ts';
 
 export type TransactionCategoryOption = { value: string; label: string };
 
+export const TRANSACTION_KIND_OPTIONS = [
+	{ value: 'Payment', label: 'Payments' },
+	{ value: 'Expense', label: 'Expenses' },
+] as const;
+
 // Payment rows are projected from PaymentReceipt ledger entries, whose database invariant fixes
 // Direction/Status to Credit. Do not offer lifecycle labels that the transaction SQL never emits.
 export const PAYMENT_STATUSES = ['Credit'] as const;
 export const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'] as const;
-export const BANK_STATUSES = ['Unmatched', 'Suggested', 'Matched'] as const;
 
 export const TENANT_MONEY_CATEGORY_OPTIONS: TransactionCategoryOption[] = [
 	{ value: 'RentCharge', label: 'Rent' },
@@ -14,11 +18,6 @@ export const TENANT_MONEY_CATEGORY_OPTIONS: TransactionCategoryOption[] = [
 	{ value: 'LateFeeCharge', label: 'Late fee' },
 	{ value: 'AddendumCharge', label: 'Lease/addendum charge' },
 	{ value: 'ManualCharge', label: 'Manual/other charge' }
-];
-
-const BANK_CATEGORY_OPTIONS: TransactionCategoryOption[] = [
-	{ value: 'Deposit', label: 'Deposit' },
-	{ value: 'Withdrawal', label: 'Withdrawal' }
 ];
 
 function uniqueOptions(options: TransactionCategoryOption[]): TransactionCategoryOption[] {
@@ -32,15 +31,18 @@ function uniqueOptions(options: TransactionCategoryOption[]): TransactionCategor
 
 const ALL_CATEGORY_OPTIONS = uniqueOptions([
 	...TENANT_MONEY_CATEGORY_OPTIONS,
-	...EXPENSE_CATEGORY_OPTIONS,
-	...BANK_CATEGORY_OPTIONS
+	...EXPENSE_CATEGORY_OPTIONS
 ]);
+
+export function normalizeTransactionKind(kind: string): string {
+	return TRANSACTION_KIND_OPTIONS.some((option) => option.value === kind) ? kind : '';
+}
 
 export function transactionStatusesForKind(kind: string): readonly string[] {
 	if (kind === 'Payment') return PAYMENT_STATUSES;
 	if (kind === 'Expense') return EXPENSE_STATUSES;
-	if (kind === 'Bank') return BANK_STATUSES;
-	return uniqueStrings([...PAYMENT_STATUSES, ...EXPENSE_STATUSES, ...BANK_STATUSES]);
+	if (kind === '') return uniqueStrings([...PAYMENT_STATUSES, ...EXPENSE_STATUSES]);
+	return [];
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -50,8 +52,8 @@ function uniqueStrings(values: string[]): string[] {
 export function transactionCategoriesForKind(kind: string): readonly TransactionCategoryOption[] {
 	if (kind === 'Payment') return TENANT_MONEY_CATEGORY_OPTIONS;
 	if (kind === 'Expense') return EXPENSE_CATEGORY_OPTIONS;
-	if (kind === 'Bank') return BANK_CATEGORY_OPTIONS;
-	return ALL_CATEGORY_OPTIONS;
+	if (kind === '') return ALL_CATEGORY_OPTIONS;
+	return [];
 }
 
 export function normalizeTransactionFilters(
