@@ -11,6 +11,14 @@ export type InitialOnboardingState = {
 	finished: boolean;
 };
 
+export function areOnboardingDetectionQueriesReady(statuses: readonly boolean[]): boolean {
+	return statuses.every(Boolean);
+}
+
+export function hasOnboardingDetectionQueryFailed(statuses: readonly boolean[]): boolean {
+	return statuses.some(Boolean);
+}
+
 export function resolveInitialOnboardingState({
 	requested,
 	persisted,

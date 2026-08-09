@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
+	areOnboardingDetectionQueriesReady,
+	hasOnboardingDetectionQueryFailed,
 	resolveInitialOnboardingState,
 	shouldFinishAfterOptionalStep,
 	type OnboardingStepDone,
@@ -62,6 +64,58 @@ describe('onboarding flow state', () => {
 		);
 	});
 
+	it('does not resume a completed persisted notification step while its signal is delayed', async () => {
+		let releaseGettingStartedSignal!: () => void;
+		const gettingStartedSignal = new Promise<void>((resolve) => {
+			releaseGettingStartedSignal = resolve;
+		});
+		const existingDataQueries = [
+			Promise.resolve(),
+			Promise.resolve(),
+			Promise.resolve(),
+			Promise.resolve(),
+			Promise.resolve(),
+		];
+		let signalSettled = false;
+		void gettingStartedSignal.then(() => {
+			signalSettled = true;
+		});
+
+		await Promise.all(existingDataQueries);
+		assert.equal(
+			areOnboardingDetectionQueriesReady([
+				true,
+				true,
+				true,
+				true,
+				true,
+				signalSettled,
+			]),
+			false,
+			'initial positioning must wait for getting-started signal data',
+		);
+
+		let resolved: ReturnType<typeof resolveInitialOnboardingState> | null = null;
+		if (areOnboardingDetectionQueriesReady([true, true, true, true, true, signalSettled])) {
+			resolved = resolveInitialOnboardingState({
+				requested: null,
+				persisted: 'notifications',
+				stepDone: completedCore({ notifications: false }),
+			});
+		}
+		assert.equal(resolved, null, 'a pending signal must not be treated as notification incomplete');
+
+		releaseGettingStartedSignal();
+		await gettingStartedSignal;
+		assert.equal(signalSettled, true);
+		resolved = resolveInitialOnboardingState({
+			requested: null,
+			persisted: 'notifications',
+			stepDone: completedCore({ notifications: true }),
+		});
+		assert.deepEqual(resolved, { stepKey: 'lease', finished: true });
+	});
+
 	it('returns to the finished screen after optional setup launched from the finished screen', () => {
 		assert.equal(
 			shouldFinishAfterOptionalStep({
@@ -101,15 +155,24 @@ describe('onboarding flow state', () => {
 		assert.match(source, /\{:else if !detectionReady \|\| !autoAdvanced\}/);
 		assert.match(source, /data-testid="onboarding-detection-error"/);
 		assert.match(source, /retryExistingDataDetection/);
-		assert.match(
-			source,
-			/const detectionReady = \$derived\(\s*\[\s*portfolioQuery\.isSuccess,\s*ownersQuery\.isSuccess,\s*propertiesQuery\.isSuccess,\s*tenantsQuery\.isSuccess,\s*leasesQuery\.isSuccess\s*\]\.every\(Boolean\)\s*\)/s,
-			'all query status properties must be read eagerly so TanStack tracks every result before any query settles'
-		);
+		assert.match(source, /areOnboardingDetectionQueriesReady\(\[\s*[\s\S]*?leasesQuery\.isSuccess,\s*gettingStartedSignalsQuery\.isSuccess,/);
+		assert.match(source, /hasOnboardingDetectionQueryFailed\(\[\s*[\s\S]*?leasesQuery\.isError,\s*gettingStartedSignalsQuery\.isError,/);
+		assert.match(source, /leasesQuery\.refetch\(\);\s*void gettingStartedSignalsQuery\.refetch\(\);/);
 		assert.doesNotMatch(
 			source,
 			/portfolioQuery\.isSuccess\s*&&/,
 			'short-circuiting skips subscriptions for faster queries and can leave detection pending forever'
+		);
+	});
+
+	it('reports getting-started signal failures through the same detection boundary', () => {
+		assert.equal(
+			hasOnboardingDetectionQueryFailed([false, false, false, false, false, true]),
+			true,
+		);
+		assert.equal(
+			hasOnboardingDetectionQueryFailed([false, false, false, false, false, false]),
+			false,
 		);
 	});
 
