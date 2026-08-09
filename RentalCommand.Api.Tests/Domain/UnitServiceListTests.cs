@@ -131,6 +131,95 @@ public class UnitServiceListTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ListWithHealthPageAsync_DefaultWindowPagesSlimUnitsBeforeHealthHydration()
+    {
+        SeedUnit("A", "Cedar Point Flats", openWorkOrders: 1);
+        SeedUnit("B", "Cedar Point Flats", openWorkOrders: 3);
+        SeedUnit("C", "Harbor View Apartments", openWorkOrders: 0);
+        SeedUnit("D", "Harbor View Apartments", openWorkOrders: 2);
+
+        await ActivateApiScopeAsync();
+        _commands.Clear();
+        var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            Sort = "unitNumber",
+            Skip = 1,
+            Take = 2,
+        });
+
+        result.TotalCount.Should().Be(4);
+        result.Items.Select(row => row.UnitNumber).Should().Equal("B", "C");
+        result.Items.Select(row => row.OpenWorkOrderCount).Should().Equal(3, 0);
+        _commands.Should().HaveCount(3);
+
+        var countSql = _commands.Should().ContainSingle(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase)).Subject;
+        countSql.Should().NotContain("vw_unit_occupancy",
+            "the default count must not expand health relations");
+        countSql.Should().NotContain("LeaseManagements",
+            "the default count is over the authorized Unit/Property seed only");
+        countSql.Should().NotContain("WorkOrders",
+            "work-order facts belong in page-keyed hydration");
+
+        var pageSql = _commands.Should().ContainSingle(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase)).Subject;
+        pageSql.Should().NotContain("vw_unit_occupancy",
+            "the authorized Unit window must be fixed before health hydration");
+        pageSql.Should().NotContain("LeaseManagements");
+        pageSql.Should().NotContain("WorkOrders");
+
+        var hydrationSql = _commands.Should().ContainSingle(sql =>
+            sql.Contains("page_units AS MATERIALIZED", StringComparison.OrdinalIgnoreCase)).Subject;
+        hydrationSql.Should().Contain("unit.\"Id\" = ANY", "hydration must be keyed by page Unit ids");
+        hydrationSql.Should().Contain("current_possession AS MATERIALIZED");
+        hydrationSql.Should().Contain("open_work_order_counts AS MATERIALIZED");
+        hydrationSql.Should().Contain("document_associations AS MATERIALIZED");
+        hydrationSql.Should().Contain("unit.\"DeletedAt\" IS NULL",
+            "raw Unit reads must preserve the DbContext soft-delete filter");
+        hydrationSql.Should().Contain("property_row.\"DeletedAt\" IS NULL",
+            "raw Property joins must preserve the DbContext soft-delete filter");
+        hydrationSql.Should().Contain("work_order.\"DeletedAt\" IS NULL",
+            "raw WorkOrder joins must preserve the DbContext soft-delete filter");
+        hydrationSql.Should().Contain("expense.\"DeletedAt\" IS NULL",
+            "raw Expense joins must preserve the DbContext soft-delete filter");
+        hydrationSql.Should().Contain("stored_file.\"DeletedAt\" IS NULL",
+            "raw StoredFile joins must preserve the DbContext soft-delete filter");
+        hydrationSql.Should().Contain("portfolio.\"DeletedAt\" IS NULL",
+            "portfolio-owned raw joins must preserve portfolio visibility");
+    }
+
+    [Fact]
+    public async Task ListWithHealthPageAsync_DefaultWindowMatchesCanonicalHealthProjectionValues()
+    {
+        var now = DateTime.UtcNow;
+        SeedUnit("A", "Cedar Point Flats", openWorkOrders: 2);
+        var (property, unit) = SeedUnitShell("B", "Harbor View Apartments", now);
+        var tenant = SeedTenant(now);
+        SeedRelationship(property, unit, tenant, now, now.AddDays(30), noticeGiven: true);
+        _ctx.Db.SaveChanges();
+
+        await ActivateApiScopeAsync();
+        var optimized = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            Sort = "unitNumber",
+            Skip = 0,
+            Take = 20,
+        });
+        var canonical = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
+        {
+            Stage = "unrecognized-stage",
+            Sort = "unitNumber",
+            Skip = 0,
+            Take = 20,
+        });
+
+        optimized.Should().BeEquivalentTo(canonical, options => options.WithStrictOrdering(),
+            "the page-keyed hydration must preserve every value from the canonical health projection");
+    }
+
+    [Fact]
     public async Task ListWithHealthPageAsync_AppliesStatusAndStageFiltersInSqlWindow()
     {
         var now = DateTime.UtcNow;
