@@ -43,6 +43,16 @@
 		'Appointment',
 		'Inspection',
 		'RentalApplication',
+		'RecurringTenantCharge',
+		'RecurringExpense',
+		'CapitalAsset',
+		'ApplicantScreening',
+		'RentalListing',
+		'ListingPublication',
+		'ListingPhoto',
+		'InspectionItem',
+		'VendorDispatch',
+		'ScanDraft',
 	] as const;
 
 	// Keep the exact forensic position in the URL so opening a target and using browser Back restores
@@ -160,9 +170,54 @@
 	}
 
 	/** Human-readable label for entity type + id */
+	const entityTypeLabels: Record<string, string> = {
+		Tenant: 'Tenant',
+		TenantAccount: 'Tenant account',
+		TenantLedgerEntry: 'Tenant account entry',
+		TenantPaymentAttempt: 'Payment attempt',
+		TenantAccountConditionPeriod: 'Tenant account condition',
+		TenantAutopayEnrollment: 'Autopay enrollment',
+		SecurityDepositAccount: 'Security deposit account',
+		SecurityDepositEntry: 'Security-deposit movement',
+		LeaseAgreement: 'Lease agreement',
+		LeaseAgreementSigner: 'Agreement signer',
+		LeaseAddendum: 'Lease addendum',
+		LeaseAddendumSigner: 'Addendum signer',
+		LeaseAddendumFinancialEffect: 'Addendum financial effect',
+		LeaseRenewalAddendumDecision: 'Addendum renewal decision',
+		StoredFile: 'Document',
+		LegalDocumentArtifact: 'Legal document',
+		SignatureRequest: 'Signature request',
+		SignatureSigner: 'Signature signer',
+		NoticeDraft: 'Tenant notice draft',
+		RenderedNotice: 'Rendered tenant notice',
+		NoticeDeliveryEvidence: 'Notice delivery evidence',
+		TenantNoticeWorkItem: 'Tenant notice work item',
+		Conversation: 'Conversation',
+		ConversationMessage: 'Conversation message',
+		Notification: 'Notification',
+		LeaseManagementParty: 'Tenant relationship party',
+		TenantUserAccess: 'Tenant portal access',
+		UnitOperationalPeriod: 'Unit operational period',
+		EvictionCase: 'Eviction case',
+		EvictionCaseEvent: 'Eviction case event',
+		WorkOrderStatusEvent: 'Work-order activity',
+		RecurringTenantCharge: 'Recurring tenant charge',
+		RecurringExpense: 'Recurring expense',
+		CapitalAsset: 'Capital asset',
+		ApplicantScreening: 'Applicant screening',
+		RentalListing: 'Rental listing',
+		ListingPublication: 'Listing publication',
+		ListingPhoto: 'Listing photo',
+		InspectionItem: 'Inspection checklist item',
+		VendorDispatch: 'Vendor dispatch',
+		ScanDraft: 'Scan draft',
+	};
+
 	function entityLabel(entry: AuditEntry): string {
 		if (!entry.entityType) return '';
-		return entry.entityId ? `${entry.entityType} #${entry.entityId}` : entry.entityType;
+		const label = entityTypeLabels[entry.entityType] ?? entry.entityType;
+		return entry.entityId ? `${label} #${entry.entityId}` : label;
 	}
 </script>
 

@@ -4,6 +4,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
@@ -77,6 +78,472 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         auditSql.Should().Contain("Expenses");
         auditSql.Should().NotContain("FROM \"Leases\"");
         auditSql.Should().NotContain("FROM \"Payments\"");
+    }
+
+    [Fact]
+    public async Task GetTimelineAsync_IncludesAuditWriterEntityTypesAcrossUnitHistoryScopes()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = DateTime.UtcNow;
+        var party = _db.LeaseManagementParties.Single(row => row.LeaseManagementId == seeded.Relationship.Id);
+        var agreementSigner = _db.LeaseAgreementSigners.Single(row => row.LeaseAgreementId == seeded.Agreement.Id);
+        var issuedArtifact = _db.LegalDocumentArtifacts.Single(row => row.Id == seeded.Agreement.IssuedArtifactId);
+        var unitFile = File(nameof(Unit), seeded.Unit.Id, "unit-history.pdf", now);
+
+        var ledgerEntry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            LeaseAgreementId = seeded.Agreement.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Timeline receipt",
+            BusinessKey = "timeline-receipt",
+            CreatedByUserId = ActorUserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            OriginatingAgreementId = seeded.Agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.AddRange(unitFile, ledgerEntry, depositAccount);
+        _db.SaveChanges();
+
+        var depositEntry = new SecurityDepositEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt,
+            Direction = SecurityDepositDirection.Increase,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            BusinessKey = "timeline-deposit",
+            Description = "Timeline deposit",
+            CreatedByUserId = ActorUserId,
+        };
+        var addendum = new LeaseAddendum
+        {
+            PublicId = Guid.NewGuid(),
+            SeriesPublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            BaseAgreementId = seeded.Agreement.Id,
+            AddendumNumber = "ADD-TIMELINE",
+            Purpose = LeaseAddendumPurpose.Rules,
+            EffectiveFromOn = DateOnly.FromDateTime(now),
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = seeded.Agreement.DocumentSourceVersionId,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+        };
+        _db.AddRange(depositEntry, addendum);
+        _db.SaveChanges();
+
+        var signatureRequest = new SignatureRequest
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = seeded.Agreement.Id,
+            Provider = "native",
+            IdempotencyKey = "timeline-signature",
+            Status = SignatureRequestStatus.AwaitingSignatures,
+            Subject = "Timeline agreement",
+            IssuedArtifactId = issuedArtifact.Id,
+            PreparedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var noticeDraft = new NoticeDraft
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            TenantAccountId = seeded.Account.Id,
+            RecipientLeaseManagementPartyId = party.Id,
+            LeaseAgreementId = seeded.Agreement.Id,
+            NoticeType = "timeline-notice",
+            Status = "Draft",
+            Subject = "Timeline notice",
+            Body = "Timeline notice body",
+            Reason = "Timeline test",
+            TriggerDate = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(signatureRequest, noticeDraft);
+        _db.SaveChanges();
+
+        SeedOperationalState(seeded.Unit, UnitOperationalPeriodType.Turnover, now, seeded.Relationship);
+
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(Tenant), seeded.Tenant.Id, 20),
+            Audit(nameof(TenantLedgerEntry), checked((int)ledgerEntry.Id), 19),
+            Audit(nameof(SecurityDepositAccount), depositAccount.Id, 18),
+            Audit(nameof(SecurityDepositEntry), checked((int)depositEntry.Id), 17),
+            Audit(nameof(StoredFile), unitFile.Id, 16),
+            Audit(nameof(LegalDocumentArtifact), issuedArtifact.Id, 15),
+            Audit(nameof(LeaseAddendum), addendum.Id, 14),
+            Audit(nameof(LeaseAgreementSigner), agreementSigner.Id, 13),
+            Audit(nameof(SignatureRequest), signatureRequest.Id, 12),
+            Audit(nameof(NoticeDraft), noticeDraft.Id, 11),
+            Audit(nameof(LeaseManagementParty), party.Id, 10),
+            Audit(nameof(UnitOperationalPeriod), _db.UnitOperationalPeriods
+                .Where(row => row.UnitId == seeded.Unit.Id)
+                .OrderByDescending(row => row.Id)
+                .Select(row => row.Id)
+                .First(), 9));
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 50, CancellationToken.None);
+
+        rows.Select(row => row.EntityType).Should().Contain([
+            nameof(Tenant), nameof(TenantLedgerEntry), nameof(SecurityDepositAccount), nameof(SecurityDepositEntry),
+            nameof(StoredFile), nameof(LegalDocumentArtifact), nameof(LeaseAddendum), nameof(LeaseAgreementSigner),
+            nameof(SignatureRequest), nameof(NoticeDraft), nameof(LeaseManagementParty), nameof(UnitOperationalPeriod),
+        ]);
+        var auditSql = _executedSql.Single(command =>
+            command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        auditSql.Should().Contain("ORDER BY");
+        auditSql.Should().Contain("LIMIT");
+        auditSql.Should().Contain("TenantLedgerEntries");
+        auditSql.Should().Contain("SecurityDepositAccounts");
+        auditSql.Should().Contain("LeaseAddenda");
+        auditSql.Should().Contain("SignatureRequests");
+        auditSql.Should().Contain("NoticeDrafts");
+    }
+
+    [Fact]
+    public async Task GetTimelineAsync_CorrelatesEveryUnitWriterAndExcludesForeignRows()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = new DateTime(2026, 1, 2, 12, 0, 0, DateTimeKind.Utc);
+        var foreignProperty = seeded.ForeignUnit.Property!;
+        var foreignAgreement = _db.LeaseAgreements.Single(row => row.LeaseManagementId == seeded.ForeignRelationship.Id);
+        var foreignAccount = _db.TenantAccounts.Single(row => row.LeaseManagementId == seeded.ForeignRelationship.Id);
+        var currentParty = _db.LeaseManagementParties.Single(row => row.LeaseManagementId == seeded.Relationship.Id);
+        var foreignParty = _db.LeaseManagementParties.Single(row => row.LeaseManagementId == seeded.ForeignRelationship.Id);
+        var foreignTenant = _db.Tenants.Single(row => row.Id == foreignParty.TenantId);
+        var currentAgreementSigner = _db.LeaseAgreementSigners.Single(row => row.LeaseAgreementId == seeded.Agreement.Id);
+        var foreignAgreementSigner = _db.LeaseAgreementSigners.Single(row => row.LeaseAgreementId == foreignAgreement.Id);
+        var incomeAccount = new LedgerAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            Code = $"4{Guid.NewGuid():N}"[..10],
+            Name = "Timeline recurring income",
+            AccountType = AccountType.Income,
+            NormalBalance = NormalBalance.Credit,
+            IsActive = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _db.Add(incomeAccount);
+        _db.SaveChanges();
+
+        var foreignWorkOrder = WorkOrderFor(
+            seeded.ForeignUnit,
+            foreignProperty,
+            "Foreign unit repair",
+            WorkOrderStatus.InProgress,
+            now);
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Timeline vendor",
+            ServiceType = "General",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var currentInspection = InspectionFor(seeded.Unit, seeded.Property, seeded.Relationship, seeded.Agreement, now);
+        var foreignInspection = InspectionFor(seeded.ForeignUnit, foreignProperty, seeded.ForeignRelationship, foreignAgreement, now);
+        var currentRecurringTenantCharge = RecurringTenantChargeFor(
+            seeded.Unit, seeded.Property, seeded.Account, seeded.Agreement, incomeAccount.Id, now);
+        var foreignRecurringTenantCharge = RecurringTenantChargeFor(
+            seeded.ForeignUnit, foreignProperty, foreignAccount, foreignAgreement, incomeAccount.Id, now);
+        var currentRecurringExpense = RecurringExpenseFor(seeded.Unit, seeded.Property, now);
+        var foreignRecurringExpense = RecurringExpenseFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentCapitalAsset = CapitalAssetFor(seeded.Unit, seeded.Property, now);
+        var foreignCapitalAsset = CapitalAssetFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentApplication = ApplicationFor(seeded.Unit, seeded.Property, now);
+        var foreignApplication = ApplicationFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentListing = ListingFor(seeded.Unit, seeded.Property, now);
+        var foreignListing = ListingFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentScanDraft = ScanDraftFor(seeded.Unit, seeded.Property, now);
+        var foreignScanDraft = ScanDraftFor(seeded.ForeignUnit, foreignProperty, now);
+        var currentPaymentAttempt = PaymentAttemptFor(seeded.Account, now, "current");
+        var foreignPaymentAttempt = PaymentAttemptFor(foreignAccount, now, "foreign");
+        var currentAddendum = AddendumFor(seeded.Relationship, seeded.Agreement, now, "current");
+        var foreignAddendum = AddendumFor(seeded.ForeignRelationship, foreignAgreement, now, "foreign");
+        var currentEvictionCase = EvictionCaseFor(
+            seeded.Relationship, seeded.Agreement, seeded.Property, seeded.Unit, now, "current");
+        var foreignEvictionCase = EvictionCaseFor(
+            seeded.ForeignRelationship, foreignAgreement, foreignProperty, seeded.ForeignUnit, now, "foreign");
+
+        _db.AddRange(
+            foreignWorkOrder,
+            vendor,
+            currentInspection,
+            foreignInspection,
+            currentRecurringTenantCharge,
+            foreignRecurringTenantCharge,
+            currentRecurringExpense,
+            foreignRecurringExpense,
+            currentCapitalAsset,
+            foreignCapitalAsset,
+            currentApplication,
+            foreignApplication,
+            currentListing,
+            foreignListing,
+            currentScanDraft,
+            foreignScanDraft,
+            currentPaymentAttempt,
+            foreignPaymentAttempt,
+            currentAddendum,
+            foreignAddendum,
+            currentEvictionCase,
+            foreignEvictionCase);
+        _db.SaveChanges();
+
+        var currentInspectionItem = InspectionItemFor(currentInspection, "In-unit checklist item");
+        var foreignInspectionItem = InspectionItemFor(foreignInspection, "Foreign checklist item");
+        var currentScreening = ScreeningFor(currentApplication, "screening-in-unit", now);
+        var foreignScreening = ScreeningFor(foreignApplication, "screening-foreign-unit", now);
+        var currentPublication = ListingPublicationFor(currentListing, "Zillow", now);
+        var foreignPublication = ListingPublicationFor(foreignListing, "Zillow", now);
+        var currentPhoto = ListingPhotoFor(currentListing, now);
+        var foreignPhoto = ListingPhotoFor(foreignListing, now);
+        var currentDispatch = VendorDispatchFor(seeded.WorkOrder, vendor, now);
+        var foreignDispatch = VendorDispatchFor(foreignWorkOrder, vendor, now);
+        var currentAddendumSigner = AddendumSignerFor(currentAddendum, currentParty, seeded.Tenant);
+        var foreignAddendumSigner = AddendumSignerFor(foreignAddendum, foreignParty, foreignTenant);
+        var currentAddendumEffect = AddendumFinancialEffectFor(currentAddendum, now, "current");
+        var foreignAddendumEffect = AddendumFinancialEffectFor(foreignAddendum, now, "foreign");
+        var currentRenewalDecision = RenewalDecisionFor(
+            seeded.Relationship, seeded.Agreement, currentAddendum.SeriesPublicId, now);
+        var foreignRenewalDecision = RenewalDecisionFor(
+            seeded.ForeignRelationship, foreignAgreement, foreignAddendum.SeriesPublicId, now);
+        var currentSignatureRequest = SignatureRequestFor(
+            seeded.Agreement, seeded.Agreement.IssuedArtifactId!.Value, now, "current");
+        var foreignSignatureRequest = SignatureRequestFor(
+            foreignAgreement, foreignAgreement.IssuedArtifactId!.Value, now, "foreign");
+        var systemNoticeTemplate = _db.SystemNoticeTemplateVersions.OrderBy(row => row.Id).First();
+        var currentWorkspaceTemplate = WorkspaceNoticeTemplateFor(systemNoticeTemplate, now, "current");
+        var foreignWorkspaceTemplate = WorkspaceNoticeTemplateFor(systemNoticeTemplate, now, "foreign");
+        _db.AddRange(currentWorkspaceTemplate, foreignWorkspaceTemplate);
+        _db.SaveChanges();
+        var currentNoticePolicy = NoticePolicyFor(currentWorkspaceTemplate, now, "current");
+        var foreignNoticePolicy = NoticePolicyFor(foreignWorkspaceTemplate, now, "foreign");
+        var currentNoticeDraft = NoticeDraftFor(
+            seeded.Relationship, seeded.Account, currentParty, seeded.Agreement, seeded.Property, now, "current");
+        var foreignNoticeDraft = NoticeDraftFor(
+            seeded.ForeignRelationship, foreignAccount, foreignParty, foreignAgreement, foreignProperty, now, "foreign");
+        var currentConversation = ConversationFor(
+            seeded.Tenant.Id, seeded.Property, seeded.WorkOrder, now, "current");
+        var foreignConversation = ConversationFor(
+            foreignParty.TenantId, foreignProperty, foreignWorkOrder, now, "foreign");
+        var currentAccessContext = new WorkspaceAccessContext
+        {
+            UserId = ActorUserId,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var currentEvictionEvent = EvictionCaseEventFor(currentEvictionCase, now, EvictionEventType.NoticeServed);
+        var foreignEvictionEvent = EvictionCaseEventFor(foreignEvictionCase, now, EvictionEventType.Filed);
+        var currentWorkOrderEvent = WorkOrderStatusEventFor(seeded.WorkOrder, now, "current");
+        var foreignWorkOrderEvent = WorkOrderStatusEventFor(foreignWorkOrder, now, "foreign");
+
+        _db.AddRange(
+            currentInspectionItem,
+            foreignInspectionItem,
+            currentScreening,
+            foreignScreening,
+            currentPublication,
+            foreignPublication,
+            currentPhoto,
+            foreignPhoto,
+            currentDispatch,
+            foreignDispatch,
+            currentAddendumSigner,
+            foreignAddendumSigner,
+            currentAddendumEffect,
+            foreignAddendumEffect,
+            currentRenewalDecision,
+            foreignRenewalDecision,
+            currentSignatureRequest,
+            foreignSignatureRequest,
+            currentNoticePolicy,
+            foreignNoticePolicy,
+            currentNoticeDraft,
+            foreignNoticeDraft,
+            currentConversation,
+            foreignConversation,
+            currentAccessContext,
+            currentEvictionEvent,
+            foreignEvictionEvent,
+            currentWorkOrderEvent,
+            foreignWorkOrderEvent);
+        _db.SaveChanges();
+
+        var currentSignatureSigner = SignatureSignerFor(
+            currentSignatureRequest, currentAgreementSigner, now);
+        var foreignSignatureSigner = SignatureSignerFor(
+            foreignSignatureRequest, foreignAgreementSigner, now);
+        var currentRenderedNotice = RenderedNoticeFor(
+            currentNoticeDraft, currentWorkspaceTemplate, seeded.Relationship, now, "current");
+        var foreignRenderedNotice = RenderedNoticeFor(
+            foreignNoticeDraft, foreignWorkspaceTemplate, seeded.ForeignRelationship, now, "foreign");
+        _db.AddRange(currentRenderedNotice, foreignRenderedNotice);
+        _db.SaveChanges();
+        var currentNoticeWorkItem = NoticeWorkItemFor(
+            currentNoticePolicy, seeded.Relationship, currentParty, now, "current");
+        var foreignNoticeWorkItem = NoticeWorkItemFor(
+            foreignNoticePolicy, seeded.ForeignRelationship, foreignParty, now, "foreign");
+        var currentConversationMessage = ConversationMessageFor(currentConversation, now, "current");
+        var foreignConversationMessage = ConversationMessageFor(foreignConversation, now, "foreign");
+        var currentAccess = TenantUserAccessFor(currentAccessContext, currentParty, now, "current");
+        var foreignAccess = TenantUserAccessFor(currentAccessContext, foreignParty, now, "foreign");
+        var currentNoticeEvidence = NoticeDeliveryEvidenceFor(
+            currentRenderedNotice, currentParty, now, "current");
+        var foreignNoticeEvidence = NoticeDeliveryEvidenceFor(
+            foreignRenderedNotice, foreignParty, now, "foreign");
+        var currentNotification = NotificationFor(currentConversation, now, "current");
+        var foreignNotification = NotificationFor(foreignConversation, now, "foreign");
+
+        _db.AddRange(
+            currentSignatureSigner,
+            foreignSignatureSigner,
+            currentNoticeWorkItem,
+            foreignNoticeWorkItem,
+            currentConversationMessage,
+            foreignConversationMessage,
+            currentAccess,
+            foreignAccess,
+            currentNoticeEvidence,
+            foreignNoticeEvidence,
+            currentNotification,
+            foreignNotification);
+        _db.SaveChanges();
+
+        var writerPairs = new (string EntityType, int InUnitId, int ForeignUnitId, string Description)[]
+        {
+            (nameof(RecurringTenantCharge), currentRecurringTenantCharge.Id, foreignRecurringTenantCharge.Id, "Set up a recurring tenant charge"),
+            (nameof(RecurringExpense), currentRecurringExpense.Id, foreignRecurringExpense.Id, "Set up a recurring expense"),
+            (nameof(CapitalAsset), currentCapitalAsset.Id, foreignCapitalAsset.Id, "Recorded a capital asset"),
+            (nameof(RentalApplication), currentApplication.Id, foreignApplication.Id, "Received a rental application"),
+            (nameof(ApplicantScreening), currentScreening.Id, foreignScreening.Id, "Started applicant screening"),
+            (nameof(RentalListing), currentListing.Id, foreignListing.Id, "Created a rental listing"),
+            (nameof(ListingPublication), currentPublication.Id, foreignPublication.Id, "Created a listing publication"),
+            (nameof(ListingPhoto), currentPhoto.Id, foreignPhoto.Id, "Added a listing photo"),
+            (nameof(InspectionItem), currentInspectionItem.Id, foreignInspectionItem.Id, "Added an inspection checklist item"),
+            (nameof(VendorDispatch), currentDispatch.Id, foreignDispatch.Id, "Dispatched a work order to a vendor"),
+            (nameof(ScanDraft), currentScanDraft.Id, foreignScanDraft.Id, "Captured a scan draft"),
+            (nameof(TenantPaymentAttempt), checked((int)currentPaymentAttempt.Id), checked((int)foreignPaymentAttempt.Id), "Recorded a payment attempt"),
+            (nameof(LeaseAddendum), currentAddendum.Id, foreignAddendum.Id, "Added a lease addendum"),
+            (nameof(LeaseAddendumSigner), currentAddendumSigner.Id, foreignAddendumSigner.Id, "Added addendum signer"),
+            (nameof(LeaseAddendumFinancialEffect), currentAddendumEffect.Id, foreignAddendumEffect.Id, "Added addendum financial effect"),
+            (nameof(LeaseRenewalAddendumDecision), currentRenewalDecision.Id, foreignRenewalDecision.Id, "Added addendum renewal decision"),
+            (nameof(LeaseAgreementSigner), currentAgreementSigner.Id, foreignAgreementSigner.Id, "Added agreement signer"),
+            (nameof(SignatureRequest), currentSignatureRequest.Id, foreignSignatureRequest.Id, "Created a signature request"),
+            (nameof(SignatureSigner), currentSignatureSigner.Id, foreignSignatureSigner.Id, "Added signature signer"),
+            (nameof(NoticeDraft), currentNoticeDraft.Id, foreignNoticeDraft.Id, "Drafted a tenant notice"),
+            (nameof(RenderedNotice), checked((int)currentRenderedNotice.Id), checked((int)foreignRenderedNotice.Id), "Rendered a tenant notice"),
+            (nameof(NoticeDeliveryEvidence), checked((int)currentNoticeEvidence.Id), checked((int)foreignNoticeEvidence.Id), "Recorded notice delivery"),
+            (nameof(TenantNoticeWorkItem), checked((int)currentNoticeWorkItem.Id), checked((int)foreignNoticeWorkItem.Id), "Queued a tenant notice"),
+            (nameof(Conversation), currentConversation.Id, foreignConversation.Id, "Opened a conversation"),
+            (nameof(ConversationMessage), currentConversationMessage.Id, foreignConversationMessage.Id, "Added a conversation message"),
+            (nameof(Notification), currentNotification.Id, foreignNotification.Id, "Added notification"),
+            (nameof(TenantUserAccess), currentAccess.Id, foreignAccess.Id, "Added tenant portal access"),
+            (nameof(EvictionCase), currentEvictionCase.Id, foreignEvictionCase.Id, "Added eviction case"),
+            (nameof(EvictionCaseEvent), currentEvictionEvent.Id, foreignEvictionEvent.Id, "Added eviction case event"),
+            (nameof(WorkOrderStatusEvent), currentWorkOrderEvent.Id, foreignWorkOrderEvent.Id, "Added work-order activity"),
+        };
+
+        var audits = writerPairs
+            .SelectMany((pair, index) => new[]
+            {
+                Audit(pair.EntityType, pair.InUnitId, 200 - index * 2),
+                Audit(pair.EntityType, pair.ForeignUnitId, 199 - index * 2),
+            });
+        _db.AtomicAuditLogs.AddRange(audits);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 200, CancellationToken.None);
+
+        foreach (var pair in writerPairs)
+        {
+            rows.Should().Contain(row => row.EntityType == pair.EntityType && row.EntityId == pair.InUnitId,
+                $"{pair.EntityType} must follow its exact unit relationship");
+            rows.Should().NotContain(row => row.EntityType == pair.EntityType && row.EntityId == pair.ForeignUnitId,
+                $"{pair.EntityType} from another unit must not leak");
+            rows.Single(row => row.EntityType == pair.EntityType && row.EntityId == pair.InUnitId)
+                .Description.Should().Be(pair.Description);
+        }
+
+        _executedSql.Should().NotContain(command => IsChildIdPreload(command));
+        var auditSql = _executedSql.Single(command =>
+            command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        foreach (var table in TimelineSubqueryTables)
+        {
+            auditSql.Should().Contain(table, $"{table} must remain a translated DB-side subquery");
+        }
+    }
+
+    [Fact]
+    public async Task GetTimelineAsync_ExcludesGenericTenantFilesAndConversations()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = DateTime.UtcNow;
+        var genericTenantFile = File(nameof(Tenant), seeded.Tenant.Id, "tenant-generic.pdf", now);
+        var genericConversation = new Conversation
+        {
+            PortfolioId = PortfolioId,
+            TenantId = seeded.Tenant.Id,
+            PropertyId = seeded.ForeignUnit.PropertyId,
+            Subject = "Tenant-wide question",
+            CreatedAt = now,
+            LastMessageAt = now,
+            LastMessagePreview = "Not tied to one unit",
+        };
+        var unitConversation = new Conversation
+        {
+            PortfolioId = PortfolioId,
+            TenantId = seeded.Tenant.Id,
+            PropertyId = seeded.Property.Id,
+            WorkOrderId = seeded.WorkOrder.Id,
+            Subject = "Unit repair thread",
+            CreatedAt = now,
+            LastMessageAt = now,
+            LastMessagePreview = "Exact work order scope",
+        };
+        _db.AddRange(genericTenantFile, genericConversation, unitConversation);
+        _db.SaveChanges();
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(StoredFile), genericTenantFile.Id, 4),
+            Audit(nameof(Conversation), genericConversation.Id, 3),
+            Audit(nameof(Conversation), unitConversation.Id, 2));
+        _db.SaveChanges();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 50, CancellationToken.None);
+
+        rows.Should().NotContain(row => row.EntityType == nameof(StoredFile) && row.EntityId == genericTenantFile.Id);
+        rows.Should().NotContain(row => row.EntityType == nameof(Conversation) && row.EntityId == genericConversation.Id);
+        rows.Should().Contain(row => row.EntityType == nameof(Conversation) && row.EntityId == unitConversation.Id);
     }
 
     [Fact]
@@ -615,7 +1082,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         _db.AddRange(workOrder, expense);
         _db.SaveChanges();
         return new SeededTimelineGraph(
-            graph.Property, graph.Unit, graph.Relationship, graph.Agreement, graph.Account,
+            graph.Property, graph.Unit, graph.Tenant, graph.Relationship, graph.Agreement, graph.Account,
             workOrder, expense, foreignUnit, foreign.Relationship);
     }
 
@@ -785,6 +1252,534 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         UpdatedAt = incurredAt,
     };
 
+    private static Inspection InspectionFor(
+        Unit unit,
+        Property property,
+        LeaseManagement relationship,
+        LeaseAgreement agreement,
+        DateTime scheduledFor) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        LeaseManagementId = relationship.Id,
+        LeaseAgreementId = agreement.Id,
+        ScheduledFor = scheduledFor,
+        CreatedAt = scheduledFor,
+        UpdatedAt = scheduledFor,
+    };
+
+    private static RecurringTenantCharge RecurringTenantChargeFor(
+        Unit unit,
+        Property property,
+        TenantAccount account,
+        LeaseAgreement agreement,
+        int ledgerAccountId,
+        DateTime now) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        TenantAccountId = account.Id,
+        LeaseAgreementId = agreement.Id,
+        DisplayName = "Monthly unit charge",
+        Amount = 25m,
+        Currency = "USD",
+        LedgerAccountId = ledgerAccountId,
+        EffectiveStartOn = DateOnly.FromDateTime(now),
+        MonthlyDueDay = 1,
+        NextRunDate = DateOnly.FromDateTime(now),
+        IsActive = true,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static RecurringExpense RecurringExpenseFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Category = ScheduleECategory.Insurance,
+        Description = "Monthly unit insurance",
+        Amount = 100m,
+        Frequency = RecurringExpenseFrequency.Monthly,
+        StartDate = now,
+        NextRunDate = now,
+        Active = true,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static CapitalAsset CapitalAssetFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Description = "Unit capital asset",
+        CostBasis = 1000m,
+        InServiceDate = now,
+        Method = DepreciationMethod.StraightLine,
+        RecoveryYears = RecoveryClass.ResidentialBuilding,
+        Convention = DepreciationConvention.MidMonth,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static RentalApplication ApplicationFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        FirstName = "Timeline",
+        LastName = "Applicant",
+        Status = ApplicationStatus.Submitted,
+        SubmittedAtUtc = now,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static RentalListing ListingFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Headline = "Unit listing",
+        Description = "Timeline listing",
+        Rent = 1000m,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ScanDraft ScanDraftFor(Unit unit, Property property, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FilePath = $"scan-{unit.Id}.pdf",
+        CapturePropertyId = property.Id,
+        CaptureUnitId = unit.Id,
+        TargetEntityType = nameof(Expense),
+        Status = "Pending",
+        CreatedAt = now,
+    };
+
+    private static InspectionItem InspectionItemFor(Inspection inspection, string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        InspectionId = inspection.Id,
+        Area = "Kitchen",
+        Label = label,
+        Result = InspectionItemResult.Pending,
+        SortOrder = 1,
+    };
+
+    private static TenantPaymentAttempt PaymentAttemptFor(
+        TenantAccount account,
+        DateTime now,
+        string label) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        TenantAccountId = account.Id,
+        Provider = "manual",
+        ProviderObjectId = $"timeline-payment-{label}-{Guid.NewGuid():N}",
+        IdempotencyKey = $"timeline-payment-{label}-{Guid.NewGuid():N}",
+        AttemptType = TenantPaymentAttemptType.UnappliedReceipt,
+        State = TenantPaymentAttemptState.Prepared,
+        Amount = 25m,
+        Currency = "USD",
+        PaymentMethodSummary = "Timeline test payment",
+        PreparedAtUtc = now,
+        SubmittedAtUtc = null,
+        SettledAtUtc = null,
+        UpdatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+    };
+
+    private static LeaseAddendum AddendumFor(
+        LeaseManagement relationship,
+        LeaseAgreement agreement,
+        DateTime now,
+        string label) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        SeriesPublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        BaseAgreementId = agreement.Id,
+        AddendumNumber = $"ADD-TIMELINE-{label}-{Guid.NewGuid():N}"[..24],
+        Purpose = LeaseAddendumPurpose.Rules,
+        EffectiveFromOn = DateOnly.FromDateTime(now),
+        TermsSchemaVersion = 1,
+        TermsPayload = "{}",
+        DocumentSourceVersionId = agreement.DocumentSourceVersionId,
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+        UpdatedAtUtc = now,
+    };
+
+    private static LeaseAddendumSigner AddendumSignerFor(
+        LeaseAddendum addendum,
+        LeaseManagementParty party,
+        Tenant tenant) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseAddendumId = addendum.Id,
+        LeaseManagementPartyId = party.Id,
+        TenantId = tenant.Id,
+        SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+        NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+        EmailSnapshot = tenant.Email!,
+        SigningOrder = 1,
+        IsRequired = true,
+    };
+
+    private static LeaseAddendumFinancialEffect AddendumFinancialEffectFor(
+        LeaseAddendum addendum,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseAddendumId = addendum.Id,
+        EffectType = LeaseAddendumFinancialEffectType.OneTimeCharge,
+        Amount = 25m,
+        Currency = "USD",
+        ChargeCode = $"TIMELINE-{label}",
+        DueOn = DateOnly.FromDateTime(now),
+        Description = $"Timeline {label} addendum charge",
+    };
+
+    private static LeaseRenewalAddendumDecision RenewalDecisionFor(
+        LeaseManagement relationship,
+        LeaseAgreement agreement,
+        Guid sourceSeriesPublicId,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        RenewalAgreementId = agreement.Id,
+        SourceAddendumSeriesPublicId = sourceSeriesPublicId,
+        Decision = LeaseRenewalAddendumDecisionType.End,
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+    };
+
+    private static SignatureRequest SignatureRequestFor(
+        LeaseAgreement agreement,
+        int issuedArtifactId,
+        DateTime now,
+        string label) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        LeaseAgreementId = agreement.Id,
+        Provider = "native",
+        IdempotencyKey = $"timeline-signature-{label}-{Guid.NewGuid():N}",
+        Status = SignatureRequestStatus.AwaitingSignatures,
+        Subject = $"Timeline {label} agreement",
+        IssuedArtifactId = issuedArtifactId,
+        PreparedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+    };
+
+    private static SignatureSigner SignatureSignerFor(
+        SignatureRequest request,
+        LeaseAgreementSigner agreementSigner,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        SignatureRequestId = request.Id,
+        AgreementSignerId = agreementSigner.Id,
+        NameSnapshot = agreementSigner.NameSnapshot,
+        EmailSnapshot = agreementSigner.EmailSnapshot,
+        SigningOrder = 1,
+        IsRequired = true,
+        TokenHash = (Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"))[..64],
+        TokenExpiresAtUtc = now.AddDays(14),
+        Status = SignatureSignerStatus.Pending,
+        SignatureType = SignatureSignatureType.None,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static WorkspaceNoticeTemplateVersion WorkspaceNoticeTemplateFor(
+        SystemNoticeTemplateVersion systemTemplate,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        SystemKey = $"timeline-{label}-{Guid.NewGuid():N}"[..28],
+        Version = 1,
+        BasedOnSystemTemplateVersionId = systemTemplate.Id,
+        IsCustomized = false,
+        Subject = $"Timeline {label} notice",
+        Body = $"Timeline {label} notice body",
+        CreatedByUserId = ActorUserId,
+        CreatedAtUtc = now,
+    };
+
+    private static TenantNoticePolicy NoticePolicyFor(
+        WorkspaceNoticeTemplateVersion template,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        AutomationKey = $"timeline-{label}-{Guid.NewGuid():N}"[..28],
+        Mode = TenantNoticeMode.Draft,
+        Classification = NoticeClassification.Operational,
+        LeadDays = 1,
+        WorkspaceNoticeTemplateVersionId = template.Id,
+        CreatedAtUtc = now,
+        UpdatedAtUtc = now,
+    };
+
+    private static NoticeDraft NoticeDraftFor(
+        LeaseManagement relationship,
+        TenantAccount account,
+        LeaseManagementParty party,
+        LeaseAgreement agreement,
+        Property property,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        TenantAccountId = account.Id,
+        RecipientLeaseManagementPartyId = party.Id,
+        LeaseAgreementId = agreement.Id,
+        PropertyId = property.Id,
+        NoticeType = $"timeline-{label}",
+        Status = "Draft",
+        Subject = $"Timeline {label} notice",
+        Body = $"Timeline {label} notice body",
+        Reason = "Unit dashboard timeline fixture",
+        TriggerDate = now,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static RenderedNotice RenderedNoticeFor(
+        NoticeDraft draft,
+        WorkspaceNoticeTemplateVersion template,
+        LeaseManagement relationship,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        NoticeDraftId = draft.Id,
+        WorkspaceNoticeTemplateVersionId = template.Id,
+        LeaseManagementId = relationship.Id,
+        Subject = draft.Subject,
+        Body = draft.Body,
+        ContentSha256 = new string(label == "current" ? 'a' : 'b', 64),
+        TemplateProvenance = $"timeline-{label}",
+        RenderedAtUtc = now,
+        ApprovedByUserId = ActorUserId,
+        ApprovedAtUtc = now,
+    };
+
+    private static TenantNoticeWorkItem NoticeWorkItemFor(
+        TenantNoticePolicy policy,
+        LeaseManagement relationship,
+        LeaseManagementParty party,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        TenantNoticePolicyId = policy.Id,
+        LeaseManagementId = relationship.Id,
+        RecipientLeaseManagementPartyId = party.Id,
+        DueAtUtc = now,
+        Status = TenantNoticeWorkStatus.Pending,
+        BusinessKey = $"timeline-notice-{label}-{Guid.NewGuid():N}",
+        CreatedAtUtc = now,
+    };
+
+    private static Conversation ConversationFor(
+        int tenantId,
+        Property property,
+        WorkOrder workOrder,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        TenantId = tenantId,
+        Subject = $"Timeline {label} conversation",
+        PropertyId = property.Id,
+        WorkOrderId = workOrder.Id,
+        StartedByLandlord = true,
+        CreatedAt = now,
+        LastMessageAt = now,
+        LastMessagePreview = $"Timeline {label} message",
+    };
+
+    private static ConversationMessage ConversationMessageFor(
+        Conversation conversation,
+        DateTime now,
+        string label) => new()
+    {
+        Conversation = conversation,
+        SenderRole = ConversationSenderRole.Landlord,
+        Body = $"Timeline {label} message",
+        Channels = "Portal",
+        CreatedAt = now,
+    };
+
+    private static TenantUserAccess TenantUserAccessFor(
+        WorkspaceAccessContext accessContext,
+        LeaseManagementParty party,
+        DateTime now,
+        string label) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        AccessContextId = accessContext.Id,
+        ApplicationUserId = ActorUserId,
+        LeaseManagementPartyId = party.Id,
+        GrantedAtUtc = now,
+        GrantedByUserId = ActorUserId,
+        Reason = $"Timeline {label} access",
+    };
+
+    private static NoticeDeliveryEvidence NoticeDeliveryEvidenceFor(
+        RenderedNotice rendered,
+        LeaseManagementParty party,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        RenderedNoticeId = rendered.Id,
+        RecipientLeaseManagementPartyId = party.Id,
+        RecipientRole = NoticeRecipientRole.PrimaryTenant,
+        Channel = NoticeDeliveryChannel.TenantPortal,
+        Destination = $"timeline-{label}@example.test",
+        OutboxMessage = new OutboxMessage
+        {
+            PortfolioId = PortfolioId,
+            MessageType = "timeline-test",
+            Payload = "{}",
+            IdempotencyKey = $"timeline-delivery-{label}-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        },
+        IdempotencyKey = $"timeline-evidence-{label}-{Guid.NewGuid():N}",
+        CreatedAtUtc = now,
+    };
+
+    private static Notification NotificationFor(
+        Conversation conversation,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        UserId = ActorUserId,
+        Type = "Timeline",
+        Title = $"Timeline {label} notification",
+        Message = $"Timeline {label} notification",
+        Severity = "Info",
+        RelatedEntityType = nameof(Conversation),
+        RelatedEntityId = conversation.Id,
+        CreatedAt = now,
+    };
+
+    private static EvictionCase EvictionCaseFor(
+        LeaseManagement relationship,
+        LeaseAgreement agreement,
+        Property property,
+        Unit unit,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        LeaseAgreementId = agreement.Id,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Status = EvictionCaseStatus.Draft,
+        CaseNumber = $"TIMELINE-{label}-{Guid.NewGuid():N}"[..24],
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static EvictionCaseEvent EvictionCaseEventFor(
+        EvictionCase evictionCase,
+        DateTime now,
+        EvictionEventType eventType) => new()
+    {
+        PortfolioId = PortfolioId,
+        EvictionCaseId = evictionCase.Id,
+        EventType = eventType,
+        EventDate = now,
+        Notes = "Unit dashboard timeline fixture",
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static WorkOrderStatusEvent WorkOrderStatusEventFor(
+        WorkOrder workOrder,
+        DateTime now,
+        string label) => new()
+    {
+        PortfolioId = PortfolioId,
+        WorkOrderId = workOrder.Id,
+        FromStatus = WorkOrderStatus.New,
+        ToStatus = workOrder.Status,
+        Kind = "Status",
+        Visibility = "Public",
+        Note = $"Timeline {label} work-order event",
+        ChangedByUserId = ActorUserId,
+        ChangedByLabel = "Timeline test",
+        CreatedAtUtc = now,
+    };
+
+    private static ApplicantScreening ScreeningFor(
+        RentalApplication application,
+        string operationKey,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        ApplicationId = application.Id,
+        Mode = ScreeningMode.External,
+        Status = ApplicantScreeningStatus.Created,
+        ProviderDisplayName = "External provider",
+        OperationKey = operationKey,
+        CreatedByUserId = ActorUserId,
+        LastStatusAtUtc = now,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ListingPublication ListingPublicationFor(
+        RentalListing listing,
+        string providerKey,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        RentalListingId = listing.Id,
+        ProviderKey = providerKey,
+        Mode = ListingPublicationMode.Guided,
+        Status = ListingPublicationStatus.Draft,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static ListingPhoto ListingPhotoFor(RentalListing listing, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        RentalListingId = listing.Id,
+        Position = 1,
+        Category = "Interior",
+        CreatedAt = now,
+    };
+
+    private static VendorDispatch VendorDispatchFor(WorkOrder workOrder, Vendor vendor, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        WorkOrderId = workOrder.Id,
+        VendorId = vendor.Id,
+        Status = VendorDispatchStatus.Dispatched,
+        DispatchedAtUtc = now,
+    };
+
     private AtomicAuditLog Audit(string entityType, int entityId, int minutesAgo) => new()
     {
         AttemptId = Guid.NewGuid(),
@@ -811,14 +1806,23 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         UploadedAt = uploadedAt,
     };
 
+    private static readonly string[] TimelineSubqueryTables =
+    [
+        "LeaseManagements", "LeaseAgreements", "TenantAccounts", "WorkOrders", "Inspections",
+        "Appointments", "Expenses", "WorkOrderStatusEvents", "EvictionCases", "EvictionCaseEvents",
+        "LeaseManagementParties", "TenantUserAccesses", "UnitOperationalPeriods", "TenantLedgerEntries",
+        "TenantPaymentAttempts", "TenantAccountConditionPeriods", "TenantAutopayEnrollments",
+        "SecurityDepositAccounts", "SecurityDepositEntries", "LeaseAddenda", "LeaseAddendumSigners",
+        "LeaseAddendumFinancialEffects", "LeaseRenewalAddendumDecisions", "LeaseAgreementSigners",
+        "LegalDocumentArtifacts", "StoredFiles", "SignatureRequests", "SignatureSigners", "NoticeDrafts",
+        "RenderedNotices", "NoticeDeliveryEvidence", "TenantNoticeWorkItems", "Conversations",
+        "ConversationMessages", "Notifications", "RecurringTenantCharges", "RecurringExpenses",
+        "CapitalAssets", "RentalApplications", "ApplicantScreenings", "RentalListings", "ListingPublications",
+        "ListingPhotos", "InspectionItems", "VendorDispatches", "ScanDrafts",
+    ];
+
     private static bool IsChildIdPreload(string command) =>
-        IsBareIdSelect(command, "LeaseManagements")
-        || IsBareIdSelect(command, "LeaseAgreements")
-        || IsBareIdSelect(command, "TenantAccounts")
-        || IsBareIdSelect(command, "WorkOrders")
-        || IsBareIdSelect(command, "Inspections")
-        || IsBareIdSelect(command, "Appointments")
-        || IsBareIdSelect(command, "Expenses");
+        TimelineSubqueryTables.Any(table => IsBareIdSelect(command, table));
 
     private static bool IsBareIdSelect(string command, string table) =>
         command.Contains("SELECT \"", StringComparison.OrdinalIgnoreCase)
@@ -839,6 +1843,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     private sealed record SeededTimelineGraph(
         Property Property,
         Unit Unit,
+        Tenant Tenant,
         LeaseManagement Relationship,
         LeaseAgreement Agreement,
         TenantAccount Account,
