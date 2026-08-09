@@ -1590,13 +1590,18 @@ export interface AuditEntry {
 	detailHref?: string;
 	timestamp: string;
 	testId?: string;
-	/** Sanitized field-level diff for an Updated row; empty for Created/Deleted. */
+	/** Sanitized field-level diff; Created/Deleted rows use an empty side for each captured field. */
 	changes?: AuditFieldChange[];
+	/** Captured detail; older audit rows may return null or omit these fields. */
+	changeReason?: string | null;
+	ipAddress?: string | null;
+	oldValues?: string | null;
+	newValues?: string | null;
 }
 
 /**
- * Admin-only forensic row from `GET /api/v1/admin/audit`: the {@link AuditEntry} fields plus the IP
- * address and raw old→new JSON the landlord-facing endpoint intentionally withholds.
+ * Admin-only forensic row from `GET /api/v1/admin/audit`: the {@link AuditEntry} fields plus the
+ * operator-only actor identity and the same captured detail fields.
  */
 export interface AdminAuditEntry extends AuditEntry {
 	userId?: number | null;

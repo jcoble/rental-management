@@ -21,8 +21,8 @@ public interface IAuditQueryService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Admin-only forensic variant of <see cref="ListAsync"/>: same portfolio-scoped filters, but the
-    /// rows include the IP address and raw old→new JSON withheld from the landlord-facing projection.
+    /// Admin-only forensic variant of <see cref="ListAsync"/>: same portfolio-scoped filters, plus
+    /// actor identity and the raw captured values used by the operator view.
     /// </summary>
     Task<IReadOnlyList<AdminAuditEntryResponse>> ListForensicAsync(
         int portfolioId,

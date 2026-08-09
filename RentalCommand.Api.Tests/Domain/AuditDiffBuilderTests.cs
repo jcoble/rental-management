@@ -9,7 +9,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <summary>
 /// Covers <see cref="AuditDiffBuilder"/>: the sanitized, landlord-safe field-level diff that powers the
 /// per-record History card. Verifies that Updated rows produce humanized old→new changes, Created/Deleted
-/// rows produce none, plumbing fields are suppressed, and values are formatted (no raw JSON leaks).
+/// rows produce set/was snapshots, plumbing fields are suppressed, and values are formatted (no raw JSON leaks).
 /// </summary>
 public sealed class AuditDiffBuilderTests
 {
@@ -91,7 +91,7 @@ public sealed class AuditDiffBuilderTests
     }
 
     [Fact]
-    public void Build_CreatedAndDeleted_ReturnEmpty()
+    public void Build_CreatedAndDeleted_ProducesHumanizedSnapshotLines()
     {
         var created = new AtomicAuditLog
         {
@@ -106,8 +106,10 @@ public sealed class AuditDiffBuilderTests
             OldValues = JsonSerializer.Serialize(new { Amount = 50 }),
         };
 
-        _builder.Build(created).Should().BeEmpty();
-        _builder.Build(deleted).Should().BeEmpty();
+        _builder.Build(created).Should().ContainSingle(c =>
+            c.Field == "Amount" && c.OldValue == "—" && c.NewValue == "50");
+        _builder.Build(deleted).Should().ContainSingle(c =>
+            c.Field == "Amount" && c.OldValue == "50" && c.NewValue == "—");
     }
 
     [Fact]
