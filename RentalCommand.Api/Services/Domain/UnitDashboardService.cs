@@ -591,6 +591,194 @@ public class UnitDashboardService : IUnitDashboardService
                 && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
             .Select(e => e.Id);
 
+        var workOrderStatusEventIds = _db.WorkOrderStatusEvents.AsNoTracking()
+            .Where(statusEvent => statusEvent.PortfolioId == portfolioId
+                && workOrderIds.Contains(statusEvent.WorkOrderId))
+            .Select(statusEvent => statusEvent.Id);
+
+        var evictionCaseIds = _db.EvictionCases.AsNoTracking()
+            .Where(eviction => eviction.PortfolioId == portfolioId && eviction.UnitId == unitId)
+            .Select(eviction => eviction.Id);
+
+        var evictionCaseEventIds = _db.EvictionCaseEvents.AsNoTracking()
+            .Where(statusEvent => statusEvent.PortfolioId == portfolioId
+                && evictionCaseIds.Contains(statusEvent.EvictionCaseId))
+            .Select(statusEvent => statusEvent.Id);
+
+        var tenantIds = _db.LeaseManagementParties.AsNoTracking()
+            .Where(party => party.PortfolioId == portfolioId
+                && relationshipIds.Contains(party.LeaseManagementId))
+            .Select(party => party.TenantId);
+
+        var partyIds = _db.LeaseManagementParties.AsNoTracking()
+            .Where(party => party.PortfolioId == portfolioId
+                && relationshipIds.Contains(party.LeaseManagementId))
+            .Select(party => party.Id);
+
+        var tenantUserAccessIds = _db.TenantUserAccesses.AsNoTracking()
+            .Where(access => access.PortfolioId == portfolioId
+                && partyIds.Contains(access.LeaseManagementPartyId))
+            .Select(access => access.Id);
+
+        var operationalPeriodIds = _db.UnitOperationalPeriods.AsNoTracking()
+            .Where(period => period.PortfolioId == portfolioId && period.UnitId == unitId)
+            .Select(period => period.Id);
+
+        var ledgerEntryIds = _db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId
+                && accountIds.Contains(entry.TenantAccountId))
+            .Select(entry => entry.Id);
+
+        var paymentAttemptIds = _db.TenantPaymentAttempts.AsNoTracking()
+            .Where(attempt => attempt.PortfolioId == portfolioId
+                && accountIds.Contains(attempt.TenantAccountId))
+            .Select(attempt => attempt.Id);
+
+        var accountConditionPeriodIds = _db.TenantAccountConditionPeriods.AsNoTracking()
+            .Where(period => period.PortfolioId == portfolioId
+                && accountIds.Contains(period.TenantAccountId))
+            .Select(period => period.Id);
+
+        var autopayEnrollmentIds = _db.TenantAutopayEnrollments.AsNoTracking()
+            .Where(enrollment => enrollment.PortfolioId == portfolioId
+                && accountIds.Contains(enrollment.TenantAccountId))
+            .Select(enrollment => enrollment.Id);
+
+        var depositAccountIds = _db.SecurityDepositAccounts.AsNoTracking()
+            .Where(account => account.PortfolioId == portfolioId
+                && accountIds.Contains(account.TenantAccountId))
+            .Select(account => account.Id);
+
+        var depositEntryIds = _db.SecurityDepositEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId
+                && depositAccountIds.Contains(entry.SecurityDepositAccountId))
+            .Select(entry => entry.Id);
+
+        var addendumIds = _db.LeaseAddenda.AsNoTracking()
+            .Where(addendum => addendum.PortfolioId == portfolioId
+                && relationshipIds.Contains(addendum.LeaseManagementId))
+            .Select(addendum => addendum.Id);
+
+        var addendumSignerIds = _db.LeaseAddendumSigners.AsNoTracking()
+            .Where(signer => signer.PortfolioId == portfolioId
+                && addendumIds.Contains(signer.LeaseAddendumId))
+            .Select(signer => signer.Id);
+
+        var addendumFinancialEffectIds = _db.LeaseAddendumFinancialEffects.AsNoTracking()
+            .Where(effect => effect.PortfolioId == portfolioId
+                && addendumIds.Contains(effect.LeaseAddendumId))
+            .Select(effect => effect.Id);
+
+        var renewalDecisionIds = _db.LeaseRenewalAddendumDecisions.AsNoTracking()
+            .Where(decision => decision.PortfolioId == portfolioId
+                && relationshipIds.Contains(decision.LeaseManagementId))
+            .Select(decision => decision.Id);
+
+        var agreementSignerIds = _db.LeaseAgreementSigners.AsNoTracking()
+            .Where(signer => signer.PortfolioId == portfolioId
+                && agreementIds.Contains(signer.LeaseAgreementId))
+            .Select(signer => signer.Id);
+
+        var legalArtifactIds = _db.LegalDocumentArtifacts.AsNoTracking()
+            .Where(artifact => artifact.PortfolioId == portfolioId
+                && (_db.LeaseAgreements.Any(agreement => agreement.PortfolioId == portfolioId
+                        && (agreement.IssuedArtifactId == artifact.Id || agreement.ExecutedArtifactId == artifact.Id)
+                        && relationshipIds.Contains(agreement.LeaseManagementId))
+                    || _db.LeaseAddenda.Any(addendum => addendum.PortfolioId == portfolioId
+                        && (addendum.IssuedArtifactId == artifact.Id || addendum.ExecutedArtifactId == artifact.Id)
+                        && relationshipIds.Contains(addendum.LeaseManagementId))))
+            .Select(artifact => artifact.Id);
+
+        var legalArtifactFileIds = _db.LegalDocumentArtifacts.AsNoTracking()
+            .Where(artifact => legalArtifactIds.Contains(artifact.Id))
+            .Select(artifact => artifact.StoredFileId);
+
+        var storedFileIds = _db.StoredFiles.AsNoTracking()
+            .Where(file => file.PortfolioId == portfolioId && (
+                legalArtifactFileIds.Contains(file.Id)
+                || (file.EntityId != null && (
+                    (file.EntityType == "Unit" && file.EntityId == unitId)
+                    || (file.EntityType == nameof(Tenant) && tenantIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(LeaseAgreement) && agreementIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(LeaseAddendum) && addendumIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(LegalDocumentArtifact) && legalArtifactIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(TenantAccount) && accountIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(TenantLedgerEntry) && ledgerEntryIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == nameof(SecurityDepositAccount) && depositAccountIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == nameof(SecurityDepositEntry) && depositEntryIds.Contains(file.EntityId.Value))
+                    || (file.EntityType == "Expense" && expenseIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == "WorkOrder" && workOrderIds.Contains((int)file.EntityId.Value))
+                    || (file.EntityType == "Inspection" && inspectionIds.Contains((int)file.EntityId.Value))))))
+            .Select(file => file.Id);
+
+        var signatureRequestIds = _db.SignatureRequests.AsNoTracking()
+            .Where(request => request.PortfolioId == portfolioId
+                && ((request.LeaseAgreementId != null && agreementIds.Contains(request.LeaseAgreementId.Value))
+                    || (request.LeaseAddendumId != null && addendumIds.Contains(request.LeaseAddendumId.Value))))
+            .Select(request => request.Id);
+
+        var signatureSignerIds = _db.SignatureSigners.AsNoTracking()
+            .Where(signer => signer.PortfolioId == portfolioId
+                && signatureRequestIds.Contains(signer.SignatureRequestId))
+            .Select(signer => signer.Id);
+
+        var noticeDraftIds = _db.NoticeDrafts.AsNoTracking()
+            .Where(draft => draft.PortfolioId == portfolioId
+                && relationshipIds.Contains(draft.LeaseManagementId))
+            .Select(draft => draft.Id);
+
+        var renderedNoticeIds = _db.RenderedNotices.AsNoTracking()
+            .Where(rendered => rendered.PortfolioId == portfolioId
+                && relationshipIds.Contains(rendered.LeaseManagementId))
+            .Select(rendered => rendered.Id);
+
+        var noticeDeliveryEvidenceIds = _db.NoticeDeliveryEvidence.AsNoTracking()
+            .Where(evidence => evidence.PortfolioId == portfolioId
+                && renderedNoticeIds.Contains(evidence.RenderedNoticeId))
+            .Select(evidence => evidence.Id);
+
+        var noticeWorkItemIds = _db.TenantNoticeWorkItems.AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId
+                && relationshipIds.Contains(item.LeaseManagementId))
+            .Select(item => item.Id);
+
+        var conversationIds = _db.Conversations.AsNoTracking()
+            .Where(conversation => conversation.PortfolioId == portfolioId
+                && (tenantIds.Contains(conversation.TenantId)
+                    || (conversation.WorkOrderId != null && workOrderIds.Contains(conversation.WorkOrderId.Value))))
+            .Select(conversation => conversation.Id);
+
+        var conversationMessageIds = _db.ConversationMessages.AsNoTracking()
+            .Where(message => conversationIds.Contains(message.ConversationId))
+            .Select(message => message.Id);
+
+        var notificationIds = _db.Notifications.AsNoTracking()
+            .Where(notification => notification.PortfolioId == portfolioId
+                && notification.RelatedEntityId != null
+                && ((notification.RelatedEntityType == nameof(Conversation)
+                        && conversationIds.Contains(notification.RelatedEntityId.Value))
+                    || (notification.RelatedEntityType == nameof(ConversationMessage)
+                        && conversationMessageIds.Contains(notification.RelatedEntityId.Value))
+                    || (notification.RelatedEntityType == nameof(NoticeDraft)
+                        && noticeDraftIds.Contains(notification.RelatedEntityId.Value))
+                    || (notification.RelatedEntityType == nameof(TenantLedgerEntry)
+                        && ledgerEntryIds.Contains(notification.RelatedEntityId.Value))
+                    || (notification.RelatedEntityType == nameof(SecurityDepositEntry)
+                        && depositEntryIds.Contains(notification.RelatedEntityId.Value))
+                    || (notification.NavigationResourceKind == nameof(Conversation)
+                        && notification.NavigationResourceId != null
+                        && conversationIds.Contains(notification.NavigationResourceId.Value))
+                    || (notification.NavigationResourceKind == nameof(NoticeDraft)
+                        && notification.NavigationResourceId != null
+                        && noticeDraftIds.Contains(notification.NavigationResourceId.Value))
+                    || (notification.NavigationResourceKind == nameof(TenantLedgerEntry)
+                        && notification.NavigationResourceId != null
+                        && ledgerEntryIds.Contains(notification.NavigationResourceId.Value))
+                    || (notification.NavigationParentResourceKind == nameof(TenantAccount)
+                        && notification.NavigationParentResourceId != null
+                        && accountIds.Contains(notification.NavigationParentResourceId!.Value))))
+            .Select(notification => notification.Id);
+
         // ONE audit query with translated OR/IN subqueries, newest first, paged.
         var rows = await _db.AtomicAuditLogs
             .AsNoTracking()
@@ -599,6 +787,35 @@ public class UnitDashboardService : IUnitDashboardService
                 (a.EntityType == nameof(LeaseManagement) && relationshipIds.Contains(a.EntityId)) ||
                 (a.EntityType == nameof(LeaseAgreement) && agreementIds.Contains(a.EntityId)) ||
                 (a.EntityType == nameof(TenantAccount) && accountIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(Tenant) && tenantIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(TenantLedgerEntry) && ledgerEntryIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(SecurityDepositAccount) && depositAccountIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(SecurityDepositEntry) && depositEntryIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(TenantPaymentAttempt) && paymentAttemptIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(TenantAccountConditionPeriod) && accountConditionPeriodIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(TenantAutopayEnrollment) && autopayEnrollmentIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseAgreementSigner) && agreementSignerIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseAddendum) && addendumIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseAddendumSigner) && addendumSignerIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseAddendumFinancialEffect) && addendumFinancialEffectIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseRenewalAddendumDecision) && renewalDecisionIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(StoredFile) && storedFileIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LegalDocumentArtifact) && legalArtifactIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(SignatureRequest) && signatureRequestIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(SignatureSigner) && signatureSignerIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(NoticeDraft) && noticeDraftIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(RenderedNotice) && renderedNoticeIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(NoticeDeliveryEvidence) && noticeDeliveryEvidenceIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(TenantNoticeWorkItem) && noticeWorkItemIds.Contains((long)a.EntityId)) ||
+                (a.EntityType == nameof(Conversation) && conversationIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(ConversationMessage) && conversationMessageIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(Notification) && notificationIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(LeaseManagementParty) && partyIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(TenantUserAccess) && tenantUserAccessIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(UnitOperationalPeriod) && operationalPeriodIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(EvictionCase) && evictionCaseIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(EvictionCaseEvent) && evictionCaseEventIds.Contains(a.EntityId)) ||
+                (a.EntityType == nameof(WorkOrderStatusEvent) && workOrderStatusEventIds.Contains(a.EntityId)) ||
                 (a.EntityType == "WorkOrder" && workOrderIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Inspection" && inspectionIds.Contains(a.EntityId)) ||
                 (a.EntityType == "Appointment" && appointmentIds.Contains(a.EntityId)) ||

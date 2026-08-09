@@ -80,6 +80,151 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetTimelineAsync_IncludesAuditWriterEntityTypesAcrossUnitHistoryScopes()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = DateTime.UtcNow;
+        var party = _db.LeaseManagementParties.Single(row => row.LeaseManagementId == seeded.Relationship.Id);
+        var agreementSigner = _db.LeaseAgreementSigners.Single(row => row.LeaseAgreementId == seeded.Agreement.Id);
+        var issuedArtifact = _db.LegalDocumentArtifacts.Single(row => row.Id == seeded.Agreement.IssuedArtifactId);
+        var unitFile = File(nameof(Unit), seeded.Unit.Id, "unit-history.pdf", now);
+
+        var ledgerEntry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            LeaseAgreementId = seeded.Agreement.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Timeline receipt",
+            BusinessKey = "timeline-receipt",
+            CreatedByUserId = ActorUserId,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            OriginatingAgreementId = seeded.Agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.AddRange(unitFile, ledgerEntry, depositAccount);
+        _db.SaveChanges();
+
+        var depositEntry = new SecurityDepositEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt,
+            Direction = SecurityDepositDirection.Increase,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            BusinessKey = "timeline-deposit",
+            Description = "Timeline deposit",
+            CreatedByUserId = ActorUserId,
+        };
+        var addendum = new LeaseAddendum
+        {
+            PublicId = Guid.NewGuid(),
+            SeriesPublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            BaseAgreementId = seeded.Agreement.Id,
+            AddendumNumber = "ADD-TIMELINE",
+            Purpose = LeaseAddendumPurpose.Rules,
+            EffectiveFromOn = DateOnly.FromDateTime(now),
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = seeded.Agreement.DocumentSourceVersionId,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+        };
+        _db.AddRange(depositEntry, addendum);
+        _db.SaveChanges();
+
+        var signatureRequest = new SignatureRequest
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = seeded.Agreement.Id,
+            Provider = "native",
+            IdempotencyKey = "timeline-signature",
+            Status = SignatureRequestStatus.AwaitingSignatures,
+            Subject = "Timeline agreement",
+            IssuedArtifactId = issuedArtifact.Id,
+            PreparedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var noticeDraft = new NoticeDraft
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = seeded.Relationship.Id,
+            TenantAccountId = seeded.Account.Id,
+            RecipientLeaseManagementPartyId = party.Id,
+            LeaseAgreementId = seeded.Agreement.Id,
+            NoticeType = "timeline-notice",
+            Status = "Draft",
+            Subject = "Timeline notice",
+            Body = "Timeline notice body",
+            Reason = "Timeline test",
+            TriggerDate = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(signatureRequest, noticeDraft);
+        _db.SaveChanges();
+
+        SeedOperationalState(seeded.Unit, UnitOperationalPeriodType.Turnover, now, seeded.Relationship);
+
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(Tenant), seeded.Tenant.Id, 20),
+            Audit(nameof(TenantLedgerEntry), checked((int)ledgerEntry.Id), 19),
+            Audit(nameof(SecurityDepositAccount), depositAccount.Id, 18),
+            Audit(nameof(SecurityDepositEntry), checked((int)depositEntry.Id), 17),
+            Audit(nameof(StoredFile), unitFile.Id, 16),
+            Audit(nameof(LegalDocumentArtifact), issuedArtifact.Id, 15),
+            Audit(nameof(LeaseAddendum), addendum.Id, 14),
+            Audit(nameof(LeaseAgreementSigner), agreementSigner.Id, 13),
+            Audit(nameof(SignatureRequest), signatureRequest.Id, 12),
+            Audit(nameof(NoticeDraft), noticeDraft.Id, 11),
+            Audit(nameof(LeaseManagementParty), party.Id, 10),
+            Audit(nameof(UnitOperationalPeriod), _db.UnitOperationalPeriods
+                .Where(row => row.UnitId == seeded.Unit.Id)
+                .OrderByDescending(row => row.Id)
+                .Select(row => row.Id)
+                .First(), 9));
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 50, CancellationToken.None);
+
+        rows.Select(row => row.EntityType).Should().Contain([
+            nameof(Tenant), nameof(TenantLedgerEntry), nameof(SecurityDepositAccount), nameof(SecurityDepositEntry),
+            nameof(StoredFile), nameof(LegalDocumentArtifact), nameof(LeaseAddendum), nameof(LeaseAgreementSigner),
+            nameof(SignatureRequest), nameof(NoticeDraft), nameof(LeaseManagementParty), nameof(UnitOperationalPeriod),
+        ]);
+        var auditSql = _executedSql.Single(command =>
+            command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        auditSql.Should().Contain("ORDER BY");
+        auditSql.Should().Contain("LIMIT");
+        auditSql.Should().Contain("TenantLedgerEntries");
+        auditSql.Should().Contain("SecurityDepositAccounts");
+        auditSql.Should().Contain("LeaseAddenda");
+        auditSql.Should().Contain("SignatureRequests");
+        auditSql.Should().Contain("NoticeDrafts");
+    }
+
+    [Fact]
     public async Task GetDashboardAsync_IncludesExpenseAndCanonicalLedgerSourceDocuments()
     {
         var seeded = SeedUnitWithTimelineChildren();
@@ -615,7 +760,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         _db.AddRange(workOrder, expense);
         _db.SaveChanges();
         return new SeededTimelineGraph(
-            graph.Property, graph.Unit, graph.Relationship, graph.Agreement, graph.Account,
+            graph.Property, graph.Unit, graph.Tenant, graph.Relationship, graph.Agreement, graph.Account,
             workOrder, expense, foreignUnit, foreign.Relationship);
     }
 
@@ -839,6 +984,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     private sealed record SeededTimelineGraph(
         Property Property,
         Unit Unit,
+        Tenant Tenant,
         LeaseManagement Relationship,
         LeaseAgreement Agreement,
         TenantAccount Account,
