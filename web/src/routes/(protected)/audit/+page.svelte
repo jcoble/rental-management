@@ -43,6 +43,16 @@
 		'Appointment',
 		'Inspection',
 		'RentalApplication',
+		'RecurringTenantCharge',
+		'RecurringExpense',
+		'CapitalAsset',
+		'ApplicantScreening',
+		'RentalListing',
+		'ListingPublication',
+		'ListingPhoto',
+		'InspectionItem',
+		'VendorDispatch',
+		'ScanDraft',
 	] as const;
 
 	// Keep the exact forensic position in the URL so opening a target and using browser Back restores
@@ -192,6 +202,16 @@
 		EvictionCase: 'Eviction case',
 		EvictionCaseEvent: 'Eviction case event',
 		WorkOrderStatusEvent: 'Work-order activity',
+		RecurringTenantCharge: 'Recurring tenant charge',
+		RecurringExpense: 'Recurring expense',
+		CapitalAsset: 'Capital asset',
+		ApplicantScreening: 'Applicant screening',
+		RentalListing: 'Rental listing',
+		ListingPublication: 'Listing publication',
+		ListingPhoto: 'Listing photo',
+		InspectionItem: 'Inspection checklist item',
+		VendorDispatch: 'Vendor dispatch',
+		ScanDraft: 'Scan draft',
 	};
 
 	function entityLabel(entry: AuditEntry): string {

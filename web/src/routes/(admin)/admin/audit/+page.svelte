@@ -38,6 +38,16 @@
 		'Appointment',
 		'Inspection',
 		'RentalApplication',
+		'RecurringTenantCharge',
+		'RecurringExpense',
+		'CapitalAsset',
+		'ApplicantScreening',
+		'RentalListing',
+		'ListingPublication',
+		'ListingPhoto',
+		'InspectionItem',
+		'VendorDispatch',
+		'ScanDraft',
 	] as const;
 
 	let search = $state('');
