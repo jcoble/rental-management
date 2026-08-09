@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto, pushState, replaceState } from '$app/navigation';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
 	import { inspections } from '$lib/api/endpoints/inspections';
@@ -37,6 +37,7 @@
 	} from '$lib/components/unit/unit-tabs';
 	import {
 		createUnitTabNavigationHandler,
+		normalizeUnitTabNavigationState,
 		resolveUnitPageDestination,
 		synchronizeUnitTabState,
 		type UnitTabNavigationState,
@@ -51,16 +52,27 @@
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
 	const emptyUnitForm: UnitEditForm = { unitNumber: '', floorPlan: '', bedrooms: '', bathrooms: '', squareFeet: '', marketRent: '', notes: '' };
+	const unitPageState = $derived(
+		normalizeUnitTabNavigationState(page.state as UnitTabNavigationState | null | undefined),
+	);
 
 	const activeDestination = $derived(resolveUnitPageDestination(
 		page.url,
-		page.state as UnitTabNavigationState,
+		unitPageState,
 	));
 	const activeTab = $derived(activeDestination.tab);
 	const activeView = $derived(activeDestination.view);
+	let routeStateHydrated = $state(false);
+	onMount(() => {
+		routeStateHydrated = true;
+	});
 
 	$effect(() => {
-		const nextState = synchronizeUnitTabState(page.url, page.state as UnitTabNavigationState);
+		// A hard document navigation can run this effect before SvelteKit has
+		// finished mounting the route component. Defer the first shallow-state
+		// write until onMount so replaceState cannot update an uninitialized page.
+		if (!routeStateHydrated) return;
+		const nextState = synchronizeUnitTabState(page.url, unitPageState);
 		if (!nextState) return;
 		replaceState(`${page.url.pathname}${page.url.search}`, nextState as App.PageState);
 	});
@@ -99,7 +111,7 @@
 	const setTab = createUnitTabNavigationHandler({
 		getCurrent: () => ({
 			url: page.url,
-			state: page.state as UnitTabNavigationState,
+			state: unitPageState,
 		}),
 		pushState: (url, state) => pushState(url, state as App.PageState),
 		replaceState: (url, state) => replaceState(url, state as App.PageState),
@@ -179,7 +191,7 @@
 			url.searchParams.set('view', 'agreements');
 			url.searchParams.set('action', 'confirm-move-in');
 			replaceState(`${url.pathname}${url.search}`, {
-				...page.state,
+				...unitPageState,
 				unitTab: 'tenant-lease',
 				unitView: 'agreements',
 			});
@@ -206,7 +218,7 @@
 		if (page.url.searchParams.get('action') !== 'confirm-move-in') return;
 		const url = new URL(page.url);
 		url.searchParams.delete('action');
-		replaceState(`${url.pathname}${url.search}`, page.state);
+		replaceState(`${url.pathname}${url.search}`, unitPageState as App.PageState);
 	}
 
 	function closeMoveInDialog() {

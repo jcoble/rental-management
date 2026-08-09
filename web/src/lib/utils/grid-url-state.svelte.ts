@@ -1,9 +1,9 @@
 /**
  * Persist a grid's filter / sort / search / paging state in the page URL query string, so it survives
  * navigating away and back (and browser Back/Forward, which remounts the page and re-seeds from the
- * URL). Mirrors EdiPlatform's grid pattern: read the params on load, then `goto('?…', { replaceState })`
- * on change. `replaceState` keeps each keystroke from stacking a history entry; `noScroll` + `keepFocus`
- * keep typing in a filter input undisturbed.
+ * URL). Mirrors EdiPlatform's grid pattern: read the params on load, then use shallow `replaceState`
+ * on change. `replaceState` keeps each keystroke from stacking a history entry and avoids a document
+ * navigation, so focus and the current list stay undisturbed.
  *
  * Usage (Svelte 5 runes): declare the state, seed it from {@link readGridParam} at init, then register a
  * single `$effect` that calls {@link syncGridUrl} with the current values. The query keys you pass are
@@ -25,8 +25,9 @@
  * values that should be OMITTED from the URL (e.g. page 1, the default sort), keeping links tidy.
  */
 
-import { goto } from '$app/navigation';
+import { replaceState } from '$app/navigation';
 import { page } from '$app/state';
+import { tick } from 'svelte';
 
 /** Read a string grid param from the seed URL (empty string when absent). */
 export function readGridParam(params: URLSearchParams, key: string): string;
@@ -80,10 +81,18 @@ export function syncGridUrl(
 	const query = gridQueryString(values, defaults, url.searchParams);
 	const current = url.searchParams.toString();
 	if (query !== current) {
-		void goto(query ? `?${query}` : url.pathname, {
-			replaceState: true,
-			noScroll: true,
-			keepFocus: true,
+		const pathname = url.pathname;
+		const hash = url.hash;
+		// Wait until the current route is mounted before touching shallow history.
+		// A document navigation here can issue a data request while offline and
+		// can race SvelteKit hydration on routes such as Leases. A shallow replace
+		// keeps the current list mounted and changes only the filter URL.
+		void tick().then(() => {
+			if (page.url.pathname !== pathname || page.url.searchParams.toString() === query) return;
+			replaceState(
+				`${pathname}${query ? `?${query}` : ''}${hash}`,
+				page.state ?? {},
+			);
 		});
 	}
 	return query;
