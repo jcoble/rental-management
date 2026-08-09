@@ -14,8 +14,10 @@ declare global {
 		}
 		// interface PageData {}
 		interface PageState {
+			unitPathname?: string | null;
 			unitTab?: string;
 			unitView?: string | null;
+			unitViewByPath?: Record<string, Record<string, string>>;
 			unitPaymentId?: number | null;
 			unitExpenseId?: number | null;
 		}
