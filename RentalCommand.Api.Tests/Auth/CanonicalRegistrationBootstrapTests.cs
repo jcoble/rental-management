@@ -195,6 +195,100 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Register_EnablesLockout_AndLocksAfterFifthFailureUntilExpiry()
+    {
+        var email = $"lockout-{Guid.NewGuid():N}@example.test";
+        var auth = CreateService(
+            CreateAtomicCredentials(),
+            new AccessEnvelopeQuery(_ctx.Db),
+            CreateCanonicalTokens());
+
+        var registered = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = email,
+                Password = "Password123!",
+                DisplayName = "Lockout Regression",
+            }, $"lockout-register-{Guid.NewGuid():N}"));
+
+        registered.Success.Should().BeTrue();
+        var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
+        user.Should().NotBeNull();
+        user!.LockoutEnabled.Should().BeTrue();
+        (await _users.ConfirmEmailAsync(user, registered.EmailConfirmationToken!)).Succeeded
+            .Should().BeTrue();
+
+        for (var attempt = 1; attempt <= 4; attempt++)
+        {
+            var failed = await ExecuteAsApiDatabaseIdentityAsync(() =>
+                auth.LoginAsync(email, "WrongPassword123!"));
+
+            failed.Success.Should().BeFalse();
+            failed.Error.Should().Be("Invalid email or password");
+        }
+
+        var fifth = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.LoginAsync(email, "WrongPassword123!"));
+        fifth.Success.Should().BeFalse();
+        fifth.Error.Should().Be("Account is locked. Try again later.");
+
+        var sixth = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.LoginAsync(email, "WrongPassword123!"));
+        sixth.Success.Should().BeFalse();
+        sixth.Error.Should().Be("Account is locked. Try again later.");
+
+        var lockedUser = await _users.FindByIdAsync(user.Id.ToString());
+        lockedUser!.LockoutEnd.Should().NotBeNull();
+        (await _users.SetLockoutEndDateAsync(
+            lockedUser,
+            DateTimeOffset.UtcNow.AddSeconds(-1))).Succeeded.Should().BeTrue();
+
+        var afterExpiry = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.LoginAsync(email, "Password123!"));
+        afterExpiry.Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ConfirmEmail_InvalidTokenForConfirmedAndUnknownUsersIsNeutral()
+    {
+        var email = $"verification-{Guid.NewGuid():N}@example.test";
+        var auth = CreateService(
+            new Mock<IAtomicAuthSessionCredentialService>().Object,
+            new AccessEnvelopeQuery(_ctx.Db),
+            CreateCanonicalTokens());
+
+        var registered = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = email,
+                Password = "Password123!",
+                DisplayName = "Verification Regression",
+            }, $"verification-register-{Guid.NewGuid():N}"));
+
+        registered.Success.Should().BeTrue();
+        var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
+        user.Should().NotBeNull();
+        (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
+            .Should().BeTrue();
+
+        var confirmedUserWithBogusToken = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.ConfirmEmailAsync(
+                user!.Id.ToString(),
+                "bogus-verification-token",
+                $"verification-invalid-confirmed-{Guid.NewGuid():N}"));
+        var unknownUserWithBogusToken = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.ConfirmEmailAsync(
+                "999999",
+                "bogus-verification-token",
+                $"verification-invalid-unknown-{Guid.NewGuid():N}"));
+
+        confirmedUserWithBogusToken.Success.Should().BeFalse();
+        unknownUserWithBogusToken.Success.Should().BeFalse();
+        confirmedUserWithBogusToken.Error.Should().Be(unknownUserWithBogusToken.Error);
+        confirmedUserWithBogusToken.ErrorType.Should().Be(unknownUserWithBogusToken.ErrorType);
+    }
+
+    [Fact]
     public async Task Logout_RevokesSessionAndRefreshCredentials_AfterRefreshRotation()
     {
         var credentials = CreateAtomicCredentials();

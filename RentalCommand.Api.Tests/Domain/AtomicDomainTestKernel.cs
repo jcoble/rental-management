@@ -237,6 +237,10 @@ internal static class AtomicDomainTestKernel
             BootstrapAccountResult,
             BootstrapAccountHandler>();
         services.AddAtomicCommandHandler<
+            ConfirmAccountEmailCommand,
+            ConfirmAccountEmailResult,
+            ConfirmAccountEmailHandler>();
+        services.AddAtomicCommandHandler<
             StartAuthSessionCommand,
             StartAuthSessionResult,
             StartAuthSessionHandler>();

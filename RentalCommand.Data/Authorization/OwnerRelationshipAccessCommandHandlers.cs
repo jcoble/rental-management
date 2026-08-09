@@ -91,6 +91,7 @@ public sealed class ActivateOwnerPortalAccessHandler
                 Email = email,
                 NormalizedEmail = normalizedEmail,
                 EmailConfirmed = false,
+                LockoutEnabled = true,
                 DisplayName = DisplayName(owner.Name, email),
                 SecurityStamp = Guid.NewGuid().ToString("N"),
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),

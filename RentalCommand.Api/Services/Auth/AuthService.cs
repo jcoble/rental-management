@@ -115,6 +115,9 @@ public interface IAuthService
 
 public class AuthService : IAuthService
 {
+    private const string NeutralEmailConfirmationError =
+        "Email confirmation failed: invalid or expired token";
+
     private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
         new("auth-password-change-result:v1");
     private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
@@ -386,12 +389,12 @@ public class AuthService : IAuthService
     {
         if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
         {
-            return AuthUserResult.Fail("User not found");
+            return AuthUserResult.Fail(NeutralEmailConfirmationError, AuthErrorType.BadRequest);
         }
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
-            return AuthUserResult.Fail("User not found");
+            return AuthUserResult.Fail(NeutralEmailConfirmationError, AuthErrorType.BadRequest);
         }
 
         var tokenValid = await _userManager.VerifyUserTokenAsync(
@@ -411,10 +414,10 @@ public class AuthService : IAuthService
             ct)).Value;
         if (result.Outcome is ConfirmAccountEmailOutcome.InvalidToken)
         {
-            return AuthUserResult.Fail("Email confirmation failed: invalid or expired token", AuthErrorType.BadRequest);
+            return AuthUserResult.Fail(NeutralEmailConfirmationError, AuthErrorType.BadRequest);
         }
         if (result.Outcome is ConfirmAccountEmailOutcome.UserNotFound)
-            return AuthUserResult.Fail("User not found");
+            return AuthUserResult.Fail(NeutralEmailConfirmationError, AuthErrorType.BadRequest);
 
         user.EmailConfirmed = true;
         return AuthUserResult.Ok(await MapToUserDtoAsync(user));
