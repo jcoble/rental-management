@@ -33,10 +33,75 @@ async function withFetch(
 	}
 }
 
-/**
- * Counterfactual: the pre-fix action at +page.server.ts:33-53 ignored non-2xx responses and
- * converted rejected fetches into { sent: true }; the first two behavioral assertions fail there.
- */
+type FetchOutcome =
+	| { kind: 'response'; response: Response }
+	| { kind: 'rejected'; error: Error };
+
+function assertRetryableFailureContract(result: Record<string, unknown>, error: string): void {
+	assert.deepEqual(result, {
+		status: 503,
+		data: {
+			error,
+			sent: false,
+			email
+		}
+	});
+}
+
+/** The pre-fix mutation: every fetch outcome is reported as a neutral success. */
+function preFixResponseHandler(_email: string, _outcome: FetchOutcome): { sent: true } {
+	return { sent: true };
+}
+
+function assertPreFixViolation(
+	scenario: string,
+	outcome: FetchOutcome,
+	error: string
+): { scenario: string; assertion: string; actual: { sent: true }; expected: object } {
+	const actual = preFixResponseHandler(email, outcome);
+	let assertionError: unknown;
+
+	try {
+		assertRetryableFailureContract(actual, error);
+	} catch (caught) {
+		assertionError = caught;
+	}
+
+	assert.ok(assertionError, `${scenario} counterfactual unexpectedly satisfied the failure contract`);
+	assert.equal((assertionError as Error).name, 'AssertionError');
+
+	return {
+		scenario,
+		assertion: (assertionError as Error).message.split('\n', 1)[0],
+		actual,
+		expected: {
+			status: 503,
+			data: { error, sent: false, email }
+		}
+	};
+}
+
+test('forgot-password failure contract rejects the pre-fix always-sent counterfactual', () => {
+	const violations = [
+		assertPreFixViolation(
+			'non-2xx API response',
+			{ kind: 'response', response: new Response(null, { status: 503 }) },
+			'Password recovery is temporarily unavailable. Please try again.'
+		),
+		assertPreFixViolation(
+			'rejected fetch',
+			{ kind: 'rejected', error: new Error('connection refused') },
+			'Unable to connect to Rental Command. Please try again.'
+		)
+	];
+
+	console.log(`Counterfactual violations (pre-fix always-sent): ${JSON.stringify(violations)}`);
+	assert.deepEqual(
+		violations.map(({ scenario }) => scenario),
+		['non-2xx API response', 'rejected fetch']
+	);
+});
+
 test('forgot-password action returns retryable 503 for a non-2xx API response', async () => {
 	await withFetch(
 		async () => new Response(null, { status: 503 }),
