@@ -691,6 +691,13 @@
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
 	let editedFieldsSeeded = $state(false);
+	let scanDateInvalid = $state<Record<string, boolean>>({});
+	const scanDatePickerInvalid = $derived(Object.values(scanDateInvalid).some(Boolean));
+	const SCAN_DATE_FIELDS = new Set(['due_date', 'transaction_date']);
+
+	function isScanDateField(name: string): boolean {
+		return SCAN_DATE_FIELDS.has(name);
+	}
 
 	// Editable line items. Seeded once from the extraction (see the data $effect) and then
 	// owned by the user; the bounded poll / cache refresh must not clobber in-progress edits,
@@ -791,6 +798,7 @@
 		editableStateDraftId = draftId;
 		editedFields = {};
 		editedFieldsSeeded = false;
+		scanDateInvalid = {};
 		editedLineItems = [];
 		lineItemsInitialized = false;
 		lineItemKeySeq = 0;
@@ -2048,13 +2056,23 @@
 												</span>
 											{/if}
 										</div>
-										<Input
-											id="lease-term-{term.name}"
-											data-testid="scan-field-{term.name}"
-											type={term.type}
-											bind:value={editedFields[term.name]}
-											disabled={reviewControlsDisabled}
-										/>
+										{#if term.type === 'date'}
+											<DatePicker
+												id="lease-term-{term.name}"
+												testid="scan-field-{term.name}"
+												bind:value={editedFields[term.name]}
+												bind:invalid={scanDateInvalid[term.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{:else}
+											<Input
+												id="lease-term-{term.name}"
+												data-testid="scan-field-{term.name}"
+												type={term.type}
+												bind:value={editedFields[term.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{/if}
 									</div>
 								{/each}
 							</div>
@@ -2120,13 +2138,23 @@
 												</span>
 											{/if}
 										</div>
-										<Input
-											id="application-{appField.name}"
-											data-testid="scan-field-{appField.name}"
-											type={appField.type}
-											bind:value={editedFields[appField.name]}
-											disabled={reviewControlsDisabled}
-										/>
+										{#if appField.type === 'date'}
+											<DatePicker
+												id="application-{appField.name}"
+												testid="scan-field-{appField.name}"
+												bind:value={editedFields[appField.name]}
+												bind:invalid={scanDateInvalid[appField.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{:else}
+											<Input
+												id="application-{appField.name}"
+												data-testid="scan-field-{appField.name}"
+												type={appField.type}
+												bind:value={editedFields[appField.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{/if}
 									</div>
 								{/each}
 							</div>
@@ -2288,13 +2316,23 @@
 														</span>
 													{/if}
 												</div>
-												<Input
-													id="loan-statement-{statementField.name}"
-													data-testid="scan-field-{statementField.name}"
-													type={statementField.type}
-													bind:value={editedFields[statementField.name]}
-													disabled={reviewControlsDisabled}
-												/>
+												{#if statementField.type === 'date'}
+													<DatePicker
+														id="loan-statement-{statementField.name}"
+														testid="scan-field-{statementField.name}"
+														bind:value={editedFields[statementField.name]}
+														bind:invalid={scanDateInvalid[statementField.name]}
+														disabled={reviewControlsDisabled}
+													/>
+												{:else}
+													<Input
+														id="loan-statement-{statementField.name}"
+														data-testid="scan-field-{statementField.name}"
+														type={statementField.type}
+														bind:value={editedFields[statementField.name]}
+														disabled={reviewControlsDisabled}
+													/>
+												{/if}
 											</div>
 										{/each}
 									</div>
@@ -2319,13 +2357,23 @@
 												</span>
 											{/if}
 										</div>
-										<Input
-											id="loan-{loanField.name}"
-											data-testid="scan-field-{loanField.name}"
-											type={loanField.type}
-											bind:value={editedFields[loanField.name]}
-											disabled={reviewControlsDisabled}
-										/>
+										{#if loanField.type === 'date'}
+											<DatePicker
+												id="loan-{loanField.name}"
+												testid="scan-field-{loanField.name}"
+												bind:value={editedFields[loanField.name]}
+												bind:invalid={scanDateInvalid[loanField.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{:else}
+											<Input
+												id="loan-{loanField.name}"
+												data-testid="scan-field-{loanField.name}"
+												type={loanField.type}
+												bind:value={editedFields[loanField.name]}
+												disabled={reviewControlsDisabled}
+											/>
+										{/if}
 									</div>
 								{/each}
 							</div>
@@ -2528,6 +2576,14 @@
 												{/each}
 											</Select.Content>
 										</Select.Root>
+									{:else if isScanDateField(fieldName)}
+										<DatePicker
+											id="field-{fieldName}"
+											testid="scan-field-{fieldName}"
+											bind:value={editedFields[fieldName]}
+											bind:invalid={scanDateInvalid[fieldName]}
+											disabled={reviewControlsDisabled}
+										/>
 									{:else}
 										<Input
 											id="field-{fieldName}"
@@ -2575,6 +2631,14 @@
 															{/each}
 														</Select.Content>
 													</Select.Root>
+												{:else if isScanDateField(field.name)}
+													<DatePicker
+														id="field-{field.name}"
+														testid="scan-field-{field.name}"
+														bind:value={editedFields[field.name]}
+														bind:invalid={scanDateInvalid[field.name]}
+														disabled={reviewControlsDisabled}
+													/>
 												{:else}
 													<!-- Raw <input> needed here to support the use:focusFirstLow action (actions cannot be placed on components) -->
 													<input
@@ -2752,7 +2816,7 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || leaseRentTrackingInvalid || applicationInvalid || loanInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || scanDatePickerInvalid || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || leaseRentTrackingInvalid || applicationInvalid || loanInvalid || amountInvalid}
 								class="flex-1"
 							>
 								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? loanReviewMode === 'match' ? 'Match & Record Payment' : 'Add Loan' : 'Confirm & Create Expense'}

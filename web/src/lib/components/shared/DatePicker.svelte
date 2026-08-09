@@ -1,7 +1,7 @@
 <!--
   DatePicker — date-only picker (typeable input + shadcn Calendar in a Popover).
 
-  A drop-in replacement for `<input type="date">`. Binds a plain ISO `yyyy-MM-dd`
+  A drop-in replacement for the native date input. Binds a plain ISO `yyyy-MM-dd`
   string (or "" for empty). NO time, NO timezone: a calendar date has no tz, so we
   never do tz math here — the API layer pins date-only fields to UTC on the wire.
 
@@ -207,7 +207,7 @@
 	}
 </script>
 
-<div class="relative">
+<div class="date-picker-shell relative w-full min-w-40">
 	<input
 		{id}
 		type="text"
@@ -222,12 +222,12 @@
 		onblur={commitText}
 		onkeydown={handleKeydown}
 		class={cn(
-			'm3-field-surface h-11 w-full rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-[6.5rem] text-left text-sm font-normal text-foreground outline-none',
+			'date-picker-input m3-field-surface h-11 w-full min-w-0 rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-[6.5rem] text-left text-sm font-normal text-foreground outline-none',
 			'placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			invalid && 'ring-2 ring-destructive'
 		)}
 	/>
-	<div class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+	<div class="date-picker-actions absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
 		<button
 			type="button"
 			{disabled}
@@ -236,7 +236,7 @@
 			onclick={setToday}
 			class={cn(
 				buttonVariants({ variant: 'ghost', size: 'sm' }),
-				'h-8 px-2 text-xs text-muted-foreground hover:bg-transparent'
+				'date-picker-today h-8 whitespace-nowrap px-2 text-xs text-muted-foreground hover:bg-transparent'
 			)}
 		>
 			Today
@@ -249,7 +249,7 @@
 				data-testid={testid ? `${testid}-calendar-trigger` : undefined}
 				class={cn(
 					buttonVariants({ variant: 'ghost', size: 'icon' }),
-					'size-9 text-muted-foreground hover:bg-transparent'
+					'date-picker-calendar-trigger size-9 shrink-0 text-muted-foreground hover:bg-transparent'
 				)}
 			>
 				<CalendarIcon class="size-4 shrink-0 opacity-70" />
@@ -273,3 +273,36 @@
 		Enter a date as MM/DD/YYYY
 	</p>
 {/if}
+
+<style>
+	/* The text input owns the date text. Keep the actions in the field without
+	 * stealing so much inline space that a narrow two-column form only shows a
+	 * punctuation mark. */
+	.date-picker-shell {
+		container: date-picker / inline-size;
+	}
+
+	@container date-picker (max-width: 12rem) {
+		.date-picker-input {
+			/* Compact actions are two 2rem buttons plus a small gap. */
+			padding-right: 4.25rem !important;
+		}
+
+		.date-picker-today {
+			/* Preserve the Today shortcut's accessible name, but give the date
+			 * text the width first. */
+			width: 2rem;
+			padding-inline: 0;
+			font-size: 0;
+		}
+
+		:global(.date-picker-calendar-trigger) {
+			height: 2rem !important;
+			width: 2rem !important;
+		}
+
+		.date-picker-actions {
+			gap: 0;
+		}
+	}
+</style>

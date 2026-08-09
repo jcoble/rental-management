@@ -50,6 +50,10 @@
 		categoryAccountId: null as number | null
 	});
 	let errors = $state<Record<string, string>>({});
+	let effectiveDateInvalid = $state(false);
+	let dueDateInvalid = $state(false);
+	let servicePeriodStartInvalid = $state(false);
+	let servicePeriodEndInvalid = $state(false);
 	let documentName = $state('');
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
@@ -61,6 +65,9 @@
 	}));
 	const accounts = $derived(accountsQuery.data?.items ?? []);
 	const chargeMapping = $derived(tenantChargeType(form.chargeType));
+	const datePickerInvalid = $derived(
+		effectiveDateInvalid || dueDateInvalid || servicePeriodStartInvalid || servicePeriodEndInvalid
+	);
 	const resolvedAccount = $derived.by(() => {
 		if (chargeMapping.systemKey) return accounts.find((account) => account.systemKey === chargeMapping.systemKey) ?? null;
 		return accounts.find((account) => account.id === form.categoryAccountId) ?? null;
@@ -82,6 +89,10 @@
 				categoryAccountId: null
 			};
 			errors = {};
+			effectiveDateInvalid = false;
+			dueDateInvalid = false;
+			servicePeriodStartInvalid = false;
+			servicePeriodEndInvalid = false;
 			documentName = '';
 			operationKey = null;
 			initializedKey = nextKey;
@@ -101,10 +112,12 @@
 	function validate(): boolean {
 		errors = {};
 		if (!(Number(form.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
-		if (!form.effectiveOn) errors.effectiveOn = 'Pick the effective date.';
-		if (!form.dueOn) errors.dueOn = 'Pick the due date.';
+		if (effectiveDateInvalid || !form.effectiveOn) errors.effectiveOn = 'Pick a valid effective date.';
+		if (dueDateInvalid || !form.dueOn) errors.dueOn = 'Pick a valid due date.';
 		if (!form.description.trim()) errors.description = 'Describe this charge.';
-		if ((form.servicePeriodStartOn && !form.servicePeriodEndOn) || (!form.servicePeriodStartOn && form.servicePeriodEndOn)) {
+		if (servicePeriodStartInvalid || servicePeriodEndInvalid) {
+			errors.servicePeriod = 'Enter valid service-period dates.';
+		} else if ((form.servicePeriodStartOn && !form.servicePeriodEndOn) || (!form.servicePeriodStartOn && form.servicePeriodEndOn)) {
 			errors.servicePeriod = 'Enter both service-period dates or leave both empty.';
 		} else if (form.servicePeriodStartOn && form.servicePeriodEndOn && form.servicePeriodEndOn < form.servicePeriodStartOn) {
 			errors.servicePeriod = 'Service-period end must be on or after the start.';
@@ -167,12 +180,22 @@
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-effective-date">
 				<span>Effective date</span>
-				<DatePicker id="one-time-charge-effective-date" bind:value={form.effectiveOn} />
+				<DatePicker
+					id="one-time-charge-effective-date"
+					testid="one-time-charge-effective-date"
+					bind:value={form.effectiveOn}
+					bind:invalid={effectiveDateInvalid}
+				/>
 				{#if errors.effectiveOn}<span class="block text-xs font-normal text-destructive">{errors.effectiveOn}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-due-date">
 				<span>Due date</span>
-				<DatePicker id="one-time-charge-due-date" bind:value={form.dueOn} />
+				<DatePicker
+					id="one-time-charge-due-date"
+					testid="one-time-charge-due-date"
+					bind:value={form.dueOn}
+					bind:invalid={dueDateInvalid}
+				/>
 				{#if errors.dueOn}<span class="block text-xs font-normal text-destructive">{errors.dueOn}</span>{/if}
 			</label>
 			<div class="space-y-1 text-sm font-medium">
@@ -180,11 +203,21 @@
 				<div class="grid gap-2 sm:grid-cols-2">
 					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-start">
 						<span>Start</span>
-						<DatePicker id="one-time-charge-service-start" bind:value={form.servicePeriodStartOn} />
+						<DatePicker
+							id="one-time-charge-service-start"
+							testid="one-time-charge-service-start"
+							bind:value={form.servicePeriodStartOn}
+							bind:invalid={servicePeriodStartInvalid}
+						/>
 					</label>
 					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-end">
 						<span>End</span>
-						<DatePicker id="one-time-charge-service-end" bind:value={form.servicePeriodEndOn} />
+						<DatePicker
+							id="one-time-charge-service-end"
+							testid="one-time-charge-service-end"
+							bind:value={form.servicePeriodEndOn}
+							bind:invalid={servicePeriodEndInvalid}
+						/>
 					</label>
 				</div>
 				{#if errors.servicePeriod}<span class="block text-xs font-normal text-destructive">{errors.servicePeriod}</span>{/if}
@@ -217,7 +250,7 @@
 
 		<Dialog.Footer>
 			<Button variant="outline" onclick={close} disabled={mutation.isPending}>Cancel</Button>
-			<Button onclick={() => validate() && mutation.mutate()} disabled={mutation.isPending} data-testid="one-time-charge-submit">
+			<Button onclick={() => validate() && mutation.mutate()} disabled={mutation.isPending || datePickerInvalid} data-testid="one-time-charge-submit">
 				{mutation.isPending ? 'Adding…' : 'Add charge'}
 			</Button>
 		</Dialog.Footer>
