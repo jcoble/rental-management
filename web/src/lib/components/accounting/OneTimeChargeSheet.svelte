@@ -171,7 +171,7 @@
 </script>
 
 <Dialog.Root open={open} onOpenChange={(next) => { if (!next) close(); }}>
-	<Dialog.Content class="max-w-xl" data-testid="one-time-charge-sheet">
+	<Dialog.Content class="max-w-2xl" data-testid="one-time-charge-sheet">
 		<Dialog.Header>
 			<Dialog.Title>Add one-time charge</Dialog.Title>
 			<div class="flex items-start gap-1.5">
