@@ -80,6 +80,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
             Email = email,
             DisplayName = displayName.Trim(),
             EmailConfirmed = emailConfirmed,
+            LockoutEnabled = true,
         };
         var validationErrors = new List<string>();
         // Identity's user validator also performs a state-dependent uniqueness query. Duplicate

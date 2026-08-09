@@ -999,7 +999,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void RlsAuthorityVersions_PreserveHistoricalL15AndInstallCurrentBootstrapAuthority()
     {
         FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260809);
         FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
 
@@ -1105,6 +1105,32 @@ public sealed class FoundationBaselinePostgreSqlTests
         act.Should().Throw<System.Reflection.TargetInvocationException>()
             .WithInnerException<NotSupportedException>()
             .WithMessage("*intentionally irreversible*production latency defect*database backup*");
+    }
+
+    [Fact]
+    public void CurrentRlsAuthorityBundle_ContainsAuthSessionRevokeAdmission_AndMigrationUsesIt()
+    {
+        var normalizedAuthoritySql = Regex.Replace(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+        normalizedAuthoritySql.Should().Contain("target_command_type = 'auth-session:revoke'");
+        normalizedAuthoritySql.Should().Contain(
+            "target_command_idempotency_key ~ '^operation:[0-9a-f]{32}$'");
+        normalizedAuthoritySql.Should().Contain(
+            "target_new_values ->> 'AuthSessionId' = NULLIF(current_setting('app.auth_session_id', true), '')");
+        normalizedAuthoritySql.Should().Contain(
+            "session.xmin = pg_current_xact_id()::xid");
+        normalizedAuthoritySql.Should().Contain(
+            "receipt.xmin = pg_current_xact_id()::xid");
+        normalizedAuthoritySql.Should().Contain(
+            "ALTER FUNCTION rc_pre_auth_account_security_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)");
+
+        var migration = new RestoreAuthSessionRevokeAudit();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RestoreAuthSessionRevokeAudit).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+        builder.Operations.OfType<SqlOperation>().Should().ContainSingle()
+            .Which.Sql.Should().BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSql);
     }
 
     [Fact]

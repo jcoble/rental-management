@@ -653,6 +653,7 @@ public sealed class GrantTenantUserAccessHandler
                 Email = email,
                 NormalizedEmail = normalizedEmail,
                 EmailConfirmed = false,
+                LockoutEnabled = true,
                 DisplayName = string.IsNullOrWhiteSpace(target.DisplayName) ? email : target.DisplayName,
                 SecurityStamp = Guid.NewGuid().ToString("N"),
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),

@@ -8,6 +8,13 @@ namespace RentalCommand.Core.Entities;
 /// </summary>
 public class ApplicationUser : IdentityUser<int>
 {
+    public ApplicationUser()
+    {
+        // Failed-login lockout is a platform invariant. Keep the Identity default enabled even
+        // for callers that construct an account outside the canonical bootstrap command.
+        LockoutEnabled = true;
+    }
+
     public string DisplayName { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
