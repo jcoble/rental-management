@@ -49,9 +49,12 @@
 	} from '$lib/onboarding/wizard-steps';
 	import { celebrateMilestone, bigFinale } from '$lib/onboarding/celebrations';
 	import {
+		areOnboardingDetectionQueriesReady,
+		hasOnboardingDetectionQueryFailed,
 		resolveInitialOnboardingState,
 		shouldFinishAfterOptionalStep,
 	} from '$lib/onboarding/onboarding-flow-state';
+	import { isPersonalAlertSetupComplete } from '$lib/onboarding/alert-completion';
 	import {
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
@@ -129,7 +132,6 @@
 	let createdLease = $state(false);
 	let leaseImportCreatedSpine = $state(false);
 	let portfolioSaved = $state(false);
-	let notificationsSaved = $state(false);
 	let returnToFinishAfterOptional = $state(false);
 
 	// ---------------------------------------------------------------------------
@@ -181,6 +183,12 @@
 		queryKey: ['notification-settings', 'my-alerts'],
 		enabled: portfolioId > 0,
 		queryFn: () => notifications.myAlerts.get(),
+	}));
+	const gettingStartedSignalsQuery = createQuery(() => ({
+		queryKey: ['getting-started', portfolioId],
+		enabled: portfolioId > 0,
+		queryFn: () => portfolios.gettingStarted(),
+		staleTime: 60_000,
 	}));
 
 	async function loadOwnerOptions(params: { search?: string; skip: number; take: number }) {
@@ -236,7 +244,7 @@
 		property: leaseImportCreatedSpine || !!createdProperty || hasExistingProperties,
 		tenants: leaseImportCreatedSpine || createdTenants.length > 0 || hasExistingTenants,
 		lease: leaseImportCreatedSpine || createdLease || hasExistingLeases,
-		notifications: notificationsSaved,
+		notifications: isPersonalAlertSetupComplete(gettingStartedSignalsQuery.data?.hasNotificationEmail),
 	});
 
 	// A1: the real "set-up spine" — a property, a tenant, and a lease all exist. The wizard lets a user
@@ -291,22 +299,24 @@
 	// requests settle before an earlier query, their proxy never notifies this component and setup
 	// can remain on the detection screen until a manual refetch.
 	const detectionReady = $derived(
-		[
+		areOnboardingDetectionQueriesReady([
 			portfolioQuery.isSuccess,
 			ownersQuery.isSuccess,
 			propertiesQuery.isSuccess,
 			tenantsQuery.isSuccess,
-			leasesQuery.isSuccess
-		].every(Boolean)
+			leasesQuery.isSuccess,
+			gettingStartedSignalsQuery.isSuccess,
+		])
 	);
 	const detectionFailed = $derived(
-		[
+		hasOnboardingDetectionQueryFailed([
 			portfolioQuery.isError,
 			ownersQuery.isError,
 			propertiesQuery.isError,
 			tenantsQuery.isError,
-			leasesQuery.isError
-		].some(Boolean)
+			leasesQuery.isError,
+			gettingStartedSignalsQuery.isError,
+		])
 	);
 	function retryExistingDataDetection() {
 		void portfolioQuery.refetch();
@@ -314,6 +324,7 @@
 		void propertiesQuery.refetch();
 		void tenantsQuery.refetch();
 		void leasesQuery.refetch();
+		void gettingStartedSignalsQuery.refetch();
 	}
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
@@ -1113,7 +1124,7 @@
 
 	function submitLease() {
 		if (leasePrefillDraftId == null) {
-			showSuccess('Choose an approved application to prepare the tenant relationship and agreement together.');
+			showError('This guided step cannot create a lease without an approved application or imported agreement. Choose an approved application to continue.');
 			void goto('/applications');
 			return;
 		}
@@ -1176,10 +1187,11 @@
 	});
 	const saveMyAlertsMutation = createMutation(() => ({
 		mutationFn: () => notifications.myAlerts.update(alertForm),
-		onSuccess: () => {
-			notificationsSaved = true;
+		onSuccess: async () => {
 			showSuccess('Your alert preferences were saved.');
-			queryClient.invalidateQueries({ queryKey: ['notification-settings', 'my-alerts'] });
+			await queryClient.invalidateQueries({ queryKey: ['notification-settings', 'my-alerts'] });
+			await queryClient.invalidateQueries({ queryKey: ['getting-started', portfolioId] });
+			await Promise.all([myAlertsQuery.refetch(), gettingStartedSignalsQuery.refetch()]);
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -1233,6 +1245,7 @@
 		if (stepIndex < STEPS.length - 1) {
 			if (reachedMilestone) celebrateMilestone();
 			stepIndex += 1;
+			syncStepUrl(STEPS[stepIndex].key);
 		} else {
 			bigFinale();
 			finishFlow();
@@ -1250,13 +1263,21 @@
 				propertySub = 'address';
 			}
 			stepIndex -= 1;
+			syncStepUrl(STEPS[stepIndex].key);
 		}
 	}
 	function skip() {
 		next({ celebrate: false });
 	}
+	function syncStepUrl(key: WizardStepKey) {
+		if (!browser || page.url.searchParams.get('step') === key) return;
+		const url = new URL(page.url);
+		url.searchParams.set('step', key);
+		void goto(`${url.pathname}${url.search}`, { replaceState: true, keepFocus: true, noScroll: true });
+	}
 	function goToStep(key: WizardStepKey) {
 		stepIndex = STEPS.findIndex((s) => s.key === key);
+		syncStepUrl(key);
 	}
 	function openOptionalStepFromFinished(key: WizardStepKey) {
 		returnToFinishAfterOptional = true;
@@ -1414,7 +1435,7 @@
 							data-testid="onboarding-step-group-{group.label.toLowerCase()}"
 						>
 							<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-								{group.label}{#if groupOptional}<span class="ml-1 normal-case text-muted-foreground/70">optional</span>{/if}
+								{group.label}{#if groupOptional}{' '}<span class="ml-1 normal-case text-muted-foreground/70">optional</span>{/if}
 							</span>
 							<div class="flex items-center gap-1">
 								{#each groupSteps as step, i (step.key)}
@@ -1798,6 +1819,8 @@
 														{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
 													</div>
 												</div>
+											<details class="mt-3" data-testid="onboarding-unit-more-details">
+												<summary class="cursor-pointer text-xs font-medium text-muted-foreground" data-testid="onboarding-unit-more-details-toggle">More unit details</summary>
 												<div class="mt-3 grid gap-2 sm:grid-cols-3">
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Square feet</span>
@@ -1815,6 +1838,7 @@
 														{#if unitRowErrors[i]?.notes}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].notes}</p>{/if}
 													</div>
 												</div>
+											</details>
 											</div>
 										{/each}
 									</div>
@@ -1982,6 +2006,7 @@
 											testid="onboarding-lease-end"
 											bind:value={leaseForm.endDate}
 											onchange={handleLeaseEndDateChange}
+											showToday={false}
 											placeholder="End date"
 										/>
 										{#if leaseErrors.endDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.endDate}</p>{/if}
