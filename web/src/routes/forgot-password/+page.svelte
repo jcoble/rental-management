@@ -9,7 +9,13 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
-	let email = $state(data.email ?? '');
+	let email = $state('');
+
+	$effect(() => {
+		const returnedEmail =
+			form && 'email' in form && typeof form.email === 'string' ? form.email : null;
+		email = returnedEmail ?? data.email ?? '';
+	});
 </script>
 
 <svelte:head>

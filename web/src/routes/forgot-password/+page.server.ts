@@ -1,9 +1,9 @@
 /**
  * Forgot-password page server action.
  *
- * The API ALWAYS returns 200 regardless of whether an account exists, to
- * prevent account enumeration. We show the same generic success message
- * unconditionally after the action runs.
+ * The API returns 200 regardless of whether an account exists, to prevent account
+ * enumeration. Infrastructure failures are different: they must remain retryable
+ * and must not be presented as if an email was sent.
  */
 
 import { fail } from '@sveltejs/kit';
@@ -30,19 +30,28 @@ export const actions: Actions = {
 			const operationKey = createHash('sha256')
 				.update(`${email}:${Math.floor(Date.now() / 60_000)}`)
 				.digest('hex');
-			// We fire this request and ignore any non-network error — the API always
-			// returns 200 regardless of whether the account exists.
-			await fetch(`${SERVER_API_BASE_URL}/auth/forgot-password`, {
+			const response = await fetch(`${SERVER_API_BASE_URL}/auth/forgot-password`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
 				body: JSON.stringify({ email })
 			});
+			if (!response.ok) {
+				return fail(503, {
+					error: 'Password recovery is temporarily unavailable. Please try again.',
+					sent: false,
+					email
+				});
+			}
 		} catch (err) {
 			console.error('Forgot password error:', err);
-			// Even on network error we show the generic message to avoid leaking info.
+			return fail(503, {
+				error: 'Unable to connect to Rental Command. Please try again.',
+				sent: false,
+				email
+			});
 		}
 
-		// Always show the generic success state.
+		// Show the neutral success state only after the API request completed successfully.
 		return { sent: true };
 	}
 };

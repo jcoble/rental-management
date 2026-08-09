@@ -302,9 +302,10 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724,
             FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725,
             FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260727,
-            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728,
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql);
         FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
-            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260809);
         FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
             .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
     }
@@ -817,10 +818,22 @@ public sealed class RlsResourceScopePlanRegressionTests : IAsyncLifetime
             .Which.Should().BeSameAs(
                 FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260728);
 
+        var revokeMigration = new RestoreAuthSessionRevokeAudit();
+        var revokeBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RestoreAuthSessionRevokeAudit).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(revokeMigration, [revokeBuilder]);
+        var revokeSql = revokeBuilder.Operations.OfType<SqlOperation>()
+            .Select(operation => operation.Sql)
+            .ToArray();
+        revokeSql.Should().ContainSingle()
+            .Which.Should().BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSql);
+
         var sql = l15Sql.Append(laterSql[0])
             .Concat(optimizedSql)
             .Concat(businessClockSql)
             .Concat(resourceClockSql)
+            .Concat(revokeSql)
             .ToArray();
         foreach (var statement in sql) await ExecuteOwnerSqlAsync(statement);
         return sql;

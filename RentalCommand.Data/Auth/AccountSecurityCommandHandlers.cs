@@ -38,6 +38,7 @@ public sealed class BootstrapAccountHandler
             Email = command.Email,
             NormalizedEmail = command.NormalizedEmail,
             EmailConfirmed = command.EmailConfirmed,
+            LockoutEnabled = true,
             DisplayName = command.DisplayName,
             PasswordHash = command.PasswordHash,
             SecurityStamp = Guid.NewGuid().ToString("N"),
@@ -292,13 +293,13 @@ public sealed class ConfirmAccountEmailHandler
         {
             return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.UserNotFound, command.UserId);
         }
-        if (user.EmailConfirmed)
-        {
-            return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.AlreadyConfirmed, user.Id);
-        }
         if (!command.TokenWasValidated)
         {
             return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.InvalidToken, user.Id);
+        }
+        if (user.EmailConfirmed)
+        {
+            return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.AlreadyConfirmed, user.Id);
         }
         EnsureStamp(user, command.ExpectedSecurityStamp);
 

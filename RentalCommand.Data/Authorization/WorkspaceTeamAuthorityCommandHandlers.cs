@@ -312,6 +312,7 @@ public sealed class CreateWorkspaceMembershipHandler
                 Email = email,
                 NormalizedEmail = normalizedEmail,
                 EmailConfirmed = false,
+                LockoutEnabled = true,
                 DisplayName = displayName,
                 SecurityStamp = Guid.NewGuid().ToString("N"),
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),

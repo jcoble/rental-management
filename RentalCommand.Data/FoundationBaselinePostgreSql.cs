@@ -2812,7 +2812,96 @@ internal static class FoundationBaselinePostgreSql
             RlsAuthorityFunctionSqlV20260728,
             RlsApiScopeAllowsFunctionSqlV20260801);
 
-    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260801;
+    internal static readonly string RlsAuthorityFunctionSqlV20260809 =
+        AddAuthSessionRevokeAuditAdmission(RlsAuthorityFunctionSqlV20260801);
+
+    internal static readonly string RlsAuthorityFunctionSql = RlsAuthorityFunctionSqlV20260809;
+
+    private const string AuthSessionRevokeAdmissionSqlV20260809 = """
+              OR (
+                session_user = 'rentalcommand_api'
+                AND target_portfolio_id IS NOT NULL
+                AND target_portfolio_id > 0
+                AND target_attempt_id IS NOT NULL
+                AND target_command_type = 'auth-session:revoke'
+                AND target_command_idempotency_key ~ '^operation:[0-9a-f]{32}$'
+                AND target_mutation_ordinal = 1
+                AND target_user_id IS NOT NULL
+                AND target_user_id > 0
+                AND target_entity_type = 'AuthSession'
+                AND target_operation = 1
+                AND target_actor_label = 'authentication:logout'
+                AND target_change_reason = 'Authentication session revoked'
+                AND target_new_values IS NOT NULL
+                AND target_new_values ->> 'AuthSessionId' =
+                    NULLIF(current_setting('app.auth_session_id', true), '')
+                AND target_user_id::text =
+                    NULLIF(current_setting('app.current_user_id', true), '')
+                AND target_entity_id::text =
+                    NULLIF(current_setting('app.current_access_context_id', true), '')
+                AND EXISTS (
+                  SELECT 1
+                  FROM public."AuthSessions" session
+                  JOIN public."WorkspaceAccessContexts" access_context
+                    ON access_context."Id" = session."ActiveAccessContextId"
+                   AND access_context."UserId" = session."UserId"
+                  WHERE session."Id"::text = target_new_values ->> 'AuthSessionId'
+                    AND session."UserId" = target_user_id
+                    AND session."ActiveAccessContextId" = target_entity_id
+                    AND session."Status" = 'Revoked'
+                    AND session."RevokedAtUtc" IS NOT NULL
+                    AND session.xmin = pg_current_xact_id()::xid
+                    AND access_context."Id" = target_entity_id
+                    AND access_context."PortfolioId" = target_portfolio_id
+                    AND access_context."AccessRevision"::text =
+                        NULLIF(current_setting('app.access_revision', true), ''))
+                AND EXISTS (
+                  SELECT 1
+                  FROM public."AtomicCommandReceipts" receipt
+                  WHERE receipt."AttemptId" = target_attempt_id
+                    AND receipt."CommandType" = target_command_type
+                    AND receipt."IdempotencyKey" = target_command_idempotency_key
+                    AND receipt.xmin = pg_current_xact_id()::xid)
+              )
+""";
+
+    private static string AddAuthSessionRevokeAuditAdmission(string authoritySql)
+    {
+        const string startMarker =
+            "CREATE OR REPLACE FUNCTION rc_pre_auth_account_security_audit_allows(";
+        const string nextMarker =
+            "CREATE OR REPLACE FUNCTION rc_bootstrap_initial_workspace(";
+        const string existingTail = "AND receipt.xmin = pg_current_xact_id()::xid)";
+        var functionStart = authoritySql.IndexOf(startMarker, StringComparison.Ordinal);
+        var nextFunction = authoritySql.IndexOf(
+            nextMarker,
+            functionStart + startMarker.Length,
+            StringComparison.Ordinal);
+        if (functionStart < 0 || nextFunction <= functionStart)
+        {
+            throw new InvalidOperationException(
+                "Could not locate the account-security authority function in the canonical bundle.");
+        }
+
+        var functionSql = authoritySql[functionStart..nextFunction];
+        var tailIndex = functionSql.LastIndexOf(existingTail, StringComparison.Ordinal);
+        if (tailIndex < 0)
+        {
+            throw new InvalidOperationException(
+                "The canonical account-security authority function must contain its receipt tail.");
+        }
+
+        var replacementFunction = string.Concat(
+            functionSql[..tailIndex],
+            existingTail,
+            "\n",
+            AuthSessionRevokeAdmissionSqlV20260809,
+            functionSql[(tailIndex + existingTail.Length)..]);
+        return string.Concat(
+            authoritySql[..functionStart],
+            replacementFunction,
+            authoritySql[nextFunction..]);
+    }
 
     private static string ReplaceInitialScopeAuthorityFunction(
         string historicalAuthoritySql,
