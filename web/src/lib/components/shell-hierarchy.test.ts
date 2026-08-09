@@ -86,25 +86,22 @@ describe('tenant shell hierarchy', () => {
 	});
 });
 
-describe('management rentals hierarchy', () => {
-	test('keeps global Rentals lists and restores the server-paged Command Center picker', () => {
+	describe('management rentals hierarchy', () => {
+		test('keeps global Rentals lists and exposes the server-paged Units picker', () => {
 		const rentalsStart = appShell.indexOf("id: 'rentals'");
 		const workStart = appShell.indexOf("id: 'work'", rentalsStart);
 		const rentalsGroup = appShell.slice(rentalsStart, workStart);
 
 		assert.match(rentalsGroup, /label: 'Rentals'/);
-		assert.match(rentalsGroup, /\{ href: '\/units', label: 'Units', icon: Home \}/);
+			assert.doesNotMatch(rentalsGroup, /\{ href: '\/units', label: 'Units', icon: Home \}/);
 		assert.match(appShell, /import CommandCenterNav/);
 		assert.match(appShell, /<CommandCenterNav/);
 		assert.match(commandCenterNav, /createQuery|listWithHealthPage|take:\s*20|#each\s+matchedUnits/);
 		assert.match(commandCenterNav, /search:\s*debouncedSearch\.value/);
 		assert.match(commandCenterNav, /enabled:\s*portfolioId > 0 && open && !collapsed/);
 		assert.doesNotMatch(commandCenterNav, /\.filter\(/);
-		assert.match(commandCenterNav, />Command Center</);
-		assert.match(
-			appShell,
-			/if \(href === '\/units'\) return currentPath === '\/units' \|\| currentPath\.startsWith\('\/units\/'\)/
-		);
+			assert.match(commandCenterNav, />Units</);
+			assert.match(appShell, /currentPath\.startsWith\('\/units\/'\)/);
 		assert.match(commandCenterNav, /staleTime:\s*5 \* 60 \* 1000/);
 		assert.match(
 			appShell,
@@ -121,7 +118,7 @@ describe('management rentals hierarchy', () => {
 		assert.equal(canAccessRoute('/units/42', 'Tenant', managementCapabilities), false);
 		assert.match(
 			appShell,
-			/const commandCenterTitleItem: NavItem = \{ href: '\/units\/', label: 'Command Center', icon: Home \}/
+				/const commandCenterTitleItem: NavItem = \{ href: '\/units\/', label: 'Units', icon: Home \}/
 		);
 	});
 });

@@ -73,6 +73,20 @@
 	}));
 
 	const report = $derived(reportQuery.data as OwnerStatementReport | undefined);
+	function propertyHasBalance(property: OwnerStatementReport['properties'][number]): boolean {
+		return [property.rentalIncome, property.expenses, property.managementFee, property.netToOwner].some(
+			(value) => Math.abs(value) > 0.005
+		);
+	}
+	const zeroPropertyCount = $derived(
+		(report?.properties ?? []).filter((property) => !propertyHasBalance(property)).length
+	);
+	let showZeroPropertyBalances = $state(false);
+	const visiblePropertyBreakdown = $derived(
+		showZeroPropertyBalances
+			? (report?.properties ?? [])
+			: (report?.properties ?? []).filter(propertyHasBalance)
+	);
 	const distributionQuery = createQuery(() => ({
 		queryKey: ['owner-distributions', portfolioId, selectedOwnerId, selectedYear],
 		queryFn: () =>
@@ -673,49 +687,65 @@
 						</Card.Root>
 					</div>
 
-					<!-- Property breakdown table -->
-					{#if report.properties.length > 0}
-						<Card.Root class="gap-0 py-0" data-testid="owners-report-properties-table">
-							<Card.Header class="border-b border-border px-4 py-3">
-								<Card.Title class="text-base font-semibold">Property breakdown</Card.Title>
-							</Card.Header>
-							<Card.Content class="p-0">
-								<div class="overflow-x-auto">
-									<table class="w-full text-sm">
-										<thead>
-											<tr class="border-b border-border bg-muted/50">
-												<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property</th>
-												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Income</th>
-												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Expenses</th>
-												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Management fee</th>
-												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Net</th>
-											</tr>
-										</thead>
-										<tbody>
-											{#each report.properties as prop (prop.propertyId)}
-												<tr
-													class="border-b border-border/50 last:border-0 hover:bg-muted/30"
-													data-testid="owners-report-property-row-{prop.propertyId}"
-												>
-													<td class="px-4 py-3 font-medium text-foreground">{prop.propertyName}</td>
-													<td class="px-4 py-3 text-right font-mono tabular-nums text-[var(--success)]">{money(prop.rentalIncome)}</td>
-													<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.expenses)}</td>
-													<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.managementFee)}</td>
-													<td
-														class="px-4 py-3 text-right font-mono tabular-nums font-semibold {prop.netToOwner >= 0
-															? 'text-[var(--success)]'
-															: 'text-destructive'}"
-													>
-														{money(prop.netToOwner)}
-													</td>
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
-							</Card.Content>
-						</Card.Root>
+		<!-- Property breakdown table -->
+		{#if report.properties.length > 0}
+			<Card.Root class="gap-0 py-0" data-testid="owners-report-properties-table">
+				<Card.Header class="border-b border-border px-4 py-3">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<Card.Title class="text-base font-semibold">Property breakdown</Card.Title>
+						{#if zeroPropertyCount > 0}
+							<button
+								type="button"
+								class="text-sm font-medium text-primary underline-offset-4 hover:underline"
+								onclick={() => (showZeroPropertyBalances = !showZeroPropertyBalances)}
+								data-testid="owners-report-toggle-zero-properties"
+							>
+								{showZeroPropertyBalances ? 'Hide' : 'Show'} {zeroPropertyCount} {zeroPropertyCount === 1 ? 'property' : 'properties'} with no balance
+							</button>
+						{/if}
+					</div>
+				</Card.Header>
+				<Card.Content class="p-0">
+					{#if visiblePropertyBreakdown.length === 0}
+						<p class="px-4 py-5 text-sm text-muted-foreground">No property has income, expenses, fees, or a net balance for this statement.</p>
+					{:else}
+						<div class="overflow-x-auto">
+							<table class="w-full text-sm">
+								<thead>
+									<tr class="border-b border-border bg-muted/50">
+										<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property</th>
+										<th class="px-4 py-3 text-right font-medium text-muted-foreground">Income</th>
+										<th class="px-4 py-3 text-right font-medium text-muted-foreground">Expenses</th>
+										<th class="px-4 py-3 text-right font-medium text-muted-foreground">Management fee</th>
+										<th class="px-4 py-3 text-right font-medium text-muted-foreground">Net</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each visiblePropertyBreakdown as prop (prop.propertyId)}
+										<tr
+											class="border-b border-border/50 last:border-0 hover:bg-muted/30"
+											data-testid="owners-report-property-row-{prop.propertyId}"
+										>
+											<td class="px-4 py-3 font-medium text-foreground">{prop.propertyName}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-[var(--success)]">{money(prop.rentalIncome)}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.expenses)}</td>
+											<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.managementFee)}</td>
+											<td
+												class="px-4 py-3 text-right font-mono tabular-nums font-semibold {prop.netToOwner >= 0
+													? 'text-[var(--success)]'
+													: 'text-destructive'}"
+											>
+												{money(prop.netToOwner)}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
 					{/if}
+				</Card.Content>
+			</Card.Root>
+		{/if}
 				{/if}
 			</div>
 		</div>

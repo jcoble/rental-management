@@ -68,6 +68,12 @@
 	// (DashboardService.ResolveActivityLabelsAsync / AuditDescriber). Types without a page → no link.
 	function activityHref(activity: DashboardActivity): string | null {
 		if (!activity.entityId) return null;
+		if (activity.type === 'LeaseAgreement' && activity.unitId) {
+			return `/units/${activity.unitId}?tab=leasing`;
+		}
+		if (activity.type === 'TenantAccount' && activity.unitId) {
+			return `/units/${activity.unitId}?tab=money&view=tenant-account&tenantAccount=${activity.entityId}`;
+		}
 		const unitHref = recordEntityHref(activity.type, activity.entityId, activity.unitId);
 		if (unitHref) return unitHref;
 		switch (activity.type) {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
-	 * Dev-only floating control for the master simulation clock (spec §7.3). Mounted from the root
-	 * +layout.svelte behind `PUBLIC_SIMULATION_ENABLED`. Shows sim-now live and drives the /dev/clock
+	 * Dev-only control for the master simulation clock (spec §7.3). Mounted in the app top bar
+	 * behind `PUBLIC_SIMULATION_ENABLED`. Shows sim-now live and drives the /dev/clock
 	 * endpoints (set-date / +1d / +1w / +1m / freeze-unfreeze / reset) via the authenticated api client;
 	 * each mutation's response is mirrored into the inline Date shim immediately for snappy feedback (the
 	 * ~1s poll keeps it synced thereafter).
@@ -108,9 +108,10 @@
 
 <style>
 	.sim-panel {
-		position: fixed;
-		top: calc(3.5rem + 12px);
-		right: 12px;
+		position: absolute;
+		top: 50%;
+		right: 0;
+		transform: translateY(-50%);
 		z-index: 99999;
 		width: 224px;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

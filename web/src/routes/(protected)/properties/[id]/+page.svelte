@@ -725,7 +725,7 @@
 				testid="property-detail-meta-card"
 				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
 			>
-				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rental setup</dt><dd class="mt-1 text-sm font-semibold">{formatRentalStructure(property.rentalStructure)}</dd></div>
+				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rental count</dt><dd class="mt-1 text-sm font-semibold">{formatRentalStructure(property.rentalStructure)}</dd></div>
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Owner</dt><dd class="mt-1 text-sm font-semibold">{ownershipLabel(property.ownerships)}</dd></div>
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year built</dt><dd class="mt-1 text-sm font-semibold">{property.yearBuilt ?? '—'}</dd></div>
 				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management fee</dt><dd class="mt-1 text-sm font-semibold">{property.managementFeePercent != null ? `${property.managementFeePercent}%` : '—'}</dd></div>
@@ -739,7 +739,7 @@
 			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" morphName="vt-prop-name" />
 				<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" morphName="vt-prop-type" />
-				<InlineField label="Rental setup" bind:value={propertyForm.rentalStructure} display={formatRentalStructure(property.rentalStructure)} editing={false} type="select" options={rentalStructureOptions} error={propertyFormErrors.rentalStructure} testid="property-detail-rental-structure" morphName="vt-prop-rental-structure" />
+				<InlineField label="Rental count" bind:value={propertyForm.rentalStructure} display={formatRentalStructure(property.rentalStructure)} editing={false} type="select" options={rentalStructureOptions} error={propertyFormErrors.rentalStructure} testid="property-detail-rental-structure" morphName="vt-prop-rental-structure" />
 				<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" morphName="vt-prop-status" />
 				{#if editingProperty}
 					<div class="sm:col-span-2">
@@ -833,7 +833,7 @@
 			</DataGrid>
 		</div>
 		<div data-testid="property-detail-leases">
-			<h2 class="mb-3 text-lg font-semibold">Rental relationships</h2>
+			<h2 class="mb-3 text-lg font-semibold">Leases</h2>
 			<DataGrid
 				data={leasesList}
 				columns={leaseColumns}

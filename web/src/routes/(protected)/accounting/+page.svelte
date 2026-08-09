@@ -54,6 +54,7 @@
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
+	import AccountingDetailModeControl from '$lib/components/accounting/AccountingDetailModeControl.svelte';
 	import MoneyPositionPanel from '$lib/components/accounting/MoneyPositionPanel.svelte';
 	import GeneralLedgerPanel from '$lib/components/accounting/GeneralLedgerPanel.svelte';
 	import CashFlowPanel from '$lib/components/accounting/CashFlowPanel.svelte';
@@ -642,17 +643,7 @@
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
-		},
-		{
-			// "Entered" = when the row was scanned/created. Default sort so freshly-scanned items
-			// land at the top even when their transaction Date is wrong/old. Tooltip reveals the
-			// edited time when it differs from created.
-			key: 'createdAt',
-			title: 'Entered',
-			format: 'date',
-			sortable: true,
-			mobileRole: 'meta',
-			cell: transactionEnteredCell,
+			cell: transactionDateCell,
 		},
 		{
 			key: 'kind',
@@ -679,6 +670,9 @@
 			format: 'currency',
 			sortable: true,
 			mobileRole: 'metric',
+			width: '7rem',
+			pinned: 'right',
+			pinnedOffset: '5rem',
 		},
 		{
 			key: 'category',
@@ -713,6 +707,8 @@
 			mobileRole: 'hidden',
 			width: '5rem',
 			align: 'center',
+			pinned: 'right',
+			pinnedOffset: '0',
 			cell: transactionReceiptCell,
 		},
 		{
@@ -725,14 +721,14 @@
 	];
 </script>
 
-{#snippet transactionEnteredCell(t: AccountingTransaction)}
+{#snippet transactionDateCell(t: AccountingTransaction)}
 	{@const edited = wasEdited(t.createdAt, t.updatedAt)}
 	<span
 		class="inline-flex items-center gap-1"
 		title={`Entered ${fullStamp(t.createdAt)}${edited ? ` · Edited ${fullStamp(t.updatedAt)}` : ''}`}
-		data-testid="transaction-entered-{t.kind.toLowerCase()}-{t.id}"
+		data-testid="transaction-date-{t.kind.toLowerCase()}-{t.id}"
 	>
-		{enteredDate(t.createdAt)}
+		{enteredDate(t.date)}
 		{#if edited}
 			<span class="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">· edited</span>
 		{/if}
@@ -860,25 +856,17 @@
 	<title>Money - Rental Command</title>
 </svelte:head>
 
-<AccountingDetailMode class="mb-4 w-full justify-end" testid="accounting-detail-mode">
+<AccountingDetailMode showControl={false} testid="accounting-detail-mode">
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
 	<PageHeader
-		class="mb-5"
-		band
-		art={1}
-		tone="mint"
-		eyebrow="Money"
+		class="mb-4"
+		density="compact"
+		eyebrow=""
 		title="Money"
-		description="See cash available, rent past due, activity, and reports."
+		description="Cash, rent, activity, and reports in one place."
 		data-testid="accounting-header"
+		actions={accountingHeaderActions}
 	>
-		<a
-			href="/docs/accounting-overview"
-			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-			data-testid="accounting-help-link"
-		>
-			How Money works
-		</a>
 	</PageHeader>
 
 	<Tabs.Root bind:value={activeTab} class="w-full">
@@ -1197,6 +1185,20 @@
 	</Tabs.Root>
 </div>
 </AccountingDetailMode>
+
+{#snippet accountingHeaderActions()}
+	<div class="flex flex-wrap items-center justify-end gap-2">
+		<span class="hidden text-xs text-muted-foreground xl:inline">Advanced adds bookkeeping detail where available.</span>
+		<AccountingDetailModeControl testid="accounting-detail-mode" />
+		<a
+			href="/docs/accounting-overview"
+			class="inline-flex min-h-10 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+			data-testid="accounting-help-link"
+		>
+			How Money works
+		</a>
+	</div>
+{/snippet}
 
 
 <Dialog.Root

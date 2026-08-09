@@ -18,6 +18,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	export interface OneTimeChargeSeed {
 		description?: string;
@@ -29,12 +30,22 @@
 	let {
 		open,
 		tenantAccountId,
+		tenantName = '',
+		propertyName = '',
+		unitLabel = '',
+		currentBalance = null,
+		currency = 'USD',
 		seed = null,
 		onclose,
 		onsaved
 	}: {
 		open: boolean;
 		tenantAccountId: number;
+		tenantName?: string;
+		propertyName?: string;
+		unitLabel?: string;
+		currentBalance?: number | null;
+		currency?: string;
 		seed?: OneTimeChargeSeed | null;
 		onclose: () => void;
 		onsaved: () => void;
@@ -74,6 +85,35 @@
 		if (chargeMapping.systemKey) return accounts.find((account) => account.systemKey === chargeMapping.systemKey) ?? null;
 		return accounts.find((account) => account.id === form.categoryAccountId) ?? null;
 	});
+	const targetLabel = $derived(
+		[tenantName || 'Tenant account', propertyName, unitLabel].filter(Boolean).join(' · ')
+	);
+	const projectedBalance = $derived(
+		currentBalance == null || !form.amount.trim() || !Number.isFinite(Number(form.amount))
+			? null
+			: currentBalance + Number(form.amount || 0)
+	);
+
+	function monthRange(offset: number): { start: string; end: string } {
+		const now = new Date();
+		const year = now.getUTCFullYear();
+		const month = now.getUTCMonth() + offset;
+		const startDate = new Date(Date.UTC(year, month, 1));
+		const endDate = new Date(Date.UTC(year, month + 1, 0));
+		return {
+			start: startDate.toISOString().slice(0, 10),
+			end: endDate.toISOString().slice(0, 10)
+		};
+	}
+
+	function setServiceMonth(offset: number): void {
+		const range = monthRange(offset);
+		form.servicePeriodStartOn = range.start;
+		form.servicePeriodEndOn = range.end;
+		servicePeriodStartInvalid = false;
+		servicePeriodEndInvalid = false;
+		delete errors.servicePeriod;
+	}
 
 	$effect(() => {
 		const nextKey = open
@@ -157,27 +197,34 @@
 		<Dialog.Header>
 			<Dialog.Title>Add one-time charge</Dialog.Title>
 			<div class="flex items-start gap-1.5">
-				<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+				<div class="min-w-0 space-y-1">
+					<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+					<p class="text-sm font-medium text-foreground" data-testid="one-time-charge-target">{targetLabel}</p>
+					{#if projectedBalance != null}
+						<p class="text-xs text-muted-foreground" data-testid="one-time-charge-projected-balance">New balance {formatAccountingCurrency(projectedBalance, currency)}</p>
+					{/if}
+				</div>
 				<HelpPopover
 					title={ACCOUNTING_HELP.oneTimeCharge.title}
 					summary={ACCOUNTING_HELP.oneTimeCharge.summary}
 					learnMoreUrl={ACCOUNTING_HELP.oneTimeCharge.href}
 					testid="one-time-charge-help"
+					side="right"
 				/>
 			</div>
 		</Dialog.Header>
 
 		<div class="grid gap-4 sm:grid-cols-2">
 			<label class="space-y-1 text-sm font-medium sm:col-span-2" for="one-time-charge-type">
-				<span>What is this charge for?</span>
+				<span>Charge type</span>
 				<Select.Root type="single" bind:value={form.chargeType}>
-					<Select.Trigger id="one-time-charge-type" class="w-full">{chargeMapping.label}</Select.Trigger>
+					<Select.Trigger id="one-time-charge-type" class="w-full" data-testid="one-time-charge-type">{chargeMapping.label}</Select.Trigger>
 					<Select.Content>{#each TENANT_CHARGE_TYPES as option}<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>{/each}</Select.Content>
 				</Select.Root>
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-amount">
 				<span>Amount</span>
-				<Input id="one-time-charge-amount" type="text" inputmode="decimal" mask="currency" bind:value={form.amount} placeholder="0.00" />
+				<Input id="one-time-charge-amount" type="text" inputmode="decimal" mask="currency" bind:value={form.amount} placeholder="0.00" autofocus data-testid="one-time-charge-amount" />
 				{#if errors.amount}<span class="block text-xs font-normal text-destructive">{errors.amount}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-effective-date">
@@ -201,24 +248,33 @@
 				{#if errors.dueOn}<span class="block text-xs font-normal text-destructive">{errors.dueOn}</span>{/if}
 			</label>
 			<div class={SERVICE_PERIOD_SECTION_CLASS}>
-				<span>Service period <span class="font-normal text-muted-foreground">(optional)</span></span>
+				<div class="flex flex-wrap items-baseline justify-between gap-2">
+					<span>What period does this cover? <span class="font-normal text-muted-foreground">(optional)</span></span>
+					<div class="flex flex-wrap gap-1" aria-label="Service period presets">
+						<button type="button" class="rounded-md border border-border px-2 py-1 text-xs font-normal text-muted-foreground hover:bg-muted" onclick={() => setServiceMonth(0)} data-testid="one-time-charge-service-this-month">This month</button>
+						<button type="button" class="rounded-md border border-border px-2 py-1 text-xs font-normal text-muted-foreground hover:bg-muted" onclick={() => setServiceMonth(-1)} data-testid="one-time-charge-service-last-month">Last month</button>
+					</div>
+				</div>
+				<p class="text-xs font-normal text-muted-foreground">The range describes the months this charge covers for reporting; it does not change the due date.</p>
 				<div class="grid gap-2 sm:grid-cols-2">
 					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-start">
-						<span>Start</span>
+						<span>Start date</span>
 						<DatePicker
 							id="one-time-charge-service-start"
 							testid="one-time-charge-service-start"
 							bind:value={form.servicePeriodStartOn}
 							bind:invalid={servicePeriodStartInvalid}
+							max={form.servicePeriodEndOn || undefined}
 						/>
 					</label>
 					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-end">
-						<span>End</span>
+						<span>End date</span>
 						<DatePicker
 							id="one-time-charge-service-end"
 							testid="one-time-charge-service-end"
 							bind:value={form.servicePeriodEndOn}
 							bind:invalid={servicePeriodEndInvalid}
+							min={form.servicePeriodStartOn || undefined}
 						/>
 					</label>
 				</div>
@@ -231,8 +287,9 @@
 			</label>
 			{#if form.chargeType === 'Other'}
 				<div class="space-y-1 text-sm font-medium sm:col-span-2" data-testid="one-time-charge-category">
-					<span>Category</span>
+					<span>Income category <span class="font-normal text-muted-foreground">(required for Other)</span></span>
 					<AccountPicker bind:selectedAccountId={form.categoryAccountId} allowAll={false} types={['Income']} />
+					<p class="text-xs font-normal text-muted-foreground">Choose where this charge should appear in income reports.</p>
 					{#if errors.category}<span class="block text-xs font-normal text-destructive">{errors.category}</span>{/if}
 				</div>
 			{:else if accountsQuery.isLoading}

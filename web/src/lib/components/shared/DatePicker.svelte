@@ -248,7 +248,7 @@
 			>
 				<CalendarIcon class="size-4 shrink-0 opacity-70" />
 			</Popover.Trigger>
-			<Popover.Content class="w-auto p-0" align="start">
+			<Popover.Content class="w-auto p-0" align="start" collisionPadding={{ top: 16, right: 16, bottom: 96, left: 16 }}>
 				<Calendar
 					type="single"
 					value={selected}

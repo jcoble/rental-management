@@ -145,6 +145,19 @@
 	const pastDue = $derived(accountSummary?.pastDueAmount ?? dashboard.tenantAccountCondition.pastDueAmount);
 	const unappliedCredit = $derived(accountSummary?.unappliedCredit ?? null);
 	const deposit = $derived(depositQuery.data);
+	const balancesMatch = $derived(
+		balanceDue != null && pastDue != null && Math.abs(balanceDue - pastDue) < 0.005
+	);
+	const oldestOpenCharge = $derived.by(() => {
+		const openCharges = rows.filter((row) => row.chargeAmount > 0 && row.openAmount > 0 && row.dueOn);
+		return [...openCharges].sort((left, right) => String(left.dueOn).localeCompare(String(right.dueOn)))[0] ?? null;
+	});
+	const oldestChargeAge = $derived.by(() => {
+		if (!oldestOpenCharge?.dueOn) return null;
+		const due = new Date(`${oldestOpenCharge.dueOn}T00:00:00Z`).getTime();
+		const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
+		return Math.max(0, Math.floor((today - due) / 86_400_000));
+	});
 
 	const monthGroups = $derived.by(() => {
 		const rowsByMonth = new Map<string, TenantLedgerRow[]>();
@@ -306,10 +319,22 @@
 			<p class="text-xs text-muted-foreground">Balance due</p>
 			<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{formatAccountingCurrency(balanceDue, currency)}</p>
 		</div>
-		<div class="min-w-36 rounded-xl border border-border bg-card px-4 py-3">
-			<p class="text-xs text-muted-foreground">Past due</p>
-			<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{formatAccountingCurrency(pastDue, currency)}</p>
-		</div>
+		{#if balancesMatch}
+			<div class="min-w-44 rounded-xl border border-border bg-card px-4 py-3" data-testid="tenant-ledger-oldest-charge">
+				<p class="text-xs text-muted-foreground">Oldest open charge</p>
+				{#if oldestOpenCharge}
+					<p class="mt-1 font-medium">{oldestChargeAge ? `${oldestChargeAge} days late` : `Due ${formatAccountingDate(oldestOpenCharge.dueOn)}`}</p>
+					<p class="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{formatAccountingCurrency(oldestOpenCharge.openAmount, currency)}</p>
+				{:else}
+					<p class="mt-1 font-medium">No open charges</p>
+				{/if}
+			</div>
+		{:else}
+			<div class="min-w-36 rounded-xl border border-border bg-card px-4 py-3" data-testid="tenant-ledger-past-due">
+				<p class="text-xs text-muted-foreground">Past due</p>
+				<p class="mt-1 font-mono text-xl font-semibold tabular-nums">{formatAccountingCurrency(pastDue, currency)}</p>
+			</div>
+		{/if}
 		<div class="min-w-48 rounded-xl border border-border bg-card px-4 py-3">
 			<p class="text-xs text-muted-foreground">Next due</p>
 			<p class="mt-1 font-medium">{formatAccountingDate(nextDueOn)} <span class="font-mono tabular-nums">· {formatAccountingCurrency(nextDueAmount, currency)}</span></p>
@@ -408,6 +433,11 @@
 	open={sheet === 'charge'}
 	tenantAccountId={tenantAccountId ?? 0}
 	seed={chargeSeed}
+	tenantName={dashboard.currentTenant?.name ?? dashboard.currentTenants?.map((tenant) => tenant.name).join(', ') ?? ''}
+	propertyName={dashboard.propertyName}
+	unitLabel={`Unit ${dashboard.unit.unitNumber}`}
+	currentBalance={balanceDue}
+	currency={currency}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -441,13 +471,13 @@
 		</Dialog.Header>
 		<div class="space-y-2">
 			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'reduce' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'reduce'} onclick={() => fixChoice = 'reduce'}>
-				<span class="block font-medium">Reduce it</span><span class="block text-sm text-muted-foreground">Posts a credit applied to this charge.</span>
+					<span class="block font-medium">Issue a credit</span><span class="block text-sm text-muted-foreground">Posts a credit to reduce this charge.</span>
 			</button>
 			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'increase' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'increase'} onclick={() => fixChoice = 'increase'}>
-				<span class="block font-medium">Increase it</span><span class="block text-sm text-muted-foreground">Posts an additional charge.</span>
+					<span class="block font-medium">Add the missing amount</span><span class="block text-sm text-muted-foreground">Posts a related charge for the amount that was missed.</span>
 			</button>
 			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'remove' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'remove'} onclick={() => fixChoice = 'remove'}>
-				<span class="block font-medium">Remove it entirely</span><span class="block text-sm text-muted-foreground">Reverses the charge.</span>
+					<span class="block font-medium">Reverse the posted charge</span><span class="block text-sm text-muted-foreground">Removes this charge with a linked reversal entry.</span>
 			</button>
 		</div>
 		<Dialog.Footer>
