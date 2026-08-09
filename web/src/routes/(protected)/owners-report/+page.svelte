@@ -73,20 +73,9 @@
 	}));
 
 	const report = $derived(reportQuery.data as OwnerStatementReport | undefined);
-	function propertyHasBalance(property: OwnerStatementReport['properties'][number]): boolean {
-		return [property.rentalIncome, property.expenses, property.managementFee, property.netToOwner].some(
-			(value) => Math.abs(value) > 0.005
-		);
-	}
-	const zeroPropertyCount = $derived(
-		(report?.properties ?? []).filter((property) => !propertyHasBalance(property)).length
-	);
+	const zeroPropertyCount = $derived(report?.zeroPropertyCount ?? 0);
+	const nonZeroPropertyCount = $derived(report?.nonZeroPropertyCount ?? 0);
 	let showZeroPropertyBalances = $state(false);
-	const visiblePropertyBreakdown = $derived(
-		showZeroPropertyBalances
-			? (report?.properties ?? [])
-			: (report?.properties ?? []).filter(propertyHasBalance)
-	);
 	const distributionQuery = createQuery(() => ({
 		queryKey: ['owner-distributions', portfolioId, selectedOwnerId, selectedYear],
 		queryFn: () =>
@@ -706,7 +695,7 @@
 					</div>
 				</Card.Header>
 				<Card.Content class="p-0">
-					{#if visiblePropertyBreakdown.length === 0}
+					{#if nonZeroPropertyCount === 0 && !showZeroPropertyBalances}
 						<p class="px-4 py-5 text-sm text-muted-foreground">No property has income, expenses, fees, or a net balance for this statement.</p>
 					{:else}
 						<div class="overflow-x-auto">
@@ -721,7 +710,8 @@
 									</tr>
 								</thead>
 								<tbody>
-									{#each visiblePropertyBreakdown as prop (prop.propertyId)}
+									{#each report.properties as prop (prop.propertyId)}
+										{#if showZeroPropertyBalances || prop.hasBalance}
 										<tr
 											class="border-b border-border/50 last:border-0 hover:bg-muted/30"
 											data-testid="owners-report-property-row-{prop.propertyId}"
@@ -738,6 +728,7 @@
 												{money(prop.netToOwner)}
 											</td>
 										</tr>
+										{/if}
 									{/each}
 								</tbody>
 							</table>

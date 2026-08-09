@@ -360,6 +360,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
 
         var authorized = _db.JournalLines.AsNoTracking().WhereAccountingAuthorized(
             _db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
         var throughAsOf = authorized.Where(line => line.JournalEntry!.EffectiveOn <= to);
         var position = await throughAsOf.GroupBy(_ => 1)
             .Select(group => new MoneyPositionSqlRow
@@ -412,13 +414,37 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                           line.LedgerAccount!.AccountType == AccountType.Expense
                             ? line.LedgerAccount.NormalBalance == NormalBalance.Debit
                                 ? -(line.DebitAmount - line.CreditAmount)
-                                : -(line.CreditAmount - line.DebitAmount)
+                            : -(line.CreditAmount - line.DebitAmount)
                             : 0m),
+                PastDueAmount = _db.TenantAccountBalanceProjections
+                    .Where(balance =>
+                        balance.PortfolioId == scope.PortfolioId &&
+                        balance.PastDueAmount > 0m &&
+                        authorizedProperties.Any(property =>
+                            property.PortfolioId == balance.PortfolioId &&
+                            property.Id == _db.LeaseManagements
+                                .Where(management =>
+                                    management.PortfolioId == balance.PortfolioId &&
+                                    management.Id == balance.LeaseManagementId)
+                                .Select(management => management.PropertyId)
+                                .FirstOrDefault()))
+                    .Sum(balance => (decimal?)balance.PastDueAmount) ?? 0m,
+                PastDueCount = _db.TenantAccountBalanceProjections
+                    .Where(balance =>
+                        balance.PortfolioId == scope.PortfolioId &&
+                        balance.PastDueAmount > 0m &&
+                        authorizedProperties.Any(property =>
+                            property.PortfolioId == balance.PortfolioId &&
+                            property.Id == _db.LeaseManagements
+                                .Where(management =>
+                                    management.PortfolioId == balance.PortfolioId &&
+                                    management.Id == balance.LeaseManagementId)
+                                .Select(management => management.PropertyId)
+                                .FirstOrDefault()))
+                    .Count(),
             })
             .SingleOrDefaultAsync(ct) ?? new MoneyPositionSqlRow();
 
-        var authorizedProperties = _db.Properties.AsNoTracking()
-            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, asOfUtc);
         var depositPosition = await (
                 from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
                 join management in _db.LeaseManagements.AsNoTracking()
@@ -478,6 +504,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             CashPaid = movement.CashPaid,
             NetCashMovement = movement.CashReceived - movement.CashPaid,
             ProfitOrLoss = position.ProfitOrLoss,
+            PastDueAmount = position.PastDueAmount,
+            PastDueCount = position.PastDueCount,
         };
     }
 
@@ -497,7 +525,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 Net = lines.Where(line => line.LedgerAccountId == account.Id)
                     .Sum(line => (decimal?)(line.DebitAmount - line.CreditAmount)) ?? 0m,
             });
-        var rows = await balances.Select(balance => new TrialBalanceRow
+        var rowsWithTotals = await balances.Select(balance => new TrialBalanceSqlRow
             {
                 AccountId = balance.LedgerAccountId,
                 AccountCode = balance.Code,
@@ -508,23 +536,40 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 TypeSubtotal = balances.Where(other => other.AccountType == balance.AccountType)
                     .Sum(other => other.Net),
                 Currency = balance.Currency,
+                IsZeroBalance = balance.Net <= 0.005m && balance.Net >= -0.005m,
+                TotalDebits = balances.Sum(other => other.Net >= 0m ? other.Net : 0m),
+                TotalCredits = balances.Sum(other => other.Net < 0m ? -other.Net : 0m),
+                ZeroBalanceCount = balances.Count(other =>
+                    other.Net <= 0.005m && other.Net >= -0.005m),
             })
             .OrderBy(row => row.AccountCode)
             .ThenBy(row => row.Currency)
             .ToListAsync(ct);
-        var totals = await balances.GroupBy(_ => 1).Select(group => new
-        {
-            Debits = group.Sum(balance => balance.Net >= 0m ? balance.Net : 0m),
-            Credits = group.Sum(balance => balance.Net < 0m ? -balance.Net : 0m),
-        }).SingleOrDefaultAsync(ct);
-        var totalDebits = totals?.Debits ?? 0m;
-        var totalCredits = totals?.Credits ?? 0m;
+
+        // The row projection carries the server-computed totals so disclosure facts and
+        // presentation rows come from the same translated SQL statement. Mapping below only
+        // strips the repeated summary columns; it does not aggregate or classify in memory.
+        var firstRow = rowsWithTotals.FirstOrDefault();
+        var totalDebits = firstRow?.TotalDebits ?? 0m;
+        var totalCredits = firstRow?.TotalCredits ?? 0m;
         return new TrialBalanceResponse
         {
-            Rows = rows,
+            Rows = rowsWithTotals.Select(row => new TrialBalanceRow
+            {
+                AccountId = row.AccountId,
+                AccountCode = row.AccountCode,
+                AccountName = row.AccountName,
+                AccountType = row.AccountType,
+                DebitBalance = row.DebitBalance,
+                CreditBalance = row.CreditBalance,
+                TypeSubtotal = row.TypeSubtotal,
+                Currency = row.Currency,
+                IsZeroBalance = row.IsZeroBalance,
+            }).ToList(),
             TotalDebits = totalDebits,
             TotalCredits = totalCredits,
             IsBalanced = totalDebits == totalCredits,
+            ZeroBalanceCount = firstRow?.ZeroBalanceCount ?? 0,
         };
     }
 
@@ -1100,6 +1145,24 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         public decimal Assets { get; init; }
         public decimal Liabilities { get; init; }
         public decimal ProfitOrLoss { get; init; }
+        public decimal PastDueAmount { get; init; }
+        public int PastDueCount { get; init; }
+    }
+
+    private sealed class TrialBalanceSqlRow
+    {
+        public int AccountId { get; init; }
+        public string AccountCode { get; init; } = string.Empty;
+        public string AccountName { get; init; } = string.Empty;
+        public AccountType AccountType { get; init; }
+        public decimal DebitBalance { get; init; }
+        public decimal CreditBalance { get; init; }
+        public decimal TypeSubtotal { get; init; }
+        public string Currency { get; init; } = string.Empty;
+        public bool IsZeroBalance { get; init; }
+        public decimal TotalDebits { get; init; }
+        public decimal TotalCredits { get; init; }
+        public int ZeroBalanceCount { get; init; }
     }
 
     private sealed class DepositPositionSqlRow

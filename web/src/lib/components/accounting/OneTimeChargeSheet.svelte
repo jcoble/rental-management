@@ -10,6 +10,7 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import { datePickerSubmitDisabled } from '$lib/components/shared/date-picker-state';
 	import { SERVICE_PERIOD_SECTION_CLASS } from './one-time-charge-layout';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -65,8 +66,7 @@
 	let errors = $state<Record<string, string>>({});
 	let effectiveDateInvalid = $state(false);
 	let dueDateInvalid = $state(false);
-	let servicePeriodStartInvalid = $state(false);
-	let servicePeriodEndInvalid = $state(false);
+	let servicePeriodInvalid = $state(false);
 	let documentName = $state('');
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
@@ -79,7 +79,7 @@
 	const accounts = $derived(accountsQuery.data?.items ?? []);
 	const chargeMapping = $derived(tenantChargeType(form.chargeType));
 	const datePickerInvalid = $derived(
-		effectiveDateInvalid || dueDateInvalid || servicePeriodStartInvalid || servicePeriodEndInvalid
+		effectiveDateInvalid || dueDateInvalid || servicePeriodInvalid
 	);
 	const resolvedAccount = $derived.by(() => {
 		if (chargeMapping.systemKey) return accounts.find((account) => account.systemKey === chargeMapping.systemKey) ?? null;
@@ -93,27 +93,6 @@
 			? null
 			: currentBalance + Number(form.amount || 0)
 	);
-
-	function monthRange(offset: number): { start: string; end: string } {
-		const now = new Date();
-		const year = now.getUTCFullYear();
-		const month = now.getUTCMonth() + offset;
-		const startDate = new Date(Date.UTC(year, month, 1));
-		const endDate = new Date(Date.UTC(year, month + 1, 0));
-		return {
-			start: startDate.toISOString().slice(0, 10),
-			end: endDate.toISOString().slice(0, 10)
-		};
-	}
-
-	function setServiceMonth(offset: number): void {
-		const range = monthRange(offset);
-		form.servicePeriodStartOn = range.start;
-		form.servicePeriodEndOn = range.end;
-		servicePeriodStartInvalid = false;
-		servicePeriodEndInvalid = false;
-		delete errors.servicePeriod;
-	}
 
 	$effect(() => {
 		const nextKey = open
@@ -133,8 +112,7 @@
 			errors = {};
 			effectiveDateInvalid = false;
 			dueDateInvalid = false;
-			servicePeriodStartInvalid = false;
-			servicePeriodEndInvalid = false;
+			servicePeriodInvalid = false;
 			documentName = '';
 			operationKey = null;
 			initializedKey = nextKey;
@@ -157,7 +135,7 @@
 		if (effectiveDateInvalid || !form.effectiveOn) errors.effectiveOn = 'Pick a valid effective date.';
 		if (dueDateInvalid || !form.dueOn) errors.dueOn = 'Pick a valid due date.';
 		if (!form.description.trim()) errors.description = 'Describe this charge.';
-		if (servicePeriodStartInvalid || servicePeriodEndInvalid) {
+		if (servicePeriodInvalid) {
 			errors.servicePeriod = 'Enter valid service-period dates.';
 		} else if ((form.servicePeriodStartOn && !form.servicePeriodEndOn) || (!form.servicePeriodStartOn && form.servicePeriodEndOn)) {
 			errors.servicePeriod = 'Enter both service-period dates or leave both empty.';
@@ -250,34 +228,17 @@
 			<div class={SERVICE_PERIOD_SECTION_CLASS}>
 				<div class="flex flex-wrap items-baseline justify-between gap-2">
 					<span>What period does this cover? <span class="font-normal text-muted-foreground">(optional)</span></span>
-					<div class="flex flex-wrap gap-1" aria-label="Service period presets">
-						<button type="button" class="rounded-md border border-border px-2 py-1 text-xs font-normal text-muted-foreground hover:bg-muted" onclick={() => setServiceMonth(0)} data-testid="one-time-charge-service-this-month">This month</button>
-						<button type="button" class="rounded-md border border-border px-2 py-1 text-xs font-normal text-muted-foreground hover:bg-muted" onclick={() => setServiceMonth(-1)} data-testid="one-time-charge-service-last-month">Last month</button>
-					</div>
 				</div>
 				<p class="text-xs font-normal text-muted-foreground">The range describes the months this charge covers for reporting; it does not change the due date.</p>
-				<div class="grid gap-2 sm:grid-cols-2">
-					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-start">
-						<span>Start date</span>
-						<DatePicker
-							id="one-time-charge-service-start"
-							testid="one-time-charge-service-start"
-							bind:value={form.servicePeriodStartOn}
-							bind:invalid={servicePeriodStartInvalid}
-							max={form.servicePeriodEndOn || undefined}
-						/>
-					</label>
-					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-end">
-						<span>End date</span>
-						<DatePicker
-							id="one-time-charge-service-end"
-							testid="one-time-charge-service-end"
-							bind:value={form.servicePeriodEndOn}
-							bind:invalid={servicePeriodEndInvalid}
-							min={form.servicePeriodStartOn || undefined}
-						/>
-					</label>
-				</div>
+				<RangeDatePicker
+					id="one-time-charge-service-period"
+					testid="one-time-charge-service-period"
+					bind:start={form.servicePeriodStartOn}
+					bind:end={form.servicePeriodEndOn}
+					bind:invalid={servicePeriodInvalid}
+					presets
+					presetMode="service-period"
+				/>
 				{#if errors.servicePeriod}<span class="block text-xs font-normal text-destructive">{errors.servicePeriod}</span>{/if}
 			</div>
 			<label class="space-y-1 text-sm font-medium sm:col-span-2" for="one-time-charge-description">

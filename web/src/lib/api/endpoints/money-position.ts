@@ -20,6 +20,8 @@ export interface MoneyPositionResponse {
 	cashPaid: number;
 	netCashMovement: number;
 	profitOrLoss: number;
+	pastDueAmount: number;
+	pastDueCount: number;
 }
 
 export function buildMoneyPositionPath(params: MoneyPositionParams = {}): string {

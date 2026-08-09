@@ -310,6 +310,8 @@ public sealed class TrialBalanceRow
     public decimal CreditBalance { get; init; }
     public decimal TypeSubtotal { get; init; }
     public string Currency { get; init; } = string.Empty;
+    /// <summary>Database-derived disclosure flag; the web client must not classify balances.</summary>
+    public bool IsZeroBalance { get; init; }
 }
 
 public sealed class TrialBalanceResponse
@@ -318,6 +320,7 @@ public sealed class TrialBalanceResponse
     public decimal TotalDebits { get; init; }
     public decimal TotalCredits { get; init; }
     public bool IsBalanced { get; init; }
+    public int ZeroBalanceCount { get; init; }
 }
 
 public sealed class FinancialStatementRow
@@ -367,6 +370,8 @@ public sealed class MoneyPositionResponse
     public decimal CashPaid { get; init; }
     public decimal NetCashMovement { get; init; }
     public decimal ProfitOrLoss { get; init; }
+    public decimal PastDueAmount { get; init; }
+    public int PastDueCount { get; init; }
 }
 
 public sealed class RecurringTenantChargeRow

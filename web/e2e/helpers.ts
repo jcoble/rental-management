@@ -141,21 +141,26 @@ export async function findLeasedUnit(
 	request: APIRequestContext,
 	token: string
 ): Promise<UnitDashboardLite> {
-	const accountsRes = await request.get('/api/v1/tenant-accounts/page?closed=false&take=1&sort=-openedAtUtc', {
+	const accountsRes = await request.get('/api/v1/tenant-accounts/page?closed=false&take=50&sort=-openedAtUtc', {
 		headers: bearer(token)
 	});
 	expect(accountsRes.ok(), `tenant-account page failed: ${accountsRes.status()}`).toBeTruthy();
 	const accounts = (await accountsRes.json()) as {
 		items: Array<{ tenantAccountId: number; unitId: number }>;
 	};
-	const account = accounts.items[0];
-	expect(account, 'No tenant account found in the seeded data').toBeTruthy();
+	expect(accounts.items.length, 'No tenant account found in the seeded data').toBeGreaterThan(0);
 
-	const dashboardRes = await request.get(`/api/v1/units/${account!.unitId}/dashboard`, {
-		headers: bearer(token)
-	});
-	expect(dashboardRes.ok(), `unit dashboard failed: ${dashboardRes.status()}`).toBeTruthy();
-	const dashboard = (await dashboardRes.json()) as UnitDashboardLite;
-	expect(dashboard.currentLease?.tenantAccountId).toBe(account!.tenantAccountId);
-	return dashboard;
+	// Some shared verification seeds retain a closed/reserved account in the first
+	// sorted slot. Walk the bounded page and return the first account whose unit
+	// dashboard still carries the same current lease identity.
+	for (const account of accounts.items) {
+		const dashboardRes = await request.get(`/api/v1/units/${account.unitId}/dashboard`, {
+			headers: bearer(token)
+		});
+		if (!dashboardRes.ok()) continue;
+		const dashboard = (await dashboardRes.json()) as UnitDashboardLite;
+		if (dashboard.currentLease?.tenantAccountId === account.tenantAccountId) return dashboard;
+	}
+
+	expect.fail('No leased tenant account found in the bounded seeded page');
 }

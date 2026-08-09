@@ -1055,6 +1055,26 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             Condition = balance.Condition,
             LastReceiptOn = balance.LastReceiptOn,
             LastReceiptAmount = balance.LastReceiptAmount,
+            OldestOpenChargeDueOn = _db.TenantChargeBalanceProjections.AsNoTracking()
+                .Where(charge =>
+                    charge.PortfolioId == account.PortfolioId &&
+                    charge.TenantAccountId == account.Id &&
+                    charge.DueOn != null &&
+                    charge.OpenAmount > 0m)
+                .OrderBy(charge => charge.DueOn)
+                .ThenBy(charge => charge.TenantLedgerEntryId)
+                .Select(charge => charge.DueOn)
+                .FirstOrDefault(),
+            OldestOpenChargeAmount = _db.TenantChargeBalanceProjections.AsNoTracking()
+                .Where(charge =>
+                    charge.PortfolioId == account.PortfolioId &&
+                    charge.TenantAccountId == account.Id &&
+                    charge.DueOn != null &&
+                    charge.OpenAmount > 0m)
+                .OrderBy(charge => charge.DueOn)
+                .ThenBy(charge => charge.TenantLedgerEntryId)
+                .Select(charge => (decimal?)charge.OpenAmount)
+                .FirstOrDefault(),
         };
 
     internal IQueryable<TenantLedgerEntryResponse> BuildEntryQuery(

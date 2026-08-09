@@ -208,6 +208,9 @@ public sealed class TenantAccountDetailResponse
     public string Condition { get; init; } = string.Empty;
     public DateOnly? LastReceiptOn { get; init; }
     public decimal? LastReceiptAmount { get; init; }
+    /// <summary>Oldest still-open debit facts from the unbounded charge-balance projection.</summary>
+    public DateOnly? OldestOpenChargeDueOn { get; init; }
+    public decimal? OldestOpenChargeAmount { get; init; }
 }
 
 public sealed class TenantLedgerEntryPageResponse

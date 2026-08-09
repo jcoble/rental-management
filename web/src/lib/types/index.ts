@@ -701,6 +701,7 @@ export interface OwnerStatementPropertyLine {
 	expenses: number;
 	managementFee: number;
 	netToOwner: number;
+	hasBalance: boolean;
 }
 
 export interface OwnerStatementReport {
@@ -714,6 +715,8 @@ export interface OwnerStatementReport {
 	totalNetToOwner: number;
 	totalDistributed: number;
 	undistributed: number;
+	zeroPropertyCount: number;
+	nonZeroPropertyCount: number;
 }
 
 // --- Schedule E tax report types ---

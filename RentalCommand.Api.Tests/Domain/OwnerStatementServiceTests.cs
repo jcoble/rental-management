@@ -100,6 +100,10 @@ public class OwnerStatementServiceTests : IAsyncLifetime
         report.TotalNetToOwner.Should().Be(2610m);      // 1860 + 750
         report.TotalDistributed.Should().Be(0m);
         report.Undistributed.Should().Be(2610m);
+        report.ZeroPropertyCount.Should().Be(0);
+        report.NonZeroPropertyCount.Should().Be(2);
+        lineA.HasBalance.Should().BeTrue();
+        lineB.HasBalance.Should().BeTrue();
 
         var propertyLineSql = _commands.FirstOrDefault(sql =>
             sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
@@ -115,6 +119,29 @@ public class OwnerStatementServiceTests : IAsyncLifetime
         report.TotalExpenses.Should().Be(report.Properties.Sum(p => p.Expenses));
         report.TotalManagementFee.Should().Be(report.Properties.Sum(p => p.ManagementFee));
         report.TotalNetToOwner.Should().Be(report.Properties.Sum(p => p.NetToOwner));
+    }
+
+    [Fact]
+    public async Task GetForOwnerAsync_ReturnsDbOwnedZeroDisclosureFacts()
+    {
+        var owner = SeedOwner("Disclosure Holdings");
+        var active = SeedProperty(owner.Id, "Active Property", managementFeePercent: 10m);
+        SeedRent(SeedLease(active, "L-ACTIVE"), 1000m, paidInYear: true);
+        SeedProperty(owner.Id, "Empty Property", managementFeePercent: 10m);
+
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        report!.ZeroPropertyCount.Should().Be(1);
+        report.NonZeroPropertyCount.Should().Be(1);
+        report.Properties.Single(p => p.PropertyName == "Active Property").HasBalance.Should().BeTrue();
+        report.Properties.Single(p => p.PropertyName == "Empty Property").HasBalance.Should().BeFalse();
+        _commands.Should().Contain(command =>
+            command.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("ROUND", StringComparison.OrdinalIgnoreCase),
+            "zero/non-zero disclosure counts must be projected by the owner statement SQL");
     }
 
     [Fact]

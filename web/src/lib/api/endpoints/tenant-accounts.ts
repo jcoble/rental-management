@@ -32,6 +32,15 @@ export interface TenantAccountDetail {
 	accountNumber: string;
 	relationshipNumber: string;
 	currency: string;
+	businessDate: string;
+	receivableBalance: number;
+	unappliedCredit: number;
+	pastDueAmount: number;
+	pastDueCount: number;
+	nextDueOn?: string | null;
+	nextDueAmount: number;
+	oldestOpenChargeDueOn?: string | null;
+	oldestOpenChargeAmount?: number | null;
 }
 
 export interface TenantLedgerEntry {

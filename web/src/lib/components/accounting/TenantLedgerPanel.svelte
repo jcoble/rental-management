@@ -22,6 +22,7 @@
 		formatAccountingCurrency,
 		formatAccountingDate
 	} from '$lib/accounting/accounting-display';
+	import { oldestOpenChargeDisplay } from '$lib/accounting/tenant-ledger-oldest-charge';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -148,16 +149,13 @@
 	const balancesMatch = $derived(
 		balanceDue != null && pastDue != null && Math.abs(balanceDue - pastDue) < 0.005
 	);
-	const oldestOpenCharge = $derived.by(() => {
-		const openCharges = rows.filter((row) => row.chargeAmount > 0 && row.openAmount > 0 && row.dueOn);
-		return [...openCharges].sort((left, right) => String(left.dueOn).localeCompare(String(right.dueOn)))[0] ?? null;
-	});
-	const oldestChargeAge = $derived.by(() => {
-		if (!oldestOpenCharge?.dueOn) return null;
-		const due = new Date(`${oldestOpenCharge.dueOn}T00:00:00Z`).getTime();
-		const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
-		return Math.max(0, Math.floor((today - due) / 86_400_000));
-	});
+	const oldestOpenCharge = $derived(
+		oldestOpenChargeDisplay({
+			businessDate: accountSummary?.businessDate,
+			oldestOpenChargeDueOn: accountSummary?.oldestOpenChargeDueOn ?? null,
+			oldestOpenChargeAmount: accountSummary?.oldestOpenChargeAmount ?? null
+		})
+	);
 
 	const monthGroups = $derived.by(() => {
 		const rowsByMonth = new Map<string, TenantLedgerRow[]>();
@@ -323,7 +321,7 @@
 			<div class="min-w-44 rounded-xl border border-border bg-card px-4 py-3" data-testid="tenant-ledger-oldest-charge">
 				<p class="text-xs text-muted-foreground">Oldest open charge</p>
 				{#if oldestOpenCharge}
-					<p class="mt-1 font-medium">{oldestChargeAge ? `${oldestChargeAge} days late` : `Due ${formatAccountingDate(oldestOpenCharge.dueOn)}`}</p>
+					<p class="mt-1 font-medium">{oldestOpenCharge.ageDays ? `${oldestOpenCharge.ageDays} days late` : `Due ${formatAccountingDate(oldestOpenCharge.dueOn)}`}</p>
 					<p class="mt-0.5 font-mono text-xs tabular-nums text-muted-foreground">{formatAccountingCurrency(oldestOpenCharge.openAmount, currency)}</p>
 				{:else}
 					<p class="mt-1 font-medium">No open charges</p>
