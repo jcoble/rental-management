@@ -1,3 +1,4 @@
+using System.Data;
 using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,7 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly ITestOutputHelper _output;
     private readonly SqlCommandRecorder _commands = new();
+    private readonly TransactionRecorder _transactions = new();
     private MigratedPostgreSqlTestContext _context = null!;
     private WorkspaceReadScope _scope;
     private SeededLedger _ledger = null!;
@@ -33,13 +35,14 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _context = await _fixture.CreateContextAsync([_commands]);
+        _context = await _fixture.CreateContextAsync([_commands, _transactions]);
         _scope = _context.Db.SeedAdministratorScope(
             PortfolioId,
             nameof(TenantAccountQueryServicePostgreSqlTests));
         _ledger = await SeedLedgerAsync();
         await _context.ActivateApiScopeAsync(_scope);
         _commands.Reset();
+        _transactions.Reset();
     }
 
     public async Task DisposeAsync() => await _context.DisposeAsync();
@@ -59,6 +62,9 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
 
         var page = await service.ListEntriesPageAsync(_scope, query);
         var pageSql = _commands.Sql.ToArray();
+        _transactions.IsolationLevels.Should().Equal(IsolationLevel.RepeatableRead);
+        _commands.TransactionPresence.Should().HaveCount(3)
+            .And.OnlyContain(isInsideTransaction => isInsideTransaction);
         foreach (var (sql, index) in pageSql.Select((sql, index) => (sql, index)))
         {
             _output.WriteLine($"--- GLOBAL ENTRY STATEMENT {index + 1} ---");
@@ -283,10 +289,16 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
     private sealed class SqlCommandRecorder : DbCommandInterceptor
     {
         private readonly List<string> _sql = [];
+        private readonly List<bool> _transactionPresence = [];
 
         public IReadOnlyList<string> Sql => _sql.ToArray();
+        public IReadOnlyList<bool> TransactionPresence => _transactionPresence.ToArray();
 
-        public void Reset() => _sql.Clear();
+        public void Reset()
+        {
+            _sql.Clear();
+            _transactionPresence.Clear();
+        }
 
         public override InterceptionResult<DbDataReader> ReaderExecuting(
             DbCommand command,
@@ -294,6 +306,7 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
             InterceptionResult<DbDataReader> result)
         {
             _sql.Add(command.CommandText);
+            _transactionPresence.Add(command.Transaction is not null);
             return base.ReaderExecuting(command, eventData, result);
         }
 
@@ -304,7 +317,27 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             _sql.Add(command.CommandText);
+            _transactionPresence.Add(command.Transaction is not null);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    private sealed class TransactionRecorder : DbTransactionInterceptor
+    {
+        private readonly List<IsolationLevel> _isolationLevels = [];
+
+        public IReadOnlyList<IsolationLevel> IsolationLevels => _isolationLevels.ToArray();
+
+        public void Reset() => _isolationLevels.Clear();
+
+        public override ValueTask<InterceptionResult<DbTransaction>> TransactionStartingAsync(
+            DbConnection connection,
+            TransactionStartingEventData eventData,
+            InterceptionResult<DbTransaction> result,
+            CancellationToken cancellationToken = default)
+        {
+            _isolationLevels.Add(eventData.IsolationLevel);
+            return ValueTask.FromResult(result);
         }
     }
 }

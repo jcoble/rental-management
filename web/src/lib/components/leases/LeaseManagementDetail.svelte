@@ -37,6 +37,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { money } from '$lib/components/unit/money';
 	import { leaseAgreementChangeTypeLabel } from '$lib/leases/lease-list-labels';
+	import { outsideEsignLabel } from '$lib/leases/lease-signing-labels';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
 
@@ -509,9 +510,9 @@
 											<Button size="sm" variant="outline" onclick={() => (signatureProgressAgreementId = signatureProgressAgreementId === agreement.leaseAgreementId ? null : agreement.leaseAgreementId)}>
 												{signatureProgressAgreementId === agreement.leaseAgreementId ? 'Hide signing progress' : 'View signing progress'}
 											</Button>
-										{:else if issuedArtifact && !agreement.hasSignatureRequest}
-											<span class="text-xs text-muted-foreground">Signed outside e-sign — no signing links to track.</span>
-										{/if}
+											{:else if issuedArtifact && !agreement.hasSignatureRequest}
+												<span class="text-xs text-muted-foreground">{outsideEsignLabel(agreement.fullyExecutedAtUtc)}</span>
+											{/if}
 										{#if canPrepareAgreements && issuedArtifact && !agreement.fullyExecutedAtUtc && !agreement.hasLiveReissue}
 											<Button size="sm" variant={agreement.voidedAtUtc ? 'default' : 'destructive'} onclick={() => (issuedRecoverySource = agreement)}>
 												{agreement.voidedAtUtc ? 'Create replacement' : 'Void and replace'}
