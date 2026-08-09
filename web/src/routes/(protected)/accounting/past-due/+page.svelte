@@ -1,5 +1,5 @@
 <!--
-  "Who's behind" — one row per tenant account currently behind on rent, with Record receipt and Text
+  "Who's behind" — one row per tenant account currently behind on rent, with Record payment and Text
   actions. This is the web counterpart of the mobile OverdueScreen and the destination behind the
   dashboard "tenants behind" KPI.
 
@@ -85,13 +85,13 @@
 		return parts.join(' · ');
 	}
 
-	// Which tenant account is currently receiving a receipt (its buttons show a spinner).
+	// Which tenant account is currently receiving a payment (its buttons show a spinner).
 	let busyAccountId = $state<number | null>(null);
 
-	// --- Record receipt modal ---
+	// --- Record payment modal ---
 	// Capture how/when the money arrived once, then target the oldest past-due charge returned by the server.
 	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
-	// receipt command accepts paidDate / method / externalReference / notes. Methods come from the shared
+	// payment command accepts paidDate / method / externalReference / notes. Methods come from the shared
 	// canonical list so web + mobile offer identical values.
 	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
 	function loadLastMethod(): string {
@@ -153,7 +153,7 @@
 			busyAccountId = lease.tenantAccountId;
 		},
 		onSuccess: (_result, vars) => {
-			showSuccess('Receipt recorded against the selected past-due charge.');
+			showSuccess('Payment recorded against the selected past-due charge.');
 			rememberLastMethod(String(vars.data.method ?? ''));
 			closeMarkPaid();
 			skip = 0;
@@ -162,7 +162,7 @@
 			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['payments'] });
 		},
-		onError: (err) => showError(apiErrorMessage(err, "Couldn't record this receipt. Please try again.")),
+		onError: (err) => showError(apiErrorMessage(err, "Couldn't record this payment. Please try again.")),
 		onSettled: () => {
 			busyAccountId = null;
 		},
@@ -292,7 +292,7 @@
 								{:else}
 									<CheckCircle2 class="h-4 w-4" />
 								{/if}
-								Record receipt
+								Record payment
 							</Button>
 							<Button
 								variant="outline"
@@ -346,7 +346,7 @@
 >
 	<Dialog.Content class="max-w-md" data-testid="past-due-mark-paid-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Record receipt</Dialog.Title>
+			<Dialog.Title>Record payment</Dialog.Title>
 			{#if markPaidTarget}
 				<Dialog.Description data-testid="past-due-mark-paid-summary">
 					{displayName(markPaidTarget)} · {money(markPaidTarget.pastDueAmount)}
@@ -398,7 +398,7 @@
 		<Dialog.Footer>
 			<Button data-testid="past-due-mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
 			<Button data-testid="past-due-mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Recording…' : 'Record receipt'}
+				{markPaidMutation.isPending ? 'Recording…' : 'Record payment'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
