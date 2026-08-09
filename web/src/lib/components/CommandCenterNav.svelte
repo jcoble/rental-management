@@ -50,9 +50,9 @@
 		href="/units"
 		onclick={closeAndNavigate}
 		class="m3-nav-link m3-state-layer mb-1 flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-		aria-label="Command Center"
-		data-m3-tooltip="Command Center"
-		data-testid="nav-command-center"
+		aria-label="Units"
+		data-m3-tooltip="Units"
+		data-testid="nav-units-picker"
 	>
 		<Boxes class="h-4 w-4" />
 	</a>
@@ -64,10 +64,10 @@
 			class="m3-nav-link m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
 			aria-expanded={open}
 			aria-controls="command-center-rental-picker"
-			data-testid="nav-command-center"
+			data-testid="nav-units-picker"
 		>
 			<Boxes class="h-4 w-4" />
-			<span class="flex-1 truncate text-left">Command Center</span>
+			<span class="flex-1 truncate text-left">Units</span>
 			{#if open}
 				<ChevronDown class="h-4 w-4" />
 			{:else}
@@ -85,7 +85,7 @@
 					<input
 						bind:value={search}
 						placeholder="Search rentals…"
-						aria-label="Search Command Center rentals"
+						aria-label="Search units"
 						class="h-8 w-full rounded-md border border-sidebar-border bg-background/60 py-1 pl-8 pr-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
 						data-testid="command-center-search"
 					/>

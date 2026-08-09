@@ -7,7 +7,8 @@ public record OwnerStatementPropertyLine(
     decimal RentalIncome,
     decimal Expenses,
     decimal ManagementFee,
-    decimal NetToOwner);
+    decimal NetToOwner,
+    bool HasBalance = true);
 
 /// <summary>
 /// Full owner statement for a given owner and tax year: one line per property plus portfolio-level totals.
@@ -24,6 +25,8 @@ public class OwnerStatementReport
     public decimal TotalNetToOwner { get; set; }
     public decimal TotalDistributed { get; set; }
     public decimal Undistributed { get; set; }
+    public int ZeroPropertyCount { get; set; }
+    public int NonZeroPropertyCount { get; set; }
 }
 
 /// <summary>Lightweight summary for the owner picker/list: owner id, name, and year net distribution.</summary>

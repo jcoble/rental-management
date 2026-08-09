@@ -28,11 +28,13 @@
 	let {
 		children,
 		class: className,
-		testid = 'accounting-detail-mode'
+		testid = 'accounting-detail-mode',
+		showControl = true
 	}: {
 		children?: Snippet;
 		class?: string;
 		testid?: string;
+		showControl?: boolean;
 	} = $props();
 
 	let mode = $state<AccountingDetailMode>('simple');
@@ -67,37 +69,39 @@
 	});
 </script>
 
-<div class={['inline-flex items-center gap-1 rounded-full border border-border bg-card p-1', className]} data-testid={testid} data-mode={mode}>
-	<span class="sr-only">Accounting detail level</span>
-	<Button
-		variant={mode === 'simple' ? 'secondary' : 'ghost'}
-		size="sm"
-		class="h-8 rounded-full px-3"
-		aria-pressed={mode === 'simple'}
-		aria-label="Use simple accounting detail"
-		onclick={() => setMode('simple')}
-		data-testid={`${testid}-simple`}
-	>
-		Simple
-	</Button>
-	<Button
-		variant={mode === 'advanced' ? 'secondary' : 'ghost'}
-		size="sm"
-		class="h-8 rounded-full px-3"
-		aria-pressed={mode === 'advanced'}
-		aria-label="Use advanced accounting detail"
-		onclick={() => setMode('advanced')}
-		data-testid={`${testid}-advanced`}
-	>
-		Advanced
-	</Button>
-	<HelpPopover
-		title={ACCOUNTING_HELP.detailMode.title}
-		summary={ACCOUNTING_HELP.detailMode.summary}
-		learnMoreUrl={ACCOUNTING_HELP.detailMode.href}
-		testid="accounting-detail-mode-help"
-	/>
-</div>
+{#if showControl}
+	<div class={['inline-flex items-center gap-1 rounded-full border border-border bg-card p-1', className]} data-testid={testid} data-mode={mode}>
+		<span class="sr-only">Accounting detail level</span>
+		<Button
+			variant={mode === 'simple' ? 'secondary' : 'ghost'}
+			size="sm"
+			class="h-8 rounded-full px-3"
+			aria-pressed={mode === 'simple'}
+			aria-label="Use simple accounting detail"
+			onclick={() => setMode('simple')}
+			data-testid={`${testid}-simple`}
+		>
+			Simple
+		</Button>
+		<Button
+			variant={mode === 'advanced' ? 'secondary' : 'ghost'}
+			size="sm"
+			class="h-8 rounded-full px-3"
+			aria-pressed={mode === 'advanced'}
+			aria-label="Use advanced accounting detail"
+			onclick={() => setMode('advanced')}
+			data-testid={`${testid}-advanced`}
+		>
+			Advanced
+		</Button>
+		<HelpPopover
+			title={ACCOUNTING_HELP.detailMode.title}
+			summary={ACCOUNTING_HELP.detailMode.summary}
+			learnMoreUrl={ACCOUNTING_HELP.detailMode.href}
+			testid="accounting-detail-mode-help"
+		/>
+	</div>
+{/if}
 
 {#if children}
 	{@render children()}

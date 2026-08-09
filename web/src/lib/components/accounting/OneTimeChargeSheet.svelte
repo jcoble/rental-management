@@ -10,6 +10,7 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import { datePickerSubmitDisabled } from '$lib/components/shared/date-picker-state';
 	import { SERVICE_PERIOD_SECTION_CLASS } from './one-time-charge-layout';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -18,6 +19,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
 
 	export interface OneTimeChargeSeed {
 		description?: string;
@@ -29,12 +31,22 @@
 	let {
 		open,
 		tenantAccountId,
+		tenantName = '',
+		propertyName = '',
+		unitLabel = '',
+		currentBalance = null,
+		currency = 'USD',
 		seed = null,
 		onclose,
 		onsaved
 	}: {
 		open: boolean;
 		tenantAccountId: number;
+		tenantName?: string;
+		propertyName?: string;
+		unitLabel?: string;
+		currentBalance?: number | null;
+		currency?: string;
 		seed?: OneTimeChargeSeed | null;
 		onclose: () => void;
 		onsaved: () => void;
@@ -54,8 +66,7 @@
 	let errors = $state<Record<string, string>>({});
 	let effectiveDateInvalid = $state(false);
 	let dueDateInvalid = $state(false);
-	let servicePeriodStartInvalid = $state(false);
-	let servicePeriodEndInvalid = $state(false);
+	let servicePeriodInvalid = $state(false);
 	let documentName = $state('');
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
@@ -68,12 +79,20 @@
 	const accounts = $derived(accountsQuery.data?.items ?? []);
 	const chargeMapping = $derived(tenantChargeType(form.chargeType));
 	const datePickerInvalid = $derived(
-		effectiveDateInvalid || dueDateInvalid || servicePeriodStartInvalid || servicePeriodEndInvalid
+		effectiveDateInvalid || dueDateInvalid || servicePeriodInvalid
 	);
 	const resolvedAccount = $derived.by(() => {
 		if (chargeMapping.systemKey) return accounts.find((account) => account.systemKey === chargeMapping.systemKey) ?? null;
 		return accounts.find((account) => account.id === form.categoryAccountId) ?? null;
 	});
+	const targetLabel = $derived(
+		[tenantName || 'Tenant account', propertyName, unitLabel].filter(Boolean).join(' · ')
+	);
+	const projectedBalance = $derived(
+		currentBalance == null || !form.amount.trim() || !Number.isFinite(Number(form.amount))
+			? null
+			: currentBalance + Number(form.amount || 0)
+	);
 
 	$effect(() => {
 		const nextKey = open
@@ -93,8 +112,7 @@
 			errors = {};
 			effectiveDateInvalid = false;
 			dueDateInvalid = false;
-			servicePeriodStartInvalid = false;
-			servicePeriodEndInvalid = false;
+			servicePeriodInvalid = false;
 			documentName = '';
 			operationKey = null;
 			initializedKey = nextKey;
@@ -117,7 +135,7 @@
 		if (effectiveDateInvalid || !form.effectiveOn) errors.effectiveOn = 'Pick a valid effective date.';
 		if (dueDateInvalid || !form.dueOn) errors.dueOn = 'Pick a valid due date.';
 		if (!form.description.trim()) errors.description = 'Describe this charge.';
-		if (servicePeriodStartInvalid || servicePeriodEndInvalid) {
+		if (servicePeriodInvalid) {
 			errors.servicePeriod = 'Enter valid service-period dates.';
 		} else if ((form.servicePeriodStartOn && !form.servicePeriodEndOn) || (!form.servicePeriodStartOn && form.servicePeriodEndOn)) {
 			errors.servicePeriod = 'Enter both service-period dates or leave both empty.';
@@ -153,31 +171,38 @@
 </script>
 
 <Dialog.Root open={open} onOpenChange={(next) => { if (!next) close(); }}>
-	<Dialog.Content class="max-w-xl" data-testid="one-time-charge-sheet">
+	<Dialog.Content class="max-w-2xl" data-testid="one-time-charge-sheet">
 		<Dialog.Header>
 			<Dialog.Title>Add one-time charge</Dialog.Title>
 			<div class="flex items-start gap-1.5">
-				<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+				<div class="min-w-0 space-y-1">
+					<Dialog.Description>This creates a real rent or resident charge for this tenant account.</Dialog.Description>
+					<p class="text-sm font-medium text-foreground" data-testid="one-time-charge-target">{targetLabel}</p>
+					{#if projectedBalance != null}
+						<p class="text-xs text-muted-foreground" data-testid="one-time-charge-projected-balance">New balance {formatAccountingCurrency(projectedBalance, currency)}</p>
+					{/if}
+				</div>
 				<HelpPopover
 					title={ACCOUNTING_HELP.oneTimeCharge.title}
 					summary={ACCOUNTING_HELP.oneTimeCharge.summary}
 					learnMoreUrl={ACCOUNTING_HELP.oneTimeCharge.href}
 					testid="one-time-charge-help"
+					side="right"
 				/>
 			</div>
 		</Dialog.Header>
 
 		<div class="grid gap-4 sm:grid-cols-2">
 			<label class="space-y-1 text-sm font-medium sm:col-span-2" for="one-time-charge-type">
-				<span>What is this charge for?</span>
+				<span>Charge type</span>
 				<Select.Root type="single" bind:value={form.chargeType}>
-					<Select.Trigger id="one-time-charge-type" class="w-full">{chargeMapping.label}</Select.Trigger>
+					<Select.Trigger id="one-time-charge-type" class="w-full" data-testid="one-time-charge-type">{chargeMapping.label}</Select.Trigger>
 					<Select.Content>{#each TENANT_CHARGE_TYPES as option}<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>{/each}</Select.Content>
 				</Select.Root>
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-amount">
 				<span>Amount</span>
-				<Input id="one-time-charge-amount" type="text" inputmode="decimal" mask="currency" bind:value={form.amount} placeholder="0.00" />
+				<Input id="one-time-charge-amount" type="text" inputmode="decimal" mask="currency" bind:value={form.amount} placeholder="0.00" autofocus data-testid="one-time-charge-amount" />
 				{#if errors.amount}<span class="block text-xs font-normal text-destructive">{errors.amount}</span>{/if}
 			</label>
 			<label class="space-y-1 text-sm font-medium" for="one-time-charge-effective-date">
@@ -201,27 +226,19 @@
 				{#if errors.dueOn}<span class="block text-xs font-normal text-destructive">{errors.dueOn}</span>{/if}
 			</label>
 			<div class={SERVICE_PERIOD_SECTION_CLASS}>
-				<span>Service period <span class="font-normal text-muted-foreground">(optional)</span></span>
-				<div class="grid gap-2 sm:grid-cols-2">
-					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-start">
-						<span>Start</span>
-						<DatePicker
-							id="one-time-charge-service-start"
-							testid="one-time-charge-service-start"
-							bind:value={form.servicePeriodStartOn}
-							bind:invalid={servicePeriodStartInvalid}
-						/>
-					</label>
-					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-end">
-						<span>End</span>
-						<DatePicker
-							id="one-time-charge-service-end"
-							testid="one-time-charge-service-end"
-							bind:value={form.servicePeriodEndOn}
-							bind:invalid={servicePeriodEndInvalid}
-						/>
-					</label>
+				<div class="flex flex-wrap items-baseline justify-between gap-2">
+					<span>What period does this cover? <span class="font-normal text-muted-foreground">(optional)</span></span>
 				</div>
+				<p class="text-xs font-normal text-muted-foreground">The range describes the months this charge covers for reporting; it does not change the due date.</p>
+				<RangeDatePicker
+					id="one-time-charge-service-period"
+					testid="one-time-charge-service-period"
+					bind:start={form.servicePeriodStartOn}
+					bind:end={form.servicePeriodEndOn}
+					bind:invalid={servicePeriodInvalid}
+					presets
+					presetMode="service-period"
+				/>
 				{#if errors.servicePeriod}<span class="block text-xs font-normal text-destructive">{errors.servicePeriod}</span>{/if}
 			</div>
 			<label class="space-y-1 text-sm font-medium sm:col-span-2" for="one-time-charge-description">
@@ -231,8 +248,9 @@
 			</label>
 			{#if form.chargeType === 'Other'}
 				<div class="space-y-1 text-sm font-medium sm:col-span-2" data-testid="one-time-charge-category">
-					<span>Category</span>
+					<span>Income category <span class="font-normal text-muted-foreground">(required for Other)</span></span>
 					<AccountPicker bind:selectedAccountId={form.categoryAccountId} allowAll={false} types={['Income']} />
+					<p class="text-xs font-normal text-muted-foreground">Choose where this charge should appear in income reports.</p>
 					{#if errors.category}<span class="block text-xs font-normal text-destructive">{errors.category}</span>{/if}
 				</div>
 			{:else if accountsQuery.isLoading}

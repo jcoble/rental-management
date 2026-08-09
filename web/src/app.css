@@ -925,12 +925,13 @@
       0 10px 30px -16px rgb(0 0 0 / 0.55);
   }
 
-  /* Menu / popover / select panels — a touch more opaque so list text stays crisp;
-     !important to override the components' bg-popover / border / shadow utilities. */
+  /* Menu / popover / select panels are a fully opaque surface. These panels often sit over
+     tenant names, balances, and dialog controls; transparency makes the options unreadable. */
   .m3-glass-pop {
-    background: color-mix(in srgb, var(--m3c-surface-container-high) 60%, transparent) !important;
-    backdrop-filter: blur(24px) saturate(1.5);
-    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    background: var(--m3c-surface-container-high) !important;
+    background-color: var(--m3c-surface-container-high) !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     border-color: color-mix(in srgb, var(--m3c-on-surface) 12%, transparent) !important;
     box-shadow:
       inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent),
@@ -951,6 +952,13 @@
     border-radius: var(--m3-shape-extra-large);
     background: var(--m3c-surface-container-high);
     box-shadow: var(--m3-elevation-3);
+    isolation: isolate;
+  }
+
+  /* Right-pinned DataGrid columns retain a readable surface while the rest of the table scrolls. */
+  .datagrid-pinned-right {
+    background: var(--m3c-surface-container, var(--card)) !important;
+    box-shadow: -1px 0 0 color-mix(in srgb, var(--m3c-on-surface) 12%, transparent);
   }
 
   .m3-dialog-content[data-state='open'] {

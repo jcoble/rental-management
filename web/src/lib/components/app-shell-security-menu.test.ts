@@ -72,8 +72,8 @@ test('staff money navigation exposes capability-gated first-class sections', () 
 	const moneyGroup = source.slice(moneyGroupStart, rentalsGroupStart);
 
 	assert.match(moneyGroup, /label: 'Money'/);
-	assert.match(moneyGroup, /\{ href: '\/accounting', label: 'Money', icon: Calculator \}/);
-	assert.match(moneyGroup, /\{ href: '\/deposits', label: 'Security Deposits', icon: PiggyBank \}/);
+	assert.match(moneyGroup, /\{ href: '\/accounting', label: 'Overview', icon: Calculator \}/);
+	assert.match(moneyGroup, /\{ href: '\/deposits', label: 'Deposits', icon: PiggyBank \}/);
 	assert.match(moneyGroup, /\{ href: '\/reports', label: 'Reports', icon: BarChart3 \}/);
 	assert.doesNotMatch(moneyGroup, /roles:/);
 	assert.match(source, /canAccessRoute\(item\.href, activeExperience, activeCapabilities\)/);

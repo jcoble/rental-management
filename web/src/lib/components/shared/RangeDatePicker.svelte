@@ -26,6 +26,11 @@
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
 	import { applyRangeDatePickerValue } from './date-picker-state';
+	import {
+		calendarPlaceholderForStart,
+		servicePeriodPreset,
+		servicePeriodPresetState
+	} from './range-date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -42,6 +47,7 @@
 		invalid = $bindable(false),
 		onchange,
 		presets = false,
+		presetMode = 'standard',
 		placeholder = 'Pick a date range',
 		disabled = false,
 		align = 'start',
@@ -53,6 +59,7 @@
 		invalid?: boolean;
 		onchange?: (range: { start: string; end: string }) => void;
 		presets?: boolean;
+		presetMode?: 'standard' | 'service-period';
 		placeholder?: string;
 		disabled?: boolean;
 		align?: 'start' | 'center' | 'end';
@@ -61,6 +68,8 @@
 	} = $props();
 
 	let open = $state(false);
+	const timezone = getLocalTimeZone();
+	let calendarMonth = $state<DateValue | undefined>(toCalendarDate(calendarPlaceholderForStart(start)) ?? today(timezone));
 
 	function toCalendarDate(iso: string | undefined): CalendarDate | undefined {
 		if (!iso) return undefined;
@@ -111,14 +120,19 @@
 	function handleValueChange(next: { start?: DateValue; end?: DateValue } | undefined) {
 		const s = next?.start ? next.start.toString() : '';
 		const e = next?.end ? next.end.toString() : '';
+		if (s) calendarMonth = toCalendarDate(calendarPlaceholderForStart(s));
 		// Close once a full range is picked (both ends chosen).
 		apply(s, e, Boolean(s && e));
 	}
 
+	$effect(() => {
+		if (open && start && !end) calendarMonth = toCalendarDate(calendarPlaceholderForStart(start));
+	});
+
 	// ---- Presets (optional) ---------------------------------------------------
 	type Preset = { label: string; range: () => { start: string; end: string } };
 
-	const tz = getLocalTimeZone();
+	const tz = timezone;
 	const presetList: Preset[] = [
 		{
 			label: 'Year to date',
@@ -163,8 +177,25 @@
 		}
 	];
 
+	const servicePresetList: Preset[] = [
+		{ label: 'This month', range: () => servicePeriodPreset(0, today(tz).toString()) },
+		{ label: 'Last month', range: () => servicePeriodPreset(-1, today(tz).toString()) },
+		{ label: 'Custom', range: () => ({ start: '', end: '' }) }
+	];
+	const activePreset = $derived.by(() => {
+		if (presetMode !== 'service-period') return null;
+		return servicePeriodPresetState(start, end, today(tz).toString());
+	});
+	const visiblePresets = $derived(presetMode === 'service-period' ? servicePresetList : presetList);
+
 	function applyPreset(p: Preset) {
 		const r = p.range();
+		if (p.label === 'Custom') {
+			apply(r.start, r.end, false);
+			calendarMonth = today(tz);
+			return;
+		}
+		calendarMonth = toCalendarDate(calendarPlaceholderForStart(r.start));
 		apply(r.start, r.end, true);
 	}
 </script>
@@ -191,9 +222,9 @@
 				<div
 					class="flex flex-row flex-wrap gap-1 border-b p-2 sm:w-40 sm:flex-col sm:flex-nowrap sm:border-b-0 sm:border-r"
 				>
-					{#each presetList as p (p.label)}
+					{#each visiblePresets as p (p.label)}
 						<Button
-							variant="ghost"
+							variant={activePreset === p.label ? 'secondary' : 'ghost'}
 							size="sm"
 							class="justify-start"
 							onclick={() => applyPreset(p)}
@@ -205,6 +236,7 @@
 				</div>
 			{/if}
 			<RangeCalendar
+				bind:placeholder={calendarMonth}
 				value={rangeValue}
 				onValueChange={handleValueChange}
 				numberOfMonths={2}

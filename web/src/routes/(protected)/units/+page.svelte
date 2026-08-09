@@ -12,7 +12,7 @@
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { getUnitsEmptyStateCopy } from '$lib/units/unit-list-state';
-	import { Home } from '@lucide/svelte';
+	import { Home, Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
@@ -88,8 +88,7 @@
 	const columns: ColumnDef<UnitHealth>[] = [
 		{ key: 'unitNumber', title: 'Unit', sortable: true, mobileRole: 'title', accessor: (u) => `Unit ${u.unitNumber}` },
 		{ key: 'propertyName', title: 'Property', sortable: true, mobileRole: 'subtitle' },
-		{ key: 'status', title: 'Rental status', mobileRole: 'badge', cell: statusCell },
-		{ key: 'simpleStage', title: 'Next step', mobileRole: 'meta', cell: stageCell },
+		{ key: 'status', title: 'Status', mobileRole: 'badge', cell: statusCell },
 		{ key: 'openWorkOrderCount', title: 'Open repairs', format: 'number', sortable: true, mobileRole: 'metric', align: 'right' },
 		{ key: 'leaseEndsInDays', title: 'Lease ends', mobileRole: 'meta', accessor: (u) => leaseEndsLabel(u.leaseEndsInDays) },
 		{ key: 'docsNeedingReviewCount', title: 'Docs', format: 'number', mobileRole: 'meta', align: 'right' },
@@ -105,24 +104,25 @@
 </script>
 
 {#snippet statusCell(unit: UnitHealth)}
-	<StatusBadge status={unit.status} />
-{/snippet}
-
-{#snippet stageCell(unit: UnitHealth)}
-	<StatusBadge status={unit.simpleStage} map={stageMap} />
+	<div class="flex flex-wrap items-center gap-1.5">
+		<StatusBadge status={unit.status} />
+		{#if unit.simpleStage && unit.simpleStage !== unit.status}
+			<span class="text-xs text-muted-foreground">Next: </span><StatusBadge status={unit.simpleStage} map={stageMap} />
+		{/if}
+	</div>
 {/snippet}
 
 <svelte:head>
-	<title>Command Center - Rental Command</title>
+	<title>Units - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
+	<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
 	<PageHeader
 		class="mb-4"
 		density="compact"
 		eyebrow="Rentals"
-		title="Command Center"
-		description="Choose a rental to manage its lease, residents, money, maintenance, documents, and history in one place."
+		title="Units"
+		description="Choose a unit to manage its lease, residents, money, maintenance, documents, and history."
 		data-testid="units-header"
 	/>
 
@@ -158,6 +158,10 @@
 				<div class="max-w-sm flex-1">
 					<SearchInput bind:value={search} placeholder="Search units…" testid="unit-search" />
 				</div>
+				<Button href="/properties?coach=open-property-for-units" variant="outline" class="shrink-0 gap-2" data-testid="unit-create-button">
+					<Plus class="h-4 w-4" />
+					New unit
+				</Button>
 				<div class="w-[240px]">
 					<RemoteRecordSelect
 						queryKey={['unit-property-filter', portfolioId]}

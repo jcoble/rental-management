@@ -435,12 +435,28 @@
 			<section class="overflow-hidden rounded-xl border border-border bg-card" data-testid="company-wide-balances">
 				<header class="border-b px-4 py-3"><h3 class="font-semibold">Whole-business account balances</h3><p class="text-sm text-muted-foreground">Every category across the portfolio. Debits equal credits overall; open the <a class="underline" href="/accounting/trial-balance">trial balance</a> for the accounting proof.</p></header>
 				{#if balancesQuery.isLoading}<p class="p-4 text-sm text-muted-foreground">Loading balances…</p>{:else}
-					<div class="divide-y" data-testid="company-balance-groups">
-						{#each ['Asset', 'Liability', 'Equity', 'Income', 'Expense'] as type}
-							{@const typeRows = (balancesQuery.data?.rows ?? []).filter((row) => row.accountType === type)}
-							{#if typeRows.length}<div class="p-4" data-testid={`company-balance-type-${type}`}><div class="mb-2 flex justify-between font-semibold"><span>{type}</span><span class="font-mono">{formatAccountingCurrency(typeRows[0].typeSubtotal)}</span></div>{#each typeRows as row}<button class="flex w-full justify-between rounded px-2 py-1 text-left text-sm hover:bg-muted" onclick={() => (selectedAccountId = row.accountId)}><span>{advanced ? `${row.accountCode} · ` : ''}{row.accountName}</span><span class="font-mono">{formatAccountingCurrency(row.debitBalance - row.creditBalance)}</span></button>{/each}</div>{/if}
-						{/each}
-					</div>
+						<div class="divide-y" data-testid="company-balance-groups">
+							{#each (balancesQuery.data?.rows ?? []) as row}
+								{#if !row.isZeroBalance}
+									<button class="flex w-full justify-between rounded px-4 py-2 text-left text-sm hover:bg-muted" onclick={() => (selectedAccountId = row.accountId)} data-testid={`company-balance-row-${row.accountId}`}>
+										<span><span class="mr-2 text-xs font-medium uppercase text-muted-foreground">{row.accountType}</span>{advanced ? `${row.accountCode} · ` : ''}{row.accountName}</span>
+										<span class="font-mono">{formatAccountingCurrency(row.debitBalance - row.creditBalance)}</span>
+									</button>
+								{/if}
+							{/each}
+							{#if (balancesQuery.data?.zeroBalanceCount ?? 0) > 0}
+								<details class="m-4 rounded-lg border border-border/70 px-2 py-1.5" data-testid="company-balance-zero-disclosure">
+									<summary class="cursor-pointer text-xs font-medium text-muted-foreground">Show {balancesQuery.data?.zeroBalanceCount} {balancesQuery.data?.zeroBalanceCount === 1 ? 'account' : 'accounts'} with no balance</summary>
+									<div class="mt-1 border-t border-border/60 pt-1">
+										{#each (balancesQuery.data?.rows ?? []) as row}
+											{#if row.isZeroBalance}
+												<button class="flex w-full justify-between rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onclick={() => (selectedAccountId = row.accountId)} data-testid={`company-zero-balance-row-${row.accountId}`}><span><span class="mr-2 uppercase">{row.accountType}</span>{advanced ? `${row.accountCode} · ` : ''}{row.accountName}</span><span class="font-mono">{formatAccountingCurrency(row.debitBalance - row.creditBalance)}</span></button>
+											{/if}
+										{/each}
+									</div>
+								</details>
+							{/if}
+						</div>
 					<p class="border-t px-4 py-3 text-sm font-medium" data-testid="company-trial-balance-note">Debits {formatAccountingCurrency(balancesQuery.data?.totalDebits)} · Credits {formatAccountingCurrency(balancesQuery.data?.totalCredits)} · {balancesQuery.data?.isBalanced ? 'Balanced' : 'Review needed'}</p>
 				{/if}
 			</section>

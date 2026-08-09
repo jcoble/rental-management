@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { navigating, page } from '$app/state';
 	import { browser } from '$app/environment';
+	import { env } from '$env/dynamic/public';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
 		LayoutDashboard,
@@ -70,12 +71,14 @@
 	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
 	import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
+	import SimClockPanel from '$lib/dev/SimClockPanel.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
 	let sidebarCollapsed = $state(false);
 	let isMobile = $state(false);
 	let isSidebarOpen = $state(false);
+	const simClockEnabled = env.PUBLIC_SIMULATION_ENABLED === 'true';
 	const routeIsChanging = $derived(
 		Boolean(navigating.to && navigating.to.url.pathname !== page.url.pathname)
 	);
@@ -123,9 +126,9 @@
 			label: 'Money',
 			icon: Wallet,
 			items: [
-				{ href: '/accounting', label: 'Money', icon: Calculator },
-				{ href: '/banking', label: 'Reconciliation & banking', icon: Landmark },
-				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank },
+				{ href: '/accounting', label: 'Overview', icon: Calculator },
+				{ href: '/banking', label: 'Banking', icon: Landmark },
+				{ href: '/deposits', label: 'Deposits', icon: PiggyBank },
 				{ href: '/reports', label: 'Reports', icon: BarChart3 }
 			]
 		},
@@ -136,7 +139,6 @@
 			items: [
 				{ href: '/properties', label: 'Properties', icon: Building },
 				{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
-				{ href: '/units', label: 'Units', icon: Home },
 				{ href: '/tenants', label: 'Tenants', icon: Users },
 				{ href: '/leases', label: 'Leases', icon: FileText },
 				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload },
@@ -331,7 +333,7 @@
 		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
 		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
-	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
+	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Units', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
 		return canAccessRoute(item.href, activeExperience, activeCapabilities);
@@ -389,6 +391,11 @@
 		if (href === '/owner') return currentPath === '/owner';
 		if (href === '/leasing') return currentPath === '/leasing';
 		if (href === '/units') return currentPath === '/units' || currentPath.startsWith('/units/');
+		if (href === '/reports') {
+			return currentPath === '/reports'
+				|| currentPath.startsWith('/reports/')
+				|| currentPath.startsWith('/owners-report');
+		}
 		if (href === '/settings') {
 			return currentPath === '/settings'
 				|| (currentPath.startsWith('/settings/')
@@ -501,6 +508,8 @@
 
 	// Title shown in the mobile top bar — the label of the deepest matching nav item.
 	let currentTitle = $derived.by(() => {
+		if (page.url.pathname.startsWith('/units/')) return 'Unit';
+		if (page.url.pathname.startsWith('/owners-report')) return 'Owner statements';
 		const match = allItems
 			.filter((item) => isActive(item.href))
 			.sort((a, b) => b.href.length - a.href.length)[0];
@@ -1001,8 +1010,13 @@
 				{currentTitle}
 			</span>
 
-			<div class="ml-auto flex items-center gap-1">
-				{#if showStaffHeader}
+				<div class="ml-auto flex items-center gap-1">
+					{#if simClockEnabled}
+						<div class="sim-clock-slot" data-testid="sim-clock-slot">
+							<SimClockPanel />
+						</div>
+					{/if}
+					{#if showStaffHeader}
 					<!-- Persistent scan-first command. Keep the label visible at desktop widths so this
 					     differentiator does not collapse into an unexplained icon. -->
 					{#if canOpenHeaderScan}
@@ -1092,6 +1106,22 @@
 			</div>
 		</main>
 	</div>
+
+	<style>
+		.sim-clock-slot {
+			position: relative;
+			width: 224px;
+			height: 40px;
+			flex: 0 1 224px;
+		}
+
+		@media (max-width: 900px) {
+			.sim-clock-slot {
+				width: 160px;
+				flex-basis: 160px;
+			}
+		}
+	</style>
 </div>
 
 <!-- Mobile overlay -->

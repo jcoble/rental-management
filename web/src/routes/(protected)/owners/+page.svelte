@@ -24,12 +24,14 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { WIZARD_STEPS } from '$lib/onboarding/wizard-steps';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
 
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
+	const ownerDescription = WIZARD_STEPS.find((step) => step.key === 'owner')?.explanation ?? 'The owner is the person or company that legally holds the property.';
 
 	// Search / sort / page persisted in the URL so they survive navigating away and back. Sort/page seed
 	// the server-side DataGrid query so owners are filtered/sorted/paged in SQL.
@@ -367,10 +369,12 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="owners-page">
 	<PageHeader
 		class="mb-4"
-		density="compact"
-		eyebrow="Settings"
+		band
+		art={9}
+		tone="violet"
+		eyebrow="Rentals"
 		title="Owners"
-		description="Ownership entities consumed by owner statements. Service providers live under Vendors."
+		description={ownerDescription}
 		data-testid="owners-header"
 	/>
 
