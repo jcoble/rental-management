@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { outsideEsignLabel } from '../../leases/lease-signing-labels.ts';
 
 const componentSource = readFileSync(new URL('./LeaseManagementDetail.svelte', import.meta.url), 'utf8');
 const typesSource = readFileSync(new URL('../../types/index.ts', import.meta.url), 'utf8');
@@ -11,9 +12,17 @@ describe('agreement signing-progress availability', () => {
 		assert.match(componentSource, /signatureProgressAgreementId === agreement\.leaseAgreementId[\s\S]*agreement\.hasSignatureRequest/);
 	});
 
-	it('explains signed-outside-esign agreements without exposing a broken action', () => {
+	it('explains signed-outside-esign agreements according to execution status', () => {
 		assert.match(componentSource, /issuedArtifact && !agreement\.hasSignatureRequest/);
-		assert.match(componentSource, /Signed outside e-sign — no signing links to track\./);
+		assert.match(componentSource, /outsideEsignLabel\(agreement\.fullyExecutedAtUtc\)/);
+		assert.equal(
+			outsideEsignLabel('2027-01-15T12:00:00Z'),
+			'Signed outside e-sign — no signing links to track.'
+		);
+		assert.equal(
+			outsideEsignLabel(null),
+			'Signing handled outside e-sign — mark as signed when complete.'
+		);
 	});
 
 	it('mirrors signature request presence and identity in the agreement history type', () => {
