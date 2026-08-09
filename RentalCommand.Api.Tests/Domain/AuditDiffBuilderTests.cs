@@ -202,7 +202,10 @@ public sealed class AuditDiffBuilderTests
                   "DOB": "1990-01-01",
                   "IdExtractedFields": "{\"Email\":{\"value\":\"avery@example.com\"}}",
                   "PayStubJson": "{\"gross\":9000}",
-                  "ConsentIpAddress": "203.0.113.44"
+                  "ConsentIpAddress": "203.0.113.44",
+                  "Employer": "Acme Co",
+                  "MonthlyIncome": 9000,
+                  "Notes": "free text about the applicant"
                 }
                 """,
         };
@@ -221,6 +224,9 @@ public sealed class AuditDiffBuilderTests
         changes.Select(c => c.Field).Should().NotContain("Id extracted fields");
         changes.Select(c => c.Field).Should().NotContain("Pay stub json");
         changes.Select(c => c.Field).Should().NotContain("Consent ip address");
+        changes.Select(c => c.Field).Should().NotContain("Employer");
+        changes.Select(c => c.Field).Should().NotContain("Monthly income");
+        changes.Select(c => c.Field).Should().NotContain("Notes");
     }
 
     [Fact]

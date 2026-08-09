@@ -34,7 +34,7 @@ public sealed class AuditDiffBuilder
     // it did before this review fix.
     private static readonly Regex[] SharedSafeSnapshotFieldPatterns =
     [
-        new("^(?:Amount|Balance|Category|Count|Currency|Description|Frequency|Interest|Interval|LateFee|Method|Name|Notes?|Operation|PaymentMethod|Percent|Principal|Quantity|Rate|Reason|Rent|Status|Subtotal|Title|Total|Type|UnitNumber|Value)$",
+        new("^(?:Amount|Balance|Category|Count|Currency|Description|Frequency|Interest|Interval|LateFee|Method|Name|Operation|PaymentMethod|Percent|Principal|Quantity|Rate|Reason|Rent|Status|Subtotal|Title|Total|Type|UnitNumber|Value)$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
         new("^Is[A-Z][A-Za-z0-9]*$",
             RegexOptions.CultureInvariant | RegexOptions.Compiled),
@@ -57,7 +57,7 @@ public sealed class AuditDiffBuilder
             },
             [nameof(RentalApplication)] = new(StringComparer.OrdinalIgnoreCase)
             {
-                "Status", "DesiredMoveInDate", "Employer", "MonthlyIncome", "ConsentGiven", "DecisionReason",
+                "Status", "DesiredMoveInDate", "ConsentGiven", "DecisionReason",
             },
             [nameof(TenantAccount)] = new(StringComparer.OrdinalIgnoreCase)
             {
