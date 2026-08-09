@@ -32,12 +32,14 @@
 	import { readPrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import {
-		buildUnitTabNavigation,
 		resolveUnitDestination,
 		UNIT_SUBNAV_ITEM_CLASS,
 		UNIT_SUBNAV_LIST_CLASS,
-		type UnitView,
 	} from '$lib/components/unit/unit-tabs';
+	import {
+		createUnitTabNavigationHandler,
+		type UnitTabNavigationState,
+	} from '$lib/components/unit/unit-tab-navigation';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
@@ -87,17 +89,13 @@
 	let recurringSort = $state('nextDueDate');
 	let recurringSkip = $state(0);
 	const maintenancePageSize = 10;
-	function setTab(tab: string, view?: UnitView) {
-		const { url, destination } = buildUnitTabNavigation(page.url, tab, view);
-		if (`${url.pathname}${url.search}` === `${page.url.pathname}${page.url.search}`) return;
-		pushState(`${url.pathname}${url.search}`, {
-			...page.state,
-			unitTab: destination.tab,
-			unitView: destination.view ?? null,
-			unitPaymentId: null,
-			unitExpenseId: null,
-		});
-	}
+	const setTab = createUnitTabNavigationHandler({
+		getCurrent: () => ({
+			url: page.url,
+			state: page.state as UnitTabNavigationState,
+		}),
+		pushState: (url, state) => pushState(url, state as App.PageState),
+	});
 
 	function tabState(tab: string) {
 		return activeTab === tab ? 'active' : 'inactive';
