@@ -27,6 +27,7 @@ Use these as exploration goals, not a step-by-step script:
 - Inspect hero actions, money/occupancy/attention metrics, recent activity, empty states, alerts, and any live updates; follow every link and verify the destination record and query context.
 - Open and collapse Money, Rentals, Work, Inbox, and Settings groups; visit every visible item from AppShell and compare the active highlight, page heading, breadcrumb, and URL.
 - Exercise dashboard-to-record deep links, unit command-center links, report tabs, ledger entry links, and notification intents; use browser Back/Forward and refresh after each navigation family.
+- Open the legacy `/analytics` deep link directly; verify its redirect lands on the dashboard (`/`) and produces no console errors, including after refresh and browser Back/Forward.
 - Compare management, owner, leasing, technician, and tenant shells with the appropriate test identities; inaccessible navigation should disappear or land on a clear access boundary.
 - Check header search, messages, appointments, command center, help, and assistant entry points for correct role-dependent destinations.
 
