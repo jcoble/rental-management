@@ -1521,7 +1521,11 @@ public sealed class DemoLeaseAddendumTemplateCommandHandler
         var existingTemplateId = await _db.DocumentTemplates
             .AsNoTracking()
             .Where(template => template.PortfolioId == command.PortfolioId
-                && template.Name == TemplateName)
+                && template.Name == TemplateName
+                && template.Kind == DocumentTemplateKind.Lease
+                && template.Status == DocumentTemplateStatus.Active
+                && template.ArchivedAtUtc == null
+                && template.PropertyId == null)
             .OrderBy(template => template.Id)
             .Select(template => (int?)template.Id)
             .FirstOrDefaultAsync(ct);
