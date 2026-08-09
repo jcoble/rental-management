@@ -216,7 +216,7 @@ public class DemoDataSeeder
         await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 DemoLeaseAddendumTemplateCommandHandler.CommandType,
-                $"portfolio:{portfolioId}:standard-lease-addendum-template:v1"),
+                $"portfolio:{portfolioId}:standard-lease-addendum-template:v2"),
             new EnsureDemoLeaseAddendumTemplateCommand(
                 portfolioId,
                 actorUserId,

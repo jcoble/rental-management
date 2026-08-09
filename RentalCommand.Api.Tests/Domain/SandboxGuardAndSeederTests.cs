@@ -393,6 +393,73 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DemoDataSeeder_UpgradesCompletedV1TemplateReceiptWithArchivedTemplateWithoutDuplicates()
+    {
+        var (seeder, _) = BuildSeeder(_ctx.Db);
+        const string operationKey = "seed-template-reconciliation-upgrade";
+
+        // Establish the pre-upgrade state: simulate the old v1 reconciliation having completed,
+        // then archive its compatible template so only an incompatible same-name row remains.
+        await seeder.SeedPortfolioAsync(1, operationKey, CancellationToken.None);
+        var archivedAtUtc = DateTime.UtcNow.AddDays(-1);
+        var seededTemplate = await _ctx.Db.DocumentTemplates
+            .SingleAsync(template => template.PortfolioId == 1
+                && template.Name == "Standard lease addendum page"
+                && template.Status == DocumentTemplateStatus.Active
+                && template.ArchivedAtUtc == null
+                && template.Kind == DocumentTemplateKind.Lease
+                && template.PropertyId == null);
+        seededTemplate.Status = DocumentTemplateStatus.Archived;
+        seededTemplate.ArchivedAtUtc = archivedAtUtc;
+        seededTemplate.UpdatedAtUtc = archivedAtUtc;
+        var templateReceipt = await _ctx.Db.AtomicCommandReceipts
+            .SingleAsync(receipt =>
+                receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+                && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2"
+                && receipt.Status == AtomicCommandReceiptStatus.Completed);
+        templateReceipt.IdempotencyKey = "portfolio:1:standard-lease-addendum-template:v1";
+        var templateAuditLogs = await _ctx.Db.AtomicAuditLogs
+            .Where(audit => audit.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+                && audit.CommandIdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2")
+            .ToListAsync();
+        foreach (var audit in templateAuditLogs)
+        {
+            audit.CommandIdempotencyKey = "portfolio:1:standard-lease-addendum-template:v1";
+        }
+        await _ctx.Db.SaveChangesAsync();
+
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+            && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v1"
+            && receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
+
+        await seeder.SeedPortfolioAsync(1, operationKey, CancellationToken.None);
+        await seeder.SeedPortfolioAsync(1, operationKey, CancellationToken.None);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var templates = await _ctx.Db.DocumentTemplates.IgnoreQueryFilters()
+            .Where(template => template.PortfolioId == 1
+                && template.Name == "Standard lease addendum page")
+            .OrderBy(template => template.Id)
+            .ToListAsync();
+
+        templates.Should().HaveCount(2);
+        templates.Should().ContainSingle(template =>
+            template.Status == DocumentTemplateStatus.Active
+            && template.ArchivedAtUtc == null
+            && template.Kind == DocumentTemplateKind.Lease
+            && template.PropertyId == null);
+        templates.Should().ContainSingle(template =>
+            template.Id == seededTemplate.Id
+            && template.Status == DocumentTemplateStatus.Archived
+            && template.ArchivedAtUtc == archivedAtUtc);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == DemoLeaseAddendumTemplateCommandHandler.CommandType
+            && receipt.IdempotencyKey == "portfolio:1:standard-lease-addendum-template:v2"
+            && receipt.Status == AtomicCommandReceiptStatus.Completed)).Should().Be(1);
+    }
+
+    [Fact]
     public async Task SeedPortfolio_PopulatedNonDemoPortfolioIsRejectedWithoutMutation()
     {
         var now = DateTime.UtcNow;
