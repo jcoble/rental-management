@@ -15,6 +15,7 @@
     presets?   boolean  show quick-range preset buttons. Default false.
     placeholder string  trigger text when empty. Default "Pick a date range".
     disabled?  boolean
+    invalid?   boolean (bindable) caller-controlled invalid state for submit guards.
     align?     'start' | 'center' | 'end'   popover alignment. Default 'start'.
     testid?    string  applied as data-testid on the trigger button for E2E.
     id?        string  id for the trigger (label `for=` association).
@@ -24,6 +25,7 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
+	import { applyRangeDatePickerValue } from './date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -37,6 +39,7 @@
 	let {
 		start = $bindable(''),
 		end = $bindable(''),
+		invalid = $bindable(false),
 		onchange,
 		presets = false,
 		placeholder = 'Pick a date range',
@@ -47,6 +50,7 @@
 	}: {
 		start?: string;
 		end?: string;
+		invalid?: boolean;
 		onchange?: (range: { start: string; end: string }) => void;
 		presets?: boolean;
 		placeholder?: string;
@@ -92,9 +96,14 @@
 	const hasValue = $derived(Boolean(start));
 
 	function apply(nextStart: string, nextEnd: string, close = false) {
-		if (nextStart === start && nextEnd === end) return;
-		start = nextStart;
-		end = nextEnd;
+		const next = applyRangeDatePickerValue(
+			{ start, end, invalid },
+			{ start: nextStart, end: nextEnd }
+		);
+		invalid = next.invalid;
+		if (!next.changed) return;
+		start = next.start;
+		end = next.end;
 		onchange?.({ start: nextStart, end: nextEnd });
 		if (close) open = false;
 	}
@@ -168,8 +177,10 @@
 		class={cn(
 			buttonVariants({ variant: 'outline' }),
 			'h-10 w-full justify-start text-left font-normal',
-			!hasValue && 'text-muted-foreground'
+			!hasValue && 'text-muted-foreground',
+			invalid && 'ring-2 ring-destructive'
 		)}
+		aria-invalid={invalid}
 	>
 		<CalendarIcon class="size-4 shrink-0 opacity-70" />
 		{label}
