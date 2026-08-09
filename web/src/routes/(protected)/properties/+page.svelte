@@ -448,9 +448,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="properties-page">
 	<PageHeader
 		class="mb-4"
-		band
-		art={2}
-		tone="sky"
+		density="compact"
 		eyebrow="Portfolio"
 		title="Properties"
 		description="Portfolio, units, and occupancy setup."

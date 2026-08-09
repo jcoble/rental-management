@@ -117,9 +117,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="leases-page">
 	<PageHeader
 		class="mb-4"
-		band
-		art={10}
-		tone="violet"
+		density="compact"
 		eyebrow="Rentals"
 		title="Leases"
 		description="Find each household's lease, any next lease, and rent account."

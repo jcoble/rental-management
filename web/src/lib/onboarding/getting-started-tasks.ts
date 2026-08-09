@@ -36,6 +36,7 @@ import {
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import { wizardStep } from './wizard-steps';
+import { isPersonalAlertSetupComplete } from './alert-completion';
 
 export type GettingStartedTaskKey =
 	| 'portfolio'
@@ -205,7 +206,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		hash: 'notifications',
 		coach: 'settings-notifications',
 		core: false,
-		isComplete: (s) => s.hasPersonalAlerts,
+		isComplete: (s) => isPersonalAlertSetupComplete(s.hasPersonalAlerts),
 	},
 	{
 		// No matching wizard step: automations are configured in Settings, not the wizard, so this
