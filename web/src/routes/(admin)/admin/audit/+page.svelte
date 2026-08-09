@@ -13,10 +13,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert, Download } from '@lucide/svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { formatAuditChangeValue } from '$lib/utils/status-labels';
 
 	// The (admin) route group already gates this page behind the Admin role server-side. This is the
-	// forensic view: every landlord-facing audit row, plus the IP address + raw old→new JSON withheld
-	// from /audit.
+	// forensic view: every audit row, plus actor identity and the captured IP address/raw old→new JSON.
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 50;
@@ -241,9 +241,9 @@
 												{/if}
 												<span aria-hidden="true">·</span>
 											{/if}
-											<span class="font-medium text-foreground/60">{entry.operationName}</span>
-											<span aria-hidden="true">·</span>
-											<span class="font-mono">IP {entry.ipAddress || '—'}</span>
+												<span class="font-medium text-foreground/60">{entry.operationName}</span>
+												<span aria-hidden="true">·</span>
+												<span class="font-mono">IP address: {entry.ipAddress || 'Not recorded'}</span>
 										</div>
 									</div>
 									<time
@@ -254,23 +254,45 @@
 									</time>
 								</summary>
 
-								<!-- Forensic detail: change reason + raw before/after JSON -->
+								<!-- Forensic detail: simple changes plus reason, source, and raw before/after JSON -->
 								<div class="space-y-3 border-t border-border bg-muted/20 px-4 py-3 text-xs">
-									{#if entry.changeReason}
-										<div>
-											<span class="font-semibold text-muted-foreground">Reason:</span>
-											{entry.changeReason}
+									<div class="grid gap-1 md:grid-cols-2">
+										<div data-testid="admin-audit-reason-{entry.id}">
+											<span class="font-semibold text-muted-foreground">Change reason:</span>
+											{entry.changeReason || 'Not recorded'}
+										</div>
+										<div data-testid="admin-audit-ip-{entry.id}">
+											<span class="font-semibold text-muted-foreground">IP address:</span>
+											{entry.ipAddress || 'Not recorded'}
+										</div>
+									</div>
+									{#if entry.changes?.length}
+										<div class="space-y-1" data-testid="admin-audit-changes-{entry.id}">
+											<p class="font-semibold text-muted-foreground">What changed</p>
+											{#each entry.changes as change (change.field)}
+												<p>
+													<span class="font-medium text-foreground">{change.field}</span>
+													{#if entry.operationName === 'Created'}
+														set to {formatAuditChangeValue(change.field, change.newValue)}
+													{:else if entry.operationName === 'Deleted'}
+														was {formatAuditChangeValue(change.field, change.oldValue)}
+													{:else}
+														changed from {formatAuditChangeValue(change.field, change.oldValue)} to
+														{formatAuditChangeValue(change.field, change.newValue)}
+													{/if}
+												</p>
+											{/each}
 										</div>
 									{/if}
 									<div class="grid gap-3 md:grid-cols-2">
 										<div>
-											<p class="mb-1 font-semibold text-muted-foreground">Old values</p>
+											<p class="mb-1 font-semibold text-muted-foreground">Before values</p>
 											<pre
 												class="overflow-x-auto rounded bg-background p-2 font-mono text-[11px] leading-snug"
 												data-testid="admin-audit-old-{entry.id}">{pretty(entry.oldValues)}</pre>
 										</div>
 										<div>
-											<p class="mb-1 font-semibold text-muted-foreground">New values</p>
+											<p class="mb-1 font-semibold text-muted-foreground">After values</p>
 											<pre
 												class="overflow-x-auto rounded bg-background p-2 font-mono text-[11px] leading-snug"
 												data-testid="admin-audit-new-{entry.id}">{pretty(entry.newValues)}</pre>

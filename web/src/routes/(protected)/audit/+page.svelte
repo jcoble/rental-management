@@ -15,9 +15,11 @@
 	import { currentUserIsPlatformAdmin } from '$lib/stores/auth.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { formatAuditChangeValue } from '$lib/utils/status-labels';
 
 	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
-	// platform-operator-only, so workspace security administrators must not receive a dead link.
+	// platform-operator-only, so workspace security administrators must not receive a dead link. The
+	// landlord page itself only receives sanitized changes and the portfolio-user-authored reason.
 	const showAdvanced = $derived(currentUserIsPlatformAdmin());
 
 	const queryClient = useQueryClient();
@@ -293,6 +295,33 @@
 									{formatRelative(entry.timestamp)}
 								</time>
 							</svelte:element>
+							{#if entry.changes?.length || entry.changeReason}
+								<div
+									class="ml-8 border-l border-border px-3 pb-2 text-xs text-muted-foreground"
+									data-testid="audit-changes-{entry.id}"
+								>
+									{#if entry.changes?.length}
+										{#each entry.changes as change (change.field)}
+											<p>
+												<span class="font-medium text-foreground">{change.field}</span>
+												{#if entry.operationName === 'Created'}
+													set to {formatAuditChangeValue(change.field, change.newValue)}
+												{:else if entry.operationName === 'Deleted'}
+													was {formatAuditChangeValue(change.field, change.oldValue)}
+												{:else}
+													changed from {formatAuditChangeValue(change.field, change.oldValue)} to
+													{formatAuditChangeValue(change.field, change.newValue)}
+												{/if}
+											</p>
+										{/each}
+									{/if}
+									{#if entry.changeReason}
+										<p class="mt-2 border-t border-border pt-2">
+											<span class="font-medium text-foreground">Reason:</span> {entry.changeReason}
+										</p>
+									{/if}
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>

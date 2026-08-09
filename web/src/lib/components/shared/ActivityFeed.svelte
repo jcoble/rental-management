@@ -98,9 +98,17 @@
 							<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
 								<dt class="font-medium text-foreground">{change.field}</dt>
 								<dd class="flex items-center gap-1.5 text-muted-foreground">
-									<span class="line-through opacity-70">{formatAuditChangeValue(change.field, change.oldValue)}</span>
-									<ArrowRight class="h-3 w-3 shrink-0" />
-									<span class="font-medium text-foreground">{formatAuditChangeValue(change.field, change.newValue)}</span>
+									{#if item.operationName === 'Created'}
+										<span>set to</span>
+										<span class="font-medium text-foreground">{formatAuditChangeValue(change.field, change.newValue)}</span>
+									{:else if item.operationName === 'Deleted'}
+										<span>was</span>
+										<span class="font-medium text-foreground">{formatAuditChangeValue(change.field, change.oldValue)}</span>
+									{:else}
+										<span class="line-through opacity-70">{formatAuditChangeValue(change.field, change.oldValue)}</span>
+										<ArrowRight class="h-3 w-3 shrink-0" />
+										<span class="font-medium text-foreground">{formatAuditChangeValue(change.field, change.newValue)}</span>
+									{/if}
 								</dd>
 							</div>
 						{/each}

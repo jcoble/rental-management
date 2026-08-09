@@ -23,9 +23,10 @@ public sealed class AuditFieldChange
 }
 
 /// <summary>
-/// MVP wire shape for one <see cref="AtomicAuditLog"/> row in the unified audit viewer. The trail is
-/// append-only, so this is a read-only projection. The raw old/new JSON and IP address are
-/// intentionally NOT exposed here — they belong to the deferred admin deep-view.
+/// Wire shape for one <see cref="AtomicAuditLog"/> row in the unified audit viewer. The trail is
+/// append-only, so this is a read-only projection. Only the portfolio-user-authored reason and the
+/// server-built sanitized change lines cross this landlord-facing boundary; IP addresses and raw
+/// before/after snapshots stay on the admin-only forensic projection.
 /// </summary>
 public class AuditEntryResponse
 {
@@ -50,13 +51,16 @@ public class AuditEntryResponse
 
     public DateTime Timestamp { get; set; }
 
+    /// <summary>Optional reason captured by the write path for this change.</summary>
+    public string? ChangeReason { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>audit-1</c>.</summary>
     public string TestId => $"audit-{Id}";
 
     /// <summary>
-    /// Sanitized field-level diff for an <c>Updated</c> row (friendly name + old→new), so the History
-    /// card can reveal *what* changed in-place. Empty for Created/Deleted (the description suffices)
-    /// and when no diff builder is supplied.
+    /// Sanitized field-level diff for an audit row (friendly name + formatted old→new), so the History
+    /// card can reveal *what* changed in-place. Created/Deleted rows use an empty-side snapshot, and
+    /// the list is empty when no diff builder is supplied.
     /// </summary>
     public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
 
@@ -77,6 +81,7 @@ public class AuditEntryResponse
             Description = describer.Describe(e),
             DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
+            ChangeReason = e.ChangeReason,
             Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
         };
 
@@ -134,9 +139,8 @@ public class AuditEntryResponse
 }
 
 /// <summary>
-/// Admin-only forensic projection of one <see cref="AtomicAuditLog"/> row. Extends the landlord-facing
-/// <see cref="AuditEntryResponse"/> with the fields it intentionally withholds — the actor's raw IP
-/// address and the unredacted old→new JSON — for compliance / forensic review. Surfaced only via the
+/// Admin-only forensic projection of one <see cref="AtomicAuditLog"/> row. It adds actor identity and
+/// keeps the captured raw detail grouped for compliance / forensic review. Surfaced only via the
 /// Admin-gated <c>GET /api/v1/admin/audit</c>; the data already lives on the row (no migration).
 /// </summary>
 public sealed class AdminAuditEntryResponse
@@ -159,7 +163,10 @@ public sealed class AdminAuditEntryResponse
     public string? DetailHref { get; set; }
     public DateTime Timestamp { get; set; }
 
-    // Forensic fields held back from the landlord-facing DTO.
+    /// <summary>Sanitized field-level changes for the expanded forensic row.</summary>
+    public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
+
+    // Forensic fields retained on the admin projection for the operator view.
     public string? IpAddress { get; set; }
     public string? OldValues { get; set; }
     public string? NewValues { get; set; }
@@ -171,7 +178,8 @@ public sealed class AdminAuditEntryResponse
         AtomicAuditLog e,
         AuditDescriber describer,
         string? resolvedActorName = null,
-        int? unitId = null) => new()
+        int? unitId = null,
+        AuditDiffBuilder? diff = null) => new()
         {
             Id = e.Id,
             PortfolioId = e.PortfolioId,
@@ -185,6 +193,7 @@ public sealed class AdminAuditEntryResponse
             Description = describer.Describe(e),
             DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
+            Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
             IpAddress = e.IpAddress,
             OldValues = e.OldValues,
             NewValues = e.NewValues,
