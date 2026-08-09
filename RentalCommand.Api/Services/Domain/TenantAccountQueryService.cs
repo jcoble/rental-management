@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
@@ -51,12 +52,17 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         TenantLedgerEntryGlobalListQuery query,
         CancellationToken ct = default)
     {
+        await using var transaction = await _db.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead,
+            ct);
         var totalCount = await BuildGlobalEntrySeedQuery(scope, query).CountAsync(ct);
         var pageEntryIds = await BuildGlobalEntryPageQuery(scope, query).ToArrayAsync(ct);
         var pageFacts = await LoadGlobalEntryPageFactsAsync(scope, query, pageEntryIds, ct);
         var items = pageFacts
             .Select(row => row.ToResponse(totalCount))
             .ToList();
+
+        await transaction.CommitAsync(ct);
 
         return new TenantLedgerEntryGlobalPageResponse
         {
