@@ -307,7 +307,8 @@ public sealed class AccountingReadModelPostgreSqlTests
     [Fact]
     public async Task TrialBalance_NetsEndingBalancesAndBalanceSheetIncludesCurrentEarnings()
     {
-        await using var setup = await _fixture.CreateContextAsync();
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
         await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
         await setup.Db.SaveChangesAsync();
         var scope = setup.Db.SeedAdministratorScope(1, nameof(TrialBalance_NetsEndingBalancesAndBalanceSheetIncludesCurrentEarnings));
@@ -325,7 +326,10 @@ public sealed class AccountingReadModelPostgreSqlTests
 
         var service = new AccountingLedgerReadModelService(setup.Db);
         var query = new StatementQuery { To = new DateOnly(2026, 8, 31), Currency = "USD" };
+        commands.Reset();
         var trial = await service.GetTrialBalanceAsync(scope, query);
+        commands.Count.Should().Be(1);
+        commands.Sql.Single().ToUpperInvariant().Should().Contain("COUNT");
         var balanceSheet = await service.GetBalanceSheetAsync(scope, query);
 
         trial.Rows.Single(row => row.AccountId == cash.Id).Should().BeEquivalentTo(
@@ -333,6 +337,9 @@ public sealed class AccountingReadModelPostgreSqlTests
         trial.TotalDebits.Should().Be(100m);
         trial.TotalCredits.Should().Be(100m);
         trial.IsBalanced.Should().BeTrue();
+        trial.Rows.Single(row => row.AccountId == cash.Id).IsZeroBalance.Should().BeFalse();
+        trial.Rows.Should().Contain(row => row.IsZeroBalance);
+        trial.ZeroBalanceCount.Should().BeGreaterThan(0);
         balanceSheet.Totals.Assets.Should().Be(60m);
         balanceSheet.Totals.CurrentEarnings.Should().Be(60m);
         balanceSheet.Totals.LiabilitiesAndEquity.Should().Be(60m);

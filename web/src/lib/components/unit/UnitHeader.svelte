@@ -36,7 +36,7 @@
 			<nav class="text-xs text-muted-foreground" aria-label="Breadcrumb">
 				<a href="/properties/{unit.propertyId}" class="hover:underline">{dashboard.propertyName}</a>
 				<span class="px-1">/</span>
-				<a href="/units" class="hover:underline">Command Center</a>
+					<a href="/units" class="hover:underline">Units</a>
 			</nav>
 			<h1 class="mt-0.5 flex items-center gap-2 text-2xl font-bold" data-testid="unit-title">
 				Unit {unit.unitNumber}

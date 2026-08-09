@@ -40,6 +40,11 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().Contain("vw_tenant_account_balances");
         sql.Should().Contain("TenantAccountId");
         sql.Should().Contain("LeaseManagementId");
+        sql.Should().Contain("vw_tenant_charge_balances");
+        sql.Should().Contain("OpenAmount");
+        sql.Should().Contain("DueOn");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT 1");
     }
 
     [Fact]

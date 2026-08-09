@@ -60,9 +60,9 @@ describe('unit rent canonical tenant ledger workflows', () => {
 		assert.match(chargeSheetSource, /servicePeriodStartOn: form\.servicePeriodStartOn \|\| null/);
 		assert.match(chargeSheetSource, /servicePeriodEndOn: form\.servicePeriodEndOn \|\| null/);
 		assert.match(panelSource, /tenantMoney\.reverseCharge/);
-		assert.match(panelSource, /Posts a credit applied to this charge/);
-		assert.match(panelSource, /Posts an additional charge/);
-		assert.match(panelSource, /Reverses the charge/);
+		assert.match(panelSource, /Posts a credit to reduce this charge/);
+		assert.match(panelSource, /Posts a related charge for the amount that was missed/);
+		assert.match(panelSource, /Removes this charge with a linked reversal entry/);
 	});
 
 	it('keeps correction actions in the canonical month ledger and out of RentTab', () => {

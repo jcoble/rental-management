@@ -48,9 +48,9 @@ describe('W2 unit tenant ledger composition', () => {
 		for (const label of ['Record payment', 'Add charge', 'Give credit', 'Recurring charge', 'Scan payment']) {
 			assert.match(panel, new RegExp(label.replace(/[&]/g, '\\&')));
 		}
-		assert.match(panel, /Posts a credit applied to this charge/);
-		assert.match(panel, /Posts an additional charge/);
-		assert.match(panel, /Reverses the charge/);
+		assert.match(panel, /Posts a credit to reduce this charge/);
+		assert.match(panel, /Posts a related charge for the amount that was missed/);
+		assert.match(panel, /Removes this charge with a linked reversal entry/);
 		assert.match(panel, /tenantMoney\.reverseCharge/);
 	});
 
@@ -58,7 +58,7 @@ describe('W2 unit tenant ledger composition', () => {
 		for (const label of ['Amount', 'Date received', 'Payment method', 'Reference / check #', 'Payer', 'Note', 'Receipt document']) {
 			assert.match(paymentSheet, new RegExp(label.replace(/[/#]/g, '\\$&')));
 		}
-		for (const label of ['What is this charge for?', 'Effective date', 'Due date', 'Service period', 'Description', 'Document']) {
+		for (const label of ['Charge type', 'Effective date', 'Due date', 'What period does this cover?', 'Description', 'Document']) {
 			assert.match(chargeSheet, new RegExp(label));
 		}
 		for (const label of ['Amount', 'Effective date', 'Reason', 'Original charge', 'Preview', 'Document']) {

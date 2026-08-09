@@ -6,6 +6,7 @@
 	import * as Dialog from "./index.js";
 	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
 	import type { ComponentProps } from "svelte";
+	import { createDialogOverlayBoundary } from './dialog-overlay-boundary.svelte.js';
 
 	let {
 		ref = $bindable(null),
@@ -19,6 +20,11 @@
 		children: Snippet;
 		showCloseButton?: boolean;
 	} = $props();
+
+	const dialogOverlayBoundary = createDialogOverlayBoundary();
+	$effect(() => {
+		dialogOverlayBoundary.content = ref as Element | null;
+	});
 </script>
 
 <DialogPortal {...portalProps}>

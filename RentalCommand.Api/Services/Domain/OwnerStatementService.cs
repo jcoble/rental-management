@@ -58,6 +58,13 @@ public class OwnerStatementService : IOwnerStatementService
             Expenses = SqlNumericFunctions.Round(row.Expenses, 2),
             ManagementFee = SqlNumericFunctions.Round(
                 row.RentalIncome * row.ManagementFeePercent / 100m, 2),
+            HasBalance =
+                SqlNumericFunctions.Round(row.RentalIncome, 2) != 0m ||
+                SqlNumericFunctions.Round(row.Expenses, 2) != 0m ||
+                SqlNumericFunctions.Round(row.RentalIncome * row.ManagementFeePercent / 100m, 2) != 0m ||
+                SqlNumericFunctions.Round(row.RentalIncome, 2) -
+                    SqlNumericFunctions.Round(row.Expenses, 2) -
+                    SqlNumericFunctions.Round(row.RentalIncome * row.ManagementFeePercent / 100m, 2) != 0m,
         });
         var statement = await _db.OwnerEntities
             .AsNoTracking()
@@ -87,6 +94,12 @@ public class OwnerStatementService : IOwnerStatementService
                 TotalNetToOwner = roundedPropertyLines
                     .Where(row => row.OwnerId == owner.Id)
                     .Sum(row => (decimal?)(row.RentalIncome - row.Expenses - row.ManagementFee)) ?? 0m,
+                ZeroPropertyCount = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id && !row.HasBalance)
+                    .Count(),
+                NonZeroPropertyCount = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id && row.HasBalance)
+                    .Count(),
                 TotalDistributed = _db.OwnerDistributions
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
@@ -123,6 +136,7 @@ public class OwnerStatementService : IOwnerStatementService
                         RentalIncome = row.RentalIncome,
                         Expenses = row.Expenses,
                         ManagementFee = row.ManagementFee,
+                        HasBalance = row.HasBalance,
                     })
                     .ToList(),
             })
@@ -140,7 +154,8 @@ public class OwnerStatementService : IOwnerStatementService
                 property.RentalIncome,
                 property.Expenses,
                 property.ManagementFee,
-                property.RentalIncome - property.Expenses - property.ManagementFee))
+                property.RentalIncome - property.Expenses - property.ManagementFee,
+                property.HasBalance))
             .ToList();
 
         var totalDistributed = Math.Round(statement.TotalDistributed, 2);
@@ -157,6 +172,8 @@ public class OwnerStatementService : IOwnerStatementService
             TotalNetToOwner = statement.TotalNetToOwner,
             TotalDistributed = totalDistributed,
             Undistributed = statement.TotalNetToOwner - totalDistributed,
+            ZeroPropertyCount = statement.ZeroPropertyCount,
+            NonZeroPropertyCount = statement.NonZeroPropertyCount,
         };
     }
 
@@ -435,6 +452,8 @@ public class OwnerStatementService : IOwnerStatementService
         public decimal TotalManagementFee { get; set; }
         public decimal TotalNetToOwner { get; set; }
         public decimal TotalDistributed { get; set; }
+        public int ZeroPropertyCount { get; set; }
+        public int NonZeroPropertyCount { get; set; }
         public List<OwnerStatementPropertySqlRow> Properties { get; set; } = [];
     }
 
@@ -454,5 +473,6 @@ public class OwnerStatementService : IOwnerStatementService
         public decimal RentalIncome { get; set; }
         public decimal Expenses { get; set; }
         public decimal ManagementFee { get; set; }
+        public bool HasBalance { get; set; }
     }
 }

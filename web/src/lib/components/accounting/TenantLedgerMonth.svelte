@@ -52,6 +52,14 @@
 	function action(row: TenantLedgerRow, next: TenantLedgerRowAction): void {
 		onaction?.(row, next);
 	}
+
+	function isOverdue(row: TenantLedgerRow): boolean {
+		return isCharge(row) && row.openAmount > 0 && Boolean(row.dueOn) && row.dueOn! < new Date().toISOString().slice(0, 10);
+	}
+
+	function openRow(row: TenantLedgerRow): void {
+		action(row, 'view');
+	}
 </script>
 
 <section class="overflow-hidden rounded-xl border border-border bg-card" data-testid={`tenant-ledger-month-${summary.year}-${summary.month}`}>
@@ -69,8 +77,8 @@
 		<Table.Header>
 			<Table.Row class="bg-muted/10 hover:bg-muted/10">
 				<Table.Head class="w-28 px-4 py-2 text-xs">Date</Table.Head>
+				<Table.Head class="w-28 px-4 py-2 text-xs">Due date</Table.Head>
 				<Table.Head class="min-w-52 px-4 py-2 text-xs">What happened</Table.Head>
-				<Table.Head class="w-28 px-4 py-2 text-xs">Due</Table.Head>
 				<Table.Head class="w-32 px-4 py-2 text-right text-xs">Charge</Table.Head>
 				<Table.Head class="w-36 px-4 py-2 text-right text-xs">Payment / credit</Table.Head>
 				<Table.Head class="w-32 px-4 py-2 text-right text-xs">Balance</Table.Head>
@@ -79,11 +87,27 @@
 		</Table.Header>
 		<Table.Body>
 			{#each rows as row (row.tenantLedgerEntryId)}
-				<Table.Row data-testid={`tenant-ledger-row-${row.tenantLedgerEntryId}`}>
+				<Table.Row
+					data-testid={`tenant-ledger-row-${row.tenantLedgerEntryId}`}
+					class="cursor-pointer hover:bg-muted/40"
+					role="button"
+					tabindex={0}
+					aria-label={`Open ${displayLabel(row)}`}
+					onclick={() => openRow(row)}
+					onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openRow(row); } }}
+				>
 					<Table.Cell class="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{formatAccountingDate(row.effectiveOn)}</Table.Cell>
+					<Table.Cell class="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{formatAccountingDate(row.dueOn)}</Table.Cell>
 					<Table.Cell class="px-4 py-3">
 						<div class="min-w-0">
-							<p class="truncate font-medium">{displayLabel(row)}</p>
+							<div class="flex min-w-0 flex-wrap items-center gap-2">
+								<p class="truncate font-medium">{displayLabel(row)}</p>
+								{#if isCharge(row) && row.openAmount > 0}
+									<span class={`rounded-full border px-1.5 py-0.5 text-[11px] font-medium ${isOverdue(row) ? 'border-destructive/40 bg-destructive/10 text-destructive' : 'border-primary/40 bg-primary/10 text-primary'}`} data-testid={`tenant-ledger-status-${row.tenantLedgerEntryId}`}>
+										{isOverdue(row) ? 'Overdue' : 'Open'}
+									</span>
+								{/if}
+							</div>
 							{#if row.paymentMethod || row.categoryName || row.recurringScheduleContext}
 								<p class="mt-1 truncate text-xs text-muted-foreground">
 									{row.paymentMethod ?? formatMoneyCategoryLabel(row.categoryName)}{#if row.recurringScheduleContext} · {row.recurringScheduleContext}{/if}
@@ -91,7 +115,6 @@
 							{/if}
 						</div>
 					</Table.Cell>
-					<Table.Cell class="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">{formatAccountingDate(row.dueOn)}</Table.Cell>
 					<Table.Cell class={`px-4 py-3 text-right font-mono tabular-nums ${accountingAmountClass(row.chargeAmount)}`}>
 						{#if isCharge(row)}{formatAccountingCurrency(row.chargeAmount, row.currency)}{:else}—{/if}
 					</Table.Cell>
@@ -101,7 +124,7 @@
 					<Table.Cell class={`px-4 py-3 text-right font-mono font-medium tabular-nums ${accountingAmountClass(row.runningAmountOwed)}`}>
 						{formatAccountingCurrency(row.runningAmountOwed, row.currency)}
 					</Table.Cell>
-					<Table.Cell class="px-2 py-3 text-right">
+					<Table.Cell class="px-2 py-3 text-right" onclick={(event) => event.stopPropagation()} onkeydown={(event) => event.stopPropagation()}>
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger aria-label={`Actions for ${displayLabel(row)}`} class="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
 								<MoreHorizontal class="size-4" />
@@ -113,7 +136,7 @@
 									<DropdownMenu.Item onSelect={() => action(row, 'related-charge')}>Add related charge</DropdownMenu.Item>
 									<DropdownMenu.Item onSelect={() => action(row, 'fix-charge')}>Reverse charge</DropdownMenu.Item>
 								{:else if isPayment(row)}
-									<DropdownMenu.Item onSelect={() => action(row, 'fix-payment')}>Fix this payment</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => action(row, 'fix-payment')}>Review payment allocation</DropdownMenu.Item>
 								{/if}
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>

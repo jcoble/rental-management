@@ -225,10 +225,12 @@
 	// underneath it; a right divider separates the pinned block from the scrolling columns. The
 	// `<th>` gets the header tint, the `<td>` the surface tint — both supplied by the m3-data-surface.
 	function pinnedHeadClass(col: ColumnDef<T>): string {
-		return col.isAction ? 'datagrid-pinned-head sticky left-0 z-20' : '';
+		if (col.isAction || col.pinned === 'left') return 'datagrid-pinned-head sticky left-0 z-20';
+		return col.pinned === 'right' ? 'datagrid-pinned-right sticky right-0 z-20' : '';
 	}
 	function pinnedCellClass(col: ColumnDef<T>): string {
-		return col.isAction ? 'datagrid-pinned-cell sticky left-0 z-10' : '';
+		if (col.isAction || col.pinned === 'left') return 'datagrid-pinned-cell sticky left-0 z-10';
+		return col.pinned === 'right' ? 'datagrid-pinned-right sticky right-0 z-10' : '';
 	}
 
 	// ── Column sizing ───────────────────────────────────────────────────────────────
@@ -248,6 +250,7 @@
 		// with the baseline min-width, which only exists to stop data columns squishing to nothing.
 		else if (!col.width && !col.isAction) parts.push(`min-width:${DEFAULT_MIN_WIDTH}`);
 		if (col.maxWidth) parts.push(`max-width:${col.maxWidth}`);
+		if (col.pinned === 'right' && col.pinnedOffset) parts.push(`right:${col.pinnedOffset}`);
 		return parts.join(';');
 	}
 

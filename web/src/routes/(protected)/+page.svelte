@@ -6,7 +6,6 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Dashboard, DashboardActivity } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { recordHref, type RecordType } from '$lib/navigation/record-href';
 	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -15,6 +14,8 @@
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { labelForType } from './appointments/calendar-utils';
 	import DashboardBriefing from './DashboardBriefing.svelte';
+	import { dashboardActivityHref } from '$lib/navigation/dashboard-activity-href';
+	import { recordHref } from '$lib/navigation/record-href';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -36,60 +37,6 @@
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
-	}
-
-	function recordTypeForEntity(entityType: string | null | undefined): RecordType | null {
-		switch (entityType) {
-			case 'WorkOrder':
-				return 'workOrder';
-			case 'Payment':
-				return 'payment';
-			case 'LeaseManagement':
-				return 'leaseManagement';
-			case 'Expense':
-				return 'expense';
-			case 'RentalApplication':
-			case 'Application':
-				return 'application';
-			default:
-				return null;
-		}
-	}
-
-	function recordEntityHref(entityType: string | null | undefined, entityId: number | null | undefined, unitId?: number | null): string | null {
-		if (!entityType || entityId == null) return null;
-		const type = recordTypeForEntity(entityType);
-		if (type) return recordHref(type, { id: entityId, unitId });
-		return null;
-	}
-
-	// Resolve a Recent Activity row to the record it touched, so each row deep-links to that entity's
-	// detail page (or its closest parent). Keep in sync with the server's audit EntityType strings
-	// (DashboardService.ResolveActivityLabelsAsync / AuditDescriber). Types without a page → no link.
-	function activityHref(activity: DashboardActivity): string | null {
-		if (!activity.entityId) return null;
-		const unitHref = recordEntityHref(activity.type, activity.entityId, activity.unitId);
-		if (unitHref) return unitHref;
-		switch (activity.type) {
-			case 'Tenant':
-				return `/tenants/${activity.entityId}`;
-			case 'Unit':
-				return `/units/${activity.entityId}`;
-			case 'Property':
-				return `/properties/${activity.entityId}`;
-			case 'Vendor':
-				return `/vendors/${activity.entityId}`;
-			case 'OwnerEntity':
-				return `/owners/${activity.entityId}`;
-			case 'Appointment':
-				return `/appointments/${activity.entityId}`;
-			case 'Inspection':
-				return `/maintenance/inspections/${activity.entityId}`;
-			case 'SecurityDeposit':
-				return `/deposits/${activity.entityId}`;
-			default:
-				return null;
-		}
 	}
 
 </script>
@@ -431,7 +378,7 @@
 								<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
 							{/snippet}
 							{#each data.recentActivity.slice(0, 8) as activity}
-								{@const href = activityHref(activity)}
+								{@const href = dashboardActivityHref(activity)}
 								{#if href}
 									<a
 										{href}

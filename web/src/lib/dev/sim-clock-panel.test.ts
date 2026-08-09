@@ -4,9 +4,10 @@ import { test } from 'node:test';
 
 const source = readFileSync(new URL('./SimClockPanel.svelte', import.meta.url), 'utf8');
 
-test('simulated-clock panel stays in a compact top-right position', () => {
-	assert.match(source, /\.sim-panel\s*\{[\s\S]*?top:\s*calc\(3\.5rem \+ 12px\);[\s\S]*?right:\s*12px;/);
-	assert.doesNotMatch(source, /\.sim-panel\s*\{[\s\S]*?(?:\n|\s)(?:left|bottom):\s*[^;]+;/);
+test('simulated-clock panel is docked in the top-bar slot', () => {
+	assert.match(source, /\.sim-panel\s*\{[\s\S]*?position:\s*absolute;/);
+	assert.match(source, /\.sim-panel\s*\{[\s\S]*?top:\s*50%;[\s\S]*?right:\s*0;/);
+	assert.doesNotMatch(source, /bottom:\s*12px/);
 	assert.doesNotMatch(source, /pointer-events:\s*none/);
 });
 

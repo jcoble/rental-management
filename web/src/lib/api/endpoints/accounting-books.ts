@@ -202,6 +202,7 @@ export interface TrialBalanceRow {
 	creditBalance: number;
 	typeSubtotal: number;
 	currency: string;
+	isZeroBalance: boolean;
 }
 
 export interface TrialBalanceResponse {
@@ -209,6 +210,7 @@ export interface TrialBalanceResponse {
 	totalDebits: number;
 	totalCredits: number;
 	isBalanced: boolean;
+	zeroBalanceCount: number;
 }
 
 export interface StatementParams {
