@@ -324,6 +324,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         var accessContext = await _ctx.Db.WorkspaceAccessContexts
             .AsNoTracking()
             .SingleAsync(row => row.Id == session.ActiveAccessContextId);
+        var operationId = Guid.NewGuid();
 
         var revoked = await ExecuteAsApiDatabaseIdentityAsync(
             session.Id,
@@ -339,7 +340,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                     accessContext.AccessRevision,
                     DateTime.UtcNow,
                     "User signed out"),
-                Guid.NewGuid()));
+                operationId));
 
         revoked.Revoked.Should().BeTrue();
         (await ExecuteAsApiDatabaseIdentityAsync(() =>
@@ -353,12 +354,508 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         revokedSession.RefreshTokenFamilies.Should().OnlyContain(row => row.RevokedAtUtc != null);
         revokedSession.RefreshTokenFamilies.SelectMany(row => row.Credentials)
             .Should().OnlyContain(row => row.RevokedAtUtc != null);
+        var credentialsBeforeReplay = await _ctx.Db.AuthSessionRefreshCredentials
+            .AsNoTracking()
+            .Where(row => row.RefreshTokenFamily!.AuthSessionId == session.Id)
+            .OrderBy(row => row.Id)
+            .ToListAsync();
+        var sessionBeforeReplay = await _ctx.Db.AuthSessions
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == session.Id);
+
+        Func<Task> replay = async () =>
+            await ExecuteAsApiDatabaseIdentityAsync(
+                session.Id,
+                user.Id,
+                accessContext.Id,
+                accessContext.AccessRevision,
+                () => credentials.RevokeSessionAsync(
+                    new RevokeAuthSessionCommand(
+                        session.Id,
+                        user.Id,
+                        accessContext.Id,
+                        accessContext.AccessRevision,
+                        DateTime.UtcNow.AddMinutes(1),
+                        "User signed out"),
+                    operationId));
+
+        await replay.Should().ThrowAsync<UnauthorizedAccessException>();
+        var credentialsAfterReplay = await _ctx.Db.AuthSessionRefreshCredentials
+            .AsNoTracking()
+            .Where(row => row.RefreshTokenFamily!.AuthSessionId == session.Id)
+            .OrderBy(row => row.Id)
+            .ToListAsync();
+        credentialsAfterReplay.Should().BeEquivalentTo(credentialsBeforeReplay);
+        var sessionAfterReplay = await _ctx.Db.AuthSessions
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == session.Id);
+        sessionAfterReplay.Status.Should().Be(sessionBeforeReplay.Status);
+        sessionAfterReplay.RevokedAtUtc.Should().Be(sessionBeforeReplay.RevokedAtUtc);
+        sessionAfterReplay.RevocationReason.Should().Be(sessionBeforeReplay.RevocationReason);
         (await _ctx.Db.AtomicAuditLogs.AsNoTracking().CountAsync(row =>
             row.CommandType == "auth-session:revoke" &&
             row.EntityType == nameof(AuthSession) &&
             row.ActorLabel == "authentication:logout" &&
             row.UserId == user!.Id)).Should().Be(1);
     }
+
+    [Fact]
+    public async Task RevokeAuthority_RejectsNonApiIdentityMismatchedCoordinatesAndCrossPortfolio()
+    {
+        var scenario = await CreateRevokeAuthorityScenarioAsync();
+
+        var nonApi = await ExecuteNonApiRevokeAuthorityProbeAsync(scenario);
+        nonApi.SessionUser.Should().NotBe("rentalcommand_api");
+        nonApi.Allows.Should().BeFalse();
+
+        var rejected = await ExecuteMismatchedRevokeAuthorityProbesAsync(scenario);
+        rejected.Should().BeEquivalentTo(new Dictionary<string, bool>
+        {
+            ["session"] = false,
+            ["user"] = false,
+            ["context"] = false,
+            ["access-revision"] = false,
+            ["portfolio"] = false,
+        });
+        (await ExecuteCrossPortfolioAuditProbeAsync(scenario)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RevokeAuthority_RejectsPreExistingReceiptAndSessionRows()
+    {
+        var scenario = await CreateRevokeAuthorityScenarioAsync();
+
+        (await ExecutePreExistingReceiptRevokeAuthorityProbeAsync(scenario)).Should().BeFalse();
+        (await ExecutePreExistingSessionRevokeAuthorityProbeAsync(scenario)).Should().BeFalse();
+    }
+
+    private async Task<RevokeAuthorityScenario> CreateRevokeAuthorityScenarioAsync()
+    {
+        var credentials = CreateAtomicCredentials();
+        var auth = CreateService(credentials, new AccessEnvelopeQuery(_ctx.Db), CreateCanonicalTokens());
+        var email = $"revoke-authority-{Guid.NewGuid():N}@example.test";
+        var registered = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = email,
+                Password = "Password123!",
+                DisplayName = "Revoke Authority Regression",
+            }, $"revoke-authority-register-{Guid.NewGuid():N}"));
+        registered.Success.Should().BeTrue();
+
+        var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
+        user.Should().NotBeNull();
+        (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
+            .Should().BeTrue();
+        (await ExecuteAsApiDatabaseIdentityAsync(() => auth.LoginAsync(email, "Password123!")))
+            .Success.Should().BeTrue();
+
+        var session = await _ctx.Db.AuthSessions
+            .AsNoTracking()
+            .SingleAsync(row => row.UserId == user!.Id);
+        var accessContext = await _ctx.Db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == session.ActiveAccessContextId);
+        return new RevokeAuthorityScenario(
+            session.Id,
+            user.Id,
+            accessContext.Id,
+            accessContext.PortfolioId,
+            accessContext.AccessRevision,
+            _ctx.ConnectionString);
+    }
+
+    private async Task<(string SessionUser, bool Allows)> ExecuteNonApiRevokeAuthorityProbeAsync(
+        RevokeAuthorityScenario scenario)
+    {
+        await using var connection = new NpgsqlConnection(_ctx.ConnectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        try
+        {
+            var operation = NewRevokeOperation();
+            var sessionUser = await ExecuteScalarAsync<string>(
+                connection,
+                transaction,
+                "SELECT session_user");
+            var allows = await ExecuteRevokeAuthorityFunctionAsync(
+                connection,
+                transaction,
+                scenario,
+                operation,
+                scenario.PortfolioId,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.AccessRevision,
+                scenario.SessionId);
+            await transaction.RollbackAsync();
+            return (sessionUser, allows);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(connection, null, "RESET SESSION AUTHORIZATION;");
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<string, bool>> ExecuteMismatchedRevokeAuthorityProbesAsync(
+        RevokeAuthorityScenario scenario)
+    {
+        await using var connection = new NpgsqlConnection(_ctx.ConnectionString);
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, null, "SET SESSION AUTHORIZATION rentalcommand_api;");
+        await using var transaction = await connection.BeginTransactionAsync();
+        try
+        {
+            var operation = NewRevokeOperation();
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision);
+            await InsertReceiptAsync(connection, transaction, operation);
+            await RevokeSessionRowAsync(connection, transaction, scenario.SessionId);
+
+            var results = new Dictionary<string, bool>(StringComparer.Ordinal)
+            {
+                ["session"] = await ExecuteRevokeAuthorityFunctionAsync(
+                    connection,
+                    transaction,
+                    scenario,
+                    operation,
+                    scenario.PortfolioId,
+                    scenario.UserId,
+                    scenario.AccessContextId,
+                    scenario.AccessRevision,
+                    Guid.NewGuid()),
+                ["user"] = await ExecuteRevokeAuthorityFunctionAsync(
+                    connection,
+                    transaction,
+                    scenario,
+                    operation,
+                    scenario.PortfolioId,
+                    scenario.UserId + 1000000,
+                    scenario.AccessContextId,
+                    scenario.AccessRevision,
+                    scenario.SessionId),
+                ["context"] = await ExecuteRevokeAuthorityFunctionAsync(
+                    connection,
+                    transaction,
+                    scenario,
+                    operation,
+                    scenario.PortfolioId,
+                    scenario.UserId,
+                    scenario.AccessContextId + 1000000,
+                    scenario.AccessRevision,
+                    scenario.SessionId),
+            };
+
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision + 1);
+            results["access-revision"] = await ExecuteRevokeAuthorityFunctionAsync(
+                connection,
+                transaction,
+                scenario,
+                operation,
+                scenario.PortfolioId,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.AccessRevision + 1,
+                scenario.SessionId);
+
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision);
+            results["portfolio"] = await ExecuteRevokeAuthorityFunctionAsync(
+                connection,
+                transaction,
+                scenario,
+                operation,
+                scenario.PortfolioId + 1000000,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.AccessRevision,
+                scenario.SessionId);
+            await transaction.RollbackAsync();
+            return results;
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(connection, null, "RESET app.access_revision; RESET app.current_access_context_id; RESET app.current_user_id; RESET app.auth_session_id; RESET SESSION AUTHORIZATION;");
+        }
+    }
+
+    private async Task<bool> ExecutePreExistingReceiptRevokeAuthorityProbeAsync(
+        RevokeAuthorityScenario scenario)
+    {
+        await using var connection = new NpgsqlConnection(_ctx.ConnectionString);
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, null, "SET SESSION AUTHORIZATION rentalcommand_api;");
+        var operation = NewRevokeOperation();
+        try
+        {
+            await using (var priorTransaction = await connection.BeginTransactionAsync())
+            {
+                await SetRevokeScopeAsync(connection, priorTransaction, scenario, scenario.AccessRevision);
+                await InsertReceiptAsync(connection, priorTransaction, operation);
+                await priorTransaction.CommitAsync();
+            }
+
+            await using var transaction = await connection.BeginTransactionAsync();
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision);
+            await RevokeSessionRowAsync(connection, transaction, scenario.SessionId);
+            var allows = await ExecuteRevokeAuthorityFunctionAsync(
+                connection,
+                transaction,
+                scenario,
+                operation,
+                scenario.PortfolioId,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.AccessRevision,
+                scenario.SessionId);
+            await transaction.RollbackAsync();
+            return allows;
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(connection, null, "RESET app.access_revision; RESET app.current_access_context_id; RESET app.current_user_id; RESET app.auth_session_id; RESET SESSION AUTHORIZATION;");
+        }
+    }
+
+    private static async Task<bool> ExecuteCrossPortfolioAuditProbeAsync(
+        RevokeAuthorityScenario scenario)
+    {
+        await using var connection = new NpgsqlConnection(scenario.ConnectionString);
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, null, "SET SESSION AUTHORIZATION rentalcommand_api;");
+        var operation = NewRevokeOperation();
+        var rejected = false;
+        try
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision);
+            await InsertReceiptAsync(connection, transaction, operation);
+            await RevokeSessionRowAsync(connection, transaction, scenario.SessionId);
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    connection,
+                    transaction,
+                    """
+                    INSERT INTO "AtomicAuditLogs"
+                        ("AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
+                         "PortfolioId", "UserId", "ActorLabel", "EntityType", "EntityId", "Operation",
+                         "NewValues", "ChangeReason", "Timestamp")
+                    VALUES
+                        (@attempt_id, 'auth-session:revoke', @idempotency_key, 1,
+                         @portfolio_id, @user_id, 'authentication:logout', 'AuthSession',
+                         @access_context_id, 1,
+                         jsonb_build_object('AuthSessionId', @session_id),
+                         'Authentication session revoked', CURRENT_TIMESTAMP)
+                    """,
+                    new("attempt_id", operation.AttemptId),
+                    new("idempotency_key", operation.IdempotencyKey),
+                    new("portfolio_id", scenario.PortfolioId + 1000000),
+                    new("user_id", scenario.UserId),
+                    new("access_context_id", scenario.AccessContextId),
+                    new("session_id", scenario.SessionId.ToString("D")));
+            }
+            catch (PostgresException exception) when (exception.SqlState == "42501")
+            {
+                rejected = true;
+            }
+
+            await transaction.RollbackAsync();
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                null,
+                "RESET app.access_revision; RESET app.current_access_context_id; RESET app.current_user_id; RESET app.auth_session_id; RESET SESSION AUTHORIZATION;");
+        }
+
+        var writtenRows = await ExecuteScalarAsync<long>(
+            connection,
+            null,
+            "SELECT COUNT(*) FROM \"AtomicAuditLogs\" WHERE \"AttemptId\" = @attempt_id",
+            new NpgsqlParameter("attempt_id", operation.AttemptId));
+        return rejected && writtenRows == 0;
+    }
+
+    private async Task<bool> ExecutePreExistingSessionRevokeAuthorityProbeAsync(
+        RevokeAuthorityScenario scenario)
+    {
+        await using var connection = new NpgsqlConnection(_ctx.ConnectionString);
+        await connection.OpenAsync();
+        await ExecuteNonQueryAsync(connection, null, "SET SESSION AUTHORIZATION rentalcommand_api;");
+        try
+        {
+            await using (var priorTransaction = await connection.BeginTransactionAsync())
+            {
+                var priorOperation = NewRevokeOperation();
+                await SetRevokeScopeAsync(connection, priorTransaction, scenario, scenario.AccessRevision);
+                await InsertReceiptAsync(connection, priorTransaction, priorOperation);
+                await RevokeSessionRowAsync(connection, priorTransaction, scenario.SessionId);
+                await priorTransaction.CommitAsync();
+            }
+
+            await using var transaction = await connection.BeginTransactionAsync();
+            var currentOperation = NewRevokeOperation();
+            await SetRevokeScopeAsync(connection, transaction, scenario, scenario.AccessRevision);
+            await InsertReceiptAsync(connection, transaction, currentOperation);
+            var allows = await ExecuteRevokeAuthorityFunctionAsync(
+                connection,
+                transaction,
+                scenario,
+                currentOperation,
+                scenario.PortfolioId,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.AccessRevision,
+                scenario.SessionId);
+            await transaction.RollbackAsync();
+            return allows;
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(connection, null, "RESET app.access_revision; RESET app.current_access_context_id; RESET app.current_user_id; RESET app.auth_session_id; RESET SESSION AUTHORIZATION;");
+        }
+    }
+
+    private static async Task SetRevokeScopeAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RevokeAuthorityScenario scenario,
+        long accessRevision)
+    {
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            SELECT set_config('app.auth_session_id', @auth_session_id, false),
+                   set_config('app.current_user_id', @current_user_id, false),
+                   set_config('app.current_access_context_id', @current_access_context_id, false),
+                   set_config('app.access_revision', @access_revision, false)
+            """,
+            new("auth_session_id", scenario.SessionId.ToString("D")),
+            new("current_user_id", scenario.UserId.ToString()),
+            new("current_access_context_id", scenario.AccessContextId.ToString()),
+            new("access_revision", accessRevision.ToString()));
+    }
+
+    private static async Task RevokeSessionRowAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid sessionId)
+    {
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            UPDATE "AuthSessions"
+            SET "Status" = 'Revoked',
+                "RevokedAtUtc" = CURRENT_TIMESTAMP,
+                "RevocationReason" = 'authority probe'
+            WHERE "Id" = @session_id
+            """,
+            new NpgsqlParameter("session_id", sessionId));
+    }
+
+    private static async Task InsertReceiptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RevokeOperation operation)
+    {
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            INSERT INTO "AtomicCommandReceipts"
+                ("Id", "AttemptId", "CommandType", "IdempotencyKey", "RequestFingerprint",
+                 "Status", "ResultContract", "StartedAt")
+            VALUES
+                (@id, @attempt_id, 'auth-session:revoke', @idempotency_key, @request_fingerprint,
+                 0, 'RevokeAuthSessionResult', CURRENT_TIMESTAMP)
+            """,
+            new("id", Guid.NewGuid()),
+            new("attempt_id", operation.AttemptId),
+            new("idempotency_key", operation.IdempotencyKey),
+            new("request_fingerprint", new string('a', 64)));
+    }
+
+    private static async Task<bool> ExecuteRevokeAuthorityFunctionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RevokeAuthorityScenario scenario,
+        RevokeOperation operation,
+        int targetPortfolioId,
+        int targetUserId,
+        int targetAccessContextId,
+        long accessRevision,
+        Guid targetSessionId)
+    {
+        await SetRevokeScopeAsync(connection, transaction, scenario, accessRevision);
+        return await ExecuteScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT public.rc_pre_auth_account_security_audit_allows(
+                @target_portfolio_id,
+                @target_attempt_id,
+                'auth-session:revoke',
+                @target_idempotency_key,
+                1,
+                @target_user_id,
+                'AuthSession',
+                @target_access_context_id,
+                1,
+                'authentication:logout',
+                'Authentication session revoked',
+                jsonb_build_object('AuthSessionId', @target_session_id))
+            """,
+            new("target_portfolio_id", targetPortfolioId),
+            new("target_attempt_id", operation.AttemptId),
+            new("target_idempotency_key", operation.IdempotencyKey),
+            new("target_user_id", targetUserId),
+            new("target_access_context_id", targetAccessContextId),
+            new("target_session_id", targetSessionId.ToString("D")));
+    }
+
+    private static RevokeOperation NewRevokeOperation()
+    {
+        var operationId = Guid.NewGuid();
+        return new RevokeOperation(operationId, $"operation:{operationId:N}");
+    }
+
+    private static async Task<T> ExecuteScalarAsync<T>(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string sql,
+        params NpgsqlParameter[] parameters)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        command.Parameters.AddRange(parameters);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task ExecuteNonQueryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string sql,
+        params NpgsqlParameter[] parameters)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        command.Parameters.AddRange(parameters);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed record RevokeAuthorityScenario(
+        Guid SessionId,
+        int UserId,
+        int AccessContextId,
+        int PortfolioId,
+        long AccessRevision,
+        string ConnectionString);
+
+    private sealed record RevokeOperation(Guid AttemptId, string IdempotencyKey);
 
     [Fact]
     public async Task IdentitySeed_FirstCleanStartup_CreatesConfiguredWorkspaceOnce()
