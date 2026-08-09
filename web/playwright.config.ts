@@ -24,12 +24,17 @@ export default defineConfig({
 		ignoreHTTPSErrors: true,
 		trace: 'on-first-retry',
 		screenshot: 'only-on-failure',
+		// Desktop testing standard is 1710x990 (this Mac's real usable browser area).
+		// devices['Desktop Chrome'] defaults to 1280x720, which renders pages half-width
+		// and invalidates every screenshot and visual judgment. Do not remove.
+		viewport: { width: 1710, height: 990 },
 	},
 	projects: [
 		{
 			name: 'chromium',
 			use: {
 				...devices['Desktop Chrome'],
+				viewport: { width: 1710, height: 990 },
 				launchOptions: {
 					args: ['--disable-http2'],
 				},
