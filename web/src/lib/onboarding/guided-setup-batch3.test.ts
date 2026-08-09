@@ -56,7 +56,9 @@ describe('guided setup batch 3 contracts', () => {
 		assert.match(onboarding, /data-testid="onboarding-unit-more-details"/);
 		assert.match(gettingStarted, /import LoadingState from '\$lib\/components\/shared\/LoadingState\.svelte'/);
 		assert.match(gettingStarted, /<LoadingState[\s\S]*?testid="get-started-loading"/);
-		assert.match(simClock, /position:\s*fixed;[\s\S]*?top:\s*calc\(3\.5rem \+ 12px\);[\s\S]*?right:\s*12px;/);
+		// Batch 5 docks the panel inside the top bar (absolute, vertically centered); the
+		// detailed positioning contract lives in sim-clock-panel.test.ts.
+		assert.match(simClock, /position:\s*absolute;[\s\S]*?top:\s*50%;[\s\S]*?right:\s*0;/);
 		assert.match(datePicker, /showToday = true/);
 	});
 });
