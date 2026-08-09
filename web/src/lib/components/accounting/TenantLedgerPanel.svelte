@@ -18,6 +18,7 @@
 	} from '$lib/api/endpoints/tenant-ledgers';
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { tenantLedgerPeriodRange } from '$lib/components/unit/money';
+	import { depositDetailHref } from '$lib/accounting/deposit-navigation';
 	import {
 		formatAccountingCurrency,
 		formatAccountingDate
@@ -344,7 +345,7 @@
 		<div class="min-w-44 rounded-xl border border-border bg-card px-4 py-3">
 			<p class="text-xs text-muted-foreground">Deposit held</p>
 			{#if deposit?.securityDepositAccountId}
-				<a class="mt-1 inline-flex items-center gap-1 font-mono font-semibold tabular-nums text-primary hover:underline" href={`/deposits/${deposit.securityDepositAccountId}`}>
+				<a class="mt-1 inline-flex items-center gap-1 font-mono font-semibold tabular-nums text-primary hover:underline" href={depositDetailHref(deposit)} data-testid="tenant-ledger-deposit-link">
 					{formatAccountingCurrency(deposit.heldBalance, deposit.currency || currency)} <ArrowRight class="size-4" />
 				</a>
 			{:else}

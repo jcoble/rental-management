@@ -96,7 +96,7 @@ public class AppointmentListQuery : ListQuery
     public AppointmentStatus? Status { get; set; }
 }
 
-public class CreateAppointmentRequest
+public class CreateAppointmentRequest : IValidatableObject
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
@@ -143,9 +143,19 @@ public class CreateAppointmentRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (ScheduledEnd.HasValue && ScheduledEnd.Value < ScheduledStart)
+        {
+            yield return new ValidationResult(
+                "End time must be at or after start time.",
+                [nameof(ScheduledEnd)]);
+        }
+    }
 }
 
-public class UpdateAppointmentRequest
+public class UpdateAppointmentRequest : IValidatableObject
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
@@ -189,4 +199,14 @@ public class UpdateAppointmentRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (ScheduledStart.HasValue && ScheduledEnd.HasValue && ScheduledEnd.Value < ScheduledStart.Value)
+        {
+            yield return new ValidationResult(
+                "End time must be at or after start time.",
+                [nameof(ScheduledEnd)]);
+        }
+    }
 }

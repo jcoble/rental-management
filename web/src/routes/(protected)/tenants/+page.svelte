@@ -11,8 +11,8 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { clearFieldError } from '$lib/forms/form-errors';
+	import { formErrorsFromApiError } from '$lib/forms/form-errors';
+	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -85,21 +85,6 @@
 		['email', 'phone', 'emergencyContact'],
 	] as const;
 
-	function clearTenantError(field: string) {
-		const next = clearFieldError(formErrors, field);
-		if (next !== formErrors) formErrors = next;
-	}
-
-	$effect(() => {
-		if (form.firstName.trim()) clearTenantError('firstName');
-	});
-	$effect(() => {
-		if (form.lastName.trim()) clearTenantError('lastName');
-	});
-	$effect(() => {
-		if (!form.email.trim() || form.email.includes('@')) clearTenantError('email');
-	});
-
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
 	}
@@ -112,7 +97,19 @@
 			closeForm();
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			const validationErrors = formErrorsFromApiError(err);
+			if (Object.keys(validationErrors).length > 0) {
+				formErrors = validationErrors;
+				const firstErrorStep = firstTenantErrorStep(validationErrors);
+				if (firstErrorStep >= 0) {
+					tenantStep = firstErrorStep;
+					markTenantStepInvalid(firstErrorStep);
+				}
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const deleteMutation = createMutation(() => ({
@@ -360,36 +357,12 @@
 			testid="tenant-stepper"
 		>
 			<div data-testid="tenant-form">
-				{#if tenantStep === 0}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
-							<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
-							{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
-							<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
-							{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
-						</div>
-					</div>
-				{:else}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-							<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" type="email" autocomplete="email" />
-							{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
-						</div>
-						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
-						</div>
-						<div class="md:col-span-2">
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>
-							<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} placeholder="Emergency contact" />
-						</div>
-					</div>
-				{/if}
+				<TenantFields
+					bind:form
+					bind:errors={formErrors}
+					section={tenantStep === 0 ? 'identity' : 'contact'}
+					testidPrefix="tenant"
+				/>
 			</div>
 		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
