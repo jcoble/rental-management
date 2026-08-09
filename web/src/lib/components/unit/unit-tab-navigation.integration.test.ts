@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
 	createUnitTabNavigationHandler,
 	resolveUnitPageDestination,
+	synchronizeUnitTabState,
 	type UnitTabNavigationState,
 } from './unit-tab-navigation.ts';
 
@@ -62,6 +63,21 @@ function tryMoveHistoryCursor(container: NavigationContainer, offset: number) {
 }
 
 describe('unit tab page navigation integration', () => {
+	it('initializes a cold deep link when the browser has no shallow page state yet', () => {
+		const url = new URL('https://rental.local/units/10?tab=money&view=tenant-account&tenantAccount=11');
+		const coldState = undefined as unknown as UnitTabNavigationState;
+
+		assert.doesNotThrow(() => synchronizeUnitTabState(url, coldState));
+		assert.deepEqual(synchronizeUnitTabState(url, coldState), {
+			unitPathname: '/units/10',
+			unitTab: 'money',
+			unitView: 'tenant-account',
+			unitViewByPath: { '/units/10': { money: 'tenant-account' } },
+			unitPaymentId: null,
+			unitExpenseId: null,
+		});
+	});
+
 	it('restores Applications when the page state retains the nested view but the URL does not', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
 			unitPathname: '/units/10',

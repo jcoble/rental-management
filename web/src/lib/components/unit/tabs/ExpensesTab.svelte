@@ -75,7 +75,7 @@
 	function openExpense(id: number) {
 		selectedExpense = id;
 		pushState(unitUrl({ expense: id }), {
-			...page.state,
+			...(page.state ?? {}),
 			unitTab: 'money',
 			unitView: 'operating-costs',
 			unitExpenseId: id,
@@ -87,7 +87,7 @@
 	function clearSelection() {
 		selectedExpense = null;
 		replaceState(unitUrl(), {
-			...page.state,
+			...(page.state ?? {}),
 			unitTab: 'money',
 			unitView: 'operating-costs',
 			unitExpenseId: null,

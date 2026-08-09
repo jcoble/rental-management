@@ -410,7 +410,7 @@
 							</div>
 						{:else if draft.conversationId}
 							<div class="border-t border-border pt-3">
-								<Button size="sm" variant="outline" href={`/messages?conversation=${draft.conversationId}`}>
+								<Button size="sm" variant="outline" href={`/messages/${draft.conversationId}`} data-testid="notice-conversation-link">
 									Open conversation
 								</Button>
 							</div>

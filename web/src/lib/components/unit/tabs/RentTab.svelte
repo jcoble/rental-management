@@ -24,7 +24,7 @@
 	const selectedReceipt = $derived.by(() => {
 		const explicitPayment = page.url.searchParams.get('payment');
 		if (explicitPayment !== null) return Number(explicitPayment) || null;
-		return page.state.unitPathname === page.url.pathname ? page.state.unitPaymentId ?? null : null;
+		return page.state?.unitPathname === page.url.pathname ? page.state?.unitPaymentId ?? null : null;
 	});
 
 	function unitUrl(payment?: number): string {
@@ -39,7 +39,7 @@
 
 	function openReceipt(id: number): void {
 		pushState(unitUrl(id), {
-			...page.state,
+			...(page.state ?? {}),
 			unitTab: 'money',
 			unitView: 'tenant-account',
 			unitPaymentId: id,
@@ -49,7 +49,7 @@
 
 	function clearSelection(): void {
 		replaceState(unitUrl(), {
-			...page.state,
+			...(page.state ?? {}),
 			unitTab: 'money',
 			unitView: 'tenant-account',
 			unitPaymentId: null
