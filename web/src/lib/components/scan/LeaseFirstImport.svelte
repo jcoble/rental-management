@@ -609,7 +609,7 @@
 				{/if}
 			</div>
 			{#if isCreatingTenant}
-				<TenantFields bind:form={tenantForm} errors={tenantErrors} {autoFilled} testidPrefix="new-rental-tenant" />
+				<TenantFields bind:form={tenantForm} bind:errors={tenantErrors} {autoFilled} testidPrefix="new-rental-tenant" />
 			{/if}
 		</div>
 	{:else if step === 3}

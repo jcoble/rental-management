@@ -8,6 +8,10 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
+	import {
+		CONVERSATION_SUBJECT_MAX_LENGTH,
+		conversationSubjectError
+	} from '$lib/messages/conversation-compose';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -233,11 +237,13 @@
 	const composeAnyChannel = $derived(
 		composeChannels.portal || composeChannels.email || composeChannels.sms
 	);
+	const composeSubjectError = $derived(conversationSubjectError(composeForm.subject));
 	const canStart = $derived(
 		!!composeForm.tenantId &&
 			!!composeForm.subject.trim() &&
 			!!composeForm.body.trim() &&
-			composeAnyChannel
+			composeAnyChannel &&
+			composeSubjectError === null
 	);
 
 	function openCompose() {
@@ -618,7 +624,9 @@
 					data-testid="conversation-compose-subject"
 					bind:value={composeForm.subject}
 					placeholder="What's this about?"
+					maxlength={CONVERSATION_SUBJECT_MAX_LENGTH}
 				/>
+				{#if composeSubjectError}<p class="mt-1 text-xs text-destructive" data-testid="conversation-compose-subject-error">{composeSubjectError}</p>{/if}
 			</div>
 
 			<!-- First message -->

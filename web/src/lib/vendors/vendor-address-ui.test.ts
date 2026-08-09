@@ -7,6 +7,7 @@ const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'u
 describe('vendor address UI contract', () => {
 	it('threads structured address fields through the vendor create/edit dialog', () => {
 		const vendorsPage = source('../../routes/(protected)/vendors/+page.svelte');
+		const vendorFields = source('../components/forms/VendorFields.svelte');
 		const schemaSource = source('../schemas/index.ts');
 		const typesSource = source('../types/index.ts');
 
@@ -20,18 +21,18 @@ describe('vendor address UI contract', () => {
 		assert.match(typesSource, /export interface Vendor \{[\s\S]*state\?: string \| null;/);
 		assert.match(typesSource, /export interface Vendor \{[\s\S]*postalCode\?: string \| null;/);
 
-		assert.match(vendorsPage, /import AddressAutocomplete from '\$lib\/components\/shared\/AddressAutocomplete\.svelte';/);
-		assert.match(vendorsPage, /import StateSelect from '\$lib\/components\/shared\/StateSelect\.svelte';/);
+		assert.match(vendorFields, /import AddressAutocomplete from '\$lib\/components\/shared\/AddressAutocomplete\.svelte';/);
+		assert.match(vendorFields, /import StateSelect from '\$lib\/components\/shared\/StateSelect\.svelte';/);
 		assert.match(vendorsPage, /const emptyVendor = \{[\s\S]*addressLine1: ''[\s\S]*city: ''[\s\S]*state: ''[\s\S]*postalCode: ''/);
 		assert.match(vendorsPage, /addressLine1: v\.addressLine1 \?\? ''/);
 		assert.match(vendorsPage, /city: v\.city \?\? ''/);
 		assert.match(vendorsPage, /state: v\.state \?\? ''/);
 		assert.match(vendorsPage, /postalCode: v\.postalCode \?\? ''/);
-		assert.match(vendorsPage, /<AddressAutocomplete[\s\S]*testid="vendor-address-input"[\s\S]*bind:value=\{vendorForm\.addressLine1\}/);
-		assert.match(vendorsPage, /onresolved=\{\(a\) => \{[\s\S]*vendorForm\.city = a\.city[\s\S]*vendorForm\.state = a\.state[\s\S]*vendorForm\.postalCode = a\.zip[\s\S]*\}\}/);
-		assert.match(vendorsPage, /data-testid="vendor-city-input"[\s\S]*bind:value=\{vendorForm\.city\}/);
-		assert.match(vendorsPage, /<StateSelect[\s\S]*testid="vendor-state-input"[\s\S]*bind:value=\{vendorForm\.state\}/);
-		assert.match(vendorsPage, /data-testid="vendor-zip-input"[\s\S]*bind:value=\{vendorForm\.postalCode\}/);
+		assert.match(vendorFields, /<AddressAutocomplete[\s\S]*testid=\{`\$\{testidPrefix\}-address-input`\}[\s\S]*bind:value=\{form\.addressLine1\}/);
+		assert.match(vendorFields, /onresolved=\{\(address\) => \{[\s\S]*form\.city = address\.city[\s\S]*form\.state = address\.state[\s\S]*form\.postalCode = address\.zip[\s\S]*\}\}/);
+		assert.match(vendorFields, /data-testid=\{`\$\{testidPrefix\}-city-input`\}[\s\S]*bind:value=\{form\.city\}/);
+		assert.match(vendorFields, /<StateSelect[\s\S]*testid=\{`\$\{testidPrefix\}-state-input`\}[\s\S]*bind:value=\{form\.state\}/);
+		assert.match(vendorFields, /data-testid=\{`\$\{testidPrefix\}-zip-input`\}[\s\S]*bind:value=\{form\.postalCode\}/);
 	});
 
 	it('shows vendor address fields on the detail page', () => {

@@ -432,6 +432,57 @@ public class AccountingServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetTransactionsAsync_OffersOnlyStatusPairsBackedByTheTransactionProjection()
+    {
+        var now = new DateTime(2027, 2, 15, 12, 0, 0, DateTimeKind.Utc);
+        var (property, lease) = SeedPropertyAndLease(now);
+        var payment = SeedPayment(lease, 1_050m, dueDate: now, paidInFull: true, paidDate: now);
+        var pending = SeedExpense("Pending expense", 10m, now, ScheduleECategory.Repairs, ExpenseStatus.Pending, property.Id);
+        var approved = SeedExpense("Approved expense", 20m, now, ScheduleECategory.Repairs, ExpenseStatus.Approved, property.Id);
+        var paid = SeedExpense("Paid expense", 30m, now, ScheduleECategory.Repairs, ExpenseStatus.Paid, property.Id);
+
+        var offeredPairs = new[]
+        {
+            (Kind: "Payment", Status: "Credit", Id: (long)payment.Id),
+            (Kind: "Expense", Status: "Pending", Id: (long)pending.Id),
+            (Kind: "Expense", Status: "Approved", Id: (long)approved.Id),
+            (Kind: "Expense", Status: "Paid", Id: (long)paid.Id),
+        };
+
+        offeredPairs.Should().HaveCount(4,
+            "the rendered filter offers one Payment status and three Expense statuses");
+
+        foreach (var pair in offeredPairs)
+        {
+            var result = await _sut.GetTransactionsAsync(
+                _scope,
+                new AccountingTransactionsQuery { Kind = pair.Kind, Status = pair.Status, Take = 20 },
+                CancellationToken.None);
+
+            result.TotalCount.Should().Be(1, $"{pair.Kind}/{pair.Status} must match exactly one seeded projected row");
+            result.Items.Should().ContainSingle(row => row.Kind == pair.Kind && row.Id == pair.Id,
+                $"{pair.Kind}/{pair.Status} must match a seeded projected row");
+        }
+
+        var unsupportedPairs = new[]
+        {
+            (Kind: "Payment", Status: "Pending"),
+            (Kind: "Payment", Status: "Approved"),
+            (Kind: "Payment", Status: "Paid"),
+            (Kind: "Expense", Status: "Credit"),
+        };
+        foreach (var pair in unsupportedPairs)
+        {
+            var unsupported = await _sut.GetTransactionsAsync(
+                _scope,
+                new AccountingTransactionsQuery { Kind = pair.Kind, Status = pair.Status, Take = 20 },
+                CancellationToken.None);
+            unsupported.Items.Should().BeEmpty(
+                $"{pair.Kind}/{pair.Status} is not an offered pair and must be normalized before the client request");
+        }
+    }
+
+    [Fact]
     public async Task GetTransactionsAsync_EnrichesOnlyPagedExpensesWithReceiptAndBankFacts()
     {
         var now = new DateTime(2027, 2, 16, 12, 0, 0, DateTimeKind.Utc);

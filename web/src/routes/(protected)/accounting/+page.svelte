@@ -25,6 +25,16 @@
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
 	import {
+		EXPENSE_STATUSES,
+		PAYMENT_STATUSES,
+		TENANT_MONEY_CATEGORY_OPTIONS,
+		normalizeTransactionFilters,
+		normalizeTransactionKind,
+		transactionCategoriesForKind,
+		transactionStatusesForKind,
+		TRANSACTION_KIND_OPTIONS
+	} from '$lib/accounting/transaction-filter-state';
+	import {
 		formatMoneyCategoryLabel,
 		formatMoneyEntryLabel
 	} from '$lib/accounting/money-display';
@@ -50,6 +60,7 @@
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { clearFieldError } from '$lib/forms/form-errors';
+	import { isPositiveNumericInput } from '$lib/forms/validation-state';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
@@ -82,15 +93,6 @@
 	const initialTab = normalizeMoneyTab(page.url.searchParams.get('tab'));
 	let activeTab = $state<string>(initialTab);
 	const PAGE_SIZE = 20;
-	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
-	const TENANT_MONEY_CATEGORY_OPTIONS = [
-		{ value: 'RentCharge', label: 'Rent' },
-		{ value: 'DepositCharge', label: 'Security deposit' },
-		{ value: 'LateFeeCharge', label: 'Late fee' },
-		{ value: 'AddendumCharge', label: 'Lease/addendum charge' },
-		{ value: 'ManualCharge', label: 'Manual/other charge' }
-	];
-	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	// --- Ledger grid state, persisted in the URL query string -------------------
 	// Filter / sort / search / paging (and the active tab) round-trip through the URL so they survive
@@ -100,9 +102,15 @@
 	const DEFAULT_SORT = '-createdAt';
 
 	let transactionSearch = $state(readGridParam(initialParams, 'q'));
-	let transactionKindFilter = $state(readGridParam(initialParams, 'kind'));
-	let transactionStatusFilter = $state(readGridParam(initialParams, 'status'));
-	let transactionCategoryFilter = $state(readGridParam(initialParams, 'category'));
+	const initialTransactionKindFilter = normalizeTransactionKind(readGridParam(initialParams, 'kind'));
+	const initialTransactionFilters = normalizeTransactionFilters(
+		initialTransactionKindFilter,
+		readGridParam(initialParams, 'status'),
+		readGridParam(initialParams, 'category')
+	);
+	let transactionKindFilter = $state(initialTransactionKindFilter);
+	let transactionStatusFilter = $state(initialTransactionFilters.status);
+	let transactionCategoryFilter = $state(initialTransactionFilters.category);
 	let transactionPropertyFilter = $state(readGridParam(initialParams, 'property'));
 	let transactionFromFilter = $state(readGridParam(initialParams, 'from'));
 	let transactionToFilter = $state(readGridParam(initialParams, 'to'));
@@ -110,6 +118,16 @@
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
+	const normalizedTransactionKind = $derived(normalizeTransactionKind(transactionKindFilter));
+	const normalizedTransactionFilters = $derived(
+		normalizeTransactionFilters(normalizedTransactionKind, transactionStatusFilter, transactionCategoryFilter)
+	);
+	$effect(() => {
+		if (normalizedTransactionKind !== transactionKindFilter) transactionKindFilter = normalizedTransactionKind;
+		const normalized = normalizedTransactionFilters;
+		if (normalized.status !== transactionStatusFilter) transactionStatusFilter = normalized.status;
+		if (normalized.category !== transactionCategoryFilter) transactionCategoryFilter = normalized.category;
+	});
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
 
@@ -150,7 +168,7 @@
 		syncGridUrl(
 			{
 				q: transactionSearch,
-				kind: transactionKindFilter,
+				kind: normalizedTransactionKind,
 				status: transactionStatusFilter,
 				category: transactionCategoryFilter,
 				property: transactionPropertyFilter,
@@ -168,9 +186,9 @@
 			'accounting-transactions',
 			portfolioId,
 			debouncedTransactionSearch.value,
-			transactionKindFilter,
-			transactionStatusFilter,
-			transactionCategoryFilter,
+			normalizedTransactionKind,
+			normalizedTransactionFilters.status,
+			normalizedTransactionFilters.category,
 			transactionPropertyFilter,
 			transactionFromFilter,
 			transactionToFilter,
@@ -179,9 +197,9 @@
 		],
 		queryFn: () => accounting.transactions({
 			search: debouncedTransactionSearch.value,
-			kind: transactionKindFilter || undefined,
-			status: transactionStatusFilter || undefined,
-			category: transactionCategoryFilter || undefined,
+			kind: normalizedTransactionKind || undefined,
+			status: normalizedTransactionFilters.status || undefined,
+			category: normalizedTransactionFilters.category || undefined,
 			propertyId: selectedPropertyFilter,
 			from: transactionFromFilter || undefined,
 			to: transactionToFilter || undefined,
@@ -323,7 +341,7 @@
 		if (expenseForm.description.trim()) clearExpenseError('description');
 	});
 	$effect(() => {
-		if (expenseForm.amount) clearExpenseError('amount');
+		if (isPositiveNumericInput(expenseForm.amount)) clearExpenseError('amount');
 	});
 	$effect(() => {
 		if (expenseForm.incurredAt) clearExpenseError('incurredAt');
@@ -628,15 +646,7 @@
 	const reportYear = $derived(new Date().getFullYear());
 	const transactionRows = $derived(transactionsQuery.data?.items ?? []);
 	const transactionTotalCount = $derived(transactionsQuery.data?.totalCount ?? 0);
-	const transactionStatusOptions = $derived.by(() =>
-		transactionKindFilter === 'Payment'
-			? PAYMENT_STATUSES
-			: transactionKindFilter === 'Expense'
-				? EXPENSE_STATUSES
-				: transactionKindFilter === 'Bank'
-					? ['Unmatched', 'Suggested', 'Matched']
-					: [...PAYMENT_STATUSES, ...EXPENSE_STATUSES.filter((status) => !PAYMENT_STATUSES.includes(status)), 'Unmatched', 'Suggested', 'Matched']
-	);
+	const transactionStatusOptions = $derived(transactionStatusesForKind(normalizedTransactionKind));
 	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
 	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
@@ -1126,9 +1136,9 @@
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All types">All types</Select.Item>
-							<Select.Item value="Payment" label="Payments">Payments</Select.Item>
-							<Select.Item value="Expense" label="Expenses">Expenses</Select.Item>
-							<Select.Item value="Bank" label="Bank activity">Bank activity</Select.Item>
+							{#each TRANSACTION_KIND_OPTIONS as option}
+								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+							{/each}
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionStatusFilter}>
@@ -1148,7 +1158,7 @@
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each (transactionKindFilter === 'Payment' ? TENANT_MONEY_CATEGORY_OPTIONS : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : [...TENANT_MONEY_CATEGORY_OPTIONS, ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) }))]) as option}
+							{#each transactionCategoriesForKind(normalizedTransactionKind) as option}
 								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>
