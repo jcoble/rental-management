@@ -49,9 +49,15 @@ async function fulfillJson(route: Route, status: number, body: unknown) {
 	});
 }
 
-async function stubConversationDetail(page: Page, id: number, subject?: string) {
-	await page.route(`**/api/v1/conversations/${id}`, (route) => fulfillJson(route, 200, conversation(id, subject)));
-	await page.route(`**/api/v1/conversations/${id}/read`, (route) => route.fulfill({ status: 204 }));
+async function stubConversationDetail(page: Page, id: number, subject?: string, requestSequence?: string[]) {
+	await page.route(`**/api/v1/conversations/${id}`, async (route) => {
+		requestSequence?.push('detail GET');
+		await fulfillJson(route, 200, conversation(id, subject));
+	});
+	await page.route(`**/api/v1/conversations/${id}/read`, async (route) => {
+		requestSequence?.push('mark-read');
+		await route.fulfill({ status: 204 });
+	});
 }
 
 type UnitCase = {
@@ -81,11 +87,17 @@ function isExpectedTransportNoise(message: string): boolean {
 }
 
 function routeLifecycleErrors(messages: string[]): string[] {
-	return messages.filter(
-		(message) =>
-			!isExpectedTransportNoise(message)
-			&& /TypeError|\$set|Cannot read properties of undefined/.test(message),
-	);
+	const lifecycleErrors: string[] = [];
+	for (const message of messages) {
+		const hasCrashSignature = /\$set|Cannot read properties of undefined/.test(message);
+		if (hasCrashSignature) {
+			lifecycleErrors.push(message);
+			continue;
+		}
+		if (isExpectedTransportNoise(message)) continue;
+		if (/TypeError/.test(message)) lifecycleErrors.push(message);
+	}
+	return lifecycleErrors;
 }
 
 async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): Promise<void> {
@@ -184,6 +196,10 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 
 		await login(page);
 		await expect(page.getByTestId('dashboard-error')).toBeVisible({ timeout: 15_000 });
+		await page.getByTestId('dashboard-properties-link').click();
+		await expect(page).toHaveURL(/\/properties$/);
+		await page.goto('/');
+		await expect(page.getByTestId('dashboard-error')).toBeVisible({ timeout: 15_000 });
 		retryClicked = true;
 		await page.getByTestId('dashboard-retry').click();
 		await expect(page.getByTestId('dashboard-hero')).toBeVisible({ timeout: 15_000 });
@@ -193,10 +209,11 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 	test('opens dashboard conversation links at the canonical detail route', async ({ page }) => {
 		const id = 7401;
 		const summary = conversationSummary(id, 'Dashboard deep-link conversation');
+		const requestSequence: string[] = [];
 		await page.route('**/api/v1/conversations/page**', (route) =>
 			fulfillJson(route, 200, { items: [summary], totalCount: 1, skip: 0, take: 5 })
 		);
-		await stubConversationDetail(page, id, summary.subject);
+		await stubConversationDetail(page, id, summary.subject, requestSequence);
 
 		await login(page);
 		await page.goto('/');
@@ -205,11 +222,13 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		await link.click();
 		await expect(page).toHaveURL(new RegExp(`/messages/${id}$`));
 		await expect(page.getByTestId('conversation-title')).toHaveText(summary.subject);
+		expect(requestSequence, 'dashboard conversation request sequence').toEqual(['detail GET', 'mark-read']);
 	});
 
 	test('opens notice conversation links at the canonical detail route', async ({ page }) => {
 		const id = 7402;
 		const subject = 'Notice deep-link conversation';
+		const requestSequence: string[] = [];
 		await page.route('**/api/v1/notices*', (route) =>
 			fulfillJson(route, 200, [
 				{
@@ -233,7 +252,7 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 				}
 			])
 		);
-		await stubConversationDetail(page, id, subject);
+		await stubConversationDetail(page, id, subject, requestSequence);
 
 		await login(page);
 		await page.goto('/notices');
@@ -243,6 +262,7 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		await link.click();
 		await expect(page).toHaveURL(new RegExp(`/messages/${id}$`));
 		await expect(page.getByTestId('conversation-title')).toHaveText(subject);
+		expect(requestSequence, 'notice conversation request sequence').toEqual(['detail GET', 'mark-read']);
 	});
 
 	test('fetches a missing conversation once, before any mark-read request', async ({ page }) => {
@@ -272,14 +292,23 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		const retryId = 7404;
 		const missingId = 7405;
 		let retryClicked = false;
+		const requestSequence: string[] = [];
+		const successfulRequestSequence: string[] = [];
 		await page.route(`**/api/v1/conversations/${retryId}`, async (route) => {
 			if (!retryClicked) {
+				requestSequence.push('detail GET (failed)');
 				await fulfillJson(route, 503, { title: 'Injected conversation outage' });
 				return;
 			}
+			requestSequence.push('detail GET');
+			successfulRequestSequence.push('detail GET');
 			await fulfillJson(route, 200, conversation(retryId, 'Recovered conversation'));
 		});
-		await page.route(`**/api/v1/conversations/${retryId}/read`, (route) => route.fulfill({ status: 204 }));
+		await page.route(`**/api/v1/conversations/${retryId}/read`, async (route) => {
+			requestSequence.push('mark-read');
+			successfulRequestSequence.push('mark-read');
+			await route.fulfill({ status: 204 });
+		});
 		await page.route(`**/api/v1/conversations/${missingId}`, (route) =>
 			fulfillJson(route, 404, { title: 'Conversation not found' })
 		);
@@ -290,6 +319,8 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		retryClicked = true;
 		await page.getByTestId('conversation-error-retry').click();
 		await expect(page.getByTestId('conversation-title')).toHaveText('Recovered conversation', { timeout: 15_000 });
+		expect(successfulRequestSequence, 'conversation Retry success request sequence').toEqual(['detail GET', 'mark-read']);
+		expect(requestSequence.slice(-2), 'conversation Retry request sequence tail').toEqual(['detail GET', 'mark-read']);
 
 		await page.goto(`/messages/${missingId}`);
 		await expect(page.getByTestId('conversation-error')).toBeVisible({ timeout: 15_000 });
