@@ -426,8 +426,13 @@
 			{:else if conversationQuery.isError}
 				<div class="flex h-full flex-col items-center justify-center p-8 text-center text-destructive" data-testid="conversation-error">
 					<MailWarning class="mb-2 h-8 w-8" />
-					<p class="text-sm">Couldn't load this conversation.</p>
-					<Button variant="outline" size="sm" class="mt-3" onclick={() => conversationQuery.refetch()}>Try again</Button>
+					<p class="text-sm" data-testid="conversation-error-title">Couldn't load this conversation.</p>
+					<div class="mt-3 flex flex-wrap justify-center gap-2" data-testid="conversation-error-actions">
+						<Button variant="outline" size="sm" onclick={() => conversationQuery.refetch()} data-testid="conversation-error-retry">Try again</Button>
+						<Button variant="ghost" size="sm" onclick={backToList} data-testid="conversation-error-back">
+							<ArrowLeft class="h-4 w-4" /> Back to conversations
+						</Button>
+					</div>
 				</div>
 			{:else if conversation}
 				<!-- Thread header -->

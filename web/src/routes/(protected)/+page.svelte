@@ -159,7 +159,14 @@
 			</div>
 		</div>
 	{:else if dashboardQuery.isError}
-		<div class="flex h-64 items-center justify-center text-destructive">Failed to load dashboard.</div>
+		<div class="mx-auto flex min-h-64 max-w-xl flex-col items-center justify-center rounded-xl border border-destructive/40 bg-destructive/5 p-6 text-center" role="alert" data-testid="dashboard-error">
+			<p class="font-medium text-destructive" data-testid="dashboard-error-title">Could not load dashboard.</p>
+			<p class="mt-1 text-sm text-muted-foreground" data-testid="dashboard-error-description">Try again. Your portfolio data has not been changed.</p>
+			<div class="mt-4 flex flex-wrap justify-center gap-2" data-testid="dashboard-error-actions">
+				<Button variant="outline" onclick={() => dashboardQuery.refetch()} data-testid="dashboard-retry">Try again</Button>
+				<Button href="/properties" variant="ghost" data-testid="dashboard-properties-link">Open properties</Button>
+			</div>
+		</div>
 	{:else if dashboardQuery.data}
 		{@const data = dashboardQuery.data as Dashboard}
 		<Card.Root
@@ -357,7 +364,7 @@
 						{:else}
 							<div class="space-y-2">
 								{#each messagesQuery.data?.items ?? [] as thread}
-									<a href="/messages?conversation={thread.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+									<a href={`/messages/${thread.id}`} class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40" data-testid={`dashboard-message-${thread.id}`}>
 										<div class="flex items-center justify-between gap-3">
 											<p class="truncate text-sm font-medium">{thread.subject}</p>
 											<span class="shrink-0 font-mono text-[11px] text-muted-foreground">{new Date(thread.lastMessageAt).toLocaleDateString()}</span>

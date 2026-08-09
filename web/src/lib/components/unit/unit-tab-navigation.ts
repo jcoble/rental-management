@@ -21,6 +21,17 @@ export type UnitTabNavigationState = Record<string, unknown> & {
 	unitExpenseId?: number | null;
 };
 
+/**
+ * SvelteKit can expose an empty/undefined shallow state during the first client
+ * pass of a hard document navigation. Keep URL resolution total at that
+ * boundary so the route can reach its query loading/error states normally.
+ */
+export function normalizeUnitTabNavigationState(
+	state: UnitTabNavigationState | null | undefined,
+): UnitTabNavigationState {
+	return state ?? {};
+}
+
 type UnitTabNavigationSnapshot = {
 	url: URL;
 	state: UnitTabNavigationState;
@@ -62,16 +73,17 @@ function explicitContextBelongsToTab(
  */
 export function resolveUnitPageDestination(
 	url: URL,
-	state: UnitTabNavigationState,
+	state: UnitTabNavigationState | null | undefined,
 ) {
+	const normalizedState = normalizeUnitTabNavigationState(state);
 	const urlResolution = resolveUnitUrlDestination(url);
-	if (urlResolution.hasExplicitViewOrRecord || state.unitPathname !== url.pathname) {
+	if (urlResolution.hasExplicitViewOrRecord || normalizedState.unitPathname !== url.pathname) {
 		return urlResolution.destination;
 	}
 
 	return resolveUnitDestination(
-		state.unitTab ?? url.searchParams.get('tab'),
-		state.unitView ?? url.searchParams.get('view'),
+		normalizedState.unitTab ?? url.searchParams.get('tab'),
+		normalizedState.unitView ?? url.searchParams.get('view'),
 	);
 }
 
@@ -82,31 +94,32 @@ export function resolveUnitPageDestination(
  */
 export function synchronizeUnitTabState(
 	url: URL,
-	state: UnitTabNavigationState,
+	state: UnitTabNavigationState | null | undefined,
 ): UnitTabNavigationState | null {
+	const normalizedState = normalizeUnitTabNavigationState(state);
 	const urlResolution = resolveUnitUrlDestination(url);
-	const stateBelongsToUnit = state.unitPathname === url.pathname;
+	const stateBelongsToUnit = normalizedState.unitPathname === url.pathname;
 	if (stateBelongsToUnit && !urlResolution.hasExplicitViewOrRecord) return null;
 
 	const destination = urlResolution.destination;
 	const explicitContextBelongsToDestination = explicitContextBelongsToTab(url, urlResolution, destination.tab);
-	const existingMemory = state.unitViewByPath?.[url.pathname] ?? {};
+	const existingMemory = normalizedState.unitViewByPath?.[url.pathname] ?? {};
 	const stateAlreadyMatchesUrl =
 		stateBelongsToUnit
-		&& state.unitTab === destination.tab
-		&& (state.unitView ?? null) === (destination.view ?? null)
+		&& normalizedState.unitTab === destination.tab
+		&& (normalizedState.unitView ?? null) === (destination.view ?? null)
 		&& (!destination.view || existingMemory[destination.tab] === destination.view)
-		&& state.unitPaymentId == null
-		&& state.unitExpenseId == null;
+		&& normalizedState.unitPaymentId == null
+		&& normalizedState.unitExpenseId == null;
 	if (stateAlreadyMatchesUrl) return null;
 
-	const unitViewByPath = { ...(state.unitViewByPath ?? {}) };
+	const unitViewByPath = { ...(normalizedState.unitViewByPath ?? {}) };
 	const memoryForPath = { ...(unitViewByPath[url.pathname] ?? {}) };
 	if (destination.view && explicitContextBelongsToDestination) memoryForPath[destination.tab] = destination.view;
 	unitViewByPath[url.pathname] = memoryForPath;
 
 	return {
-		...state,
+		...normalizedState,
 		unitPathname: url.pathname,
 		unitTab: destination.tab,
 		unitView: destination.view ?? null,
@@ -129,9 +142,10 @@ export function createUnitTabNavigationHandler({
 }: UnitTabNavigationAdapter): (tab: string, view?: UnitView) => void {
 	return (tab: string, view?: UnitView) => {
 		const current = getCurrent();
+		const currentState = normalizeUnitTabNavigationState(current.state);
 		const urlResolution = resolveUnitUrlDestination(current.url);
-		const synchronizedState = synchronizeUnitTabState(current.url, current.state);
-		const baseState = synchronizedState ?? current.state;
+		const synchronizedState = synchronizeUnitTabState(current.url, currentState);
+		const baseState = synchronizedState ?? currentState;
 		const stateBelongsToUnit = baseState.unitPathname === current.url.pathname;
 		const currentDestination = resolveUnitPageDestination(current.url, baseState);
 		const memoryForPath = { ...(baseState.unitViewByPath?.[current.url.pathname] ?? {}) };

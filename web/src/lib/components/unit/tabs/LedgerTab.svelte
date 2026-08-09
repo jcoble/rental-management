@@ -26,7 +26,7 @@
 			return urlResolution.destination.view === 'operating-costs' ? 'operating-costs' : 'tenant-account';
 		}
 
-		const rememberedView = page.state.unitPathname === page.url.pathname ? page.state.unitView : null;
+		const rememberedView = page.state?.unitPathname === page.url.pathname ? page.state?.unitView : null;
 		return rememberedView === 'operating-costs' ? 'operating-costs' : 'tenant-account';
 	});
 
@@ -40,7 +40,7 @@
 	function setView(view: 'tenant-account' | 'operating-costs') {
 		if (view === activeView) return;
 		pushState(ledgerUrl(view), {
-			...page.state,
+			...(page.state ?? {}),
 			unitTab: 'money',
 			unitView: view,
 			unitPaymentId: null,
