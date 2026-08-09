@@ -10,6 +10,8 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import { datePickerSubmitDisabled } from '$lib/components/shared/date-picker-state';
+	import { SERVICE_PERIOD_SECTION_CLASS } from './one-time-charge-layout';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -198,7 +200,7 @@
 				/>
 				{#if errors.dueOn}<span class="block text-xs font-normal text-destructive">{errors.dueOn}</span>{/if}
 			</label>
-			<div class="space-y-1 text-sm font-medium">
+			<div class={SERVICE_PERIOD_SECTION_CLASS}>
 				<span>Service period <span class="font-normal text-muted-foreground">(optional)</span></span>
 				<div class="grid gap-2 sm:grid-cols-2">
 					<label class="space-y-1 text-xs font-normal text-muted-foreground" for="one-time-charge-service-start">
@@ -250,7 +252,7 @@
 
 		<Dialog.Footer>
 			<Button variant="outline" onclick={close} disabled={mutation.isPending}>Cancel</Button>
-			<Button onclick={() => validate() && mutation.mutate()} disabled={mutation.isPending || datePickerInvalid} data-testid="one-time-charge-submit">
+			<Button onclick={() => validate() && mutation.mutate()} disabled={datePickerSubmitDisabled(datePickerInvalid, mutation.isPending)} data-testid="one-time-charge-submit">
 				{mutation.isPending ? 'Adding…' : 'Add charge'}
 			</Button>
 		</Dialog.Footer>

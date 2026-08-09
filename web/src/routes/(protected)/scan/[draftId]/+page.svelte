@@ -20,6 +20,11 @@
 	} from '$lib/api/endpoints/loans';
 	import type { WorkOrder } from '$lib/types';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
+	import {
+		activeScanDateFieldNames,
+		GENERIC_SCAN_DATE_FIELDS,
+		hasVisibleScanDateInvalid
+	} from '$lib/scans/scan-date-guard';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import {
 		buildScanReviewInitialEditedFields,
@@ -692,8 +697,7 @@
 	let editedFields = $state<Record<string, string>>({});
 	let editedFieldsSeeded = $state(false);
 	let scanDateInvalid = $state<Record<string, boolean>>({});
-	const scanDatePickerInvalid = $derived(Object.values(scanDateInvalid).some(Boolean));
-	const SCAN_DATE_FIELDS = new Set(['due_date', 'transaction_date']);
+	const SCAN_DATE_FIELDS = GENERIC_SCAN_DATE_FIELDS;
 
 	function isScanDateField(name: string): boolean {
 		return SCAN_DATE_FIELDS.has(name);
@@ -1035,6 +1039,19 @@
 	let depositFundingRedirectPending = $state(false);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
+	const scanDatePickerInvalid = $derived(
+		hasVisibleScanDateInvalid(
+			scanDateInvalid,
+			activeScanDateFieldNames({
+				targetEntityType: data?.targetEntityType,
+				loanReviewMode,
+				fields: data?.fields ?? [],
+				isProcessing,
+				status: data?.status,
+				isTerminal
+			})
+		)
+	);
 	const canRecoverPaymentDepositHandoff = $derived(
 		isPayment &&
 			!!data?.sourceStoredFileId &&

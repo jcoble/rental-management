@@ -38,9 +38,9 @@
 	import {
 		formatIsoToUsInput,
 		maskDateInput,
-		parseCompleteLooseDate,
-		parseLooseDate
+		parseCompleteLooseDate
 	} from '$lib/utils/parse-date';
+	import { commitDatePickerText } from './date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -130,21 +130,10 @@
 
 	// ---- Text input ----------------------------------------------------------
 	function commitText() {
-		const raw = text.trim();
-		if (raw === '') {
-			invalid = false;
-			text = '';
-			commit('');
-			return;
-		}
-		const iso = parseLooseDate(raw);
-		if (iso && isInRange(iso)) {
-			invalid = false;
-			text = formatIsoToUsInput(iso); // normalize what the user typed
-			commit(iso);
-		} else {
-			invalid = true;
-		}
+		const next = commitDatePickerText(text, value, { min, max });
+		invalid = next.invalid;
+		text = next.text;
+		commit(next.value);
 	}
 
 	function handleTextInput(e: Event) {
@@ -207,7 +196,7 @@
 	}
 </script>
 
-<div class="date-picker-shell relative w-full min-w-40">
+<div class="date-picker-shell relative w-full min-w-0">
 	<input
 		{id}
 		type="text"
@@ -239,7 +228,7 @@
 				'date-picker-today h-8 whitespace-nowrap px-2 text-xs text-muted-foreground hover:bg-transparent'
 			)}
 		>
-			Today
+			<span class="date-picker-today-label">Today</span>
 		</button>
 		<Popover.Root bind:open>
 			<Popover.Trigger
@@ -280,20 +269,19 @@
 	 * punctuation mark. */
 	.date-picker-shell {
 		container: date-picker / inline-size;
+		min-inline-size: 0;
 	}
 
 	@container date-picker (max-width: 12rem) {
 		.date-picker-input {
-			/* Compact actions are two 2rem buttons plus a small gap. */
-			padding-right: 4.25rem !important;
+			/* Give the formatted date text the field's inline space first. */
+			padding-left: 0.625rem;
+			padding-right: 2.75rem !important;
+			font-size: 0.8125rem;
 		}
 
 		.date-picker-today {
-			/* Preserve the Today shortcut's accessible name, but give the date
-			 * text the width first. */
-			width: 2rem;
-			padding-inline: 0;
-			font-size: 0;
+			display: none;
 		}
 
 		:global(.date-picker-calendar-trigger) {
@@ -303,6 +291,25 @@
 
 		.date-picker-actions {
 			gap: 0;
+			right: 0.25rem;
+		}
+	}
+
+	@container date-picker (max-width: 8rem) {
+		.date-picker-input {
+			padding-left: 0.375rem;
+			padding-right: 2.25rem !important;
+			font-size: 0.75rem;
+			letter-spacing: -0.01em;
+		}
+
+		:global(.date-picker-calendar-trigger) {
+			height: 1.75rem !important;
+			width: 1.75rem !important;
+		}
+
+		.date-picker-actions {
+			right: 0;
 		}
 	}
 </style>

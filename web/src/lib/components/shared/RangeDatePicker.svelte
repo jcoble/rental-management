@@ -25,6 +25,7 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
+	import { applyRangeDatePickerValue } from './date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -95,9 +96,14 @@
 	const hasValue = $derived(Boolean(start));
 
 	function apply(nextStart: string, nextEnd: string, close = false) {
-		if (nextStart === start && nextEnd === end) return;
-		start = nextStart;
-		end = nextEnd;
+		const next = applyRangeDatePickerValue(
+			{ start, end, invalid },
+			{ start: nextStart, end: nextEnd }
+		);
+		invalid = next.invalid;
+		if (!next.changed) return;
+		start = next.start;
+		end = next.end;
 		onchange?.({ start: nextStart, end: nextEnd });
 		if (close) open = false;
 	}
