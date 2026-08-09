@@ -35,7 +35,7 @@
 		localWallClockToUtcIso
 	} from './calendar-utils';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { formErrorsFromApiError } from '$lib/forms/form-errors';
+	import { clearFieldErrorWhen, formErrorsFromApiError } from '$lib/forms/form-errors';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -175,25 +175,31 @@
 	const calendarInitialDate = $derived(typeof window === 'undefined' ? undefined : new Date());
 
 	function clearFormError(field: string) {
-		if (!formErrors[field]) return;
-		const next = { ...formErrors };
-		delete next[field];
-		formErrors = next;
+		const shouldClear =
+			field === 'title'
+				? appointmentSchema.shape.title.safeParse(form.title).success
+				: field === 'scheduledStart'
+					? appointmentSchema.shape.scheduledStart.safeParse(form.scheduledStart).success
+					: field === 'scheduledEnd'
+						? !form.scheduledEnd || !parseForm(appointmentSchema, form).errors?.scheduledEnd
+						: field === 'prospectEmail'
+							? isOptionalEmailValid(form.prospectEmail)
+							: false;
+		const next = clearFieldErrorWhen(formErrors, field, shouldClear);
+		if (next !== formErrors) formErrors = next;
 	}
 
 	$effect(() => {
-		if (form.title) clearFormError('title');
+		clearFormError('title');
 	});
 	$effect(() => {
-		if (form.scheduledStart) clearFormError('scheduledStart');
+		clearFormError('scheduledStart');
 	});
 	$effect(() => {
-		if (form.scheduledEnd && !parseForm(appointmentSchema, form).errors?.scheduledEnd) {
-			clearFormError('scheduledEnd');
-		}
+		clearFormError('scheduledEnd');
 	});
 	$effect(() => {
-		if (isOptionalEmailValid(form.prospectEmail)) clearFormError('prospectEmail');
+		clearFormError('prospectEmail');
 	});
 
 	function invalidate() {

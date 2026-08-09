@@ -2,7 +2,9 @@ import { EXPENSE_CATEGORY_OPTIONS } from './expense-categories.ts';
 
 export type TransactionCategoryOption = { value: string; label: string };
 
-export const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'] as const;
+// Payment rows are projected from PaymentReceipt ledger entries, whose database invariant fixes
+// Direction/Status to Credit. Do not offer lifecycle labels that the transaction SQL never emits.
+export const PAYMENT_STATUSES = ['Credit'] as const;
 export const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'] as const;
 export const BANK_STATUSES = ['Unmatched', 'Suggested', 'Matched'] as const;
 

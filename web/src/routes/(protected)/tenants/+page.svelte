@@ -12,7 +12,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { clearFieldError, formErrorsFromApiError } from '$lib/forms/form-errors';
+	import { clearFieldErrorWhen, formErrorsFromApiError } from '$lib/forms/form-errors';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -86,18 +86,26 @@
 	] as const;
 
 	function clearTenantError(field: string) {
-		const next = clearFieldError(formErrors, field);
+		const shouldClear =
+			field === 'firstName'
+				? tenantSchema.shape.firstName.safeParse(form.firstName).success
+				: field === 'lastName'
+					? tenantSchema.shape.lastName.safeParse(form.lastName).success
+					: field === 'email'
+						? isOptionalEmailValid(form.email)
+						: false;
+		const next = clearFieldErrorWhen(formErrors, field, shouldClear);
 		if (next !== formErrors) formErrors = next;
 	}
 
 	$effect(() => {
-		if (form.firstName.trim()) clearTenantError('firstName');
+		clearTenantError('firstName');
 	});
 	$effect(() => {
-		if (form.lastName.trim()) clearTenantError('lastName');
+		clearTenantError('lastName');
 	});
 	$effect(() => {
-		if (isOptionalEmailValid(form.email)) clearTenantError('email');
+		clearTenantError('email');
 	});
 
 	function invalidate() {
@@ -394,7 +402,8 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" maxlength={50} />
+							<!-- Length-only international contract: schema/DTO/maxlength all allow 50 characters. -->
+							<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" maxlength={50} />
 						</div>
 						<div class="md:col-span-2">
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>

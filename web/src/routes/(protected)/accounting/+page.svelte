@@ -116,12 +116,11 @@
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
+	const normalizedTransactionFilters = $derived(
+		normalizeTransactionFilters(transactionKindFilter, transactionStatusFilter, transactionCategoryFilter)
+	);
 	$effect(() => {
-		const normalized = normalizeTransactionFilters(
-			transactionKindFilter,
-			transactionStatusFilter,
-			transactionCategoryFilter
-		);
+		const normalized = normalizedTransactionFilters;
 		if (normalized.status !== transactionStatusFilter) transactionStatusFilter = normalized.status;
 		if (normalized.category !== transactionCategoryFilter) transactionCategoryFilter = normalized.category;
 	});
@@ -184,8 +183,8 @@
 			portfolioId,
 			debouncedTransactionSearch.value,
 			transactionKindFilter,
-			transactionStatusFilter,
-			transactionCategoryFilter,
+			normalizedTransactionFilters.status,
+			normalizedTransactionFilters.category,
 			transactionPropertyFilter,
 			transactionFromFilter,
 			transactionToFilter,
@@ -195,8 +194,8 @@
 		queryFn: () => accounting.transactions({
 			search: debouncedTransactionSearch.value,
 			kind: transactionKindFilter || undefined,
-			status: transactionStatusFilter || undefined,
-			category: transactionCategoryFilter || undefined,
+			status: normalizedTransactionFilters.status || undefined,
+			category: normalizedTransactionFilters.category || undefined,
 			propertyId: selectedPropertyFilter,
 			from: transactionFromFilter || undefined,
 			to: transactionToFilter || undefined,

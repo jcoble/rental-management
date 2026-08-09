@@ -7,6 +7,15 @@ export function clearFieldError<T extends FormErrors>(errors: T, field: string):
 	return next as T;
 }
 
+/** Clear an inline error only after the field's current value satisfies its submit-time rule. */
+export function clearFieldErrorWhen<T extends FormErrors>(
+	errors: T,
+	field: string,
+	shouldClear: boolean
+): T {
+	return shouldClear ? clearFieldError(errors, field) : errors;
+}
+
 /** Map ASP.NET ValidationProblemDetails keys to the camelCase names used by form state. */
 export function validationErrorsToFormErrors(
 	validationErrors?: Record<string, string[] | string | undefined> | null

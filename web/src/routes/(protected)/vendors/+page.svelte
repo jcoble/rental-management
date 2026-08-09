@@ -17,7 +17,7 @@
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import { clearFieldError, formErrorsFromApiError } from '$lib/forms/form-errors';
+	import { clearFieldErrorWhen, formErrorsFromApiError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -100,7 +100,17 @@
 	] as const;
 
 	function clearVendorError(field: string) {
-		const next = clearFieldError(vendorErrors, field);
+		const shouldClear =
+			field === 'name'
+				? vendorSchema.shape.name.safeParse(vendorForm.name).success
+				: field === 'serviceType'
+					? vendorSchema.shape.serviceType.safeParse(vendorForm.serviceType).success
+					: field === 'email'
+						? isOptionalEmailValid(vendorForm.email)
+						: field === 'website'
+							? vendorSchema.shape.website.safeParse(vendorForm.website).success && isBlankOrValidUrl(vendorForm.website)
+							: false;
+		const next = clearFieldErrorWhen(vendorErrors, field, shouldClear);
 		if (next !== vendorErrors) vendorErrors = next;
 	}
 
@@ -115,16 +125,16 @@
 	}
 
 	$effect(() => {
-		if (vendorForm.name.trim()) clearVendorError('name');
+		clearVendorError('name');
 	});
 	$effect(() => {
-		if (vendorForm.serviceType.trim()) clearVendorError('serviceType');
+		clearVendorError('serviceType');
 	});
 	$effect(() => {
-		if (isOptionalEmailValid(vendorForm.email)) clearVendorError('email');
+		clearVendorError('email');
 	});
 	$effect(() => {
-		if (isBlankOrValidUrl(vendorForm.website)) clearVendorError('website');
+		clearVendorError('website');
 	});
 
 	function invalidateVendors() {
@@ -422,8 +432,9 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-								<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" maxlength={50} />
-							</div>
+							<!-- Length-only international contract: schema/DTO/maxlength all allow 50 characters. -->
+							<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" maxlength={50} />
+						</div>
 						<div class="md:col-span-2">
 							<span class="mb-1 block text-xs font-medium text-muted-foreground">Website</span>
 							<Input data-testid="vendor-website-input" bind:value={vendorForm.website} placeholder="https://example.com" type="url" autocomplete="url" inputmode="url" maxlength={500} />
@@ -449,7 +460,8 @@
 								bind:value={vendorForm.state}
 								placeholder="State"
 							/>
-							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={20} mask="zip" />
+							<!-- Length-only international contract: schema/DTO/maxlength all allow 20 characters. -->
+							<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP or postal code" inputmode="text" autocomplete="postal-code" maxlength={20} />
 						</div>
 						</div>
 					{:else}

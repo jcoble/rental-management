@@ -34,3 +34,15 @@ test('transaction filter options retain only values supported by the active kind
 	assert.ok(transactionCategoriesForKind('Payment').some((option) => option.value === 'RentCharge'));
 	assert.ok(!transactionCategoriesForKind('Payment').some((option) => option.value === 'Repairs'));
 });
+
+test('S18-BUG-1 exposes the status vocabulary projected for payment rows', () => {
+	assert.deepEqual(transactionStatusesForKind('Payment'), ['Credit']);
+	assert.deepEqual(
+		normalizeTransactionFilters('Payment', 'Credit', ''),
+		{ status: 'Credit', category: '' }
+	);
+	assert.deepEqual(
+		normalizeTransactionFilters('Payment', 'Paid', ''),
+		{ status: '', category: '' }
+	);
+});
