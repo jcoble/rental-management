@@ -328,6 +328,7 @@ public partial class AccountingService : IAccountingService
                 PropertyName = management.Property!.Name,
                 UnitNumber = management.Unit!.UnitNumber,
                 PastDueAmount = balance.PastDueAmount,
+                TotalOpenBalance = balance.ReceivableBalance,
                 OverduePaymentCount = balance.PastDueCount,
                 OldestDueOn = oldest.DueOn!.Value,
                 OldestLedgerEntryId = oldest.TenantLedgerEntryId,

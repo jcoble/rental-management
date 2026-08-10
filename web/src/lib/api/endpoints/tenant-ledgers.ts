@@ -20,10 +20,12 @@ export type TenantLedgerDirection = 'Debit' | 'Credit';
 export type TenantLedgerSort =
 	| 'effectiveOn'
 	| '-effectiveOn'
+	| 'oldestDueOn'
 	| 'postedAtUtc'
 	| '-postedAtUtc';
 
 export interface AllocationRef {
+	allocationId: number;
 	targetSourceId: number;
 	targetPublicId: string;
 	targetDescription: string;

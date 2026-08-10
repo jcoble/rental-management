@@ -255,6 +255,8 @@ public class AccountingServiceTests : IAsyncLifetime
         row.OldestLedgerEntryOpenAmount.Should().Be(900m,
             "the receipt target amount must belong to the exact oldest charge, not the account aggregate");
         row.PastDueAmount.Should().Be(1275m);
+        row.TotalOpenBalance.Should().Be(1275m,
+            "the dialog amount cap must come from the server-owned tenant account balance");
         row.OverduePaymentCount.Should().Be(2);
 
         var selects = _commands

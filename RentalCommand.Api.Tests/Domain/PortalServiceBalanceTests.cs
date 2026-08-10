@@ -505,6 +505,12 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
             item.TenantLedgerEntryId == legitimatePreMarkerCharge.Id
             && item.SignedAmount == 1650m
             && item.IsFocused);
+        var rentReceipt = history.Items.Single(item => item.Description == "rent-receipt");
+        rentReceipt.Allocations.Should().ContainSingle(allocation =>
+            allocation.AllocationId > 0
+            && allocation.TargetDescription == "settled-rent"
+            && allocation.Amount == 900m
+            && allocation.EffectiveOn == businessDate.AddDays(-5));
         history.Items.Should().NotContain(item =>
             item.TenantLedgerEntryId == scenario.PreStartChargeId
             || item.TenantLedgerEntryId == scenario.PreStartReversalId);

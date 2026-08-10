@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 const page = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../../../../lib/api/endpoints/portal.ts', import.meta.url), 'utf8');
 const helper = readFileSync(new URL('../../../../lib/portal/tenant-ledger.ts', import.meta.url), 'utf8');
+const historyRows = readFileSync(new URL('../../../../lib/components/accounting/PortalAccountHistoryRows.svelte', import.meta.url), 'utf8');
 
 describe('tenant account history contract', () => {
 	test('uses the authorized portal account summary and canonical history response', () => {
@@ -55,10 +56,10 @@ describe('tenant account history contract', () => {
 	});
 
 	test('groups account history by month with server-owned month-end balances and contextual help', () => {
-		assert.match(page, /portal-history-month-/);
-		assert.match(page, /monthLabel\(entry\.effectiveOn\)/);
-		assert.match(page, /Month-end balance/);
-		assert.match(page, /entry\.runningBalance/);
+		assert.match(historyRows, /portal-history-month-/);
+		assert.match(historyRows, /monthLabel\(entry\.effectiveOn\)/);
+		assert.match(historyRows, /Month-end balance/);
+		assert.match(historyRows, /entry\.runningBalance/);
 		assert.match(page, /ACCOUNTING_HELP\.tenantLedger/);
 		assert.match(page, /portal-account-history-help/);
 	});
@@ -72,13 +73,13 @@ describe('tenant account history contract', () => {
 			'portal-history-error',
 			'accountsQuery.refetch()',
 			'historyQuery.refetch()',
-			'data-focused={entry.isFocused}',
 			'scrollIntoView',
 			'portal-beginning-balance',
 			'portal-closing-balance'
 		]) {
 			assert.ok(page.includes(contract), `missing ${contract}`);
 		}
+		assert.match(historyRows, /data-focused=\{entry\.isFocused\}/);
 	});
 
 	test('prints a tenant-safe HTML statement with server-provided date range and closing balance', () => {

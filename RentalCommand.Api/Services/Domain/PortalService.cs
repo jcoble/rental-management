@@ -253,12 +253,52 @@ public class PortalService : IPortalService
         var from = query.From.HasValue ? DateOnly.FromDateTime(query.From.Value) : (DateOnly?)null;
         var to = query.To.HasValue ? DateOnly.FromDateTime(query.To.Value) : (DateOnly?)null;
         var rows = await _db.Database.SqlQueryRaw<PortalTenantAccountHistorySqlRow>(
-                """
+            """
+            WITH history AS (
                 SELECT *
                 FROM rc_portal_tenant_account_history(
                     @portfolio_id, @user_id, @access_context_id, @access_revision,
                     @tenant_account_id, @period, @from_on, @to_on, @skip, @take, @focused_entry_id)
-                """,
+            )
+            SELECT history."TenantAccountId",
+                   history."LeaseManagementId",
+                   history."Currency",
+                   history."BusinessDate",
+                   history."Period",
+                   history."PeriodFrom",
+                   history."PeriodTo",
+                   history."CurrentDue",
+                   history."BeginningBalance",
+                   history."ClosingBalance",
+                   history."TotalCount",
+                   COALESCE((
+                       SELECT jsonb_agg(
+                           item.value || jsonb_build_object(
+                               'allocations', COALESCE((
+                                   SELECT jsonb_agg(
+                                       jsonb_build_object(
+                                           'allocationId', allocation."Id",
+                                           'targetSourceId', debit."Id",
+                                           'targetPublicId', debit."PublicId",
+                                           'targetDescription', debit."Description",
+                                           'amount', allocation."Amount",
+                                           'effectiveOn', debit."EffectiveOn")
+                                       ORDER BY debit."EffectiveOn", debit."Id", allocation."Id")
+                                   FROM "TenantLedgerAllocations" AS allocation
+                                   JOIN "TenantLedgerEntries" AS debit
+                                     ON debit."PortfolioId" = allocation."PortfolioId"
+                                    AND debit."TenantAccountId" = allocation."TenantAccountId"
+                                    AND debit."Id" = allocation."DebitEntryId"
+                                   WHERE allocation."PortfolioId" = @portfolio_id
+                                     AND allocation."TenantAccountId" = @tenant_account_id
+                                     AND allocation."CreditEntryId" = (item.value->>'tenantLedgerEntryId')::bigint
+                               ), '[]'::jsonb)
+                           ) ORDER BY item.ordinal)
+                       FROM jsonb_array_elements(history."ItemsJson"::jsonb)
+                           WITH ORDINALITY AS item(value, ordinal)
+                   ), '[]'::jsonb)::text AS "ItemsJson"
+            FROM history
+            """,
                 new NpgsqlParameter<int>("portfolio_id", scope.PortfolioId),
                 new NpgsqlParameter<int>("user_id", scope.UserId),
                 new NpgsqlParameter<int>("access_context_id", scope.AccessContextId),
