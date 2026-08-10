@@ -127,7 +127,44 @@ describe('unit tab page navigation integration', () => {
 		}
 	});
 
-	it('restores Applications when the page state retains the nested view but the URL does not', () => {
+	it('lets a user click Money away from a lease detail and converges after one write', () => {
+		const url = new URL('https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('money');
+
+		assert.equal(container.url.searchParams.get('tab'), 'money');
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.equal(container.state.unitTab, 'money');
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('keeps a work-order detail on entry, drops it on leave, and does not resurrect it on return', () => {
+		const url = new URL('https://rental.local/units/19?tab=money&view=work-orders&wo=3');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('wo'), '3');
+
+		setTab('summary');
+		assert.equal(container.url.searchParams.get('tab'), 'summary');
+		assert.equal(container.url.searchParams.get('wo'), null);
+
+		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('view'), 'work-orders');
+		assert.equal(container.url.searchParams.get('wo'), null);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('remembers Applications after leaving a URL-normalized page without resurrecting its record', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
 			unitPathname: '/units/10',
 			unitTab: 'leasing',
@@ -140,16 +177,17 @@ describe('unit tab page navigation integration', () => {
 		container.url = new URL('https://rental.local/units/10?tab=leasing&app=7');
 		setTab('summary');
 		assert.equal(container.url.searchParams.get('view'), null);
+		assert.equal(container.url.searchParams.get('app'), null);
 		assert.equal(container.state.unitView, null);
 
 		setTab('leasing');
 		assert.equal(container.url.searchParams.get('view'), 'applications');
 		assert.equal(container.state.unitTab, 'leasing');
 		assert.equal(container.state.unitView, 'applications');
-		assert.equal(container.url.searchParams.get('app'), '7');
+		assert.equal(container.url.searchParams.get('app'), null);
 	});
 
-	it('keeps the ten contextual parameters and clears only an explicitly selected record key', () => {
+	it('drops foreign record keys on primary-tab changes and clears the target on list re-entry', () => {
 		const container = createContainer(
 			'https://rental.local/units/10?tab=leasing&view=applications&wo=8&app=7&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15',
 			{ unitPathname: '/units/10', unitTab: 'leasing', unitView: 'applications' },
@@ -157,21 +195,19 @@ describe('unit tab page navigation integration', () => {
 		const setTab = connect(container);
 
 		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('view'), 'work-orders');
+		assert.equal(container.url.searchParams.get('wo'), '8');
+		for (const param of ['app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
+			assert.equal(container.url.searchParams.get(param), null, `foreign ${param} survived the tab change`);
+		}
+
 		setTab('leasing', 'applications');
 
-		for (const [key, value] of Object.entries({
-			view: 'applications',
-			wo: '8',
-			app: null,
-			payment: '9',
-			expense: '10',
-			tenantAccount: '11',
-			leaseManagement: '12',
-			agreement: '13',
-			ledger: '14',
-			action: '15',
-		})) {
-			assert.equal(container.url.searchParams.get(key), value, `unexpected ${key} value`);
+		assert.equal(container.url.searchParams.get('tab'), 'leasing');
+		assert.equal(container.url.searchParams.get('view'), 'applications');
+		for (const param of ['wo', 'app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
+			assert.equal(container.url.searchParams.get(param), null, `record ${param} survived list re-entry`);
 		}
 	});
 

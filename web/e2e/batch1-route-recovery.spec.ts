@@ -164,6 +164,36 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		expect(failures, 'unit cold-load/refresh failures').toEqual([]);
 	});
 
+	test('lets every primary tab leave a lease-management deep link', async ({ page }) => {
+		test.setTimeout(120_000);
+		const consoleErrors: string[] = [];
+		const pageErrors: string[] = [];
+		page.on('console', (message) => {
+			if (message.type() === 'error') consoleErrors.push(message.text());
+		});
+		page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
+
+		await login(page);
+		expect(await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1710, height: 990 });
+		await page.goto('/units/19?tab=tenant-lease&view=agreements&leaseManagement=17', {
+			waitUntil: 'domcontentloaded'
+		});
+		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('tab-tenant-lease')).toHaveAttribute('aria-selected', 'true');
+
+		for (const tab of ['summary', 'leasing', 'money', 'maintenance', 'documents-history']) {
+			await page.getByTestId(`tab-${tab}`).click();
+			await expect(page).toHaveURL(new RegExp(`[?&]tab=${tab}(?:&|$)`));
+			await expect(page.getByTestId(`tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+			await expect(page.getByTestId('tab-tenant-lease')).toHaveAttribute('aria-selected', 'false');
+			expect(new URL(page.url()).searchParams.get('leaseManagement')).toBeNull();
+		}
+
+		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+		console.log(JSON.stringify({ consoleErrors, pageErrors, lifecycleErrors }, null, 2));
+		expect(lifecycleErrors, 'lease-management tab-click lifecycle errors').toEqual([]);
+	});
+
 	test('loads Leases without the route-load runtime error and keeps an offline property filter in-app', async ({ page }) => {
 		const consoleErrors: string[] = [];
 		const pageErrors: string[] = [];
