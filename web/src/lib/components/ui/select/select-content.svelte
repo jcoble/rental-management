@@ -7,7 +7,7 @@
 	import type { ComponentProps } from "svelte";
 	import type { WithoutChildrenOrChild } from "$lib/utils.js";
 	import { getDialogOverlayBoundary } from '../dialog/dialog-overlay-boundary.svelte.js';
-	import { getOverlayPositioning } from '../overlay-positioning';
+	import { getOverlayPositioning, type OverlayCollisionPadding } from '../overlay-positioning';
 
 	let {
 		ref = $bindable(null),
@@ -15,15 +15,19 @@
 		sideOffset = 4,
 		collisionPadding,
 		collisionBoundary,
+		viewportPadding,
 		portalProps,
 		children,
 		preventScroll = true,
 		...restProps
 	}: WithoutChild<SelectPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<ComponentProps<typeof SelectPortal>>;
+		viewportPadding?: Partial<OverlayCollisionPadding>;
 	} = $props();
 	const dialogBoundary = getDialogOverlayBoundary();
-	const overlayPositioning = $derived(getOverlayPositioning(dialogBoundary, collisionBoundary, collisionPadding));
+	const overlayPositioning = $derived(
+		getOverlayPositioning(dialogBoundary, collisionBoundary, collisionPadding, { viewportPadding })
+	);
 </script>
 
 <SelectPortal {...portalProps}>

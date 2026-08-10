@@ -24,6 +24,7 @@
 				options={yearItems.map((item) => ({ value: String(item.value), label: item.label }))}
 				disabled={calendarSelectDisabled(props)}
 				ariaLabel="Choose year"
+				viewportPadding={{ bottom: 12 }}
 				triggerClass="h-(--cell-size) w-auto min-w-20 border-0 bg-transparent px-2 shadow-none"
 				onchange={(nextValue) => dispatchCalendarSelectChange(props, nextValue, onchange)}
 			/>

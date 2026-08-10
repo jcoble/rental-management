@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Select from '$lib/components/ui/select';
+	import type { OverlayCollisionPadding } from '$lib/components/ui/overlay-positioning';
 
 	type Option = {
 		value: string;
@@ -15,6 +16,7 @@
 		testid,
 		triggerClass = 'w-full',
 		ariaLabel,
+		viewportPadding,
 		onchange
 	}: {
 		value?: string;
@@ -24,6 +26,7 @@
 		testid?: string;
 		triggerClass?: string;
 		ariaLabel?: string;
+		viewportPadding?: Partial<OverlayCollisionPadding>;
 		onchange?: (value: string) => void;
 	} = $props();
 
@@ -44,7 +47,7 @@
 	}}
 >
 	<Select.Trigger class={triggerClass} data-testid={testid} aria-label={ariaLabel}>{selectedLabel}</Select.Trigger>
-	<Select.Content>
+	<Select.Content {viewportPadding}>
 		{#each options as option (option.value)}
 			<Select.Item value={option.value === '' ? EMPTY_VALUE : option.value} label={option.label} disabled={option.disabled}>
 				{option.label}
