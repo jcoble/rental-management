@@ -136,8 +136,9 @@
 			<svg
 				class="h-auto w-full overflow-visible"
 				viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-				role="img"
-				aria-labelledby="cash-flow-chart-title cash-flow-chart-description"
+				role="group"
+				aria-labelledby="cash-flow-chart-title"
+				aria-describedby="cash-flow-chart-description"
 				data-testid="cash-flow-trend-svg"
 			>
 			<title id="cash-flow-chart-title" data-testid="cash-flow-chart-title">Monthly cash flow trend</title>
@@ -198,6 +199,7 @@
 				>
 					<title data-testid={`cash-flow-month-title-${point.key}`}>{monthAriaLabel(point)}</title>
 
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -- focus exposes the mark's tooltip without making it an action control. -->
 					<rect
 						x={x - width / 2}
 						y={BASELINE - incomeHeight}
@@ -205,7 +207,7 @@
 						height={incomeHeight}
 						rx={2}
 						class="cash-flow-mark fill-emerald-500"
-						role="button"
+						role="img"
 						aria-label={`${point.label} ${advanced ? 'income' : 'money in'} ${formatAccountingCurrency(point.income)}`}
 						aria-describedby={activeTooltip?.id === incomeTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
 						tabindex="0"
@@ -223,6 +225,7 @@
 						<title>{`${advanced ? 'Income' : 'Money in'} ${formatAccountingCurrency(point.income)}`}</title>
 					</rect>
 
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -- focus exposes the mark's tooltip without making it an action control. -->
 					<rect
 						x={x - width / 2}
 						y={BASELINE}
@@ -230,7 +233,7 @@
 						height={costHeight}
 						rx={2}
 						class="cash-flow-mark fill-amber-500"
-						role="button"
+						role="img"
 						aria-label={`${point.label} ${advanced ? 'operating expenses' : 'operating costs'} ${formatOutflow(point.operatingExpenses)}`}
 						aria-describedby={activeTooltip?.id === costsTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
 						tabindex="0"
@@ -248,6 +251,7 @@
 						<title>{`${advanced ? 'Operating expenses' : 'Operating costs'} ${formatOutflow(point.operatingExpenses)}`}</title>
 					</rect>
 
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -- focus exposes the mark's tooltip without making it an action control. -->
 					<rect
 						x={x - width / 2}
 						y={loanY}
@@ -255,7 +259,7 @@
 						height={loanHeight}
 						rx={2}
 						class="cash-flow-mark fill-orange-500"
-						role="button"
+						role="img"
 						aria-label={`${point.label} ${advanced ? 'debt service' : 'loan payments'} ${formatOutflow(point.debtService)}`}
 						aria-describedby={activeTooltip?.id === loansTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
 						tabindex="0"
@@ -273,13 +277,14 @@
 						<title>{`${advanced ? 'Debt service' : 'Loan payments'} ${formatOutflow(point.debtService)}`}</title>
 					</rect>
 
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -- focus exposes the mark's tooltip without making it an action control. -->
 					<circle
 						cx={x}
 						cy={netY}
 						r={5}
 						class="cash-flow-mark fill-primary stroke-card"
 						stroke-width={2}
-						role="button"
+						role="img"
 						aria-label={`${point.label} ${advanced ? 'net cash flow' : 'cash flow'} ${formatAccountingCurrency(point.cashFlow)}`}
 						aria-describedby={activeTooltip?.id === netTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
 						tabindex="0"
@@ -334,7 +339,7 @@
 
 <style>
 	.cash-flow-mark {
-		cursor: pointer;
+		cursor: default;
 		outline: none;
 	}
 

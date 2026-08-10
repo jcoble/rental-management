@@ -155,6 +155,15 @@ describe('cash-flow chart projection', () => {
 		assert.equal(cashFlowNetPositionPercent(response.totalCashFlow, scale), 50 + (8240 / 24100) * 50);
 	});
 
+	it('includes the centered outflow stack in the visual scale', () => {
+		assert.equal(
+			cashFlowChartScale([
+				{ key: '2026-04', label: 'Apr 2026', income: 100, operatingExpenses: 80, debtService: 80, cashFlow: -60 }
+			]),
+			160
+		);
+	});
+
 	it('keeps monthly bar heights proportional on one shared maximum scale', () => {
 		const points = [
 			{ key: '2026-06', label: 'Jun 2026', income: 18055, operatingExpenses: 0, debtService: 0, cashFlow: 18055 },

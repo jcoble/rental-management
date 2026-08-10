@@ -33,6 +33,17 @@ const points: CashFlowChartPoint[] = [
 	}
 ];
 
+const stackedOutflowPoints: CashFlowChartPoint[] = [
+	{
+		key: '2026-04',
+		label: 'Apr 2026',
+		income: 100,
+		operatingExpenses: 80,
+		debtService: 80,
+		cashFlow: -60
+	}
+];
+
 describe('cash-flow trend chart rendering', () => {
 	it('renders one shared scale with truthful bar and marker geometry', () => {
 		const view = render(CashFlowTrendChart, {
@@ -72,6 +83,24 @@ describe('cash-flow trend chart rendering', () => {
 		}
 	});
 
+	it('keeps a stacked outflow within the shared bottom-axis scale', () => {
+		const scale = cashFlowChartScale(stackedOutflowPoints);
+		const view = render(CashFlowTrendChart, { props: { points: stackedOutflowPoints, scale } });
+		const costs = view.getByTestId('cash-flow-bar-costs-2026-04') as SVGRectElement;
+		const loans = view.getByTestId('cash-flow-bar-loans-2026-04') as SVGRectElement;
+		const finalOutflowEdge = Number(loans.getAttribute('y')) + Number(loans.getAttribute('height'));
+		const bottomAxis = view.getByTestId('cash-flow-chart-gridline-min');
+
+		expect(scale).toBe(160);
+		expect(view.getByTestId('cash-flow-chart-axis-label-min').textContent).toBe('-$160.00');
+		expect(finalOutflowEdge).toBeLessThanOrEqual(Number(bottomAxis.getAttribute('y1')));
+		expect(finalOutflowEdge).toBeCloseTo(Number(bottomAxis.getAttribute('y1')), 8);
+		expect(finalOutflowEdge).toBeCloseTo(
+			Number(costs.getAttribute('y')) + Number(costs.getAttribute('height')) + Number(loans.getAttribute('height')),
+			8
+		);
+	});
+
 	it('shows each exact series value through the keyboard-focus tooltip', async () => {
 		const view = render(CashFlowTrendChart, {
 			props: { points, scale: cashFlowChartScale(points) }
@@ -95,9 +124,13 @@ describe('cash-flow trend chart rendering', () => {
 		for (const [testId, expectedText] of expectedMarks) {
 			const mark = view.getByTestId(testId) as SVGGraphicsElement;
 			expect(mark.getAttribute('tabindex')).toBe('0');
+			expect(mark.getAttribute('role')).toBe('img');
+			expect(view.getByRole('img', { name: mark.getAttribute('aria-label') ?? '' })).toBe(mark);
 			await fireEvent.focus(mark);
 			expect(view.getByTestId('cash-flow-chart-tooltip').textContent).toContain(expectedText);
 		}
+		expect(view.getByTestId('cash-flow-trend-svg').getAttribute('role')).toBe('group');
+		expect(view.queryAllByRole('button')).toHaveLength(0);
 
 		await fireEvent.blur(view.getByTestId('cash-flow-marker-net-2026-03'));
 		expect(view.queryByTestId('cash-flow-chart-tooltip')).toBeNull();

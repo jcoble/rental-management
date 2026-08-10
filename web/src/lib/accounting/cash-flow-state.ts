@@ -286,6 +286,15 @@ export function cashFlowChartScale(points: readonly CashFlowChartPoint[]): numbe
 			const value = point[metric];
 			if (Number.isFinite(value)) maximum = Math.max(maximum, Math.abs(value));
 		}
+
+		// The chart draws the two outflow marks as one centered vertical stack.
+		// Include that visual magnitude in the scale without creating or displaying
+		// a new financial total; the server-provided series remain unchanged.
+		const operatingExpenses = Number.isFinite(point.operatingExpenses)
+			? Math.abs(point.operatingExpenses)
+			: 0;
+		const debtService = Number.isFinite(point.debtService) ? Math.abs(point.debtService) : 0;
+		maximum = Math.max(maximum, operatingExpenses + debtService);
 	}
 	return maximum || 1;
 }
