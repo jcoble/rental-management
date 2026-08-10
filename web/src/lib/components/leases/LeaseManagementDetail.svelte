@@ -17,6 +17,7 @@
 	import AddendumCorrectionDialog from '$lib/components/leases/AddendumCorrectionDialog.svelte';
 	import AddendumCreateDialog from '$lib/components/leases/AddendumCreateDialog.svelte';
 	import AddendumDraftDialog from '$lib/components/leases/AddendumDraftDialog.svelte';
+	import LeaseArtifactActions from '$lib/components/leases/LeaseArtifactActions.svelte';
 	import AgreementDraftDialog from '$lib/components/leases/AgreementDraftDialog.svelte';
 	import AgreementIssuedRecoveryDialog from '$lib/components/leases/AgreementIssuedRecoveryDialog.svelte';
 	import AgreementSignatureProgress from '$lib/components/leases/AgreementSignatureProgress.svelte';
@@ -131,6 +132,16 @@
 		URL.revokeObjectURL(url);
 	}
 
+	function openBlobInNewTab(blob: Blob) {
+		const url = URL.createObjectURL(blob);
+		const opened = window.open(url, '_blank', 'noopener,noreferrer');
+		if (!opened) {
+			showError('Could not open the lease document in a new tab.');
+		}
+		// Keep the object URL alive long enough for the new tab to load the PDF.
+		window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+	}
+
 	async function downloadAgreement(agreementId: number, artifactId: number, fileName: string) {
 		try {
 			await saveBlob(
@@ -142,7 +153,21 @@
 				fileName
 			);
 		} catch (error) {
-			showError(apiErrorMessage(error, 'Agreement download failed.'));
+			showError(apiErrorMessage(error, 'Lease document download failed.'));
+		}
+	}
+
+	async function viewAgreement(agreementId: number, artifactId: number) {
+		try {
+			openBlobInNewTab(
+				await leaseManagements.downloadArtifact(
+					leaseManagementId,
+					agreementId,
+					artifactId
+				)
+			);
+		} catch (error) {
+			showError(apiErrorMessage(error, 'Lease document download failed.'));
 		}
 	}
 
@@ -525,14 +550,14 @@
 									<AgreementSignatureProgress leaseManagementId={leaseManagementId} leaseAgreementId={agreement.leaseAgreementId} agreementNumber={agreement.agreementNumber} onclose={() => (signatureProgressAgreementId = null)} />
 								{/if}
 
-								<div class="flex flex-wrap gap-2">
-									{#if issuedArtifact}
-										<Button variant="outline" size="sm" class="gap-2" onclick={() => downloadAgreement(agreement.leaseAgreementId, issuedArtifact.legalDocumentArtifactId, issuedArtifact.fileName)}><FileDown class="h-4 w-4" /> Issued PDF</Button>
-									{/if}
-									{#if executedArtifact}
-										<Button variant="outline" size="sm" class="gap-2" onclick={() => downloadAgreement(agreement.leaseAgreementId, executedArtifact.legalDocumentArtifactId, executedArtifact.fileName)}><FileDown class="h-4 w-4" /> Executed PDF</Button>
-									{/if}
-								</div>
+								<LeaseArtifactActions
+									issuedArtifact={issuedArtifact}
+									executedArtifact={executedArtifact}
+									onview={(artifact) => viewAgreement(agreement.leaseAgreementId, artifact.legalDocumentArtifactId)}
+									ondownload={(artifact) => downloadAgreement(agreement.leaseAgreementId, artifact.legalDocumentArtifactId, artifact.fileName)}
+									noExecutedArtifactMessage={agreement.isGoverning ? 'No signed lease document yet' : null}
+									testidPrefix={`lease-agreement-${agreement.leaseAgreementId}`}
+								/>
 
 				{#if canPrepareAgreements && agreement.isGoverning}
 									<div class="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
