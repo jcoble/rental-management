@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
+import { createLeaseSubmissionCoordinator } from './lease-submission.ts';
 
 const onboarding = readFileSync(
 	new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
@@ -44,10 +45,65 @@ describe('guided setup batch 3 contracts', () => {
 		assert.match(onboarding, /stepIndex -= 1;[\s\S]*?syncStepUrl\(STEPS\[stepIndex\]\.key\)/);
 	});
 
-	test('manual lease submits through the canonical manual lease flow', () => {
-		assert.match(onboarding, /scan\.createManualLease/);
-		assert.doesNotMatch(onboarding, /This guided step cannot create a lease/);
-		assert.doesNotMatch(onboarding, /goto\('\/applications'\)/);
+	test('manual lease submission uses a stable manual operation and never navigates to applications', async () => {
+		const manualCalls: Array<{ request: unknown; operationId: string }> = [];
+		const confirmCalls: Array<{ draftId: number; overrides: string }> = [];
+		const navigationCalls: string[] = [];
+		let attempts = 0;
+		const coordinator = createLeaseSubmissionCoordinator(
+			{
+				createManualLease: async (request, operationId) => {
+					manualCalls.push({ request, operationId });
+					attempts += 1;
+					if (attempts === 1) throw new Error('retryable');
+					return { status: 'confirmed' };
+				},
+				confirm: async (draftId, overrides) => {
+					confirmCalls.push({ draftId, overrides });
+					return { status: 'confirmed' };
+				},
+			},
+			{ createOperationId: () => 'manual-operation-834', navigate: (url) => navigationCalls.push(url) }
+		);
+		const validLease = {
+			leaseNumber: 'MANUAL-834',
+			propertyId: 12,
+			unitId: 34,
+			tenantId: 56,
+			startDate: '2026-09-01',
+			endDate: '2027-08-31',
+			monthlyRent: 1450,
+			securityDeposit: 1450,
+			lateFeeAmount: 75,
+			rentDueDay: 1,
+			reviewDisposition: 'NeedsSignatures' as const,
+			documentTemplateId: null,
+		};
+
+		await assert.rejects(() => coordinator.submit(validLease, null), /retryable/);
+		await coordinator.submit(validLease, null);
+		assert.equal(manualCalls.length, 2);
+		assert.deepEqual(manualCalls[0].request, {
+			propertyId: 12,
+			unitId: 34,
+			tenantId: 56,
+			leaseNumber: 'MANUAL-834',
+			startDate: '2026-09-01',
+			endDate: '2027-08-31',
+			monthlyRent: 1450,
+			securityDeposit: 1450,
+			lateFee: 75,
+			rentDueDay: 1,
+		});
+		assert.equal(manualCalls[0].operationId, 'manual-operation-834');
+		assert.equal(manualCalls[1].operationId, manualCalls[0].operationId);
+		assert.equal(confirmCalls.length, 0);
+		assert.deepEqual(navigationCalls, []);
+
+		await coordinator.submit(validLease, 77);
+		assert.equal(confirmCalls.length, 1);
+		assert.equal(confirmCalls[0].draftId, 77);
+		assert.equal(JSON.parse(confirmCalls[0].overrides).leaseNumber, 'MANUAL-834');
 	});
 
 	test('setup polish keeps controls visible, compact, and contextual', () => {

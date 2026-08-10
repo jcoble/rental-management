@@ -169,10 +169,97 @@ public sealed class CreateManualLeaseHandler
             || command.AuthSessionId == Guid.Empty
             || command.AccessContextId <= 0 || command.ExpectedAccessRevision <= 0)
             throw new UnauthorizedAccessException("The current access envelope is incomplete.");
+
+        ValidateManualTarget(command.Target);
+
         if (command.Target.ReviewDisposition != LeaseScanReviewDisposition.NeedsSignatures)
             throw new ScanConfirmationValidationException(
                 "A manual lease must use the built-in unsigned agreement confirmation flow.");
     }
+
+    private static void ValidateManualTarget(ScanLeaseTargetData target)
+    {
+        // The command uses zero only as the explicit full-home bootstrap sentinel; the public
+        // DTO keeps a supplied PropertyId nullable and rejects zero/negative values at the edge.
+        if (target.PropertyId < 0)
+            Reject("PropertyId must be positive when supplied.");
+        ValidateOptionalPositiveId(target.UnitId, nameof(target.UnitId));
+        ValidateOptionalPositiveId(target.TenantId, nameof(target.TenantId));
+        ValidateOptionalPositiveId(target.LeaseManagementId, nameof(target.LeaseManagementId));
+        ValidateOptionalPositiveId(target.TenantAccountId, nameof(target.TenantAccountId));
+        ValidateOptionalPositiveId(target.LeaseAgreementId, nameof(target.LeaseAgreementId));
+        ValidateOptionalPositiveId(target.DocumentTemplateId, nameof(target.DocumentTemplateId));
+
+        var leaseNumber = target.LeaseNumber?.Trim();
+        if (string.IsNullOrWhiteSpace(leaseNumber))
+            Reject("LeaseNumber is required and cannot be blank.");
+        if (leaseNumber!.Length > 100)
+            Reject("LeaseNumber cannot exceed 100 characters.");
+
+        if (target.StartDate is null)
+            Reject("StartDate is required.");
+        if (target.EndDate is null)
+            Reject("EndDate is required.");
+        if (target.EndDate!.Value.Date < target.StartDate!.Value.Date)
+            Reject("EndDate cannot be before StartDate.");
+        if (target.MonthlyRent is not > 0m)
+            Reject("MonthlyRent must be greater than zero.");
+        if (target.RentDueDay is not (>= 1 and <= 31))
+            Reject("RentDueDay must be between 1 and 31.");
+        if (target.SecurityDeposit is < 0m)
+            Reject("SecurityDeposit cannot be negative.");
+        if (target.LateFee is < 0m)
+            Reject("LateFee cannot be negative.");
+        if (target.UnitBedrooms is < 0m)
+            Reject("UnitBedrooms cannot be negative.");
+        if (target.UnitBathrooms is < 0m)
+            Reject("UnitBathrooms cannot be negative.");
+        if (target.UnitSquareFeet is < 0)
+            Reject("UnitSquareFeet cannot be negative.");
+
+        if (!Enum.IsDefined(target.RentTrackingStartMode))
+            Reject("RentTrackingStartMode is invalid.");
+        if (target.RentTrackingStartMode == RentTrackingStartMode.CustomCutoffDate
+            && target.RentTrackingStartOn is null)
+        {
+            Reject("RentTrackingStartOn is required for a custom cutoff.");
+        }
+        if (target.RentTrackingStartMode != RentTrackingStartMode.CustomCutoffDate
+            && target.RentTrackingStartOn is not null)
+        {
+            Reject("RentTrackingStartOn is only valid for a custom cutoff.");
+        }
+        if (target.GracePeriodDays is < 0 or > 31)
+            Reject("GracePeriodDays must be between 0 and 31.");
+        if (target.TermsSchemaVersion <= 0)
+            Reject("TermsSchemaVersion must be positive.");
+        ValidateTermsPayload(target.TermsPayload);
+    }
+
+    private static void ValidateOptionalPositiveId(int? value, string fieldName)
+    {
+        if (value is <= 0)
+            Reject($"{fieldName} must be positive when supplied.");
+    }
+
+    private static void ValidateTermsPayload(string? termsPayload)
+    {
+        if (string.IsNullOrWhiteSpace(termsPayload))
+            return;
+        try
+        {
+            using var document = JsonDocument.Parse(termsPayload);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                Reject("TermsPayload must be a JSON object.");
+        }
+        catch (JsonException)
+        {
+            Reject("TermsPayload must be valid JSON.");
+        }
+    }
+
+    private static void Reject(string message) =>
+        throw new ScanConfirmationValidationException($"Manual lease validation failed: {message}");
 
     private static int? Positive(int? value) => value is > 0 ? value : null;
 }

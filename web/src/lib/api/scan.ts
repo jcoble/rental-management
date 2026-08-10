@@ -146,7 +146,7 @@ export interface ManualLeaseCreateRequest {
 	unitSquareFeet?: number | null;
 	leaseNumber: string;
 	startDate: string;
-	endDate?: string | null;
+	endDate: string;
 	monthlyRent: number;
 	securityDeposit?: number | null;
 	lateFee?: number | null;

@@ -56,10 +56,9 @@
 	} from '$lib/onboarding/onboarding-flow-state';
 	import { isPersonalAlertSetupComplete } from '$lib/onboarding/alert-completion';
 	import {
-		buildOnboardingManualLeaseRequest,
-		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
+	import { createLeaseSubmissionCoordinator } from '$lib/onboarding/lease-submission';
 	import { addCalendarYear } from '$lib/utils/parse-date';
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
@@ -97,6 +96,7 @@
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
+	const leaseSubmission = createLeaseSubmissionCoordinator(scan);
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const SELECTOR_PAGE_SIZE = 20;
 
@@ -1001,7 +1001,6 @@
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
 	let leasePrefillDraftId = $state<number | null>(null);
-	let manualLeaseOperationId = $state<string | null>(null);
 	const leaseSignatureChoiceInvalid = $derived(
 		leasePrefillDraftId != null &&
 		!leaseReviewDisposition
@@ -1107,21 +1106,12 @@
 
 	const saveLeaseMutation = createMutation<unknown, Error, LeaseSubmitPayload>(() => ({
 		mutationFn: async ({ data, prefillDraftId }: LeaseSubmitPayload): Promise<unknown> => {
-			if (prefillDraftId != null) {
-				return scan.confirm(prefillDraftId, buildOnboardingLeaseScanOverrides(data));
-			}
-
-			const operationId = manualLeaseOperationId ?? crypto.randomUUID();
-			manualLeaseOperationId = operationId;
-			return scan.createManualLease(
-				buildOnboardingManualLeaseRequest(data),
-				operationId
-			);
+			return leaseSubmission.submit(data, prefillDraftId);
 		},
 		onSuccess: () => {
 			createdLease = true;
 			leasePrefillDraftId = null;
-			manualLeaseOperationId = null;
+			leaseSubmission.clear();
 			showSuccess('Lease created.');
 			queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 			queryClient.invalidateQueries({ queryKey: ['properties'] });

@@ -420,6 +420,120 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableTheory]
+    [InlineData("lease-number-blank")]
+    [InlineData("lease-number-too-long")]
+    [InlineData("start-date-missing")]
+    [InlineData("end-date-missing")]
+    [InlineData("end-before-start")]
+    [InlineData("monthly-rent-not-positive")]
+    [InlineData("rent-due-day-out-of-range")]
+    [InlineData("property-id-not-positive")]
+    [InlineData("unit-id-not-positive")]
+    [InlineData("tenant-id-not-positive")]
+    [InlineData("security-deposit-negative")]
+    [InlineData("late-fee-negative")]
+    [InlineData("bedrooms-negative")]
+    [InlineData("bathrooms-negative")]
+    [InlineData("square-feet-negative")]
+    public async Task GuidedSetupManualLease_InvalidInput_IsRejectedBeforeAnyBusinessFlush(
+        string invalidClass)
+    {
+        SkipIfDockerUnavailable();
+
+        var marker = $"m834-{Guid.NewGuid():N}";
+        var target = GuidedSetupManualTarget(marker);
+        target = invalidClass switch
+        {
+            "lease-number-blank" => target with { LeaseNumber = "   " },
+            "lease-number-too-long" => target with { LeaseNumber = new string('L', 101) },
+            "start-date-missing" => target with { StartDate = null },
+            "end-date-missing" => target with { EndDate = null },
+            "end-before-start" => target with { EndDate = new DateTime(2026, 8, 31, 0, 0, 0, DateTimeKind.Utc) },
+            "monthly-rent-not-positive" => target with { MonthlyRent = 0m },
+            "rent-due-day-out-of-range" => target with { RentDueDay = 0 },
+            "property-id-not-positive" => target with { PropertyId = -1 },
+            "unit-id-not-positive" => target with { UnitId = -1 },
+            "tenant-id-not-positive" => target with { TenantId = -1 },
+            "security-deposit-negative" => target with { SecurityDeposit = -1m },
+            "late-fee-negative" => target with { LateFee = -1m },
+            "bedrooms-negative" => target with { UnitBedrooms = -1m },
+            "bathrooms-negative" => target with { UnitBathrooms = -1m },
+            "square-feet-negative" => target with { UnitSquareFeet = -1 },
+            _ => throw new ArgumentOutOfRangeException(nameof(invalidClass), invalidClass, null),
+        };
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            target,
+            $"guided-setup-manual-lease:invalid:{marker}");
+        var identity = new AtomicCommandIdentity(
+            "guided-setup.manual-lease",
+            $"{_portfolioId}:invalid:{marker}");
+
+        var before = await ReadManualLeasePersistenceCountsAsync(marker, target.LeaseNumber, identity);
+        var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>();
+
+        var after = await ReadManualLeasePersistenceCountsAsync(marker, target.LeaseNumber, identity);
+        after.Should().Be(before);
+    }
+
+    [SkippableFact]
+    public async Task GuidedSetupManualLease_CanonicalCascadeFailureAfterDraftFlush_RollsBackAllRows()
+    {
+        SkipIfDockerUnavailable();
+
+        var marker = $"m834-fail-{Guid.NewGuid():N}";
+        var target = GuidedSetupManualTarget(marker);
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            target,
+            $"guided-setup-manual-lease:failure:{marker}");
+        var identity = new AtomicCommandIdentity(
+            "guided-setup.manual-lease",
+            $"{_portfolioId}:failure:{marker}");
+
+        var before = await ReadManualLeasePersistenceCountsAsync(
+            marker, target.LeaseNumber, identity);
+        await InstallManualLeaseCascadeFailureTriggerAsync();
+        try
+        {
+            var action = () => ExecuteAtomicAsync(identity, command, Codec);
+
+            await action.Should().ThrowAsync<Exception>()
+                .Where(ex => ex.ToString().Contains(
+                    "fail manual lease canonical cascade after draft flush",
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            await RemoveManualLeaseCascadeFailureTriggerAsync();
+        }
+
+        var after = await ReadManualLeasePersistenceCountsAsync(
+            marker, target.LeaseNumber, identity);
+        after.Drafts.Should().Be(before.Drafts);
+        after.Properties.Should().Be(before.Properties);
+        after.Units.Should().Be(before.Units);
+        after.Tenants.Should().Be(before.Tenants);
+        after.LeaseManagements.Should().Be(before.LeaseManagements);
+        after.TenantAccounts.Should().Be(before.TenantAccounts);
+        after.LeaseManagementParties.Should().Be(before.LeaseManagementParties);
+        after.Agreements.Should().Be(before.Agreements);
+        after.Receipts.Should().Be(before.Receipts);
+        after.AuditRows.Should().Be(before.AuditRows);
+        after.OutboxRows.Should().Be(before.OutboxRows);
+    }
+
+    [SkippableTheory]
     [InlineData(ScanConfirmationTargetKind.Expense)]
     [InlineData(ScanConfirmationTargetKind.Payment)]
     [InlineData(ScanConfirmationTargetKind.WorkOrder)]
@@ -2781,6 +2895,79 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         }
     }
 
+    private static ScanLeaseTargetData GuidedSetupManualTarget(string marker) => new(
+        PropertyId: 0,
+        UnitId: null,
+        TenantId: null,
+        TenantName: $"Manual {marker} Tenant",
+        TenantEmail: $"{marker.ToLowerInvariant()}@example.test",
+        TenantPhone: "555-0199",
+        TenantEmergencyContact: null,
+        PropertyName: $"{marker} House",
+        PropertyType: "SingleFamily",
+        RentalStructure: RentalStructure.SingleRental,
+        PropertyAddress: $"{marker} Street",
+        PropertyCity: "Akron",
+        PropertyState: "OH",
+        PropertyPostalCode: "44308",
+        UnitNumber: $"{marker}-unit",
+        UnitBedrooms: 2m,
+        UnitBathrooms: 1m,
+        UnitSquareFeet: 900,
+        LeaseNumber: $"{marker}-lease",
+        StartDate: new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+        EndDate: new DateTime(2027, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+        MonthlyRent: 1_450m,
+        SecurityDeposit: 1_450m,
+        LateFee: 75m,
+        RentDueDay: 1,
+        ReviewDisposition: LeaseScanReviewDisposition.NeedsSignatures,
+        TermsPayload: "{}",
+        RentTrackingStartMode: RentTrackingStartMode.ForwardOnly);
+
+    private async Task<ManualLeasePersistenceCounts> ReadManualLeasePersistenceCountsAsync(
+        string marker,
+        string? leaseNumber,
+        AtomicCommandIdentity identity)
+    {
+        await using var verify = Scope();
+        return new ManualLeasePersistenceCounts(
+            await verify.Db.ScanDrafts.CountAsync(row => row.PortfolioId == _portfolioId),
+            await verify.Db.Properties.CountAsync(row => row.PortfolioId == _portfolioId
+                && row.AddressLine1 == $"{marker} Street"),
+            await verify.Db.Units.CountAsync(row => row.PortfolioId == _portfolioId
+                && row.UnitNumber == $"{marker}-unit"),
+            await verify.Db.Tenants.CountAsync(row => row.PortfolioId == _portfolioId
+                && row.Email == $"{marker.ToLowerInvariant()}@example.test"),
+            await verify.Db.LeaseManagements.CountAsync(row => row.PortfolioId == _portfolioId),
+            await verify.Db.TenantAccounts.CountAsync(row => row.PortfolioId == _portfolioId),
+            await verify.Db.LeaseManagementParties.CountAsync(row => row.PortfolioId == _portfolioId),
+            leaseNumber is null
+                ? 0
+                : await verify.Db.LeaseAgreements.CountAsync(row => row.PortfolioId == _portfolioId
+                    && row.AgreementNumber == leaseNumber),
+            await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.IdempotencyKey == identity.IdempotencyKey),
+            await verify.Db.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey),
+            await verify.Db.OutboxMessages.CountAsync(row => row.IdempotencyKey.Contains(marker)));
+    }
+
+    private sealed record ManualLeasePersistenceCounts(
+        int Drafts,
+        int Properties,
+        int Units,
+        int Tenants,
+        int LeaseManagements,
+        int TenantAccounts,
+        int LeaseManagementParties,
+        int Agreements,
+        int Receipts,
+        int AuditRows,
+        int OutboxRows);
+
     private static ScanLeaseTargetData LeaseTarget(
         int propertyId,
         int? unitId,
@@ -3076,6 +3263,35 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             default:
                 throw new ArgumentOutOfRangeException(nameof(failurePoint));
         }
+    }
+
+    private async Task InstallManualLeaseCascadeFailureTriggerAsync()
+    {
+        await using var scope = Scope();
+        await scope.Db.Database.ExecuteSqlRawAsync("""
+            CREATE OR REPLACE FUNCTION fail_manual_lease_cascade()
+            RETURNS trigger AS $$
+            BEGIN
+                IF NEW."RelationshipNumber" LIKE 'LM-SCAN-%' THEN
+                    RAISE EXCEPTION 'fail manual lease canonical cascade after draft flush';
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+            DROP TRIGGER IF EXISTS fail_manual_lease_cascade ON "LeaseManagements";
+            CREATE TRIGGER fail_manual_lease_cascade
+            BEFORE INSERT ON "LeaseManagements"
+            FOR EACH ROW EXECUTE FUNCTION fail_manual_lease_cascade();
+            """);
+    }
+
+    private async Task RemoveManualLeaseCascadeFailureTriggerAsync()
+    {
+        await using var scope = Scope();
+        await scope.Db.Database.ExecuteSqlRawAsync("""
+            DROP TRIGGER IF EXISTS fail_manual_lease_cascade ON "LeaseManagements";
+            DROP FUNCTION IF EXISTS fail_manual_lease_cascade();
+            """);
     }
 
     private async Task<(int LoanId, int PaymentId)> SeedExistingLoanWithPaymentsAsync()
