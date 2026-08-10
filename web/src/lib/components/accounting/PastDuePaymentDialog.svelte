@@ -115,6 +115,7 @@
 	}
 
 	function submit(): void {
+		if (pending || openChargesLoading || openChargesError) return;
 		if (!validate()) return;
 		const amount = Number(form.amount);
 		rememberLastMethod(form.method);

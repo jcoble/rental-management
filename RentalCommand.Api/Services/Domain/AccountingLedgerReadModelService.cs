@@ -728,63 +728,31 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Select(journal => (Guid?)journal.PublicId)
                     .FirstOrDefault(),
                 Currency = entry.Currency,
-            })
-            .ToListAsync(ct);
-
-        var entryIds = page.Select(row => row.TenantLedgerEntryId).ToArray();
-        if (entryIds.Length > 0)
-        {
-            var allocations = await _db.TenantLedgerAllocations
-                .AsNoTracking()
-                .Where(allocation => allocation.PortfolioId == portfolioId
-                    && (entryIds.Contains(allocation.DebitEntryId) || entryIds.Contains(allocation.CreditEntryId)))
-                .Select(allocation => new
-                {
-                    allocation.Id,
-                    allocation.DebitEntryId,
-                    allocation.CreditEntryId,
-                    allocation.Amount,
-                    Debit = new
-                    {
-                        allocation.DebitEntry!.PublicId,
-                        allocation.DebitEntry.Description,
-                        allocation.DebitEntry.EffectiveOn,
-                    },
-                    Credit = new
-                    {
-                        allocation.CreditEntry!.PublicId,
-                        allocation.CreditEntry.Description,
-                        allocation.CreditEntry.EffectiveOn,
-                    },
-                })
-                .ToListAsync(ct);
-            foreach (var row in page)
-            {
-                row.Allocations = allocations
-                    .Where(allocation => allocation.DebitEntryId == row.TenantLedgerEntryId)
+                Allocations = _db.TenantLedgerAllocations
+                    .Where(allocation => allocation.PortfolioId == portfolioId
+                        && allocation.TenantAccountId == tenantAccountId
+                        && (allocation.DebitEntryId == entry.Id || allocation.CreditEntryId == entry.Id))
+                    .OrderBy(allocation => allocation.Id)
                     .Select(allocation => new AllocationRef
                     {
                         AllocationId = allocation.Id,
-                        TargetSourceId = allocation.CreditEntryId,
-                        TargetPublicId = allocation.Credit.PublicId,
-                        TargetDescription = allocation.Credit.Description,
+                        TargetSourceId = allocation.DebitEntryId == entry.Id
+                            ? allocation.CreditEntryId
+                            : allocation.DebitEntryId,
+                        TargetPublicId = allocation.DebitEntryId == entry.Id
+                            ? allocation.CreditEntry!.PublicId
+                            : allocation.DebitEntry!.PublicId,
+                        TargetDescription = allocation.DebitEntryId == entry.Id
+                            ? allocation.CreditEntry!.Description
+                            : allocation.DebitEntry!.Description,
                         Amount = allocation.Amount,
-                        EffectiveOn = allocation.Credit.EffectiveOn,
+                        EffectiveOn = allocation.DebitEntryId == entry.Id
+                            ? allocation.CreditEntry!.EffectiveOn
+                            : allocation.DebitEntry!.EffectiveOn,
                     })
-                    .Concat(allocations
-                        .Where(allocation => allocation.CreditEntryId == row.TenantLedgerEntryId)
-                        .Select(allocation => new AllocationRef
-                        {
-                            AllocationId = allocation.Id,
-                            TargetSourceId = allocation.DebitEntryId,
-                            TargetPublicId = allocation.Debit.PublicId,
-                            TargetDescription = allocation.Debit.Description,
-                            Amount = allocation.Amount,
-                            EffectiveOn = allocation.Debit.EffectiveOn,
-                        }))
-                    .ToArray();
-            }
-        }
+                    .ToList(),
+            })
+            .ToListAsync(ct);
 
         return new AccountingPage<TenantLedgerRow>
         {

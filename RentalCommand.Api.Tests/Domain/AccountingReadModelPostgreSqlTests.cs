@@ -113,6 +113,152 @@ public sealed class AccountingReadModelPostgreSqlTests
     }
 
     [Fact]
+    public async Task TenantLedger_PageAssociatesEveryAllocationServerSideWithinThreeCommands()
+    {
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
+        var scope = setup.Db.SeedAdministratorScope(
+            1, nameof(TenantLedger_PageAssociatesEveryAllocationServerSideWithinThreeCommands));
+        var now = new DateTime(2027, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Allocation projection property",
+            AddressLine1 = "1 Allocation Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = 1,
+            Property = property,
+            UnitNumber = "1A",
+            MarketRent = 900m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = 1,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = "ALLOC-PROJECTION",
+            PossessionGivenAtUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = scope.UserId,
+            RowVersion = Guid.NewGuid(),
+        };
+        var account = new TenantAccount
+        {
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            AccountNumber = "ALLOC-PROJECTION",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = scope.UserId,
+        };
+        setup.Db.AddRange(property, unit, relationship, account);
+        await setup.Db.SaveChangesAsync();
+
+        var charge = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 900m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 1, 1),
+            DueOn = new DateOnly(2027, 1, 1),
+            PostedAtUtc = now,
+            Description = "January rent",
+            BusinessKey = "allocation-projection:charge",
+            CreatedByUserId = scope.UserId,
+        };
+        var receipt = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 900m,
+            Currency = "USD",
+            EffectiveOn = new DateOnly(2027, 1, 2),
+            PostedAtUtc = now.AddDays(1),
+            Description = "January payment",
+            BusinessKey = "allocation-projection:receipt",
+            CreatedByUserId = scope.UserId,
+        };
+        setup.Db.AddRange(charge, receipt);
+        await setup.Db.SaveChangesAsync();
+
+        var original = new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = 900m,
+            AllocatedAtUtc = now,
+            BusinessKey = "allocation-projection:original",
+            CreatedByUserId = scope.UserId,
+        };
+        setup.Db.TenantLedgerAllocations.Add(original);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+
+        var compensating = new TenantLedgerAllocation
+        {
+            PortfolioId = 1,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = -900m,
+            ReversesAllocationId = original.Id,
+            AllocatedAtUtc = now.AddMinutes(1),
+            BusinessKey = "allocation-projection:compensating",
+            CreatedByUserId = scope.UserId,
+        };
+        setup.Db.TenantLedgerAllocations.Add(compensating);
+        await setup.Db.SaveChangesAsync();
+        setup.Db.ChangeTracker.Clear();
+        await setup.ActivateApiScopeAsync(scope);
+        commands.Reset();
+
+        var page = await new AccountingLedgerReadModelService(setup.Db).GetTenantLedgerAsync(
+            1,
+            account.Id,
+            new TenantLedgerQuery { Take = 20, Sort = "effectiveOn" },
+            CancellationToken.None);
+
+        var chargeRow = page!.Items.Single(row => row.TenantLedgerEntryId == charge.Id);
+        chargeRow.Allocations.Select(allocation => allocation.AllocationId)
+            .Should().Equal(original.Id, compensating.Id);
+        chargeRow.Allocations.Select(allocation => allocation.Amount)
+            .Should().Equal(900m, -900m);
+        page.Items.Single(row => row.TenantLedgerEntryId == receipt.Id)
+            .Allocations.Select(allocation => allocation.AllocationId)
+            .Should().Equal(original.Id, compensating.Id);
+
+        commands.Count.Should().BeLessThanOrEqualTo(3);
+        commands.Sql.Should().Contain(sql =>
+            sql.Contains("TenantLedgerAllocations", StringComparison.Ordinal)
+            && sql.Contains("TenantLedgerEntries", StringComparison.Ordinal)
+            && sql.Contains("LEFT JOIN LATERAL", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("TenantAccountId", StringComparison.Ordinal)
+            && sql.Contains("DebitEntryId", StringComparison.Ordinal)
+            && sql.Contains("CreditEntryId", StringComparison.Ordinal)
+            && sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Transactions_PageKeysPrecedeHydrationAndStayWithinThreeStatements()
     {
         var commands = new SqlCommandCounter();

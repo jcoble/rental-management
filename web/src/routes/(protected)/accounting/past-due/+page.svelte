@@ -13,8 +13,8 @@
 	import { goto } from '$app/navigation';
 	import { accounting } from '$lib/api/endpoints/accounting';
 	import { payments } from '$lib/api/endpoints/payments';
-	import { tenantLedgers, type TenantLedgerRow } from '$lib/api/endpoints/tenant-ledgers';
 	import type { PastDueLease } from '$lib/types';
+	import { loadAllOpenCharges } from '$lib/accounting/past-due-preview';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
@@ -27,9 +27,6 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
-	// The API deliberately caps any one SQL page at 200 rows. Walk every server-ordered page so the
-	// display-only preview never silently omits a later charge that the authoritative allocator will use.
-	const OPEN_CHARGES_PAGE_SIZE = 200;
 	let skip = $state(0);
 
 	const pastDueQuery = createQuery(() => ({
@@ -101,36 +98,6 @@
 		showMarkPaidForm = false;
 		markPaidTarget = null;
 		receiptOperationKey = null;
-	}
-
-	async function loadAllOpenCharges(tenantAccountId: number): Promise<TenantLedgerRow[]> {
-		const items: TenantLedgerRow[] = [];
-		let nextSkip = 0;
-		let totalCount = 0;
-
-		do {
-			const page = await tenantLedgers.list(tenantAccountId, {
-				skip: nextSkip,
-				take: OPEN_CHARGES_PAGE_SIZE,
-				openOnly: true,
-				sort: 'oldestDueOn'
-			});
-			items.push(...page.items);
-			totalCount = page.totalCount;
-			const pageEnd = page.skip + page.items.length;
-			if (page.items.length === 0) {
-				if (pageEnd < totalCount) {
-					throw new Error('Open-charge preview paging ended before the server total.');
-				}
-				break;
-			}
-			if (pageEnd <= nextSkip) {
-				throw new Error('Open-charge preview paging did not advance.');
-			}
-			nextSkip = pageEnd;
-		} while (nextSkip < totalCount);
-
-		return items;
 	}
 
 	const openChargesQuery = createQuery(() => {

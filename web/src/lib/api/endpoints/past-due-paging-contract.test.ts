@@ -17,6 +17,10 @@ const pageSource = readFileSync(
   ),
   "utf8"
 );
+const previewSource = readFileSync(
+  new URL("../../accounting/past-due-preview.ts", import.meta.url),
+  "utf8"
+);
 
 describe("Who's behind canonical paging contract", () => {
   it("sends bounded skip/take and exposes exact page metadata", () => {
@@ -51,13 +55,16 @@ describe("Who's behind canonical paging contract", () => {
     assert.doesNotMatch(pageSource, /leaseId|oldestPaymentId/);
   });
 
-  it("walks every server-ordered open-charge page for the payment preview", () => {
-    assert.match(pageSource, /async function loadAllOpenCharges\(tenantAccountId: number\)/);
-    assert.match(pageSource, /skip: nextSkip/);
-    assert.match(pageSource, /take: OPEN_CHARGES_PAGE_SIZE/);
-    assert.match(pageSource, /openOnly: true/);
-    assert.match(pageSource, /sort: 'oldestDueOn'/);
-    assert.match(pageSource, /while \(nextSkip < totalCount\)/);
+  it("uses the bounded production preview loader with fail-closed continuation checks", () => {
+    assert.match(pageSource, /import \{ loadAllOpenCharges \} from '\$lib\/accounting\/past-due-preview';/);
+    assert.match(pageSource, /queryFn: \(\) => loadAllOpenCharges\(tenantAccountId as number\)/);
+    assert.match(previewSource, /MAX_OPEN_CHARGE_PREVIEW_REQUESTS = 32/);
+    assert.match(previewSource, /for \(let requestNumber = 0; requestNumber < MAX_OPEN_CHARGE_PREVIEW_REQUESTS/);
+    assert.match(previewSource, /page\.skip !== nextSkip/);
+    assert.match(previewSource, /page\.totalCount !== expectedTotalCount/);
+    assert.match(previewSource, /Open-charge preview exceeded/);
+    assert.match(previewSource, /openOnly: true/);
+    assert.match(previewSource, /sort: 'oldestDueOn'/);
     assert.match(pageSource, /openChargesQuery\.data \?\? \[\]/);
   });
 });

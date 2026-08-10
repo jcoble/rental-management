@@ -10,6 +10,7 @@ const dialogSource = readFileSync(
 		new URL('../../components/accounting/PastDuePaymentDialog.svelte', import.meta.url),
 		'utf8'
 );
+const previewSource = readFileSync(new URL('../../accounting/past-due-preview.ts', import.meta.url), 'utf8');
 const typeSource = readFileSync(new URL('../../types/index.ts', import.meta.url), 'utf8');
 
 describe('past-due partial receipt contract', () => {
@@ -23,7 +24,8 @@ describe('past-due partial receipt contract', () => {
 		assert.match(dialogSource, /past-due-mark-paid-amount-input/);
 		assert.match(dialogSource, /past-due-mark-paid-amount-error/);
 		assert.match(dialogSource, /past-due-allocation-preview/);
-		assert.match(pageSource, /openOnly: true/);
-		assert.match(pageSource, /sort: 'oldestDueOn'/);
+		assert.match(pageSource, /loadAllOpenCharges\(tenantAccountId as number\)/);
+		assert.match(previewSource, /openOnly: true/);
+		assert.match(previewSource, /sort: 'oldestDueOn'/);
 	});
 });
