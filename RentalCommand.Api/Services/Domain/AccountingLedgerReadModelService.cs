@@ -740,6 +740,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     && (entryIds.Contains(allocation.DebitEntryId) || entryIds.Contains(allocation.CreditEntryId)))
                 .Select(allocation => new
                 {
+                    allocation.Id,
                     allocation.DebitEntryId,
                     allocation.CreditEntryId,
                     allocation.Amount,
@@ -763,6 +764,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Where(allocation => allocation.DebitEntryId == row.TenantLedgerEntryId)
                     .Select(allocation => new AllocationRef
                     {
+                        AllocationId = allocation.Id,
                         TargetSourceId = allocation.CreditEntryId,
                         TargetPublicId = allocation.Credit.PublicId,
                         TargetDescription = allocation.Credit.Description,
@@ -773,6 +775,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         .Where(allocation => allocation.CreditEntryId == row.TenantLedgerEntryId)
                         .Select(allocation => new AllocationRef
                         {
+                            AllocationId = allocation.Id,
                             TargetSourceId = allocation.DebitEntryId,
                             TargetPublicId = allocation.Debit.PublicId,
                             TargetDescription = allocation.Debit.Description,

@@ -168,6 +168,7 @@ public sealed class GeneralLedgerRow
 
 public sealed class AllocationRef
 {
+    public long AllocationId { get; init; }
     public long TargetSourceId { get; init; }
     public Guid TargetPublicId { get; init; }
     public string TargetDescription { get; init; } = string.Empty;

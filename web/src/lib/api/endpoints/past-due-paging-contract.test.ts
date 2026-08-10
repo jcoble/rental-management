@@ -50,4 +50,14 @@ describe("Who's behind canonical paging contract", () => {
     assert.doesNotMatch(pageSource, /daysFromTodayUtc|Date\.now|Tenant account #/);
     assert.doesNotMatch(pageSource, /leaseId|oldestPaymentId/);
   });
+
+  it("walks every server-ordered open-charge page for the payment preview", () => {
+    assert.match(pageSource, /async function loadAllOpenCharges\(tenantAccountId: number\)/);
+    assert.match(pageSource, /skip: nextSkip/);
+    assert.match(pageSource, /take: OPEN_CHARGES_PAGE_SIZE/);
+    assert.match(pageSource, /openOnly: true/);
+    assert.match(pageSource, /sort: 'oldestDueOn'/);
+    assert.match(pageSource, /while \(nextSkip < totalCount\)/);
+    assert.match(pageSource, /openChargesQuery\.data \?\? \[\]/);
+  });
 });

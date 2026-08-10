@@ -134,6 +134,7 @@ export interface PortalTenantAccountHistoryItem {
 }
 
 export interface PortalTenantAllocationRef {
+	allocationId: number;
 	targetSourceId: number;
 	targetPublicId: string;
 	targetDescription: string;

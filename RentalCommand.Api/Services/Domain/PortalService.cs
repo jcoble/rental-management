@@ -277,12 +277,13 @@ public class PortalService : IPortalService
                                'allocations', COALESCE((
                                    SELECT jsonb_agg(
                                        jsonb_build_object(
+                                           'allocationId', allocation."Id",
                                            'targetSourceId', debit."Id",
                                            'targetPublicId', debit."PublicId",
                                            'targetDescription', debit."Description",
                                            'amount', allocation."Amount",
                                            'effectiveOn', debit."EffectiveOn")
-                                       ORDER BY debit."EffectiveOn", debit."Id")
+                                       ORDER BY debit."EffectiveOn", debit."Id", allocation."Id")
                                    FROM "TenantLedgerAllocations" AS allocation
                                    JOIN "TenantLedgerEntries" AS debit
                                      ON debit."PortfolioId" = allocation."PortfolioId"

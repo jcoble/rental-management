@@ -28,6 +28,7 @@
 		openCharges = [],
 		totalOpenAmount,
 		openChargesLoading = false,
+		openChargesError = false,
 		pending = false,
 		onclose,
 		onsubmit
@@ -37,6 +38,7 @@
 		openCharges?: PastDueOpenCharge[];
 		totalOpenAmount: number;
 		openChargesLoading?: boolean;
+		openChargesError?: boolean;
 		pending?: boolean;
 		onclose: () => void;
 		onsubmit: (data: PastDuePaymentSubmission) => void;
@@ -161,6 +163,8 @@
 				</div>
 				{#if openChargesLoading}
 					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-loading">Loading open charges…</p>
+				{:else if openChargesError}
+					<p class="mt-2 text-xs text-destructive" data-testid="past-due-allocation-preview-error">Couldn't load every open charge. Try again before recording this payment.</p>
 				{:else if allocationPreview.length === 0}
 					<p class="mt-2 text-xs text-muted-foreground" data-testid="past-due-allocation-preview-empty">Enter a positive amount to preview the charges it will cover.</p>
 				{:else}
@@ -206,7 +210,7 @@
 
 		<Dialog.Footer data-testid="past-due-mark-paid-footer">
 			<Button data-testid="past-due-mark-paid-cancel" variant="outline" onclick={onclose} disabled={pending}>Cancel</Button>
-			<Button data-testid="past-due-mark-paid-confirm" onclick={submit} disabled={pending}>
+			<Button data-testid="past-due-mark-paid-confirm" onclick={submit} disabled={pending || openChargesLoading || openChargesError}>
 				{pending ? 'Recording…' : 'Record payment'}
 			</Button>
 		</Dialog.Footer>

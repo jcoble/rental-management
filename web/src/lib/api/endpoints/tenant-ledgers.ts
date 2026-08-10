@@ -25,6 +25,7 @@ export type TenantLedgerSort =
 	| '-postedAtUtc';
 
 export interface AllocationRef {
+	allocationId: number;
 	targetSourceId: number;
 	targetPublicId: string;
 	targetDescription: string;

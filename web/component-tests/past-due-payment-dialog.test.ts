@@ -53,6 +53,15 @@ const openCharges: PastDueOpenCharge[] = [
 	},
 ];
 
+const openChargesBeyondFirstServerPage: PastDueOpenCharge[] = Array.from({ length: 201 }, (_, index) => ({
+	tenantLedgerEntryId: 1000 + index,
+	description: `Charge ${index + 1}`,
+	effectiveOn: `2027-${String(Math.floor(index / 28) + 1).padStart(2, '0')}-01`,
+	dueOn: `2027-${String(Math.floor(index / 28) + 1).padStart(2, '0')}-01`,
+	openAmount: 1,
+	currency: 'USD',
+}));
+
 function renderDialog(onsubmit = vi.fn<(data: PastDuePaymentSubmission) => void>()) {
 	return {
 		onsubmit,
@@ -107,5 +116,23 @@ describe('past-due partial payment dialog', () => {
 		expect(view.getByTestId('past-due-allocation-preview-row-7').textContent).toContain('$400.00');
 		expect(view.getByTestId('past-due-allocation-preview-row-8').textContent).toContain('$200.00');
 		expect(view.queryByTestId('past-due-allocation-preview-row-9')).toBeNull();
+	});
+
+	it('previews a covered charge beyond the first server page', async () => {
+		const view = render(PastDuePaymentDialog, {
+			props: {
+				open: true,
+				target,
+				openCharges: openChargesBeyondFirstServerPage,
+				totalOpenAmount: 201,
+				onclose: vi.fn(),
+				onsubmit: vi.fn(),
+			},
+		});
+
+		await fireEvent.input(view.getByTestId('past-due-mark-paid-amount-input'), { target: { value: '201' } });
+
+		expect(view.getByTestId('past-due-allocation-preview-row-1200').textContent).toContain('Charge 201');
+		expect(view.getByTestId('past-due-allocation-preview-row-1200').textContent).toContain('$1.00');
 	});
 });
