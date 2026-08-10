@@ -44,10 +44,10 @@ describe('guided setup batch 3 contracts', () => {
 		assert.match(onboarding, /stepIndex -= 1;[\s\S]*?syncStepUrl\(STEPS\[stepIndex\]\.key\)/);
 	});
 
-	test('manual lease routing explains that no lease was created before opening Applications', () => {
-		assert.match(onboarding, /showError\('This guided step cannot create a lease without an approved application or imported agreement\./);
-		assert.match(onboarding, /goto\('\/applications'\)/);
-		assert.doesNotMatch(onboarding, /showSuccess\('Choose an approved application/);
+	test('manual lease submits through the canonical manual lease flow', () => {
+		assert.match(onboarding, /scan\.createManualLease/);
+		assert.doesNotMatch(onboarding, /This guided step cannot create a lease/);
+		assert.doesNotMatch(onboarding, /goto\('\/applications'\)/);
 	});
 
 	test('setup polish keeps controls visible, compact, and contextual', () => {

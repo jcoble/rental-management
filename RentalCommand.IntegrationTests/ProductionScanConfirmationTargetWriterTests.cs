@@ -85,6 +85,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             ConfirmScanDraftResult,
             ConfirmScanDraftHandler>();
         services.AddAtomicCommandHandler<
+            CreateManualLeaseCommand,
+            ConfirmScanDraftResult,
+            CreateManualLeaseHandler>();
+        services.AddAtomicCommandHandler<
             AtomicMoneyMutationCommand,
             AtomicMoneyMutationResult,
             AtomicMoneyMutationHandler>();
@@ -326,6 +330,93 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     {
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
+    }
+
+    [SkippableFact]
+    public async Task GuidedSetupManualLease_UsesCanonicalScanConfirmationCascade()
+    {
+        SkipIfDockerUnavailable();
+
+        var target = new ScanLeaseTargetData(
+            PropertyId: 0,
+            UnitId: null,
+            TenantId: null,
+            TenantName: "Manual Guided Tenant",
+            TenantEmail: "manual-guided-tenant@example.test",
+            TenantPhone: "555-0199",
+            TenantEmergencyContact: null,
+            PropertyName: "Manual Guided House",
+            PropertyType: "SingleFamily",
+            RentalStructure: RentalStructure.SingleRental,
+            PropertyAddress: "834 Manual Lane",
+            PropertyCity: "Akron",
+            PropertyState: "OH",
+            PropertyPostalCode: "44308",
+            UnitNumber: "1",
+            UnitBedrooms: 2m,
+            UnitBathrooms: 1m,
+            UnitSquareFeet: 900,
+            LeaseNumber: "MANUAL-GUIDED-834",
+            StartDate: new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
+            EndDate: new DateTime(2027, 8, 31, 0, 0, 0, DateTimeKind.Utc),
+            MonthlyRent: 1_450m,
+            SecurityDeposit: 1_450m,
+            LateFee: 75m,
+            RentDueDay: 1,
+            ReviewDisposition: LeaseScanReviewDisposition.NeedsSignatures,
+            TermsPayload: "{}",
+            RentTrackingStartMode: RentTrackingStartMode.ForwardOnly);
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            target,
+            "guided-setup-manual-lease:test-834");
+
+        var outcome = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "guided-setup.manual-lease",
+                $"{_portfolioId}:guided-setup-manual-lease:test-834"),
+            command,
+            Codec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        outcome.Value.LeaseManagementId.Should().BePositive();
+        outcome.Value.TargetEntityId.Should().BePositive();
+
+        var replay = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "guided-setup.manual-lease",
+                $"{_portfolioId}:guided-setup-manual-lease:test-834"),
+            command,
+            Codec);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.Should().Be(outcome.Value);
+
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.TargetEntityId);
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.LeaseManagementId);
+        var account = await verify.Db.TenantAccounts.AsNoTracking()
+            .SingleAsync(row => row.LeaseManagementId == relationship.Id);
+        var party = await verify.Db.LeaseManagementParties.AsNoTracking()
+            .SingleAsync(row => row.LeaseManagementId == relationship.Id);
+        var unit = await verify.Db.Units.AsNoTracking()
+            .SingleAsync(row => row.Id == relationship.UnitId);
+        var property = await verify.Db.Properties.AsNoTracking()
+            .SingleAsync(row => row.Id == relationship.PropertyId);
+        var tenant = await verify.Db.Tenants.AsNoTracking()
+            .SingleAsync(row => row.Id == party.TenantId);
+
+        property.Name.Should().Be("Manual Guided House");
+        unit.UnitNumber.Should().Be("1");
+        tenant.Email.Should().Be("manual-guided-tenant@example.test");
+        account.LeaseManagementId.Should().Be(relationship.Id);
+        party.TenantId.Should().Be(tenant.Id);
+        agreement.LeaseManagementId.Should().Be(relationship.Id);
     }
 
     [SkippableTheory]

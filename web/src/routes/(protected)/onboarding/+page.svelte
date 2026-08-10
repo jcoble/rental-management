@@ -56,6 +56,7 @@
 	} from '$lib/onboarding/onboarding-flow-state';
 	import { isPersonalAlertSetupComplete } from '$lib/onboarding/alert-completion';
 	import {
+		buildOnboardingManualLeaseRequest,
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
@@ -1000,6 +1001,7 @@
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
 	let leasePrefillDraftId = $state<number | null>(null);
+	let manualLeaseOperationId = $state<string | null>(null);
 	const leaseSignatureChoiceInvalid = $derived(
 		leasePrefillDraftId != null &&
 		!leaseReviewDisposition
@@ -1109,13 +1111,21 @@
 				return scan.confirm(prefillDraftId, buildOnboardingLeaseScanOverrides(data));
 			}
 
-			throw new Error('Prepare a move-in from an approved application, or import an existing signed agreement.');
+			const operationId = manualLeaseOperationId ?? crypto.randomUUID();
+			manualLeaseOperationId = operationId;
+			return scan.createManualLease(
+				buildOnboardingManualLeaseRequest(data),
+				operationId
+			);
 		},
 		onSuccess: () => {
 			createdLease = true;
 			leasePrefillDraftId = null;
+			manualLeaseOperationId = null;
 			showSuccess('Lease created.');
 			queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
+			queryClient.invalidateQueries({ queryKey: ['properties'] });
+			queryClient.invalidateQueries({ queryKey: ['tenants'] });
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			next();
 		},
@@ -1123,11 +1133,6 @@
 	}));
 
 	function submitLease() {
-		if (leasePrefillDraftId == null) {
-			showError('This guided step cannot create a lease without an approved application or imported agreement. Choose an approved application to continue.');
-			void goto('/applications');
-			return;
-		}
 		const leaseNumber =
 			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		const result = parseForm(leaseSchema, {
@@ -2108,7 +2113,7 @@
 							</Button>
 						{:else}
 							<Button class="gap-1" data-testid="onboarding-finish" disabled={anyPending || leaseSignatureChoiceInvalid} onclick={submitLease}>
-								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Continue to applications'}
+								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Create lease & finish'}
 								<CheckCircle2 class="h-4 w-4" />
 							</Button>
 						{/if}
