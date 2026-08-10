@@ -10,17 +10,11 @@
 	} from '$lib/accounting/accounting-display';
 	import {
 		buildServerCashFlowChartPoints,
-		buildCashFlowMonthlyRanges,
-		cashFlowBarPercent,
 		cashFlowChartScale,
-		cashFlowNetPositionPercent,
 		cashFlowPropertyDetails,
 		CASH_FLOW_PERIOD_PRESETS,
 		resolveCashFlowRange,
 		sortCashFlowProperties,
-		type CashFlowChartMetric,
-		type CashFlowChartPoint,
-		type CashFlowMonthlyResponse,
 		type CashFlowPeriodPreset,
 		type CashFlowPropertySortKey,
 		type CashFlowRange,
@@ -28,6 +22,7 @@
 	} from '$lib/accounting/cash-flow-state';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 	import CashFlowWaterfall from './CashFlowWaterfall.svelte';
+	import CashFlowTrendChart from './CashFlowTrendChart.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Table from '$lib/components/ui/table';
@@ -143,18 +138,6 @@
 	function propertyDetailLabel(key: 'operatingExpenses' | 'debtService'): string {
 		if (key === 'operatingExpenses') return advanced ? 'Operating expenses' : 'Operating costs';
 		return advanced ? 'Debt service' : 'Loan payments';
-	}
-
-	function chartMetricValue(point: CashFlowChartPoint, metric: CashFlowChartMetric): number {
-		return point[metric];
-	}
-
-	function chartBarHeight(point: CashFlowChartPoint, metric: CashFlowChartMetric): number {
-		return cashFlowBarPercent(chartMetricValue(point, metric), chartScale);
-	}
-
-	function chartNetPosition(point: CashFlowChartPoint): number {
-		return cashFlowNetPositionPercent(point.cashFlow, chartScale);
 	}
 
 	function sortAriaValue(key: CashFlowPropertySortKey): 'ascending' | 'descending' | 'none' {
@@ -280,33 +263,7 @@
 				{:else if chartPoints.length === 0}
 					<div class="p-5 text-sm text-muted-foreground" data-testid="cash-flow-monthly-empty">No monthly activity for these filters yet.</div>
 				{:else}
-					<figure class="overflow-x-auto px-4 py-5 sm:px-5">
-						<div class="flex min-w-max items-end gap-4" role="img" aria-label="Monthly cash-flow chart">
-							{#each chartPoints as point (point.key)}
-								<div class="w-24 shrink-0" data-testid={`cash-flow-month-${point.key}`}>
-									<div class="relative h-56 rounded-lg bg-muted/20" role="group" aria-label={`${point.label}: money in ${formatAccountingCurrency(point.income)}, operating costs ${formatOutflow(point.operatingExpenses)}, loan payments ${formatOutflow(point.debtService)}, cash flow ${formatAccountingCurrency(point.cashFlow)}`}>
-										<div class="absolute inset-x-2 top-1/2 border-t border-dashed border-border"></div>
-										<div class="absolute inset-x-2 top-0 flex h-1/2 items-end justify-center gap-1 px-1 pb-1">
-											<span class="w-3 rounded-t bg-emerald-500" style={`height: ${chartBarHeight(point, 'income')}%`} aria-hidden="true"></span>
-										</div>
-										<div class="absolute inset-x-2 bottom-0 flex h-1/2 items-start justify-center gap-1 px-1 pt-1">
-											<span class="w-3 rounded-b bg-amber-500" style={`height: ${chartBarHeight(point, 'operatingExpenses')}%`} aria-hidden="true"></span>
-											<span class="w-3 rounded-b bg-orange-500" style={`height: ${chartBarHeight(point, 'debtService')}%`} aria-hidden="true"></span>
-										</div>
-										<span class="absolute left-1/2 size-3 -translate-x-1/2 rounded-full border-2 border-card bg-primary" style={`bottom: ${chartNetPosition(point)}%`} aria-hidden="true"></span>
-									</div>
-									<p class="mt-2 text-center text-xs font-medium">{point.label}</p>
-									<div class="mt-2 space-y-0.5 text-center text-[11px] leading-tight text-muted-foreground">
-										<p>In {formatAccountingCurrency(point.income)}</p>
-										<p>Costs {formatOutflow(point.operatingExpenses)}</p>
-										<p>Loans {formatOutflow(point.debtService)}</p>
-										<p class="font-medium text-foreground">Net {formatAccountingCurrency(point.cashFlow)}</p>
-									</div>
-								</div>
-							{/each}
-						</div>
-						<figcaption class="mt-4 text-xs text-muted-foreground">Bars show the direction of each server-provided monthly figure. Exact amounts are listed below every month.</figcaption>
-					</figure>
+					<CashFlowTrendChart points={chartPoints} scale={chartScale} {advanced} />
 				{/if}
 			</section>
 
