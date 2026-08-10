@@ -77,6 +77,8 @@ const MONTH_LABELS = [
 	'Dec'
 ] as const;
 
+export const CASH_FLOW_MIN_BAR_HEIGHT_PX = 2;
+
 interface CalendarDateParts {
 	year: number;
 	month: number;
@@ -93,6 +95,16 @@ function toIsoDate(parts: CalendarDateParts): string {
 
 function toMonthKey(year: number, month: number): string {
 	return `${year}-${pad(month)}`;
+}
+
+/** Format the server's YYYY-MM month key without changing the underlying key. */
+export function formatCashFlowMonthLabel(month: string): string {
+	const match = /^(\d{4})-(\d{2})$/.exec(month.trim());
+	if (!match) return month;
+
+	const monthNumber = Number(match[2]);
+	const monthName = MONTH_LABELS[monthNumber - 1];
+	return monthName ? `${monthName} ${match[1]}` : month;
 }
 
 function parseDateOnly(value: string): CalendarDateParts | null {
@@ -246,7 +258,7 @@ export function cashFlowPropertyDetails(property: PropertyCashFlow): CashFlowPro
 }
 
 export function buildServerCashFlowChartPoints(response: CashFlowSummaryResponse): CashFlowChartPoint[] {
-	return (response.months ?? []).map((month) => ({ key: month.month, label: month.month, income: month.income,
+	return (response.months ?? []).map((month) => ({ key: month.month, label: formatCashFlowMonthLabel(month.month), income: month.income,
 		operatingExpenses: month.operatingExpenses, debtService: month.debtService, cashFlow: month.cashFlow }));
 }
 
@@ -271,8 +283,18 @@ export function cashFlowChartScale(points: readonly CashFlowChartPoint[]): numbe
 	let maximum = 0;
 	for (const point of points) {
 		for (const metric of ['income', 'operatingExpenses', 'debtService', 'cashFlow'] as const) {
-			maximum = Math.max(maximum, Math.abs(point[metric]));
+			const value = point[metric];
+			if (Number.isFinite(value)) maximum = Math.max(maximum, Math.abs(value));
 		}
+
+		// The chart draws the two outflow marks as one centered vertical stack.
+		// Include that visual magnitude in the scale without creating or displaying
+		// a new financial total; the server-provided series remain unchanged.
+		const operatingExpenses = Number.isFinite(point.operatingExpenses)
+			? Math.abs(point.operatingExpenses)
+			: 0;
+		const debtService = Number.isFinite(point.debtService) ? Math.abs(point.debtService) : 0;
+		maximum = Math.max(maximum, operatingExpenses + debtService);
 	}
 	return maximum || 1;
 }
@@ -283,8 +305,78 @@ export function cashFlowBarPercent(value: number, scale: number): number {
 	return Math.min(100, Math.max(0, (Math.abs(value) / scale) * 100));
 }
 
+/**
+ * Convert a server-provided amount to pixels in one shared linear plot scale.
+ * A non-zero amount gets a tiny visible footprint without changing its value or scale.
+ */
+export function cashFlowBarPixels(
+	value: number,
+	scale: number,
+	plotHeight: number,
+	minimumVisibleHeight = CASH_FLOW_MIN_BAR_HEIGHT_PX
+): number {
+	if (!Number.isFinite(value) || !Number.isFinite(scale) || scale <= 0 || !Number.isFinite(plotHeight) || plotHeight <= 0) {
+		return 0;
+	}
+
+	const magnitude = Math.abs(value);
+	if (magnitude === 0) return 0;
+
+	const proportionalHeight = (magnitude / scale) * plotHeight;
+	const minimumHeight = Math.max(0, minimumVisibleHeight);
+	return Math.min(plotHeight, Math.max(minimumHeight, proportionalHeight));
+}
+
+/**
+ * Project the two centered outflow segments into one bounded stack.
+ * When independent minimum footprints would overflow the shared plot, use the
+ * proportional heights instead so the stack remains truthful to the scale.
+ */
+export function cashFlowStackedBarPixels(
+	firstValue: number,
+	secondValue: number,
+	scale: number,
+	plotHeight: number,
+	minimumVisibleHeight = CASH_FLOW_MIN_BAR_HEIGHT_PX
+): readonly [number, number] {
+	if (
+		!Number.isFinite(firstValue) ||
+		!Number.isFinite(secondValue) ||
+		!Number.isFinite(scale) ||
+		scale <= 0 ||
+		!Number.isFinite(plotHeight) ||
+		plotHeight <= 0
+	) {
+		return [0, 0];
+	}
+
+	const magnitudes = [Math.abs(firstValue), Math.abs(secondValue)];
+	if (magnitudes[0] === 0 && magnitudes[1] === 0) return [0, 0];
+
+	const proportional = magnitudes.map((magnitude) =>
+		Math.min(plotHeight, (magnitude / scale) * plotHeight)
+	);
+	const proportionalTotal = proportional[0] + proportional[1];
+	if (proportionalTotal > plotHeight) {
+		const fit = plotHeight / proportionalTotal;
+		proportional[0] *= fit;
+		proportional[1] *= fit;
+	}
+
+	const minimumHeight = Math.max(0, minimumVisibleHeight);
+	const withMinimum = proportional.map((height, index) =>
+		magnitudes[index] === 0 ? 0 : Math.max(minimumHeight, height)
+	);
+	if (withMinimum[0] + withMinimum[1] <= plotHeight) {
+		return [withMinimum[0], withMinimum[1]];
+	}
+
+	// The floors cannot both fit; dropping them preserves the shared scale.
+	return [proportional[0], proportional[1]];
+}
+
 /** Return a bounded vertical position for the net-flow marker around the zero baseline. */
 export function cashFlowNetPositionPercent(value: number, scale: number): number {
 	if (!Number.isFinite(value) || !Number.isFinite(scale) || scale <= 0) return 50;
-	return Math.min(95, Math.max(5, 50 + (value / scale) * 45));
+	return Math.min(100, Math.max(0, 50 + (value / scale) * 50));
 }
