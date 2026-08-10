@@ -64,6 +64,7 @@
 		'rent-roll': ClipboardList,
 		'rent-ledger': ScrollText,
 		delinquency: AlertTriangle,
+		'aged-receivables': AlertTriangle,
 		'owner-statement': FileBarChart,
 		'owner-distributions': Users,
 		occupancy: Building2,

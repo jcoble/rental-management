@@ -301,6 +301,204 @@ public class ReportsServiceTests : IAsyncLifetime
             .Should().BeTrue("bucket and total amounts must be summed in SQL");
     }
 
+    [Fact]
+    public async Task GetRentRollAsync_UsesOneSqlStatementWithAsOfAndPropertyRollups()
+    {
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentRollAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = new DateOnly(2026, 7, 15),
+        }, CancellationToken.None);
+
+        report.AsOf.Should().Be(new DateOnly(2026, 7, 15));
+        var sql = string.Join("\n---\n", _executedSql);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "rent roll rows, property totals, and portfolio totals must be one SQL statement");
+        sql.Should().Contain("jsonb_agg", "property groups and rows must be aggregated in SQL");
+        sql.Should().Contain("rc_api_effective_capability_scopes", "authorization must stay in the report query");
+        sql.Should().Contain("@asOfDate", "the requested snapshot date must be parameterized");
+        sql.Should().Contain("TenantLedgerEntries", "rent-roll balances must use the ledger inside the authorized statement");
+        sql.Should().Contain("TenantLedgerAllocations", "rent-roll allocations must be netted inside the authorized statement");
+        sql.Should().Contain("credit.\"EffectiveOn\" <= @asOfDate", "credit allocations must be bounded by the requested snapshot");
+    }
+
+    [Fact]
+    public async Task GetAgedReceivablesAsync_UsesOneSqlStatementWithCaseBucketsAndRollups()
+    {
+        _executedSql.Clear();
+
+        var report = await _sut.GetAgedReceivablesAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = new DateOnly(2026, 7, 15),
+        }, CancellationToken.None);
+
+        report.AsOf.Should().Be(new DateOnly(2026, 7, 15));
+        var sql = string.Join("\n---\n", _executedSql);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "aged rows, property buckets, and portfolio buckets must be one SQL statement");
+        sql.Should().Contain("CASE", "aging buckets must be computed in SQL");
+        sql.Should().Contain("jsonb_agg", "property rollups and rows must be aggregated in SQL");
+        sql.Should().Contain("TenantLedgerEntries", "aged balances must use the ledger inside the authorized statement");
+        sql.Should().Contain("TenantLedgerAllocations", "aged allocations must be netted inside the authorized statement");
+        sql.Should().Contain("reversal.\"EffectiveOn\" <= @asOfDate", "reversals must be bounded by the requested snapshot");
+    }
+
+    [Fact]
+    public async Task GetRentRollAsync_IncludesVacantUnitsAndPropertyPortfolioTotals()
+    {
+        var property = SeedProperty("Rent Roll QA");
+        var occupiedUnit = SeedUnit("1", property.Id);
+        SeedLease(property, occupiedUnit, SeedTenant("Occupied", "Tenant"), 1_250m);
+        SeedUnit("2", property.Id); // explicit vacancy must remain visible in the real report
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentRollAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = DateOnly.FromDateTime(DateTime.UtcNow),
+        }, CancellationToken.None);
+
+        var propertyGroup = report.Properties.Should().ContainSingle().Subject;
+        propertyGroup.UnitCount.Should().Be(2);
+        propertyGroup.LeaseCount.Should().Be(1);
+        propertyGroup.Rows.Should().ContainSingle(row => row.IsVacant);
+        propertyGroup.Rows.Should().ContainSingle(row => !row.IsVacant && row.BaseRent == 1_250m);
+        report.PortfolioTotals.UnitCount.Should().Be(2);
+        report.PortfolioTotals.LeaseCount.Should().Be(1);
+        report.PortfolioTotals.TotalBaseRent.Should().Be(1_250m);
+        _executedSql.Should().ContainSingle(sql => sql.Contains("RentRoll", StringComparison.OrdinalIgnoreCase) ||
+            (sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase) &&
+             sql.Contains("row_values", StringComparison.OrdinalIgnoreCase)),
+            "the complete rent-roll snapshot and totals must be one SQL statement");
+    }
+
+    [Fact]
+    public async Task GetAgedReceivablesAsync_BucketsThreeAgesFromCanonicalOpenCharges()
+    {
+        var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+        var property = SeedProperty("Aging QA");
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Behind", "Tenant"), 1_000m);
+        SeedPayment(lease, 100m, asOf.AddDays(-10).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        SeedPayment(lease, 200m, asOf.AddDays(-45).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        SeedPayment(lease, 300m, asOf.AddDays(-75).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        _executedSql.Clear();
+
+        var report = await _sut.GetAgedReceivablesAsync(_scope, new ReportRangeQuery { AsOf = asOf }, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.Buckets.Current.Should().Be(100m);
+        row.Buckets.Days31To60.Should().Be(200m);
+        row.Buckets.Days61To90.Should().Be(300m);
+        row.Buckets.Over90.Should().Be(0m);
+        row.Total.Should().Be(600m);
+        report.TotalOutstanding.Should().Be(600m);
+        report.PortfolioTotals.Should().BeEquivalentTo(report.Totals);
+        _executedSql.Should().ContainSingle(sql =>
+            sql.Contains("TenantLedgerEntries", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("TenantLedgerAllocations", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase),
+            "as-of charge balances, age buckets, and rollups must be one SQL statement");
+    }
+
+    [Fact]
+    public async Task AsOfMoneyReports_ExcludeLaterPaymentReversalAndFutureCharge_ThenIncludeThemAtInverseBoundary()
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var historicalAsOf = today.AddDays(-10);
+        var paymentDate = historicalAsOf.AddDays(3);
+        var reversalDate = historicalAsOf.AddDays(5);
+        var futureChargeDate = historicalAsOf.AddDays(6);
+        var inverseAsOf = historicalAsOf.AddDays(7);
+        var property = SeedProperty("As-of boundary QA");
+        var lease = SeedLease(
+            property,
+            SeedUnit("1", property.Id),
+            SeedTenant("Boundary", "Tenant"),
+            rent: 1_000m,
+            start: today.AddDays(-45).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+
+        var chargeDate = historicalAsOf.AddDays(-5);
+        SeedPayment(
+            lease,
+            1_000m,
+            chargeDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            paidInFull: false,
+            paidDate: paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            amountPaid: 300m);
+        var chargeToReverse = SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.RentCharge,
+            TenantLedgerDirection.Debit,
+            200m,
+            historicalAsOf.AddDays(-4),
+            "as-of charge to reverse");
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.Reversal,
+            TenantLedgerDirection.Credit,
+            200m,
+            reversalDate,
+            "as-of reversal",
+            chargeToReverse.Id);
+        SeedLedgerEntry(
+            lease,
+            TenantLedgerEntryType.RentCharge,
+            TenantLedgerDirection.Debit,
+            400m,
+            futureChargeDate,
+            "as-of future charge");
+        _db.ChangeTracker.Clear();
+
+        _executedSql.Clear();
+        var historicalRentRoll = await _sut.GetRentRollAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = historicalAsOf },
+            CancellationToken.None);
+        var historicalRentRow = historicalRentRoll.Rows.Should().ContainSingle().Subject;
+        historicalRentRow.CurrentBalance.Should().Be(1_200m);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "historical rent-roll rows and totals must remain one SQL statement");
+        var historicalRentRollSql = string.Join("\n---\n", _executedSql);
+        historicalRentRollSql.Should().Contain("reversal.\"EffectiveOn\" <= @asOfDate");
+        historicalRentRollSql.Should().Contain("credit.\"EffectiveOn\" <= @asOfDate");
+        historicalRentRollSql.Should().Contain("entry.\"EffectiveOn\" <= @asOfDate");
+
+        _executedSql.Clear();
+        var historicalAged = await _sut.GetAgedReceivablesAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = historicalAsOf },
+            CancellationToken.None);
+        var historicalAgedRow = historicalAged.Rows.Should().ContainSingle().Subject;
+        historicalAgedRow.Total.Should().Be(1_200m);
+        historicalAgedRow.Buckets.Current.Should().Be(1_200m);
+        historicalAged.TotalOutstanding.Should().Be(1_200m);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "historical aged rows, buckets, and totals must remain one SQL statement");
+
+        _executedSql.Clear();
+        var inverseRentRoll = await _sut.GetRentRollAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = inverseAsOf },
+            CancellationToken.None);
+        var inverseRentRow = inverseRentRoll.Rows.Should().ContainSingle().Subject;
+        inverseRentRow.CurrentBalance.Should().Be(1_100m);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "inverse rent-roll rows and totals must remain one SQL statement");
+
+        _executedSql.Clear();
+        var inverseAged = await _sut.GetAgedReceivablesAsync(
+            _scope,
+            new ReportRangeQuery { AsOf = inverseAsOf },
+            CancellationToken.None);
+        var inverseAgedRow = inverseAged.Rows.Should().ContainSingle().Subject;
+        inverseAgedRow.Total.Should().Be(1_100m);
+        inverseAgedRow.Buckets.Current.Should().Be(1_100m);
+        inverseAged.TotalOutstanding.Should().Be(1_100m);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "inverse aged rows, buckets, and totals must remain one SQL statement");
+    }
+
     // ── General Ledger running balance (DB) ────────────────────────────────────────────────────────
 
     [Fact]

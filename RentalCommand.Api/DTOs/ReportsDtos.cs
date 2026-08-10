@@ -96,6 +96,9 @@ public static class ReportParamKeys
     public const string Skip = "skip";
     public const string Take = "take";
     public const string Sort = "sort";
+
+    /// <summary>Snapshot date (inclusive), bound from query <c>asOf</c>.</summary>
+    public const string AsOf = "asOf";
 }
 
 // ── Shared param binding ─────────────────────────────────────────────────────────────────────────
@@ -116,6 +119,9 @@ public class ReportRangeQuery
 
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "to")]
     public DateTime? To { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "asOf")]
+    public DateOnly? AsOf { get; set; }
 
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyId")]
     public int? PropertyId { get; set; }
@@ -145,11 +151,17 @@ public class ReportRangeQuery
 
 // ── Rent Roll ────────────────────────────────────────────────────────────────────────────────────
 
-/// <summary>Current rent-roll snapshot: one row per active/under-notice lease, plus portfolio totals.</summary>
+/// <summary>As-of rent-roll snapshot: one row per unit (including vacant units), grouped by property.</summary>
 public class RentRollResponse
 {
     public DateTime GeneratedAt { get; set; }
+    public DateOnly AsOf { get; set; }
     public IReadOnlyList<RentRollRow> Rows { get; set; } = [];
+
+    /// <summary>Rows and subtotals grouped by property for the report table.</summary>
+    public IReadOnlyList<RentRollPropertyGroup> Properties { get; set; } = [];
+
+    public RentRollTotals PortfolioTotals { get; set; } = new();
 
     /// <summary>Count of leases in the roll.</summary>
     public int LeaseCount { get; set; }
@@ -174,11 +186,93 @@ public class RentRollRow
     public string UnitNumber { get; set; } = string.Empty;
     public int? TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
+    public IReadOnlyList<string> TenantNames { get; set; } = [];
     public decimal MonthlyRent { get; set; }
+    public decimal BaseRent { get; set; }
     public decimal SecurityDeposit { get; set; }
+    public decimal DepositHeld { get; set; }
+    public decimal CurrentBalance { get; set; }
     public DateOnly StartOn { get; set; }
     public DateOnly? EndOn { get; set; }
     public string StatusName { get; set; } = string.Empty;
+    public bool IsVacant { get; set; }
+}
+
+/// <summary>Rent-roll rows and money totals for one property.</summary>
+public sealed class RentRollPropertyGroup
+{
+    public int PropertyId { get; set; }
+    public string PropertyName { get; set; } = string.Empty;
+    public IReadOnlyList<RentRollRow> Rows { get; set; } = [];
+    public int UnitCount { get; set; }
+    public int LeaseCount { get; set; }
+    public decimal TotalBaseRent { get; set; }
+    public decimal TotalMonthlyRent { get; set; }
+    public decimal TotalSecurityDeposit { get; set; }
+    public decimal TotalDepositHeld { get; set; }
+    public decimal TotalCurrentBalance { get; set; }
+}
+
+/// <summary>Portfolio totals for the rent-roll snapshot.</summary>
+public sealed class RentRollTotals
+{
+    public int UnitCount { get; set; }
+    public int LeaseCount { get; set; }
+    public decimal TotalBaseRent { get; set; }
+    public decimal TotalMonthlyRent { get; set; }
+    public decimal TotalSecurityDeposit { get; set; }
+    public decimal TotalDepositHeld { get; set; }
+    public decimal TotalCurrentBalance { get; set; }
+}
+
+// ── Aged receivables ────────────────────────────────────────────────────────────────────────────
+
+/// <summary>Open tenant-account receivables aged by the charge date, grouped by property.</summary>
+public sealed class AgedReceivablesResponse
+{
+    public DateOnly AsOf { get; set; }
+    public IReadOnlyList<AgedReceivablesRow> Rows { get; set; } = [];
+    public IReadOnlyList<AgedReceivablesPropertyGroup> Properties { get; set; } = [];
+    public AgedReceivablesBuckets Totals { get; set; } = new();
+    public decimal TotalOutstanding { get; set; }
+    public AgedReceivablesBuckets PortfolioTotals { get; set; } = new();
+}
+
+/// <summary>One tenant account's open receivables across the four age buckets.</summary>
+public sealed class AgedReceivablesRow
+{
+    public int TenantAccountId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int PropertyId { get; set; }
+    public string PropertyName { get; set; } = string.Empty;
+    public int UnitId { get; set; }
+    public string UnitNumber { get; set; } = string.Empty;
+    public int? TenantId { get; set; }
+    public string TenantName { get; set; } = string.Empty;
+    public IReadOnlyList<string> TenantNames { get; set; } = [];
+    public AgedReceivablesBuckets Buckets { get; set; } = new();
+    public decimal Total { get; set; }
+    public DateOnly? OldestChargeDate { get; set; }
+    public int OldestChargeAgeDays { get; set; }
+}
+
+/// <summary>Property-level aged receivables rows and bucket totals.</summary>
+public sealed class AgedReceivablesPropertyGroup
+{
+    public int PropertyId { get; set; }
+    public string PropertyName { get; set; } = string.Empty;
+    public IReadOnlyList<AgedReceivablesRow> Rows { get; set; } = [];
+    public AgedReceivablesBuckets Buckets { get; set; } = new();
+    public decimal TotalOutstanding { get; set; }
+}
+
+/// <summary>0-30, 31-60, 61-90, and 90+ day open receivable amounts.</summary>
+public sealed class AgedReceivablesBuckets
+{
+    public decimal Current { get; set; }
+    public decimal Days31To60 { get; set; }
+    public decimal Days61To90 { get; set; }
+    public decimal Over90 { get; set; }
 }
 
 // ── Rent Ledger (accrual, per lease over a range) ─────────────────────────────────────────────────

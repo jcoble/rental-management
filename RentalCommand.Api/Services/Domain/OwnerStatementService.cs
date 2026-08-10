@@ -27,7 +27,16 @@ public class OwnerStatementService : IOwnerStatementService
         GetForOwnerCoreAsync(
             scope.PortfolioId,
             ownerId,
-            year,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
+            AuthorizedProperties(scope),
+            ct);
+
+    public Task<OwnerStatementReport?> GetForOwnerPeriodAsync(
+        WorkspaceReadScope scope, int ownerId, OwnerStatementPeriod period, CancellationToken ct = default) =>
+        GetForOwnerCoreAsync(
+            scope.PortfolioId,
+            ownerId,
+            period,
             AuthorizedProperties(scope),
             ct);
 
@@ -36,19 +45,20 @@ public class OwnerStatementService : IOwnerStatementService
         GetForOwnerCoreAsync(
             scope.PortfolioId,
             ownerId,
-            year,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
             AuthorizedOwnerPortalProperties(scope),
             ct);
 
     private async Task<OwnerStatementReport?> GetForOwnerCoreAsync(
         int portfolioId,
         int ownerId,
-        int year,
+        OwnerStatementPeriod period,
         IQueryable<Property> authorizedProperties,
         CancellationToken ct)
     {
-        var (start, end) = YearRange(year);
-        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year, authorizedProperties);
+        var start = period.StartUtc;
+        var end = period.EndUtc;
+        var propertyNetRows = OwnerPropertyNetRows(portfolioId, period, authorizedProperties);
         var roundedPropertyLines = propertyNetRows.Select(row => new OwnerStatementPropertySqlRow
         {
             OwnerId = row.OwnerId,
@@ -164,7 +174,11 @@ public class OwnerStatementService : IOwnerStatementService
         {
             OwnerId = statement.OwnerId,
             OwnerName = statement.OwnerName,
-            Year = year,
+            Year = period.Year,
+            Period = period.Kind.ToString().ToLowerInvariant(),
+            PeriodLabel = period.Label,
+            PeriodStart = period.StartOn,
+            PeriodEnd = period.EndOn,
             Properties = lines,
             TotalIncome = statement.TotalIncome,
             TotalExpenses = statement.TotalExpenses,
@@ -182,7 +196,15 @@ public class OwnerStatementService : IOwnerStatementService
         WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
         ListOwnersWithNetCoreAsync(
             scope.PortfolioId,
-            year,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
+            AuthorizedProperties(scope),
+            ct);
+
+    public Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetPeriodAsync(
+        WorkspaceReadScope scope, OwnerStatementPeriod period, CancellationToken ct = default) =>
+        ListOwnersWithNetCoreAsync(
+            scope.PortfolioId,
+            period,
             AuthorizedProperties(scope),
             ct);
 
@@ -194,7 +216,7 @@ public class OwnerStatementService : IOwnerStatementService
     {
         var summaries = OwnerSummaries(
             scope.PortfolioId,
-            year,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
             AuthorizedOwnerPortalProperties(scope));
         var search = query.Search?.Trim();
         if (!string.IsNullOrWhiteSpace(search))
@@ -244,11 +266,11 @@ public class OwnerStatementService : IOwnerStatementService
 
     private async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetCoreAsync(
         int portfolioId,
-        int year,
+        OwnerStatementPeriod period,
         IQueryable<Property> authorizedProperties,
         CancellationToken ct)
     {
-        return await OwnerSummaries(portfolioId, year, authorizedProperties)
+        return await OwnerSummaries(portfolioId, period, authorizedProperties)
             .OrderBy(summary => summary.OwnerName)
             .ThenBy(summary => summary.OwnerId)
             .Select(summary => new OwnerStatementSummary(
@@ -265,8 +287,20 @@ public class OwnerStatementService : IOwnerStatementService
         int year,
         IQueryable<Property> authorizedProperties)
     {
-        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year, authorizedProperties);
-        var (start, end) = YearRange(year);
+        return OwnerSummaries(
+            portfolioId,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
+            authorizedProperties);
+    }
+
+    private IQueryable<OwnerStatementSummarySqlRow> OwnerSummaries(
+        int portfolioId,
+        OwnerStatementPeriod period,
+        IQueryable<Property> authorizedProperties)
+    {
+        var propertyNetRows = OwnerPropertyNetRows(portfolioId, period, authorizedProperties);
+        var start = period.StartUtc;
+        var end = period.EndUtc;
 
         return propertyNetRows
             .GroupBy(property => new { property.OwnerId, property.OwnerName })
@@ -335,8 +369,21 @@ public class OwnerStatementService : IOwnerStatementService
         int year,
         IQueryable<Property> authorizedProperties)
     {
-        var (startOn, endOn) = YearDateRange(year);
-        var (startUtc, endUtc) = YearRange(year);
+        return OwnerPropertyNetRows(
+            portfolioId,
+            OwnerStatementPeriod.Resolve("annual", null, _timeProvider.UtcNow(), year),
+            authorizedProperties);
+    }
+
+    private IQueryable<OwnerPropertyNetRow> OwnerPropertyNetRows(
+        int portfolioId,
+        OwnerStatementPeriod period,
+        IQueryable<Property> authorizedProperties)
+    {
+        var startOn = period.StartOn;
+        var endOn = period.EndOnExclusive;
+        var startUtc = period.StartUtc;
+        var endUtc = period.EndUtc;
 
         return
             from ownership in _db.PropertyOwnerships.AsNoTracking()
@@ -380,9 +427,9 @@ public class OwnerStatementService : IOwnerStatementService
                         e.PortfolioId == portfolioId &&
                         e.PropertyId == p.Id &&
                         e.Status == ExpenseStatus.Paid &&
-                        // Sargable half-open year range (was .Year ==).
-                        (e.PaidAt ?? e.IncurredAt) >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
-                        (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        // Sargable half-open period range (never extract a year/month in SQL).
+                        (e.PaidAt ?? e.IncurredAt) >= startUtc &&
+                        (e.PaidAt ?? e.IncurredAt) < endUtc &&
                         (e.PaidAt ?? e.IncurredAt) >= ownership.EffectiveFromUtc &&
                         (ownership.EffectiveToUtc == null
                             || (e.PaidAt ?? e.IncurredAt) < ownership.EffectiveToUtc))

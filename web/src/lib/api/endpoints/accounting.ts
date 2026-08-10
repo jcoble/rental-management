@@ -25,6 +25,21 @@ export type AccountingTransactionParams = ListParams & {
 	to?: string;
 };
 
+export interface OwnerStatementPeriodParams {
+	period?: string;
+	asOf?: string;
+	year?: number;
+}
+
+function ownerStatementQuery(params: OwnerStatementPeriodParams | number = {}): string {
+	const normalized = typeof params === 'number' ? { year: params } : params;
+	return buildListQuery(undefined, {
+		period: normalized.period,
+		asOf: normalized.asOf,
+		year: normalized.year
+	});
+}
+
 /**
  * A high-confidence, still-unmatched bank line the user can one-tap confirm against a
  * Payment/Expense row. Powers the "Match?" chip on the accounting ledger. Nothing is auto-matched.
@@ -102,13 +117,15 @@ export const accounting = {
 	yearEnd: (year?: number, propertyId?: number) =>
 		api.get<YearEndView>(`/accounting/year-end${buildListQuery(undefined, { year, propertyId })}`),
 
-	// GET /api/v1/accounting/owner-statements?year=YYYY
-	ownerStatements: (year: number) =>
-		api.get<OwnerStatementSummary[]>(`/accounting/owner-statements?year=${year}`),
+	// GET /api/v1/accounting/owner-statements?period=&asOf=&year=
+	// Omitting period/asOf defaults to the previous completed month; year remains a
+	// compatibility escape hatch for the former annual report.
+	ownerStatements: (params: OwnerStatementPeriodParams | number = {}) =>
+		api.get<OwnerStatementSummary[]>(`/accounting/owner-statements${ownerStatementQuery(params)}`),
 
-	// GET /api/v1/accounting/owner-statement?ownerId=&year=YYYY
-	ownerStatement: (ownerId: number, year: number) =>
-		api.get<OwnerStatementReport>(`/accounting/owner-statement?ownerId=${ownerId}&year=${year}`),
+	// GET /api/v1/accounting/owner-statement?ownerId=&period=&asOf=&year=
+	ownerStatement: (ownerId: number, params: OwnerStatementPeriodParams | number = {}) =>
+		api.get<OwnerStatementReport>(`/accounting/owner-statement?ownerId=${ownerId}${ownerStatementQuery(params).replace('?', '&')}`),
 };
 
 /**
@@ -195,7 +212,10 @@ export async function downloadYearEndPacket(year: number): Promise<void> {
  * Download the owner-statement CSV for the given owner and year with the bearer token attached.
  * Mirrors downloadScheduleECsv exactly.
  */
-export async function downloadOwnerStatementCsv(ownerId: number, year: number): Promise<void> {
+export async function downloadOwnerStatementCsv(
+	ownerId: number,
+	params: OwnerStatementPeriodParams | number = {}
+): Promise<void> {
 	if (!browser) return;
 
 	if (isTokenExpired(120)) {
@@ -207,7 +227,13 @@ export async function downloadOwnerStatementCsv(ownerId: number, year: number): 
 	}
 
 	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/accounting/owner-statement/export?ownerId=${ownerId}&year=${year}`;
+	const normalized = typeof params === 'number' ? { year: params } : params;
+	const query = new URLSearchParams({ ownerId: String(ownerId) });
+	if (normalized.period) query.set('period', normalized.period);
+	if (normalized.asOf) query.set('asOf', normalized.asOf);
+	if (normalized.year != null) query.set('year', String(normalized.year));
+	const periodLabel = normalized.period ?? normalized.year?.toString() ?? 'statement';
+	const url = `${CLIENT_API_BASE_URL}/accounting/owner-statement/export?${query.toString()}`;
 
 	const response = await fetch(url, {
 		credentials: 'include',
@@ -222,7 +248,7 @@ export async function downloadOwnerStatementCsv(ownerId: number, year: number): 
 	const objectUrl = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = objectUrl;
-	a.download = `owner-statement-${ownerId}-${year}.csv`;
+	a.download = `owner-statement-${ownerId}-${periodLabel}.csv`;
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);
