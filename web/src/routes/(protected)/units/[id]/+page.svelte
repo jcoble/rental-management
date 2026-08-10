@@ -120,6 +120,11 @@
 			state: unitPageState,
 		}),
 		pushState: (url, state) => pushState(url, state as App.PageState),
+		navigate: (url, state) => void goto(url, {
+			state: state as App.PageState,
+			keepFocus: true,
+			noScroll: true,
+		}),
 		replaceState: (url, state) => replaceState(url, state as App.PageState),
 	});
 

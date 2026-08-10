@@ -13,6 +13,7 @@ type NavigationContainer = {
 	state: UnitTabNavigationState;
 	history: Array<{ url: URL; state: UnitTabNavigationState }>;
 	cursor: number;
+	operations: Array<'pushState' | 'navigate' | 'replaceState'>;
 };
 
 function createContainer(url: string, state: UnitTabNavigationState): NavigationContainer {
@@ -22,22 +23,37 @@ function createContainer(url: string, state: UnitTabNavigationState): Navigation
 		state,
 		history: [{ url: new URL(initialUrl), state }],
 		cursor: 0,
+		operations: [],
 	};
+}
+
+function commitHistoryEntry(container: NavigationContainer, url: string, state: UnitTabNavigationState) {
+	container.url = new URL(url, container.url);
+	container.state = state;
+	container.history = [
+		...container.history.slice(0, container.cursor + 1),
+		{ url: new URL(container.url), state },
+	];
+	container.cursor += 1;
 }
 
 function connect(container: NavigationContainer) {
 	return createUnitTabNavigationHandler({
 		getCurrent: () => ({ url: container.url, state: container.state }),
 		pushState: (url, state) => {
-			container.url = new URL(url, container.url);
-			container.state = state;
-			container.history = [
-				...container.history.slice(0, container.cursor + 1),
-				{ url: new URL(container.url), state },
-			];
-			container.cursor += 1;
+			container.operations.push('pushState');
+			commitHistoryEntry(container, url, state);
 		},
-		replaceState: (_url, state) => {
+		navigate: (url, state) => {
+			// SvelteKit goto() creates a normal history entry unless replaceState is
+			// requested. Keep URL, page state, and the back/forward cursor together
+			// so this adapter exercises the same production boundary as the browser.
+			container.operations.push('navigate');
+			commitHistoryEntry(container, url, state);
+		},
+		replaceState: (url, state) => {
+			container.operations.push('replaceState');
+			container.url = new URL(url, container.url);
 			container.state = state;
 			container.history[container.cursor] = {
 				url: new URL(container.url),
@@ -127,7 +143,116 @@ describe('unit tab page navigation integration', () => {
 		}
 	});
 
-	it('restores Applications when the page state retains the nested view but the URL does not', () => {
+	it('lets a user click Money away from a lease detail and converges after one write', () => {
+		const url = new URL('https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('money');
+
+		assert.equal(container.url.searchParams.get('tab'), 'money');
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.equal(container.state.unitTab, 'money');
+		assert.deepEqual(container.operations, ['navigate']);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('keeps a work-order detail on entry, drops it on leave, and does not resurrect it on return', () => {
+		const url = new URL('https://rental.local/units/19?tab=money&view=work-orders&wo=3');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('wo'), '3');
+		assert.deepEqual(container.operations, ['navigate']);
+
+		setTab('summary');
+		assert.equal(container.url.searchParams.get('tab'), 'summary');
+		assert.equal(container.url.searchParams.get('wo'), null);
+
+		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('view'), 'work-orders');
+		assert.equal(container.url.searchParams.get('wo'), null);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('clicking the already-selected canonical tab creates no history entry and converges', () => {
+		const url = new URL('https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('tenant-lease');
+		setTab('tenant-lease');
+
+		assert.equal(container.history.length, 1);
+		assert.equal(container.cursor, 0);
+		assert.deepEqual(container.operations, []);
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'tenant-lease',
+			view: 'agreements',
+		});
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('back and forward restore the exact deep and clicked entries without a synchronization loop', () => {
+		const deepUrl = 'https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17';
+		const initialState = synchronizeUnitTabState(new URL(deepUrl), undefined);
+		assert.ok(initialState);
+		const container = createContainer(deepUrl, initialState);
+		const setTab = connect(container);
+
+		setTab('money');
+		assert.equal(container.history.length, 2);
+		assert.deepEqual(container.operations, ['navigate']);
+		assert.equal(`${container.history[0].url.pathname}${container.history[0].url.search}`, '/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		assert.equal(`${container.history[1].url.pathname}${container.history[1].url.search}`, '/units/19?tab=money&view=tenant-account');
+
+		moveHistoryCursor(container, -1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'tenant-lease',
+			view: 'agreements',
+		});
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+		assert.equal(container.history.length, 2);
+
+		moveHistoryCursor(container, 1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=money&view=tenant-account');
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'money',
+			view: 'tenant-account',
+		});
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+		assert.equal(container.history.length, 2);
+	});
+
+	it('two rapid destination clicks settle on the last click without resurrecting the lease record', () => {
+		const deepUrl = 'https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17';
+		const initialState = synchronizeUnitTabState(new URL(deepUrl), undefined);
+		assert.ok(initialState);
+		const container = createContainer(deepUrl, initialState);
+		const setTab = connect(container);
+
+		setTab('summary');
+		setTab('maintenance');
+
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=maintenance&view=work-orders');
+		assert.equal(container.state.unitTab, 'maintenance');
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.deepEqual(container.operations, ['navigate', 'pushState']);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('remembers Applications after leaving a URL-normalized page without resurrecting its record', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
 			unitPathname: '/units/10',
 			unitTab: 'leasing',
@@ -140,16 +265,17 @@ describe('unit tab page navigation integration', () => {
 		container.url = new URL('https://rental.local/units/10?tab=leasing&app=7');
 		setTab('summary');
 		assert.equal(container.url.searchParams.get('view'), null);
+		assert.equal(container.url.searchParams.get('app'), null);
 		assert.equal(container.state.unitView, null);
 
 		setTab('leasing');
 		assert.equal(container.url.searchParams.get('view'), 'applications');
 		assert.equal(container.state.unitTab, 'leasing');
 		assert.equal(container.state.unitView, 'applications');
-		assert.equal(container.url.searchParams.get('app'), '7');
+		assert.equal(container.url.searchParams.get('app'), null);
 	});
 
-	it('keeps the ten contextual parameters and clears only an explicitly selected record key', () => {
+	it('drops foreign record keys on primary-tab changes and clears the target on list re-entry', () => {
 		const container = createContainer(
 			'https://rental.local/units/10?tab=leasing&view=applications&wo=8&app=7&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15',
 			{ unitPathname: '/units/10', unitTab: 'leasing', unitView: 'applications' },
@@ -157,21 +283,19 @@ describe('unit tab page navigation integration', () => {
 		const setTab = connect(container);
 
 		setTab('maintenance');
+		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
+		assert.equal(container.url.searchParams.get('view'), 'work-orders');
+		assert.equal(container.url.searchParams.get('wo'), '8');
+		for (const param of ['app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
+			assert.equal(container.url.searchParams.get(param), null, `foreign ${param} survived the tab change`);
+		}
+
 		setTab('leasing', 'applications');
 
-		for (const [key, value] of Object.entries({
-			view: 'applications',
-			wo: '8',
-			app: null,
-			payment: '9',
-			expense: '10',
-			tenantAccount: '11',
-			leaseManagement: '12',
-			agreement: '13',
-			ledger: '14',
-			action: '15',
-		})) {
-			assert.equal(container.url.searchParams.get(key), value, `unexpected ${key} value`);
+		assert.equal(container.url.searchParams.get('tab'), 'leasing');
+		assert.equal(container.url.searchParams.get('view'), 'applications');
+		for (const param of ['wo', 'app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
+			assert.equal(container.url.searchParams.get(param), null, `record ${param} survived list re-entry`);
 		}
 	});
 
