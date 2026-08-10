@@ -6,7 +6,7 @@ The implementation for this round is committed as `9589538771fe05940206995b76c09
 
 ### Finding 1 — receipt
 
-Original commit: `651beacdd853f8e811ebe2f951236f877a025249`. Fix-round commit: `9589538771fe05940206995b76c09b579a5ba796`.
+Original commit: `651beacdd853f8e811ebe2f951236f877a025249`. Fix-round implementation commit: `9589538771fe05940206995b76c09b579a5ba796`. Receipt introduction commit: `d919b71a9ae480aaeb2487639dbd2366f2a0c673`.
 
 Exact satisfy-text: `Add evidence/tsk833-receipt.md with per-item commit SHA, production file:line proof, defect-catching test file:line proof, and explicit evidence for every item claimed already implemented.`
 
