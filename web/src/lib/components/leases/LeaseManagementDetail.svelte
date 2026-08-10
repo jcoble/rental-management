@@ -318,8 +318,8 @@
 
 		{#if summary.hasReconciliationException}
 			<div class="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm">
-				<p class="font-medium">Lease and move-in details don't match</p>
-				<p class="mt-1 text-muted-foreground">Review the lease dates and the move-in/move-out dates before making another change.</p>
+				<p class="font-medium">Lease and move-in dates don't match</p>
+				<p class="mt-1 text-muted-foreground">Check the lease and move-in/move-out dates before making another change.</p>
 			</div>
 		{/if}
 
@@ -333,11 +333,11 @@
 								<dd><StatusBadge status={summary.lifecycle} /></dd>
 							</div>
 							<div class="space-y-1">
-								<dt class="text-xs font-medium text-muted-foreground">Current agreement</dt>
+								<dt class="text-xs font-medium text-muted-foreground">Current lease</dt>
 								<dd class="font-medium">{summary.agreementNumber ?? 'Not issued'}</dd>
 							</div>
 							<div class="space-y-1">
-								<dt class="text-xs font-medium text-muted-foreground">Agreement status</dt>
+								<dt class="text-xs font-medium text-muted-foreground">Lease status</dt>
 								<dd class="font-medium">{summary.agreementStatus ? leaseAgreementStatusLabel(summary.agreementStatus) : 'No lease in effect'}</dd>
 							</div>
 							<div class="space-y-1">
@@ -366,7 +366,7 @@
 								<div class="space-y-1">
 									<dt class="text-xs font-medium text-muted-foreground">Upcoming lease document</dt>
 									<dd class="font-medium">
-										{summary.upcomingAgreementNumber ?? `Agreement #${summary.upcomingLeaseAgreementId}`}
+										{summary.upcomingAgreementNumber ?? `Lease #${summary.upcomingLeaseAgreementId}`}
 										{summary.upcomingTermStartOn ? ` · starts ${formatDateOnly(summary.upcomingTermStartOn)}` : ''}
 										{summary.upcomingAgreementStatus ? ` · ${summary.upcomingAgreementStatus}` : ''}
 									</dd>
@@ -445,7 +445,7 @@
 		<Card>
 			<CardHeader>
 				<div class="flex flex-wrap items-start justify-between gap-3">
-					<div><CardTitle class="flex items-center gap-2"><Users class="h-5 w-5" /> Household and responsibility</CardTitle><p class="mt-1 text-sm text-muted-foreground">Membership and login access can change over time. Signed agreement PDFs never change.</p></div>
+					<div><CardTitle class="flex items-center gap-2"><Users class="h-5 w-5" /> Household and responsibility</CardTitle><p class="mt-1 text-sm text-muted-foreground">Membership and login access can change over time. Signed lease PDFs never change.</p></div>
 					{#if canManageHousehold}<Button size="sm" onclick={() => (householdAction = { mode: 'add' })}>Add person</Button>{/if}
 				</div>
 			</CardHeader>
@@ -504,7 +504,7 @@
 						<Button class="mt-3" variant="outline" size="sm" onclick={() => agreementsQuery.refetch()}>Try again</Button>
 					</div>
 				{:else if (agreementsQuery.data?.items.length ?? 0) === 0}
-					<p class="text-sm text-muted-foreground">No signed lease document is attached yet.</p>
+					<p class="text-sm text-muted-foreground">No signed lease document yet</p>
 				{:else}
 					<div class="divide-y">
 						{#each agreementsQuery.data?.items ?? [] as agreement}
@@ -559,7 +559,7 @@
 									testidPrefix={`lease-agreement-${agreement.leaseAgreementId}`}
 								/>
 
-				{#if canPrepareAgreements && agreement.isGoverning}
+								{#if canPrepareAgreements && agreement.isGoverning}
 									<div class="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
 										<span class="mr-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Change the lease</span>
 										<Button size="sm" onclick={() => (createAddendumBase = agreement)}><FilePlus2 class="mr-1 h-4 w-4" /> Add a page</Button>
@@ -576,7 +576,7 @@
 
 				{#if agreementsQuery.data}
 					<div class="flex flex-col gap-2 border-t pt-4">
-						<p class="text-xs text-muted-foreground">{agreementsQuery.data.totalCount} agreement version{agreementsQuery.data.totalCount === 1 ? '' : 's'} total</p>
+						<p class="text-xs text-muted-foreground">{agreementsQuery.data.totalCount} lease version{agreementsQuery.data.totalCount === 1 ? '' : 's'} total</p>
 						<Pagination bind:skip={agreementSkip} take={AGREEMENT_PAGE_SIZE} count={agreementsQuery.data.items.length} hasNext={agreementSkip + agreementsQuery.data.items.length < agreementsQuery.data.totalCount} testid="agreement-history-pagination" />
 					</div>
 				{/if}

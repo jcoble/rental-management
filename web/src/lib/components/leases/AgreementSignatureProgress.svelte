@@ -128,7 +128,7 @@
 	<div class="flex items-start justify-between gap-4">
 		<div>
 			<h3 class="font-medium">Signature progress · {agreementNumber}</h3>
-			<p class="text-xs text-muted-foreground">Loaded only for this selected agreement version.</p>
+			<p class="text-xs text-muted-foreground">Loaded only for this selected lease version.</p>
 		</div>
 		<Button variant="ghost" size="icon" aria-label="Close signature progress" onclick={onclose}>
 			<X class="h-4 w-4" />

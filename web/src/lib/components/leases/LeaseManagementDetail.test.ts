@@ -17,11 +17,11 @@ describe('agreement signing-progress availability', () => {
 		assert.match(componentSource, /outsideEsignLabel\(agreement\.fullyExecutedAtUtc\)/);
 		assert.equal(
 			outsideEsignLabel('2027-01-15T12:00:00Z'),
-			'Signed outside e-sign — no signing links to track.'
+			'Signed outside Rental Command — no signing links to track.'
 		);
 		assert.equal(
 			outsideEsignLabel(null),
-			'Signing handled outside e-sign — mark as signed when complete.'
+			'Signing handled outside Rental Command — mark as signed when complete.'
 		);
 	});
 

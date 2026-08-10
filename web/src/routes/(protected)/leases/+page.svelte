@@ -85,13 +85,13 @@
 			accessor: (item) => {
 				const current = leaseAgreementStatusLabel(item.agreementStatus);
 				if (!item.upcomingLeaseAgreementId) return current;
-				return `${current} · Next lease: ${leaseAgreementStatusLabel(item.upcomingAgreementStatus)}`;
+				return `${current} · Upcoming lease: ${leaseAgreementStatusLabel(item.upcomingAgreementStatus)}`;
 			}
 		},
 		{
 			key: 'hasReconciliationException',
 			title: 'Review',
-			accessor: (item) => (item.hasReconciliationException ? 'Dates need review' : '—')
+			accessor: (item) => (item.hasReconciliationException ? 'Check lease dates' : '—')
 		},
 		{ key: 'termEndOn', title: 'Term ends', format: 'date' },
 		{

@@ -53,7 +53,7 @@
 	const effectTypes: LeaseAddendumFinancialEffectType[] = ['RecurringRentDelta', 'OneTimeCharge', 'DepositObligationDelta'];
 	const purposeOptions = purposes.map((item) => ({
 		value: item,
-		label: ({ Financial: 'Rent or money change', Pet: 'Pet agreement', Occupancy: 'Household change', Rules: 'Property rules', Other: 'Other change' } as const)[item]
+		label: ({ Financial: 'Rent or money change', Pet: 'Pet rules', Occupancy: 'Household change', Rules: 'Property rules', Other: 'Other change' } as const)[item]
 	}));
 	const signerRoleOptions = signerRoles.map((item) => ({
 		value: item,

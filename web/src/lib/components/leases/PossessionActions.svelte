@@ -328,7 +328,7 @@
 				max={summary.businessDate}
 				onchange={() => (historicalValidationError = '')}
 			/>
-			<p class="text-xs text-muted-foreground">The date must be inside the executed agreement term.</p>
+			<p class="text-xs text-muted-foreground">The date must be inside the signed lease term.</p>
 		</div>
 		{#if historicalValidationError}<p class="text-sm text-destructive">{historicalValidationError}</p>{/if}
 		<Dialog.Footer>
