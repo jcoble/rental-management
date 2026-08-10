@@ -49,6 +49,26 @@ async function fulfillJson(route: Route, status: number, body: unknown) {
 	});
 }
 
+function inspectionDetailForUnitSelection(id: number, unitId: number | null) {
+	return {
+		id,
+		portfolioId: 1,
+		propertyId: 1,
+		unitId,
+		type: 'Routine',
+		status: 'Scheduled',
+		scheduledFor: '2026-08-10T12:00:00Z',
+		completedAt: null,
+		outcome: null,
+		notes: `Selection guard coverage ${id}`,
+		propertyName: 'Runtime Property',
+		unitNumber: unitId == null ? null : `Unit ${unitId}`,
+		createdAt: '2026-08-10T12:00:00Z',
+		updatedAt: '2026-08-10T12:00:00Z',
+		items: []
+	};
+}
+
 async function stubConversationDetail(page: Page, id: number, subject?: string, requestSequence?: string[]) {
 	await page.route(`**/api/v1/conversations/${id}`, async (route) => {
 		requestSequence?.push('detail GET');
@@ -298,6 +318,44 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		expect(lifecycleErrors, 'inspection detail lifecycle errors').toEqual([]);
 	});
 
+	test('clears wrong-Unit and null-Unit inspection deep links back to the list', async ({ page }) => {
+		test.setTimeout(120_000);
+		const consoleErrors: string[] = [];
+		const pageErrors: string[] = [];
+		const cases = [
+			{ name: 'wrong-Unit inspection', inspectionId: 84801, unitId: 2 },
+			{ name: 'null-Unit inspection', inspectionId: 84802, unitId: null }
+		] as const;
+		page.on('console', (message) => {
+			if (message.type() === 'error') consoleErrors.push(message.text());
+		});
+		page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
+
+		await login(page);
+		expect(await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1710, height: 990 });
+
+		for (const invalidCase of cases) {
+			const detailRoute = `**/api/v1/inspections/${invalidCase.inspectionId}`;
+			let detailRequests = 0;
+			await page.route(detailRoute, async (route) => {
+				detailRequests += 1;
+				await fulfillJson(route, 200, inspectionDetailForUnitSelection(invalidCase.inspectionId, invalidCase.unitId));
+			});
+
+			await page.goto(`/units/1?tab=maintenance&view=inspections&inspection=${invalidCase.inspectionId}`, { waitUntil: 'domcontentloaded' });
+			await expect.poll(() => detailRequests, `${invalidCase.name} detail request`).toBeGreaterThan(0);
+			await expect(page).toHaveURL('/units/1?tab=maintenance&view=inspections', { timeout: 30_000 });
+			await expect(page.getByTestId('unit-inspection-list'), `${invalidCase.name} list`).toBeVisible({ timeout: 30_000 });
+			await expect(page.getByTestId('inspection-detail-facts'), `${invalidCase.name} facts`).toHaveCount(0);
+			await expect(page.getByTestId('inspection-detail-title'), `${invalidCase.name} title`).toHaveCount(0);
+			await page.unroute(detailRoute);
+		}
+
+		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+		console.log(JSON.stringify({ consoleErrors, pageErrors, lifecycleErrors }, null, 2));
+		expect(lifecycleErrors, 'invalid inspection selection lifecycle errors').toEqual([]);
+	});
+
 	test('loads Leases without the route-load runtime error and keeps an offline property filter in-app', async ({ page }) => {
 		const consoleErrors: string[] = [];
 		const pageErrors: string[] = [];
@@ -316,13 +374,16 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		const propertySearch = page.getByRole('searchbox', { name: 'Search properties…' });
 		await expect(propertySearch).toBeVisible({ timeout: 15_000 });
 
-		await page.context().setOffline(true);
+		// Keep the app shell connected while making the server request unavailable. Chromium's
+		// context-wide offline toggle can navigate the Vite document to chrome-error:// when a
+		// debounced query starts, which masks the shallow filter-navigation behavior under test.
+		await page.route('**/api/v1/properties/page**', async (route) => route.abort('internetdisconnected'));
 		try {
 			await propertySearch.fill('offline-batch1');
 			await expect(page).toHaveURL(/\/properties\?q=offline-batch1/, { timeout: 5_000 });
 			await expect(page.getByTestId('properties-page')).toBeVisible();
 		} finally {
-			await page.context().setOffline(false);
+			await page.unroute('**/api/v1/properties/page**');
 		}
 
 		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
