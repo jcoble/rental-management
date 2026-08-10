@@ -165,9 +165,17 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 	});
 
 	test('lets every primary tab leave a lease-management deep link', async ({ page }) => {
-		test.setTimeout(120_000);
+		test.setTimeout(180_000);
 		const consoleErrors: string[] = [];
 		const pageErrors: string[] = [];
+		const deepLink = '/units/19?tab=tenant-lease&view=agreements&leaseManagement=17';
+		const destinations: ReadonlyArray<{ tab: string; path: string }> = [
+			{ tab: 'summary', path: '/units/19?tab=summary' },
+			{ tab: 'leasing', path: '/units/19?tab=leasing&view=listing' },
+			{ tab: 'money', path: '/units/19?tab=money&view=tenant-account' },
+			{ tab: 'maintenance', path: '/units/19?tab=maintenance&view=work-orders' },
+			{ tab: 'documents-history', path: '/units/19?tab=documents-history&view=documents' },
+		];
 		page.on('console', (message) => {
 			if (message.type() === 'error') consoleErrors.push(message.text());
 		});
@@ -175,18 +183,34 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 
 		await login(page);
 		expect(await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1710, height: 990 });
-		await page.goto('/units/19?tab=tenant-lease&view=agreements&leaseManagement=17', {
-			waitUntil: 'domcontentloaded'
-		});
-		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 30_000 });
-		await expect(page.getByTestId('tab-tenant-lease')).toHaveAttribute('aria-selected', 'true');
 
-		for (const tab of ['summary', 'leasing', 'money', 'maintenance', 'documents-history']) {
+		for (const { tab, path } of destinations) {
+			// Recreate the reported deep state before every click so each primary
+			// destination exercises the production goto boundary, not just the first one.
+			await page.goto(deepLink, { waitUntil: 'domcontentloaded' });
+			await expect(page.getByTestId('unit-page'), `${tab} deep-link shell`).toBeVisible({ timeout: 30_000 });
+			await expect(page.getByTestId('tab-tenant-lease'), `${tab} owning tab`).toHaveAttribute('aria-selected', 'true');
+			await expect(page.getByTestId('unit-agreement-section'), `${tab} owning detail section`).toBeVisible({ timeout: 30_000 });
+			await expect(page.getByText('Lease at a glance', { exact: true }), `${tab} owning lease detail`).toBeVisible({ timeout: 30_000 });
+			expect(new URL(page.url()).searchParams.get('leaseManagement'), `${tab} deep-link record`).toBe('17');
+			const preClickLifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+			expect(preClickLifecycleErrors, `${tab} pre-click lifecycle errors`).toEqual([]);
+			const consoleErrorStart = consoleErrors.length;
+			const pageErrorStart = pageErrors.length;
+
 			await page.getByTestId(`tab-${tab}`).click();
-			await expect(page).toHaveURL(new RegExp(`[?&]tab=${tab}(?:&|$)`));
+			await expect.poll(() => {
+				const url = new URL(page.url());
+				return `${url.pathname}${url.search}`;
+			}, `${tab} destination URL`).toBe(path);
 			await expect(page.getByTestId(`tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
 			await expect(page.getByTestId('tab-tenant-lease')).toHaveAttribute('aria-selected', 'false');
-			expect(new URL(page.url()).searchParams.get('leaseManagement')).toBeNull();
+			expect(new URL(page.url()).searchParams.get('leaseManagement'), `${tab} foreign record`).toBeNull();
+			const clickLifecycleErrors = routeLifecycleErrors([
+				...consoleErrors.slice(consoleErrorStart),
+				...pageErrors.slice(pageErrorStart),
+			]);
+			expect(clickLifecycleErrors, `${tab} click lifecycle errors`).toEqual([]);
 		}
 
 		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);

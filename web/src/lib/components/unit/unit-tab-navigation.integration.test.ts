@@ -13,6 +13,7 @@ type NavigationContainer = {
 	state: UnitTabNavigationState;
 	history: Array<{ url: URL; state: UnitTabNavigationState }>;
 	cursor: number;
+	operations: Array<'pushState' | 'navigate' | 'replaceState'>;
 };
 
 function createContainer(url: string, state: UnitTabNavigationState): NavigationContainer {
@@ -22,22 +23,37 @@ function createContainer(url: string, state: UnitTabNavigationState): Navigation
 		state,
 		history: [{ url: new URL(initialUrl), state }],
 		cursor: 0,
+		operations: [],
 	};
+}
+
+function commitHistoryEntry(container: NavigationContainer, url: string, state: UnitTabNavigationState) {
+	container.url = new URL(url, container.url);
+	container.state = state;
+	container.history = [
+		...container.history.slice(0, container.cursor + 1),
+		{ url: new URL(container.url), state },
+	];
+	container.cursor += 1;
 }
 
 function connect(container: NavigationContainer) {
 	return createUnitTabNavigationHandler({
 		getCurrent: () => ({ url: container.url, state: container.state }),
 		pushState: (url, state) => {
-			container.url = new URL(url, container.url);
-			container.state = state;
-			container.history = [
-				...container.history.slice(0, container.cursor + 1),
-				{ url: new URL(container.url), state },
-			];
-			container.cursor += 1;
+			container.operations.push('pushState');
+			commitHistoryEntry(container, url, state);
 		},
-		replaceState: (_url, state) => {
+		navigate: (url, state) => {
+			// SvelteKit goto() creates a normal history entry unless replaceState is
+			// requested. Keep URL, page state, and the back/forward cursor together
+			// so this adapter exercises the same production boundary as the browser.
+			container.operations.push('navigate');
+			commitHistoryEntry(container, url, state);
+		},
+		replaceState: (url, state) => {
+			container.operations.push('replaceState');
+			container.url = new URL(url, container.url);
 			container.state = state;
 			container.history[container.cursor] = {
 				url: new URL(container.url),
@@ -139,6 +155,7 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(container.url.searchParams.get('tab'), 'money');
 		assert.equal(container.url.searchParams.get('leaseManagement'), null);
 		assert.equal(container.state.unitTab, 'money');
+		assert.deepEqual(container.operations, ['navigate']);
 		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
 	});
 
@@ -152,6 +169,7 @@ describe('unit tab page navigation integration', () => {
 		setTab('maintenance');
 		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
 		assert.equal(container.url.searchParams.get('wo'), '3');
+		assert.deepEqual(container.operations, ['navigate']);
 
 		setTab('summary');
 		assert.equal(container.url.searchParams.get('tab'), 'summary');
@@ -161,6 +179,76 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
 		assert.equal(container.url.searchParams.get('view'), 'work-orders');
 		assert.equal(container.url.searchParams.get('wo'), null);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('clicking the already-selected canonical tab creates no history entry and converges', () => {
+		const url = new URL('https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('tenant-lease');
+		setTab('tenant-lease');
+
+		assert.equal(container.history.length, 1);
+		assert.equal(container.cursor, 0);
+		assert.deepEqual(container.operations, []);
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'tenant-lease',
+			view: 'agreements',
+		});
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('back and forward restore the exact deep and clicked entries without a synchronization loop', () => {
+		const deepUrl = 'https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17';
+		const initialState = synchronizeUnitTabState(new URL(deepUrl), undefined);
+		assert.ok(initialState);
+		const container = createContainer(deepUrl, initialState);
+		const setTab = connect(container);
+
+		setTab('money');
+		assert.equal(container.history.length, 2);
+		assert.deepEqual(container.operations, ['navigate']);
+		assert.equal(`${container.history[0].url.pathname}${container.history[0].url.search}`, '/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		assert.equal(`${container.history[1].url.pathname}${container.history[1].url.search}`, '/units/19?tab=money&view=tenant-account');
+
+		moveHistoryCursor(container, -1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'tenant-lease',
+			view: 'agreements',
+		});
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+		assert.equal(container.history.length, 2);
+
+		moveHistoryCursor(container, 1);
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=money&view=tenant-account');
+		assert.deepEqual(resolveUnitPageDestination(container.url, container.state), {
+			tab: 'money',
+			view: 'tenant-account',
+		});
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+		assert.equal(container.history.length, 2);
+	});
+
+	it('two rapid destination clicks settle on the last click without resurrecting the lease record', () => {
+		const deepUrl = 'https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17';
+		const initialState = synchronizeUnitTabState(new URL(deepUrl), undefined);
+		assert.ok(initialState);
+		const container = createContainer(deepUrl, initialState);
+		const setTab = connect(container);
+
+		setTab('summary');
+		setTab('maintenance');
+
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=maintenance&view=work-orders');
+		assert.equal(container.state.unitTab, 'maintenance');
+		assert.equal(container.url.searchParams.get('leaseManagement'), null);
+		assert.deepEqual(container.operations, ['navigate', 'pushState']);
 		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
 	});
 
