@@ -347,12 +347,14 @@ public sealed class CsvImportService : ICsvImportService
                     && parsed > 0) propertyId = parsed;
                 else errors.Add("propertyId must be a positive whole number.");
             }
+            var bedrooms = ParseDecimal("bedrooms", Cell("bedrooms"), errors);
+            var bathrooms = ParseDecimal("bathrooms", Cell("bathrooms"), errors);
             var request = new CreateUnitRequest
             {
                 PropertyId = propertyId ?? 1,
                 UnitNumber = Cell("unitNumber") ?? string.Empty,
-                Bedrooms = ParseDecimal("bedrooms", Cell("bedrooms"), errors) ?? 0m,
-                Bathrooms = ParseDecimal("bathrooms", Cell("bathrooms"), errors) ?? 0m,
+                Bedrooms = bedrooms,
+                Bathrooms = bathrooms,
                 MarketRent = ParseDecimal("marketRent", Cell("marketRent"), errors) ?? 0m,
             };
             TryValidate(request, errors);
@@ -360,7 +362,7 @@ public sealed class CsvImportService : ICsvImportService
                 errors.Add("propertyName or propertyId is required.");
             commands.Add(new AtomicUnitImportRow(
                 row.RowNumber, propertyId, NullIfEmpty(Cell("propertyName")),
-                request.UnitNumber.Trim(), request.Bedrooms ?? 0m, request.Bathrooms ?? 0m, request.MarketRent,
+                request.UnitNumber.Trim(), bedrooms, bathrooms, request.MarketRent,
                 errors.ToArray()));
         }
 

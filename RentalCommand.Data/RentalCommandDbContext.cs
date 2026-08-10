@@ -337,8 +337,11 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.OwnerEntityType).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
-            // Find the auto-created self-owner quickly (and assert at most one per portfolio in code).
-            entity.HasIndex(e => new { e.PortfolioId, e.IsPrimary });
+            // The portfolio can have at most one active primary/self-owner. The partial unique index
+            // is the final guard for writers that do not use the property-setup advisory lock.
+            entity.HasIndex(e => new { e.PortfolioId, e.IsPrimary })
+                .IsUnique()
+                .HasFilter("\"IsPrimary\" AND \"DeletedAt\" IS NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.OwnerEntities)

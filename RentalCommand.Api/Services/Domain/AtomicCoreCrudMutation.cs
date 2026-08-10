@@ -495,11 +495,16 @@ public sealed class AtomicCoreCrudMutationHandler
         CancellationToken ct)
     {
         var db = _db;
+        // Serialize the self-owner get-or-create independently of the broader portfolio mutation
+        // lock. The partial unique index below is the database backstop for any other writer, while
+        // this transaction-scoped lock makes concurrent first-property retries reuse the committed
+        // owner instead of racing an insert.
+        await attempt.AcquireLockAsync("PortfolioPrimaryOwner", command.PortfolioId, ct);
         var existingPrimaryId = await db.Set<OwnerEntity>().AsNoTracking()
             .Where(owner => owner.PortfolioId == command.PortfolioId
                 && owner.IsPrimary && owner.DeletedAt == null)
             .Select(owner => (int?)owner.Id)
-            .FirstOrDefaultAsync(ct);
+            .SingleOrDefaultAsync(ct);
         if (existingPrimaryId.HasValue)
             return existingPrimaryId.Value;
 

@@ -89,6 +89,34 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Setup_reuses_an_existing_self_owner_without_creating_a_duplicate()
+    {
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var existing = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Existing self owner",
+            Email = "existing-self-owner@example.test",
+            IsPrimary = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.OwnerEntities.Add(existing);
+        await _ctx.Db.SaveChangesAsync();
+
+        var created = await _sut.SetupAsync(_scope, SingleRentalRequest(), "self-owner-reuse");
+
+        created.Should().NotBeNull();
+        (await _ctx.Db.OwnerEntities.AsNoTracking()
+            .CountAsync(entity => entity.PortfolioId == PortfolioId && entity.IsPrimary))
+            .Should().Be(1);
+        (await _ctx.Db.PropertyOwnerships.AsNoTracking()
+            .SingleAsync(ownership => ownership.PropertyId == created!.Property.Id))
+            .OwnerEntityId.Should().Be(existing.Id);
+    }
+
+    [Fact]
     public async Task Setup_honors_an_explicit_owner_instead_of_defaulting_to_self_owner()
     {
         var explicitOwner = new OwnerEntity
@@ -117,6 +145,52 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             .Should().Be(0);
     }
 
+    [Fact]
+    public async Task Concurrent_first_property_setup_creates_one_active_primary_owner()
+    {
+        await using var context = await _postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            PortfolioId, nameof(Concurrent_first_property_setup_creates_one_active_primary_owner));
+        await using var firstProvider = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(
+            context.ConnectionString, _timeProvider);
+        await using var secondProvider = AtomicDomainTestKernel.CreateForCoreCrudPostgreSql(
+            context.ConnectionString, _timeProvider);
+        await using var firstScope = firstProvider.CreateAsyncScope();
+        await using var secondScope = secondProvider.CreateAsyncScope();
+        var firstService = new PropertyService(
+            firstScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            Mock.Of<IDataUpdateService>(),
+            _timeProvider,
+            firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var secondService = new PropertyService(
+            secondScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            Mock.Of<IDataUpdateService>(),
+            _timeProvider,
+            secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var firstRequest = SingleRentalRequest();
+        firstRequest.Property.Name = "Concurrent First Property A";
+        firstRequest.Property.AddressLine1 = "101 Concurrent Way";
+        var secondRequest = SingleRentalRequest();
+        secondRequest.Property.Name = "Concurrent First Property B";
+        secondRequest.Property.AddressLine1 = "102 Concurrent Way";
+
+        await Task.WhenAll(
+            firstService.SetupAsync(scope, firstRequest, "concurrent-first-property-a"),
+            secondService.SetupAsync(scope, secondRequest, "concurrent-first-property-b"));
+
+        await using var verify = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(context.ConnectionString)
+                .Options);
+        var primaryOwners = await verify.OwnerEntities.AsNoTracking()
+            .Where(entity => entity.PortfolioId == PortfolioId
+                && entity.IsPrimary && entity.DeletedAt == null)
+            .ToListAsync();
+        primaryOwners.Should().ContainSingle();
+        (await verify.Properties.CountAsync(property => property.PortfolioId == PortfolioId))
+            .Should().Be(2);
+    }
+
     [Theory]
     [InlineData(PropertyType.Storage)]
     [InlineData(PropertyType.Parking)]
@@ -134,6 +208,24 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
         created.Should().NotBeNull();
         created!.Units.Should().ContainSingle().Which.Should().Match<UnitResponse>(unit =>
             unit.Bedrooms == 0m && unit.Bathrooms == 0m && unit.PropertyType == propertyType);
+    }
+
+    [Fact]
+    public async Task Setup_rejects_omitted_residential_beds_and_baths_without_writes()
+    {
+        var request = SingleRentalRequest();
+        request.Units[0].Bedrooms = null;
+        request.Units[0].Bathrooms = null;
+
+        Func<Task> act = async () => await _sut.SetupAsync(
+            _scope, request, "missing-residential-bed-bath");
+
+        await act.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("*Bedrooms and bathrooms are required for residential dwellings.*");
+        (await _ctx.Db.Properties.CountAsync()).Should().Be(0);
+        (await _ctx.Db.Units.CountAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "rental.property.setup")).Should().Be(0);
     }
 
     [Fact]

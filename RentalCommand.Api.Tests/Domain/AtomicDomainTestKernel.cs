@@ -172,6 +172,22 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForCoreCrudPostgreSql(
+        string connectionString,
+        TimeProvider? timeProvider = null)
+    {
+        var services = CorePostgreSql(connectionString, timeProvider);
+        services.AddAtomicCommandHandler<
+            AtomicCoreCrudMutationCommand,
+            AtomicCoreCrudMutationResult,
+            AtomicCoreCrudMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicGuidedTenantSetupCommand,
+            AtomicGuidedTenantSetupResult,
+            AtomicGuidedTenantSetupHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForRentalCrudPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);

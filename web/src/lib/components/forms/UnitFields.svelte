@@ -55,7 +55,7 @@
 				<span class="text-xs font-medium text-muted-foreground">Beds</span>
 				<AutoFilledBadge show={filled('bedrooms')} confidence={conf('bedrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" inputmode="numeric" mask="integer" />
+			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" inputmode="numeric" mask="integer" required={showBedBath} />
 			{#if errors.bedrooms}<p class="mt-1 text-xs text-destructive">{errors.bedrooms}</p>{/if}
 		</div>
 		<div>
@@ -63,7 +63,7 @@
 				<span class="text-xs font-medium text-muted-foreground">Baths</span>
 				<AutoFilledBadge show={filled('bathrooms')} confidence={conf('bathrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" inputmode="decimal" mask="decimal" />
+			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" inputmode="decimal" mask="decimal" required={showBedBath} />
 			{#if errors.bathrooms}<p class="mt-1 text-xs text-destructive">{errors.bathrooms}</p>{/if}
 		</div>
 		{/if}
