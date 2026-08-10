@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildOnboardingLeaseScanOverrides } from './lease-scan-confirm.ts';
+import {
+	buildOnboardingLeaseScanOverrides,
+	buildOnboardingManualLeaseRequest,
+} from './lease-scan-confirm.ts';
 
 describe('buildOnboardingLeaseScanOverrides', () => {
 	it('sends the selected property, unit, tenant, and reviewed lease terms to scan confirmation', () => {
@@ -81,6 +84,37 @@ describe('buildOnboardingLeaseScanOverrides', () => {
 
 		assert.equal(overrides.reviewDisposition, 'AlreadyFullySigned');
 		assert.equal('documentTemplateId' in overrides, false);
+	});
+
+	it('maps manual Guided Setup terms to the canonical manual lease request', () => {
+		assert.deepEqual(
+			buildOnboardingManualLeaseRequest({
+				leaseNumber: 'MANUAL-834',
+				propertyId: 12,
+				unitId: 34,
+				tenantId: 56,
+				startDate: '2026-09-01',
+				endDate: '2027-08-31',
+				monthlyRent: 1450,
+				securityDeposit: 1450,
+				lateFeeAmount: 75,
+				rentDueDay: 1,
+				reviewDisposition: 'NeedsSignatures',
+				documentTemplateId: null,
+			}),
+			{
+				propertyId: 12,
+				unitId: 34,
+				tenantId: 56,
+				leaseNumber: 'MANUAL-834',
+				startDate: '2026-09-01',
+				endDate: '2027-08-31',
+				monthlyRent: 1450,
+				securityDeposit: 1450,
+				lateFee: 75,
+				rentDueDay: 1,
+			}
+		);
 	});
 
 });

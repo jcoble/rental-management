@@ -125,6 +125,40 @@ export interface ScanConfirmResponse {
 	atomicDisposition: 'Executed' | 'Replayed' | 'Joined';
 }
 
+export interface ManualLeaseCreateRequest {
+	propertyId?: number | null;
+	unitId?: number | null;
+	tenantId?: number | null;
+	tenantName?: string | null;
+	tenantEmail?: string | null;
+	tenantPhone?: string | null;
+	tenantEmergencyContact?: string | null;
+	propertyName?: string | null;
+	propertyType?: string | null;
+	rentalStructure?: string | null;
+	propertyAddress?: string | null;
+	propertyCity?: string | null;
+	propertyState?: string | null;
+	propertyPostalCode?: string | null;
+	unitNumber?: string | null;
+	unitBedrooms?: number | null;
+	unitBathrooms?: number | null;
+	unitSquareFeet?: number | null;
+	leaseNumber: string;
+	startDate: string;
+	endDate: string;
+	monthlyRent: number;
+	securityDeposit?: number | null;
+	lateFee?: number | null;
+	rentDueDay: number;
+	termsSchemaVersion?: number;
+	termsPayload?: string | null;
+	gracePeriodDays?: number;
+	possessionGivenAtUtc?: string | null;
+	rentTrackingStartMode?: string;
+	rentTrackingStartOn?: string | null;
+}
+
 export interface ScanDraftListResponse {
 	items: ScanDraftResponse[];
 	totalCount: number;
@@ -245,6 +279,14 @@ export const scan = {
 		scanConfirmOperationIds.delete(id);
 		return response;
 	},
+
+	createManualLease: (
+		request: ManualLeaseCreateRequest,
+		operationId: string = crypto.randomUUID()
+	): Promise<ScanConfirmResponse> =>
+		api.post<ScanConfirmResponse>('/scans/manual-lease', request, {
+			headers: { 'Idempotency-Key': operationId }
+		}),
 
 	retry: async (id: number): Promise<unknown> => {
 		const operationId = scanRetryOperationIds.get(id) ?? crypto.randomUUID();

@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.DTOs;
@@ -197,6 +198,70 @@ public sealed class ConfirmScanRequest
     public string ClientOperationId { get; set; } = string.Empty;
 
     public string? OverridesJson { get; set; }
+}
+
+/// <summary>Reviewed Guided Setup lease facts admitted through the canonical scan confirmer.</summary>
+public sealed class CreateManualLeaseRequest : IValidatableObject
+{
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+    [Range(1, int.MaxValue)]
+    public int? TenantId { get; set; }
+    public string? TenantName { get; set; }
+    public string? TenantEmail { get; set; }
+    public string? TenantPhone { get; set; }
+    public string? TenantEmergencyContact { get; set; }
+    public string? PropertyName { get; set; }
+    public string? PropertyType { get; set; }
+    public RentalStructure? RentalStructure { get; set; }
+    public string? PropertyAddress { get; set; }
+    public string? PropertyCity { get; set; }
+    public string? PropertyState { get; set; }
+    public string? PropertyPostalCode { get; set; }
+    public string? UnitNumber { get; set; }
+    [Range(typeof(decimal), "0", "99")]
+    public decimal? UnitBedrooms { get; set; }
+    [Range(typeof(decimal), "0", "99")]
+    public decimal? UnitBathrooms { get; set; }
+    [Range(0, 99999)]
+    public int? UnitSquareFeet { get; set; }
+    [Required]
+    [MaxLength(100)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "LeaseNumber cannot be blank.")]
+    public string? LeaseNumber { get; set; }
+    [Required]
+    public DateTime? StartDate { get; set; }
+    [Required]
+    public DateTime? EndDate { get; set; }
+    [Range(typeof(decimal), "0.01", "99999999")]
+    public decimal? MonthlyRent { get; set; }
+    [Range(typeof(decimal), "0", "99999999")]
+    public decimal? SecurityDeposit { get; set; }
+    [Range(typeof(decimal), "0", "99999999")]
+    public decimal? LateFee { get; set; }
+    [Range(1, 31)]
+    public int? RentDueDay { get; set; }
+    [Range(1, int.MaxValue)]
+    public int TermsSchemaVersion { get; set; } = 1;
+    public string? TermsPayload { get; set; }
+    [Range(0, 31)]
+    public short GracePeriodDays { get; set; }
+    public DateTime? PossessionGivenAtUtc { get; set; }
+    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.ForwardOnly;
+    public DateOnly? RentTrackingStartOn { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (StartDate.HasValue && EndDate.HasValue
+            && EndDate.Value.Date < StartDate.Value.Date)
+        {
+            yield return new ValidationResult(
+                "EndDate cannot be before StartDate.",
+                [nameof(EndDate), nameof(StartDate)]);
+        }
+    }
 }
 
 /// <summary>Stable operation identity plus selected canonical account for payment scan review.</summary>
