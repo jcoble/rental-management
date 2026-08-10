@@ -43,7 +43,7 @@ describe('shared modal dismissal policy', () => {
 		await waitFor(() => expect(view.queryByTestId('data-entry-dialog')).toBeNull());
 	});
 
-	it('keeps a data-entry sheet open with its typed value and allows explicit Cancel', async () => {
+	it('keeps a data-entry sheet open with its typed value and allows explicit Close', async () => {
 		const view = render(ModalDismissGuardHarness);
 		await fireEvent.click(view.getByTestId('open-sheet'));
 		const input = view.getByTestId('sheet-input') as HTMLInputElement;
@@ -53,7 +53,10 @@ describe('shared modal dismissal policy', () => {
 
 		await waitFor(() => expect(view.getByTestId('data-entry-sheet')).toBeTruthy());
 		expect(input.value).toBe('typed sheet value');
-		await fireEvent.click(view.getByTestId('sheet-cancel'));
+		await fireEvent.keyDown(document, { key: 'Escape' });
+		await waitFor(() => expect(view.getByTestId('data-entry-sheet')).toBeTruthy());
+		expect(input.value).toBe('typed sheet value');
+		await fireEvent.click(view.getByTestId('sheet-close'));
 		await waitFor(() => expect(view.queryByTestId('data-entry-sheet')).toBeNull());
 	});
 
@@ -67,5 +70,49 @@ describe('shared modal dismissal policy', () => {
 		await waitFor(() => expect(view.getByTestId('notification-help-dialog')).toBeTruthy());
 		await clickBackdrop('[data-slot="dialog-overlay"]');
 		await waitFor(() => expect(view.queryByTestId('notification-help-dialog')).toBeNull());
+	});
+
+	it('keeps transient read-only controls dismissible from the backdrop and Escape', async () => {
+		const view = render(ModalDismissGuardHarness);
+		await fireEvent.click(view.getByTestId('open-transient'));
+		expect(view.getByTestId('command-search-control')).toBeTruthy();
+		expect(view.getByTestId('disclosure-control')).toBeTruthy();
+		expect(view.getByTestId('popover-control')).toBeTruthy();
+		expect(view.getByTestId('menu-control')).toBeTruthy();
+		expect(view.getByTestId('tooltip-control')).toBeTruthy();
+
+		await clickBackdrop('[data-slot="dialog-overlay"]');
+		await waitFor(() => expect(view.queryByTestId('transient-dialog')).toBeNull());
+
+		await fireEvent.click(view.getByTestId('open-transient'));
+		await fireEvent.keyDown(document, { key: 'Escape' });
+		await waitFor(() => expect(view.queryByTestId('transient-dialog')).toBeNull());
+	});
+
+	it('dismisses CommandDialog from the backdrop and Escape', async () => {
+		const view = render(ModalDismissGuardHarness);
+		await fireEvent.click(view.getByTestId('open-command'));
+		await waitFor(() => expect(view.getByTestId('command-dialog-input')).toBeTruthy());
+
+		await clickBackdrop('[data-slot="dialog-overlay"]');
+		await waitFor(() => expect(view.queryByTestId('command-dialog-input')).toBeNull());
+
+		await fireEvent.click(view.getByTestId('open-command'));
+		await fireEvent.keyDown(document, { key: 'Escape' });
+		await waitFor(() => expect(view.queryByTestId('command-dialog-input')).toBeNull());
+	});
+
+	it('dismisses a populated read-only UnitTimelineRail from the backdrop and Escape', async () => {
+		const view = render(ModalDismissGuardHarness);
+		await fireEvent.click(view.getByTestId('unit-activity-open'));
+		await waitFor(() => expect(view.getByTestId('unit-activity-flyout')).toBeTruthy());
+		expect(view.getByTestId('timeline-activity').querySelector('button[aria-expanded]')).toBeTruthy();
+
+		await clickBackdrop('[data-slot="drawer-overlay"]');
+		await waitFor(() => expect(view.queryByTestId('unit-activity-flyout')).toBeNull());
+
+		await fireEvent.click(view.getByTestId('unit-activity-open'));
+		await fireEvent.keyDown(document, { key: 'Escape' });
+		await waitFor(() => expect(view.queryByTestId('unit-activity-flyout')).toBeNull());
 	});
 });
