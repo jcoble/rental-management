@@ -76,15 +76,22 @@ internal static class ScheduleEDepreciationQuery
             };
 
         var components = propertyComponents.Concat(assetComponents);
-        return components
+        var groupedComponents = components
             .GroupBy(component => component.PropertyId)
-            .Select(group => new ScheduleEDepreciationRow
+            .Select(group => new ScheduleEDepreciationGroupedRow
             {
                 PropertyId = group.Key,
                 Amount = group.Sum(component => component.Amount),
                 IsFirstYearEstimate = group.Max(component => component.FirstYearEstimateMarker) == 1,
-                TotalAmount = components.Sum(component => (decimal?)component.Amount) ?? 0m,
             });
+
+        return groupedComponents.Select(group => new ScheduleEDepreciationRow
+        {
+            PropertyId = group.PropertyId,
+            Amount = group.Amount,
+            IsFirstYearEstimate = group.IsFirstYearEstimate,
+            TotalAmount = groupedComponents.Sum(component => (decimal?)component.Amount) ?? 0m,
+        });
     }
 
     private sealed class ScheduleEDepreciationComponent
@@ -92,6 +99,13 @@ internal static class ScheduleEDepreciationQuery
         public int PropertyId { get; set; }
         public decimal Amount { get; set; }
         public int FirstYearEstimateMarker { get; set; }
+    }
+
+    private sealed class ScheduleEDepreciationGroupedRow
+    {
+        public int PropertyId { get; set; }
+        public decimal Amount { get; set; }
+        public bool IsFirstYearEstimate { get; set; }
     }
 }
 

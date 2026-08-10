@@ -440,6 +440,98 @@ public class ScheduleEServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetReportAsync_DepreciationUnionGroupsAndTotalsByPropertyInSql()
+    {
+        var selected = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Cedar",
+            AddressLine1 = "3 Cedar",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            PurchasePrice = 300_000m,
+            LandValue = 60_000m,
+            InServiceDate = D(2020, 1, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var selectedSecond = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple",
+            AddressLine1 = "4 Maple",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            PurchasePrice = 275_000m,
+            LandValue = 50_000m,
+            InServiceDate = D(2021, 1, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var decoy = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Decoy",
+            AddressLine1 = "5 Decoy",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            PurchasePrice = 550_000m,
+            LandValue = 50_000m,
+            InServiceDate = D(2019, 1, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.AddRange(selected, selectedSecond, decoy);
+        _db.SaveChanges();
+
+        _db.CapitalAssets.AddRange(
+            NewDepreciableAsset(selected.Id, "Selected roof", 9_900m),
+            NewDepreciableAsset(selected.Id, "Selected HVAC", 5_500m),
+            NewDepreciableAsset(selectedSecond.Id, "Second HVAC", 5_500m),
+            NewDepreciableAsset(decoy.Id, "Decoy roof", 19_800m));
+        _db.SaveChanges();
+        _scope = SeedSelectedPropertyScope(selected.Id, selectedSecond.Id);
+        await _context.ActivateApiScopeAsync(_scope);
+        _commands.Clear();
+
+        var report = await _sut.GetReportAsync(_scope, Year, ct: CancellationToken.None);
+
+        report.Properties.Select(property => property.PropertyId)
+            .Should().BeEquivalentTo([selected.Id, selectedSecond.Id]);
+        report.Properties.Should().NotContain(property => property.PropertyId == decoy.Id);
+        report.Properties.Single(property => property.PropertyId == selected.Id)
+            .Depreciation.Should().Be(8_937.27m);
+        report.Properties.Single(property => property.PropertyId == selectedSecond.Id)
+            .Depreciation.Should().Be(8_256.82m);
+        report.TotalExpenses.Should().Be(17_194.09m);
+
+        _commands.Should().ContainSingle(
+            "Schedule E depreciation must be returned by the service with one translated SQL statement");
+        var depreciationSql = ExtractDepreciationAggregate(_commands.Single());
+        var sumIndex = depreciationSql.IndexOf("sum(", StringComparison.OrdinalIgnoreCase);
+        var unionIndex = depreciationSql.IndexOf("UNION ALL", StringComparison.Ordinal);
+        var assetIndex = depreciationSql.IndexOf("FROM \"CapitalAssets\"", StringComparison.Ordinal);
+        var groupByIndex = depreciationSql.IndexOf("GROUP BY", StringComparison.Ordinal);
+
+        depreciationSql.Should().Contain("rc_schedule_e_depreciation_amount(p");
+        depreciationSql.Should().Contain("rc_schedule_e_depreciation_amount(c");
+        depreciationSql.Should().Contain("UNION ALL");
+        depreciationSql.Should().Contain("FROM \"CapitalAssets\"");
+        depreciationSql[groupByIndex..]
+            .Should().Contain("\"PropertyId\"");
+        sumIndex.Should().BeGreaterThanOrEqualTo(0,
+            "the depreciation relation must total component amounts in SQL");
+        sumIndex.Should().BeLessThan(unionIndex,
+            "the SQL total must wrap the property-and-asset union");
+        unionIndex.Should().BeLessThan(assetIndex);
+        assetIndex.Should().BeLessThan(groupByIndex,
+            "the property-and-capital-asset union must be grouped by property before materialization");
+    }
+
+    [Fact]
     public async Task GetReportAsync_ProjectsPropertyRowFactsInSql()
     {
         var property = new Property
@@ -582,6 +674,76 @@ public class ScheduleEServiceTests : IAsyncLifetime
         sql.Contains("CapitalAssets", StringComparison.Ordinal) &&
         sql.Contains("PurchasePrice", StringComparison.Ordinal) &&
         sql.Contains("RecoveryYears", StringComparison.Ordinal);
+
+    private static string ExtractDepreciationAggregate(string sql)
+    {
+        var searchFrom = 0;
+        while (searchFrom < sql.Length)
+        {
+            var propertySource = sql.IndexOf(
+                "FROM \"Properties\" AS p", searchFrom, StringComparison.Ordinal);
+            if (propertySource < 0)
+                break;
+
+            var propertyFunction = sql.IndexOf(
+                "rc_schedule_e_depreciation_amount(p",
+                propertySource,
+                StringComparison.OrdinalIgnoreCase);
+            var union = propertyFunction < 0
+                ? -1
+                : sql.IndexOf("UNION ALL", propertyFunction, StringComparison.Ordinal);
+            var assetSource = union < 0
+                ? -1
+                : sql.IndexOf("FROM \"CapitalAssets\" AS c", union, StringComparison.Ordinal);
+            var assetFunction = assetSource < 0
+                ? -1
+                : sql.IndexOf(
+                    "rc_schedule_e_depreciation_amount(c",
+                    assetSource,
+                    StringComparison.OrdinalIgnoreCase);
+            var groupBy = assetFunction < 0
+                ? -1
+                : sql.IndexOf("GROUP BY", assetFunction, StringComparison.Ordinal);
+            var sum = sql.LastIndexOf("sum(", propertySource, StringComparison.OrdinalIgnoreCase);
+
+            if (propertyFunction > propertySource &&
+                union > propertyFunction &&
+                assetSource > union &&
+                assetFunction > assetSource &&
+                groupBy > assetFunction &&
+                sum >= 0 &&
+                propertySource - sum < 2_000)
+            {
+                var groupByLineEnd = sql.IndexOf('\n', groupBy);
+                if (groupByLineEnd < 0)
+                    groupByLineEnd = sql.Length;
+                var aggregateStart = sql.LastIndexOf("SELECT", sum, StringComparison.OrdinalIgnoreCase);
+                return sql[aggregateStart..groupByLineEnd];
+            }
+
+            searchFrom = propertySource + 1;
+        }
+
+        throw new InvalidOperationException(
+            "The Schedule E SQL statement did not contain a property-and-capital-asset depreciation aggregate.");
+    }
+
+    private static CapitalAsset NewDepreciableAsset(
+        int propertyId,
+        string description,
+        decimal costBasis) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = propertyId,
+        Description = description,
+        CostBasis = costBasis,
+        InServiceDate = D(Year, 8, 1),
+        Method = DepreciationMethod.StraightLine,
+        RecoveryYears = RecoveryClass.ResidentialBuilding,
+        Convention = DepreciationConvention.MidMonth,
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
 
     private Property SeedProperty(string name)
     {
@@ -739,7 +901,7 @@ public class ScheduleEServiceTests : IAsyncLifetime
         });
     }
 
-    private WorkspaceReadScope SeedSelectedPropertyScope(int propertyId)
+    private WorkspaceReadScope SeedSelectedPropertyScope(params int[] propertyIds)
     {
         var now = DateTime.UtcNow;
         var email = $"schedule-e-selected-{Guid.NewGuid():N}@example.test";
@@ -783,12 +945,15 @@ public class ScheduleEServiceTests : IAsyncLifetime
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        foreach (var propertyId in propertyIds)
         {
-            MembershipRoleAssignment = assignment,
-            PortfolioId = PortfolioId,
-            PropertyId = propertyId,
-        });
+            assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = assignment,
+                PortfolioId = PortfolioId,
+                PropertyId = propertyId,
+            });
+        }
         var session = new AuthSession
         {
             Id = Guid.NewGuid(),
