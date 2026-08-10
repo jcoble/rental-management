@@ -31,7 +31,7 @@ describe("Who's behind canonical paging contract", () => {
     );
     assert.match(
       typeSource,
-      /interface PastDueLease[\s\S]*oldestLedgerEntryId: number;[\s\S]*oldestLedgerEntryOpenAmount: number;/
+      /interface PastDueLease[\s\S]*pastDueAmount: number;[\s\S]*totalOpenBalance: number;[\s\S]*oldestLedgerEntryId: number;[\s\S]*oldestLedgerEntryOpenAmount: number;/
     );
   });
 
@@ -41,13 +41,13 @@ describe("Who's behind canonical paging contract", () => {
       /accounting\.pastDue\(\{ skip, take: PAGE_SIZE \}\)/
     );
     assert.match(pageSource, /payments\.recordReceipt\(lease\.tenantAccountId/);
-    assert.match(pageSource, /targetChargeEntryId: lease\.oldestLedgerEntryId/);
-    assert.match(pageSource, /amount: lease\.oldestLedgerEntryOpenAmount/);
+    assert.match(pageSource, /targetChargeEntryId: null/);
+    assert.match(pageSource, /amount: data\.amount/);
+    assert.match(pageSource, /allocateOldestCharges: true/);
     assert.match(pageSource, /tenantAccount=\$\{lease\.tenantAccountId\}/);
     assert.match(pageSource, /data-testid="past-due-pagination"/);
     assert.match(pageSource, /result\.businessDate/);
     assert.doesNotMatch(pageSource, /daysFromTodayUtc|Date\.now|Tenant account #/);
     assert.doesNotMatch(pageSource, /leaseId|oldestPaymentId/);
-    assert.doesNotMatch(pageSource, /allocateOldestCharges/);
   });
 });

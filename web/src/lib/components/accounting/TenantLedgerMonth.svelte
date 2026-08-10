@@ -8,6 +8,7 @@
 	} from '$lib/accounting/accounting-display';
 	import { formatMoneyCategoryLabel, formatMoneyEntryLabel } from '$lib/accounting/money-display';
 	import { tenantMonthSummaryReconciles } from '$lib/accounting/tenant-ledger-summary';
+	import TenantPaymentAllocationDetails from './TenantPaymentAllocationDetails.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Table from '$lib/components/ui/table';
 
@@ -115,6 +116,13 @@
 								<p class="mt-1 truncate text-xs text-muted-foreground">
 									{row.paymentMethod ?? formatMoneyCategoryLabel(row.categoryName)}{#if row.recurringScheduleContext} · {row.recurringScheduleContext}{/if}
 								</p>
+							{/if}
+							{#if isPayment(row)}
+								<TenantPaymentAllocationDetails
+									allocations={row.allocations}
+									currency={row.currency}
+									testid={`tenant-ledger-payment-allocations-${row.tenantLedgerEntryId}`}
+								/>
 							{/if}
 						</div>
 					</Table.Cell>

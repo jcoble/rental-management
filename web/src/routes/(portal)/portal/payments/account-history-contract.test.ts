@@ -54,6 +54,13 @@ describe('tenant account history contract', () => {
 		assert.doesNotMatch(page, /\.sort\(|\.filter\(/);
 	});
 
+	test('renders server-provided payment allocations for tenant-facing rows', () => {
+		assert.match(page, /TenantPaymentAllocationDetails/);
+		assert.match(page, /entry\.allocations/);
+		assert.match(page, /portal-payment-allocations-/);
+		assert.match(api, /interface PortalTenantAllocationRef/);
+	});
+
 	test('groups account history by month with server-owned month-end balances and contextual help', () => {
 		assert.match(page, /portal-history-month-/);
 		assert.match(page, /monthLabel\(entry\.effectiveOn\)/);

@@ -13,18 +13,15 @@
 	import { goto } from '$app/navigation';
 	import { accounting } from '$lib/api/endpoints/accounting';
 	import { payments } from '$lib/api/endpoints/payments';
+	import { tenantLedgers } from '$lib/api/endpoints/tenant-ledgers';
 	import type { PastDueLease } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import PastDuePaymentDialog, { type PastDuePaymentSubmission } from '$lib/components/accounting/PastDuePaymentDialog.svelte';
 	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, CircleCheckBig, Loader2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -88,42 +85,12 @@
 	// Which tenant account is currently receiving a payment (its buttons show a spinner).
 	let busyAccountId = $state<number | null>(null);
 
-	// --- Record payment modal ---
-	// Capture how/when the money arrived once, then target the oldest past-due charge returned by the server.
-	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
-	// payment command accepts paidDate / method / externalReference / notes. Methods come from the shared
-	// canonical list so web + mobile offer identical values.
-	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
-	function loadLastMethod(): string {
-		if (typeof localStorage === 'undefined') return '';
-		try {
-			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
-		} catch {
-			return '';
-		}
-	}
-	function rememberLastMethod(method: string) {
-		if (!method || typeof localStorage === 'undefined') return;
-		try {
-			localStorage.setItem(LAST_METHOD_KEY, method);
-		} catch {
-			/* storage may be unavailable */
-		}
-	}
-	function todayLocal(): string {
-		const d = new Date();
-		const p = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-	}
-
 	let showMarkPaidForm = $state(false);
 	let markPaidTarget = $state<PastDueLease | null>(null);
-	let markPaidForm = $state({ paidDate: '', method: '', externalReference: '', notes: '' });
 	let receiptOperationKey = $state<string | null>(null);
 
 	function openMarkPaid(lease: PastDueLease) {
 		markPaidTarget = lease;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
 		showMarkPaidForm = true;
 		receiptOperationKey = null;
 	}
@@ -133,28 +100,42 @@
 		receiptOperationKey = null;
 	}
 
+	const openChargesQuery = createQuery(() => {
+		const tenantAccountId = markPaidTarget?.tenantAccountId;
+		return {
+			queryKey: ['past-due-open-charges', portfolioId, tenantAccountId],
+			enabled: showMarkPaidForm && tenantAccountId != null,
+			queryFn: () => tenantLedgers.list(tenantAccountId as number, {
+				openOnly: true,
+				take: 200,
+				sort: 'oldestDueOn'
+			})
+		};
+	});
+	const openCharges = $derived(openChargesQuery.data?.items ?? []);
+
 	// Record one receipt against the continuous tenant account. Afterwards we
 	// refresh the shared sources (past-due list + dashboard snapshot) so the KPI count and these rows
 	// update together and stay in lockstep.
 	const markPaidMutation = createMutation(() => ({
-		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: Record<string, unknown> }) => {
+		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: PastDuePaymentSubmission }) => {
 			receiptOperationKey ??= crypto.randomUUID();
 			return payments.recordReceipt(lease.tenantAccountId, receiptOperationKey, {
-				amount: lease.oldestLedgerEntryOpenAmount,
-				effectiveOn: String(data.paidDate),
-				description: String(data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`),
-				paymentMethodSummary: String(data.method),
-				externalReference: data.externalReference ? String(data.externalReference) : undefined,
+				amount: data.amount,
+				effectiveOn: data.paidDate,
+				description: data.notes || `Payment for ${lease.relationshipNumber || 'tenant account'}`,
+				paymentMethodSummary: data.method,
+				externalReference: data.externalReference,
 				payerName: lease.tenantName || undefined,
-				targetChargeEntryId: lease.oldestLedgerEntryId
+				targetChargeEntryId: null,
+				allocateOldestCharges: true
 			});
 		},
 		onMutate: ({ lease }) => {
 			busyAccountId = lease.tenantAccountId;
 		},
-		onSuccess: (_result, vars) => {
-			showSuccess('Payment recorded against the selected past-due charge.');
-			rememberLastMethod(String(vars.data.method ?? ''));
+		onSuccess: (_result, _vars) => {
+			showSuccess('Payment recorded and allocated oldest-first.');
 			closeMarkPaid();
 			skip = 0;
 			queryClient.invalidateQueries({ queryKey: ['accounting-past-due', portfolioId] });
@@ -168,17 +149,8 @@
 		},
 	}));
 
-	function submitMarkPaid() {
+	function submitMarkPaid(data: PastDuePaymentSubmission) {
 		if (!markPaidTarget) return;
-		if (!markPaidForm.method) {
-			showError('Choose a payment method.');
-			return;
-		}
-		const data: Record<string, unknown> = {};
-		data.paidDate = markPaidForm.paidDate || todayLocal();
-		if (markPaidForm.method) data.method = markPaidForm.method;
-		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
-		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
 		markPaidMutation.mutate({ lease: markPaidTarget, data });
 	}
 
@@ -338,68 +310,13 @@
 	{/if}
 </div>
 
-<!-- Mark Paid: capture how/when the money arrived once, then settle every owed payment on the lease.
-	 Smart defaults (today + last-used method) keep it a quick confirm. -->
-<Dialog.Root
+<PastDuePaymentDialog
 	open={showMarkPaidForm}
-	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
->
-	<Dialog.Content class="max-w-md" data-testid="past-due-mark-paid-dialog">
-		<Dialog.Header>
-			<Dialog.Title>Record payment</Dialog.Title>
-			{#if markPaidTarget}
-				<Dialog.Description data-testid="past-due-mark-paid-summary">
-					{displayName(markPaidTarget)} · {money(markPaidTarget.pastDueAmount)}
-					{#if markPaidTarget.overduePaymentCount > 1}
-						· {markPaidTarget.overduePaymentCount} charges
-					{/if}
-				</Dialog.Description>
-			{/if}
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="past-due-mark-paid-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
-				<DatePicker testid="past-due-mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
-				<Select.Root type="single" bind:value={markPaidForm.method}>
-					<Select.Trigger class="w-full" data-testid="past-due-mark-paid-method-input">
-						{markPaidForm.method || 'Select method'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each PAYMENT_METHODS as m}
-							<Select.Item value={m} label={m}>{m}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
-				<Input
-					data-testid="past-due-mark-paid-reference-input"
-					bind:value={markPaidForm.externalReference}
-					placeholder="Check #, confirmation #, etc. (optional)"
-				/>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-				<textarea
-					data-testid="past-due-mark-paid-notes-input"
-					bind:value={markPaidForm.notes}
-					rows={2}
-					maxlength={2000}
-					placeholder="Anything to remember about this payment (optional)"
-					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="past-due-mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
-			<Button data-testid="past-due-mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Recording…' : 'Record payment'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+	target={markPaidTarget}
+	openCharges={openCharges}
+	totalOpenAmount={markPaidTarget?.totalOpenBalance ?? 0}
+	openChargesLoading={openChargesQuery.isLoading}
+	pending={markPaidMutation.isPending}
+	onclose={closeMarkPaid}
+	onsubmit={submitMarkPaid}
+/>

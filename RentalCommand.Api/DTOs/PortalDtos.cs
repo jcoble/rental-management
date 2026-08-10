@@ -239,6 +239,16 @@ public sealed class PortalTenantAccountHistoryItemResponse
     public long? ReversesEntryId { get; init; }
     public long? ReversedByEntryId { get; init; }
     public bool IsFocused { get; init; }
+    public IReadOnlyList<PortalTenantAllocationRefResponse> Allocations { get; init; } = [];
+}
+
+public sealed class PortalTenantAllocationRefResponse
+{
+    public long TargetSourceId { get; init; }
+    public Guid TargetPublicId { get; init; }
+    public string TargetDescription { get; init; } = string.Empty;
+    public decimal Amount { get; init; }
+    public DateOnly EffectiveOn { get; init; }
 }
 
 public sealed class PortalTenantChargePageResponse

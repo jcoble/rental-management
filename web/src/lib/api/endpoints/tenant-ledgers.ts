@@ -20,6 +20,7 @@ export type TenantLedgerDirection = 'Debit' | 'Credit';
 export type TenantLedgerSort =
 	| 'effectiveOn'
 	| '-effectiveOn'
+	| 'oldestDueOn'
 	| 'postedAtUtc'
 	| '-postedAtUtc';
 

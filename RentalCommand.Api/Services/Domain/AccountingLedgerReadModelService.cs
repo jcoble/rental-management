@@ -1017,6 +1017,12 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
             : entries.OrderBy(entry => entry.EffectiveOn)
                 .ThenBy(entry => entry.PostedAtUtc)
                 .ThenBy(entry => entry.Id),
+        "oldestdueon" => query.SortDescending
+            ? entries.OrderByDescending(entry => entry.DueOn)
+                .ThenByDescending(entry => entry.Id)
+            : entries.OrderBy(entry => entry.DueOn == null)
+                .ThenBy(entry => entry.DueOn)
+                .ThenBy(entry => entry.Id),
         "postedatutc" => query.SortDescending
             ? entries.OrderByDescending(entry => entry.PostedAtUtc)
                 .ThenByDescending(entry => entry.EffectiveOn)

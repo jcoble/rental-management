@@ -16,6 +16,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import TenantPaymentAllocationDetails from '$lib/components/accounting/TenantPaymentAllocationDetails.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { apiErrorMessage, showError, showInfo, showSuccess } from '$lib/utils/toast';
 	import { CreditCard, Printer, Repeat } from '@lucide/svelte';
@@ -385,6 +386,13 @@
 							<!-- The server's entry.displayType stays private; tenantLedgerLabel owns visible vocabulary. -->
 							<div class="min-w-0">
 								<p class="font-medium">{tenantLedgerLabel(entry)}</p>
+								{#if entry.entryType === 'PaymentReceipt'}
+									<TenantPaymentAllocationDetails
+										allocations={entry.allocations}
+										currency={history.currency}
+										testid={`portal-payment-allocations-${entry.tenantLedgerEntryId}`}
+									/>
+								{/if}
 							</div>
 							<div class="flex justify-between gap-4 md:block md:text-right">
 								<span class="text-sm text-muted-foreground md:hidden">Amount</span>
