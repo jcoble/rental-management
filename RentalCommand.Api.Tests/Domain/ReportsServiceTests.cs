@@ -915,12 +915,24 @@ public class ReportsServiceTests : IAsyncLifetime
         unfiltered.TotalOperatingExpenses.Should().Be(425m);
         unfiltered.TotalNoi.Should().Be(575m);
         unfiltered.TotalCashFlow.Should().Be(575m);
-        var selectSql = _executedSql
-            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+        var reportQueries = _executedSql
+            .Where(sql =>
+                sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) ||
+                sql.TrimStart().StartsWith("WITH", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        selectSql.Length.Should().BeGreaterThanOrEqualTo(
+        reportQueries.Length.Should().BeInRange(
+            1,
             3,
-            "true cash flow must retain SQL row, property-total, and operating-expense aggregates even though detail and monthly projections add SQL reads");
+            "true cash flow must keep authorization plus one database-side report statement within the 1-3 query budget");
+        var reportSql = reportQueries.Should().ContainSingle(
+            sql => sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase),
+            "property/detail and monthly attachment must be aggregated in the database report statement").Subject;
+        reportSql.Should().Contain("SUM(", "property and portfolio totals must be summed in SQL");
+        reportSql.Should().Contain("GROUP BY", "detail and monthly totals must be grouped in SQL");
+        reportSql.Should().Contain("date_trunc", "monthly aggregation must be performed in SQL");
+        reportSql.Should().Contain("property_totals", "property totals must be calculated in the database statement");
+        reportSql.Should().Contain("portfolio_expense_totals", "portfolio operating expenses must be calculated in the database statement");
+        reportSql.Should().Contain("OperatingExpenseDetails", "detail rows must be attached in the database JSON aggregate");
 
         _executedSql.Clear();
 
