@@ -248,8 +248,8 @@ describe('rendered lease-management action wiring', () => {
 	it('opens issued and executed PDFs synchronously, then navigates the returned tabs with exact payloads', async () => {
 		const events: string[] = [];
 		const openedWindows = [
-			{ location: { href: '' }, close: vi.fn() },
-			{ location: { href: '' }, close: vi.fn() }
+			{ location: { href: '' }, opener: window, close: vi.fn() },
+			{ location: { href: '' }, opener: window, close: vi.fn() }
 		];
 		const open = vi.spyOn(window, 'open').mockImplementation(() => {
 			const opened = openedWindows.shift();
@@ -274,8 +274,10 @@ describe('rendered lease-management action wiring', () => {
 		const view = await renderDetail();
 		await fireEvent.click(view.getByTestId(`lease-agreement-${governingAgreementId}-view-issued`));
 		expect(events).toEqual(['open', `download:${leaseManagementId}:${governingAgreementId}:${issuedArtifact.legalDocumentArtifactId}`]);
+		expect(open).toHaveBeenNthCalledWith(1, '', '_blank');
 		expect(openedWindows).toHaveLength(1);
 		const issuedWindow = (open.mock.results[0]?.value ?? null) as typeof openedWindows[number];
+		expect(issuedWindow.opener).toBeNull();
 		expect(issuedWindow.location.href).toBe('');
 		resolveIssued(new Blob(['issued']));
 		await waitFor(() => expect(issuedWindow.location.href).toBe('blob:issued-41'));
@@ -287,7 +289,9 @@ describe('rendered lease-management action wiring', () => {
 			'open',
 			`download:${leaseManagementId}:${governingAgreementId}:${executedArtifact.legalDocumentArtifactId}`
 		]);
+		expect(open).toHaveBeenNthCalledWith(2, '', '_blank');
 		const executedWindow = (open.mock.results[1]?.value ?? null) as typeof openedWindows[number];
+		expect(executedWindow.opener).toBeNull();
 		resolveExecuted(new Blob(['executed']));
 		await waitFor(() => expect(executedWindow.location.href).toBe('blob:executed-42'));
 		expect(mocks.downloadArtifact.mock.calls).toEqual([
@@ -305,7 +309,7 @@ describe('rendered lease-management action wiring', () => {
 		expect(mocks.downloadArtifact).not.toHaveBeenCalled();
 		expect(mocks.showError).toHaveBeenCalledWith('Could not open the lease document in a new tab.');
 
-		const opened = { location: { href: '' }, close: vi.fn() };
+		const opened = { location: { href: '' }, opener: window, close: vi.fn() };
 		open.mockReturnValueOnce(opened as unknown as Window);
 		mocks.downloadArtifact.mockReset();
 		mocks.downloadArtifact.mockRejectedValueOnce(new Error('download unavailable'));

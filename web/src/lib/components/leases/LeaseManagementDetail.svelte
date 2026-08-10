@@ -133,8 +133,9 @@
 	}
 
 	function openPlaceholderTab() {
-		const opened = window.open('', '_blank', 'noopener,noreferrer');
+		const opened = window.open('', '_blank');
 		if (!opened) showError('Could not open the lease document in a new tab.');
+		else opened.opener = null;
 		return opened;
 	}
 
