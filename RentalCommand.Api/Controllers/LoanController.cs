@@ -71,7 +71,7 @@ public class LoanController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var posted = await _service.PostPaymentAsync(
@@ -93,7 +93,7 @@ public class LoanController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var created = await _service.CreateAsync(GetWorkspaceReadScope(), request, operationKey, ct);
@@ -113,7 +113,7 @@ public class LoanController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
@@ -129,7 +129,7 @@ public class LoanController : ManagementControllerBase
         int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);

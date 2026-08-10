@@ -17,6 +17,7 @@
 		type PrepareMoveInFormErrors
 	} from '$lib/leases/prepare-move-in-form';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
@@ -198,7 +199,7 @@
 			items: result.items.map((unit) => ({
 				id: unit.id,
 				label: `${unit.propertyName} · Unit ${unit.unitNumber}`,
-				description: `${unit.status} · ${unit.simpleStage}`
+				description: `${formatStatusLabel(unit.status)} · ${formatStatusLabel(unit.simpleStage)}`
 			}))
 		};
 	}
@@ -374,7 +375,7 @@
 								<p class="mt-1 font-semibold">No application required</p>
 								<p class="text-sm text-muted-foreground">
 									The lease, tenant relationship, rent account, and rent tracking are created by the
-									canonical move-in command.
+									move-in setup.
 								</p>
 							</div>
 						{:else if seededApplicationId > 0}
@@ -390,7 +391,7 @@
 								{:else if application}
 									<p class="mt-1 font-semibold">{application.firstName} {application.lastName}</p>
 									<p class="text-sm text-muted-foreground">
-										Application #{application.id} · {application.status}
+										Application #{application.id} · {formatStatusLabel(application.status)}
 									</p>
 								{:else}
 									<p class="mt-2 text-sm text-destructive">The application could not be loaded.</p>
@@ -473,7 +474,7 @@
 									onchange={() => clearError('unitId')}
 									options={(unitOptionsQuery.data?.items ?? []).map((unit) => ({
 										value: String(unit.id),
-										label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${unit.status}`
+										label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${formatStatusLabel(unit.status)}`
 									}))}
 									placeholder="Choose the exact rental"
 									ariaLabel="Exact rental"
@@ -769,7 +770,7 @@
 								}}
 								options={[
 									{ value: 'ForwardOnly', label: 'Start from the current date' },
-									{ value: 'BackfillFromLeaseStart', label: 'Backfill from the lease start' },
+									{ value: 'BackfillFromLeaseStart', label: 'Add past rent from the lease start' },
 									{ value: 'CustomCutoffDate', label: 'Start from a custom date' }
 								]}
 								ariaLabel="Begin rent charges"

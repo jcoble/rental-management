@@ -8,6 +8,7 @@ const source = readFileSync(
 	'utf8'
 );
 const labelsSource = readFileSync(new URL('./lease-list-labels.ts', import.meta.url), 'utf8');
+const statusLabelsSource = readFileSync(new URL('../utils/status-labels.ts', import.meta.url), 'utf8');
 const leaseDetailRouteSource = readFileSync(
 	new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
 	'utf8'
@@ -39,10 +40,10 @@ test('lease list surfaces upcoming agreement and reconciliation state', () => {
 });
 
 test('lease list uses plain status language', () => {
-	assert.doesNotMatch(source, /No governing agreement/);
 	assert.doesNotMatch(source, /\bLifecycle\b/);
 	assert.doesNotMatch(source, /\brelationship\b/i);
-	assert.doesNotMatch(labelsSource, /No governing agreement|\bLifecycle\b|\brelationship\b/i);
+	assert.doesNotMatch(labelsSource, /\bLifecycle\b|\brelationship\b/i);
+	assert.match(statusLabelsSource, /\['NoGoverningAgreement', 'No lease in effect'\]/);
 	assert.match(source, /title: 'Status'/);
 	assert.match(source, /title: 'Lease'/);
 	assert.match(source, /leaseAgreementStatusLabel/);

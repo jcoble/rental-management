@@ -154,7 +154,7 @@ public class VendorService : IVendorService
         {
             throw new ArgumentOutOfRangeException(
                 nameof(clientOperationId),
-                "W-9 request ClientOperationId cannot exceed 160 characters.");
+                "A request key cannot exceed 160 characters.");
         }
 
         var operationDigest = Convert.ToHexString(

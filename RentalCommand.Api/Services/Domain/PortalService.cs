@@ -1222,7 +1222,7 @@ public class PortalService : IPortalService
         var digest = Convert.ToHexString(SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
         var outcome = await (_atomic ?? throw new InvalidOperationException(
-                "Atomic tenant work-order mutations are not configured."))
+                "Tenant work-order changes are not available right now."))
             .ExecuteAsync(new AtomicCommandIdentity("portal.work-order.create", digest),
                 command, WorkOrderMutationCodec, ct);
         return outcome.Value.Outcome == OperationMutationOutcome.NotFound || outcome.Value.Snapshot is null
@@ -1240,7 +1240,7 @@ public class PortalService : IPortalService
         var digest = Convert.ToHexString(SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
         var outcome = await (_atomic ?? throw new InvalidOperationException(
-                "Atomic tenant work-order mutations are not configured."))
+                "Tenant work-order changes are not available right now."))
             .ExecuteAsync(new AtomicCommandIdentity(operation, digest),
                 command, WorkOrderMutationCodec, ct);
         return outcome.Value;

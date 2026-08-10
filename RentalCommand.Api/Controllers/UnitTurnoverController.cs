@@ -36,7 +36,7 @@ public sealed class UnitTurnoverController : ManagementControllerBase
         var normalizedKey = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
         {
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
         }
         if (!TryGetActiveAccessContext(out var active))
         {

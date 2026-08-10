@@ -26,6 +26,7 @@
 	import LeaseTemplateDesigner from '$lib/components/document-templates/LeaseTemplateDesigner.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	const queryClient = useQueryClient();
 
@@ -348,7 +349,7 @@
 								<div class="min-w-0 flex-1">
 									<div class="flex flex-wrap items-center gap-2">
 										<h3 class="truncate text-base font-semibold">{template.name}</h3>
-										<Badge variant={statusVariant(template.status)}>{template.status}</Badge>
+										<Badge variant={statusVariant(template.status)}>{formatStatusLabel(template.status)}</Badge>
 										{#if template.defaultForPortfolio}
 											<Badge variant="outline" class="gap-1">
 												<CheckCircle2 class="h-3 w-3" />

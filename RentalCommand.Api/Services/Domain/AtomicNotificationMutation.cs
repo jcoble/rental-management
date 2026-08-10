@@ -445,7 +445,7 @@ public sealed class AtomicNotificationMutationHandler
         policy.JurisdictionReviewedByUserId = request.ConfirmJurisdictionReviewed ? command.ActorUserId : null;
         policy.UpdatedAtUtc = now;
         attempt.BindSemanticAudit(policy, Audit(command, nameof(TenantNoticePolicy), AuditLogOperation.Updated,
-            "Tenant notice policy bound to immutable template version", policy.Id));
+            "Tenant notice policy saved with its template version", policy.Id));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(WorkspaceNoticeTemplateVersion), next.Id, now);
         var response = await TenantNoticePolicyResponseQuery(db, command.PortfolioId, policy.Id)
@@ -1048,7 +1048,7 @@ public sealed class AtomicNotificationMutationHandler
 
     private T Read<T>(AtomicNotificationMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Notification mutation request payload is invalid.");
+        ?? throw new ArgumentException("The notification update is invalid.");
 
     private DateTime BusinessNow(AtomicNotificationMutationCommand command, DateTime databaseNow)
     {
@@ -1059,7 +1059,7 @@ public sealed class AtomicNotificationMutationHandler
 
         if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
         {
-            throw new ArgumentException("Notification mutation business time must be UTC.");
+            throw new ArgumentException("Notification time must use UTC.");
         }
 
         return command.BusinessNowUtc;
@@ -1090,7 +1090,7 @@ public sealed class AtomicNotificationMutationHandler
                     or AtomicNotificationMutationDomain.TenantConversationRead)
                 && command.EntityId <= 0))
             throw new ArgumentException(
-                "Portfolio, actor, access revision, payload, and delivery identifiers are required.");
+                "Workspace, user, access details, and delivery details are required.");
     }
 
     private AtomicNotificationMutationResult Missing() => new(false, false, 0, 0);

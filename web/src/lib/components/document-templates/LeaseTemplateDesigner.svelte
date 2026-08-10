@@ -18,6 +18,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import type { LeaseManagementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Card from '$lib/components/ui/card';
@@ -1094,7 +1095,7 @@
 									<div class="flex flex-wrap items-center gap-2">
 										<Badge variant="outline">{formatSigner(selectedCatalogItem.signerRole)}</Badge>
 										<Badge variant={selectedCatalogItem.requiredForSignature ? 'default' : 'secondary'}>
-											{selectedCatalogItem.requiredForSignature ? 'Required' : selectedCatalogItem.kind}
+											{selectedCatalogItem.requiredForSignature ? 'Required' : formatStatusLabel(selectedCatalogItem.kind)}
 										</Badge>
 									</div>
 									<p class="mt-2 truncate text-xs font-medium">{selectedCatalogItem.label}</p>

@@ -112,7 +112,7 @@
 			/>
 			<span class="block text-sm font-medium text-foreground">Yes, everyone has signed</span>
 			<span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
-				Keep this exact PDF as the executed agreement. It becomes the governing lease immediately.
+				Keep this exact PDF as the executed agreement. It becomes the active lease immediately.
 			</span>
 		</label>
 
@@ -129,7 +129,7 @@
 			/>
 			<span class="block text-sm font-medium text-foreground">No, signatures are still needed</span>
 			<span class="mt-1 block text-xs leading-relaxed text-muted-foreground">
-				Create an editable draft from the supplied lease or one of your templates. It will not govern until the required people sign it.
+				Create an editable draft from the supplied lease or one of your templates. It will not take effect until the required people sign it.
 			</span>
 		</label>
 	</div>

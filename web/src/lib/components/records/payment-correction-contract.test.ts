@@ -80,6 +80,7 @@ describe('payment correction contract', () => {
 	it('prefills correction context and reason', () => {
 		const correction = paymentCorrectionContext(originalReceipt);
 
+		assert.equal(PAYMENT_CORRECTION_REASON, 'Correction of original payment receipt');
 		assert.deepEqual(correction, {
 			tenantAccountId: 41,
 			tenantLedgerEntryId: 812,

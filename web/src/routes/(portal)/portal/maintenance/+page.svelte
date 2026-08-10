@@ -3,6 +3,7 @@
 	import { portal } from '$lib/api/endpoints/portal';
 	import { documents } from '$lib/api/endpoints/documents';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -245,7 +246,7 @@
 			<form class="mb-4 grid gap-2 sm:grid-cols-[1fr_11rem_auto]" onsubmit={(event) => { event.preventDefault(); applySearch(); }}>
 				<Input bind:value={searchInput} placeholder="Search requests" aria-label="Search maintenance requests" />
 				<Select.Root type="single" bind:value={status} onValueChange={() => { skip = 0; }}>
-					<Select.Trigger class="w-full">{status === 'All' ? 'All statuses' : status}</Select.Trigger>
+					<Select.Trigger class="w-full">{status === 'All' ? 'All statuses' : formatStatusLabel(status)}</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="All" label="All statuses">All statuses</Select.Item>
 						<Select.Item value="New" label="New">New</Select.Item>
@@ -278,9 +279,9 @@
 					>
 						<div class="min-w-0 flex-1">
 							<p class="truncate font-medium">{order.title}</p>
-							<p class="text-sm text-muted-foreground">{order.priority}</p>
+							<p class="text-sm text-muted-foreground">{formatStatusLabel(order.priority)}</p>
 						</div>
-						<StatusBadge status={String(order.status)} />
+						<StatusBadge status={formatStatusLabel(String(order.status))} />
 						<ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" />
 					</button>
 				{:else}
@@ -341,7 +342,7 @@
 				<div class="grid gap-3 sm:grid-cols-2">
 					<Input bind:value={form.category} placeholder="Category" data-testid="portal-request-category" />
 					<Select.Root type="single" bind:value={form.priority}>
-						<Select.Trigger class="w-full">{form.priority}</Select.Trigger>
+						<Select.Trigger class="w-full">{formatStatusLabel(form.priority)}</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="Low" label="Low">Low</Select.Item>
 							<Select.Item value="Normal" label="Normal">Normal</Select.Item>
@@ -414,8 +415,8 @@
 			{@const detailCaps = workOrderCapabilities(detail)}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-center gap-2">
-					<StatusBadge status={String(detail.status)} />
-					<StatusBadge status={String(detail.priority)} />
+					<StatusBadge status={formatStatusLabel(String(detail.status))} />
+					<StatusBadge status={formatStatusLabel(String(detail.priority))} />
 					{#if isOpen(detail.status)}
 						<span class="text-xs text-muted-foreground">We'll update this as work progresses.</span>
 					{/if}

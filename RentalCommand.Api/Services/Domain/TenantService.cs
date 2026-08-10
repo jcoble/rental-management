@@ -96,7 +96,7 @@ public class TenantService : ITenantService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped tenant mutations require the atomic persistence kernel.");
+        "Tenant changes must use the standard save process.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>

@@ -346,7 +346,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         {
             return BadRequest(new
             {
-                error = "Idempotency-Key is required and must be at most 128 characters.",
+                error = "A request key is required and cannot exceed 128 characters.",
             });
         }
         var tenantId = await GetTenantIdAsync(ct);
@@ -420,7 +420,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     {
         var operationKey = idempotencyKey?.Trim() ?? string.Empty;
         if (operationKey.Length is <= 0 or > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null) return Forbid();
         var item = await _service.CommentTenantWorkOrderAsync(
@@ -441,7 +441,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     {
         var operationKey = idempotencyKey?.Trim() ?? string.Empty;
         if (operationKey.Length is <= 0 or > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null) return Forbid();
         var item = await _service.UpdateTenantWorkOrderAsync(
@@ -462,7 +462,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     {
         var operationKey = idempotencyKey?.Trim() ?? string.Empty;
         if (operationKey.Length is <= 0 or > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null) return Forbid();
         var item = await _service.CancelTenantWorkOrderAsync(
@@ -481,7 +481,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     {
         var operationKey = idempotencyKey?.Trim() ?? string.Empty;
         if (operationKey.Length is <= 0 or > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _service.CreateTenantWorkOrderAsync(
             GetActiveAccessContext(), request, operationKey, ct);
         return created == null
@@ -562,7 +562,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         if (tenantId == null) return Forbid();
         var operationKey = idempotencyKey?.Trim() ?? string.Empty;
         if (operationKey.Length is <= 0 or > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var active = GetActiveAccessContext();
         var scope = new WorkspaceReadScope(active.PortfolioId, active.UserId, active.SessionId,
             active.AccessContextId, active.AccessRevision);

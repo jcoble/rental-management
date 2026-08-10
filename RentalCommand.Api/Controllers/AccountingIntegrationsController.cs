@@ -72,7 +72,7 @@ public class AccountingIntegrationsController : ManagementControllerBase
         {
             return BadRequest(new
             {
-                error = "Idempotency-Key is required and must be at most 128 characters.",
+                error = "A request key is required and cannot exceed 128 characters.",
             });
         }
 
@@ -146,7 +146,7 @@ public class AccountingIntegrationsController : ManagementControllerBase
         {
             return BadRequest(new
             {
-                error = "Idempotency-Key is required and must be at most 128 characters.",
+                error = "A request key is required and cannot exceed 128 characters.",
             });
         }
 
@@ -172,7 +172,7 @@ public class AccountingIntegrationsController : ManagementControllerBase
         {
             return BadRequest(new
             {
-                error = "Idempotency-Key is required and must be at most 128 characters.",
+                error = "A request key is required and cannot exceed 128 characters.",
             });
         }
 

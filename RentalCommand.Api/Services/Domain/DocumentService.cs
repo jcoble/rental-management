@@ -220,7 +220,7 @@ public sealed class DocumentService : IDocumentService
         {
             throw new ArgumentOutOfRangeException(
                 nameof(clientOperationId),
-                "Document clientOperationId cannot exceed 160 characters.");
+                "A request key cannot exceed 160 characters.");
         }
 
         return normalized;

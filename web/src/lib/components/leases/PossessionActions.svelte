@@ -117,13 +117,13 @@
 				historicalOperationKey()
 			),
 		onSuccess: async () => {
-			showSuccess('Historical possession reconciled.');
+			showSuccess('Past move-in details updated.');
 			historicalOpen = false;
 			historicalValidationError = '';
 			historicalOperation = null;
 			await onchanged();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Could not reconcile possession.'))
+		onError: (error) => showError(apiErrorMessage(error, 'Could not update the past move-in details.'))
 	}));
 
 	function submitHistorical() {
@@ -284,7 +284,7 @@
 			{/if}
 			{#if canManage && canReconcileHistoricalPossession}
 				<Button variant="outline" onclick={openHistorical} data-testid="lease-reconcile-historical-possession">
-					<CalendarCheck class="mr-2 h-4 w-4" /> Reconcile possession
+					<CalendarCheck class="mr-2 h-4 w-4" /> Update past move-in details
 				</Button>
 			{/if}
 			{#if canManage && canReturnPossession}
@@ -315,7 +315,7 @@
 <Dialog.Root open={historicalOpen} onOpenChange={(open) => { if (!open) closeHistorical(); }}>
 	<Dialog.Content class="max-w-md" data-testid="lease-reconcile-historical-possession-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Reconcile possession</Dialog.Title>
+			<Dialog.Title>Update past move-in details</Dialog.Title>
 			<Dialog.Description>Record the actual historical date the tenant received possession for unit {summary.unitNumber}.</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-2">
@@ -335,7 +335,7 @@
 			<Button variant="outline" onclick={closeHistorical} disabled={historicalMutation.isPending}>Cancel</Button>
 			<Button onclick={submitHistorical} disabled={historicalMutation.isPending || historicalDateInvalid} data-testid="historical-possession-submit">
 				{#if historicalMutation.isPending}<Loader2 class="mr-2 h-4 w-4 animate-spin" />{/if}
-				Reconcile possession
+				Update past move-in details
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

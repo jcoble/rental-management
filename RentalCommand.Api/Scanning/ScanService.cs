@@ -179,7 +179,7 @@ public sealed class ScanService : IScanService
         {
             return new(
                 ScanConfirmationPreparationOutcome.UnsupportedTarget,
-                Error: $"Unsupported scan confirmation target '{draft.TargetEntityType}'.");
+                Error: "That scan type isn't supported.");
         }
         var normalizedOverrides = string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson;
         JsonElement overrideRoot;

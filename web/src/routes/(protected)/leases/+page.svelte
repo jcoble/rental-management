@@ -91,7 +91,7 @@
 		{
 			key: 'hasReconciliationException',
 			title: 'Review',
-			accessor: (item) => (item.hasReconciliationException ? 'Needs reconciliation' : '—')
+			accessor: (item) => (item.hasReconciliationException ? 'Dates need review' : '—')
 		},
 		{ key: 'termEndOn', title: 'Term ends', format: 'date' },
 		{

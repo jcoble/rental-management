@@ -81,7 +81,7 @@ public class PortfolioController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Portfolio not found" }) : Ok(updated);
     }
@@ -96,7 +96,7 @@ public class PortfolioController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Portfolio not found" });
     }

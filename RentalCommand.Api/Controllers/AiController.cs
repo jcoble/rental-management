@@ -70,7 +70,7 @@ public class AiController : ManagementControllerBase
         if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
         var deliveryOperationId = NormalizeIdempotencyKey(idempotencyKey);
         if ((req.DeliverViaEmail || req.DeliverViaSms) && deliveryOperationId is null)
-            return BadRequest("Idempotency-Key is required for Q&A delivery and must be at most 128 characters.");
+            return BadRequest("A request key is required for Q&A delivery and cannot exceed 128 characters.");
 
         var scope = GetWorkspaceReadScope();
         if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
@@ -110,7 +110,7 @@ public class AiController : ManagementControllerBase
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
-            return BadRequest("Idempotency-Key is required and must be at most 128 characters.");
+            return BadRequest("A request key is required and cannot exceed 128 characters.");
         if (req.Draft is null) return BadRequest("Draft is required.");
         if (req.Draft.Expense?.PropertyId is not int propertyId) return Forbid();
 

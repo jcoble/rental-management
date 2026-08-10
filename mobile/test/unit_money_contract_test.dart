@@ -253,7 +253,7 @@ void main() {
         CorrectTenantPaymentInput(
           paymentEntryId: 901,
           effectiveOn: DateTime(2026, 7, 24),
-          reason: 'Correction of immutable payment receipt',
+          reason: 'Correction of original payment receipt',
           paymentMethodSummary: 'Check',
           externalReference: 'refund-check-7',
         ),

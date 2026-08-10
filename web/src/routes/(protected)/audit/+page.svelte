@@ -15,7 +15,7 @@
 	import { currentUserIsPlatformAdmin } from '$lib/stores/auth.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
-	import { formatAuditChangeValue } from '$lib/utils/status-labels';
+	import { formatAuditChangeValue, formatStatusLabel } from '$lib/utils/status-labels';
 
 	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
 	// platform-operator-only, so workspace security administrators must not receive a dead link. The
@@ -216,8 +216,12 @@
 
 	function entityLabel(entry: AuditEntry): string {
 		if (!entry.entityType) return '';
-		const label = entityTypeLabels[entry.entityType] ?? entry.entityType;
+		const label = entityTypeLabels[entry.entityType] ?? formatStatusLabel(entry.entityType);
 		return entry.entityId ? `${label} #${entry.entityId}` : label;
+	}
+
+	function entityTypeFilterLabel(value: string): string {
+		return value ? (entityTypeLabels[value] ?? formatStatusLabel(value)) : 'All records';
 	}
 </script>
 
@@ -277,12 +281,12 @@
 			</Select.Root>
 			<Select.Root type="single" bind:value={entityTypeFilter}>
 				<Select.Trigger class="w-40" data-testid="audit-entity-type-filter">
-					{entityTypeFilter || 'All entities'}
+					{entityTypeFilterLabel(entityTypeFilter)}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All entities">All entities</Select.Item>
+					<Select.Item value="" label="All records">All records</Select.Item>
 					{#each ENTITY_TYPES as e}
-						<Select.Item value={e} label={e}>{e}</Select.Item>
+						<Select.Item value={e} label={entityTypeLabels[e] ?? formatStatusLabel(e)}>{entityTypeLabels[e] ?? formatStatusLabel(e)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>

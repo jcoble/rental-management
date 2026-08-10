@@ -138,7 +138,7 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
         where TCommand : notnull, IAtomicCommandData
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryGetActiveAccessContext(out var active)) return Forbid();
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))
             .ToLowerInvariant();

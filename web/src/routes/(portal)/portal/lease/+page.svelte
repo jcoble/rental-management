@@ -101,7 +101,7 @@
 				<div class="rounded-lg border border-border bg-card p-4">
 					<p class="font-medium">{relationship.agreement?.agreementNumber ?? relationship.relationshipNumber}</p>
 					<p class="mt-1 text-sm text-muted-foreground">{relationship.propertyName} {relationship.unitNumber ? `Unit ${relationship.unitNumber}` : ''}</p>
-					<p class="mt-3 text-sm">{relationship.agreement ? `Rent ${money(relationship.agreement.baseRentAmount)} · ${relationship.agreement.termEndOn ? `Ends ${formatDateOnly(relationship.agreement.termEndOn)}` : 'Month-to-month'}` : 'No governing agreement'}</p>
+					<p class="mt-3 text-sm">{relationship.agreement ? `Rent ${money(relationship.agreement.baseRentAmount)} · ${relationship.agreement.termEndOn ? `Ends ${formatDateOnly(relationship.agreement.termEndOn)}` : 'Month-to-month'}` : 'No lease in effect'}</p>
 					{#if relationship.agreement?.executedDocumentAvailable}
 						<Button
 							type="button"

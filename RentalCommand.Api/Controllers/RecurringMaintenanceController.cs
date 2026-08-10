@@ -62,7 +62,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _service.CreateAuthorizedAsync(
             GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
@@ -80,7 +80,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAuthorizedAsync(
             GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null
@@ -98,7 +98,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.SetActiveAuthorizedAsync(
             GetWorkspaceReadScope(), id, request.IsActive, operationKey, ct);
         return updated == null ? NotFound(new { error = "Recurring maintenance task not found" }) : Ok(updated);
@@ -113,7 +113,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAuthorizedAsync(
             GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Recurring maintenance task not found" });

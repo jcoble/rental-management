@@ -300,7 +300,7 @@ public class AppointmentService : IAppointmentService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Atomic appointment mutations are not configured.");
+        "Appointment changes are not available right now.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

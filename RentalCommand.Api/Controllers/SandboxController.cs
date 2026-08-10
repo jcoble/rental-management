@@ -48,7 +48,7 @@ public class SandboxController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
         {
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         var state = await _sandbox.GoLiveAsync(GetWorkspaceReadScope(), key, ct);
@@ -73,7 +73,7 @@ public class SandboxController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
         {
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         var mode = request.Mode?.Trim().ToLowerInvariant();

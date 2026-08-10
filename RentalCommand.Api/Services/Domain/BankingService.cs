@@ -154,9 +154,9 @@ public class BankingService : IBankingService
         var publicToken = Normalize(request.PublicToken)
             ?? throw new InvalidOperationException("A Plaid public token is required.");
         var clientOperationId = Normalize(request.ClientOperationId)
-            ?? throw new InvalidOperationException("A stable client operation id is required for Plaid token exchange.");
+            ?? throw new InvalidOperationException("A request key is required for Plaid token exchange.");
         if (clientOperationId.Length > 160)
-            throw new InvalidOperationException("Plaid ClientOperationId cannot exceed 160 characters.");
+            throw new InvalidOperationException("A request key cannot exceed 160 characters.");
         var accountId = Normalize(request.AccountId)
             ?? throw new InvalidOperationException("A Plaid account id is required.");
 
@@ -1138,7 +1138,7 @@ public class BankingService : IBankingService
                 transferBankTransactionId) == 0)
         {
             throw new DomainValidationException(
-                "Provide exactly one canonical bank reconciliation target.");
+                "Choose exactly one record to match to this bank transaction.");
         }
     }
 
@@ -1196,7 +1196,7 @@ public class BankingService : IBankingService
         : loanPaymentId.HasValue ? BankReconciliationAction.MatchLoanPayment
         : ownerDistributionId.HasValue ? BankReconciliationAction.MatchOwnerDistribution
         : transferBankTransactionId.HasValue ? BankReconciliationAction.MatchTransfer
-        : throw new DomainValidationException("A canonical bank reconciliation target is required.");
+        : throw new DomainValidationException("Choose one record to match to this bank transaction.");
 
     private async Task<BankMatchSuggestionResponse?> LoadSqlRankedSuggestionAsync(
         int portfolioId,

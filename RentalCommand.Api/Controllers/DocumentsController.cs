@@ -127,14 +127,14 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             return BadRequest(new { error = validationError });
 
         if (string.IsNullOrWhiteSpace(entityType))
-            return BadRequest(new { error = "entityType is required." });
+            return BadRequest(new { error = "Document type is required." });
         if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
-            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 160 characters." });
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
         if (!TryParseTarget(normalizedEntityType, out var target))
-            return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
+            return BadRequest(new { error = "That document type isn't supported." });
         var isStaff = HasWorkspaceMembership();
         WorkspaceReadScope? staffScope = null;
         if (isStaff)
@@ -248,12 +248,12 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(entityType))
-            return BadRequest(new { error = "entityType query parameter is required." });
+            return BadRequest(new { error = "Document type is required." });
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
         if (!TryParseTarget(normalizedEntityType, out var target))
-            return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
+            return BadRequest(new { error = "That document type isn't supported." });
         normalizedEntityType = target.ToString();
 
         // Tenant guard: a tenant may only list documents for a WorkOrder they own. Returning an empty
@@ -366,7 +366,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
-            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 160 characters." });
 
         var portfolioId = GetPortfolioId();
         var isStaff = HasWorkspaceMembership();

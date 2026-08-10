@@ -25,7 +25,7 @@ public sealed class TenantAccountLifecycleController : ManagementControllerBase
     {
         var normalized = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         if (!TryGetActiveAccessContext(out var active)) return Forbid();
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
             .ToLowerInvariant();

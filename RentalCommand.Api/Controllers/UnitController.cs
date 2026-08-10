@@ -332,9 +332,9 @@ public class UnitController : ManagementControllerBase
     {
         var operationId = supplied?.Trim();
         if (string.IsNullOrEmpty(operationId))
-            throw new DomainValidationException("Idempotency-Key is required.");
+            throw new DomainValidationException("A request key is required.");
         if (operationId.Length > 160)
-            throw new DomainValidationException("Idempotency-Key cannot exceed 160 characters.");
+            throw new DomainValidationException("A request key cannot exceed 160 characters.");
         return operationId;
     }
 
@@ -367,7 +367,7 @@ public class UnitController : ManagementControllerBase
     {
         if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var scope = GetWorkspaceReadScope();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsManage,
@@ -394,7 +394,7 @@ public class UnitController : ManagementControllerBase
     {
         if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var scope = GetWorkspaceReadScope();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsManage,
@@ -418,7 +418,7 @@ public class UnitController : ManagementControllerBase
     {
         if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var scope = GetWorkspaceReadScope();
         try
         {

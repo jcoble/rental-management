@@ -63,6 +63,7 @@
 	} from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -297,7 +298,7 @@
 
 	function loanPaymentLabel(payment: LoanPayment): string {
 		const dueDate = new Date(payment.dueDate).toLocaleDateString();
-		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${payment.status}`;
+		return `${payment.periodKey} · due ${dueDate} · ${formatUsd(payment.totalAmount)} · ${formatStatusLabel(payment.status)}`;
 	}
 
 	const expenseUnitsQuery = createQuery(() => ({
@@ -609,7 +610,7 @@
 
 	function expenseWorkOrderLabel(workOrder: WorkOrder): string {
 		const unit = workOrder.unitNumber ? ` · Unit ${workOrder.unitNumber}` : '';
-		return `${workOrder.title}${unit} · ${workOrder.status}`;
+		return `${workOrder.title}${unit} · ${formatStatusLabel(workOrder.status)}`;
 	}
 
 	const selectedExpenseWorkOrderLabel = $derived.by(() => {
@@ -972,7 +973,7 @@
 			case 'Confirmed': return 'Confirmed';
 			case 'Failed': return 'Extraction failed';
 			case 'Rejected': return 'Rejected';
-			default: return s;
+			default: return formatStatusLabel(s);
 		}
 	}
 
@@ -1914,7 +1915,7 @@
 										{#if leaseUnitsQuery.data}
 											{#each leaseUnitChoices as unit (unit.id)}
 														<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
-															Unit {unit.unitNumber} ({unit.status})
+															Unit {unit.unitNumber} ({formatStatusLabel(unit.status)})
 														</Select.Item>
 													{/each}
 												{/if}
@@ -2026,12 +2027,12 @@
 												{rentTrackingStartMode === 'ForwardOnly'
 													? 'Start from the current date'
 													: rentTrackingStartMode === 'BackfillFromLeaseStart'
-														? 'Backfill from the lease start'
+														? 'Add past rent from the lease start'
 														: 'Start from a custom date'}
 											</Select.Trigger>
 											<Select.Content>
 												<Select.Item value="ForwardOnly" label="Start from the current date">Start from the current date</Select.Item>
-												<Select.Item value="BackfillFromLeaseStart" label="Backfill from the lease start">Backfill from the lease start</Select.Item>
+												<Select.Item value="BackfillFromLeaseStart" label="Add past rent from the lease start">Add past rent from the lease start</Select.Item>
 												<Select.Item value="CustomCutoffDate" label="Start from a custom date">Start from a custom date</Select.Item>
 											</Select.Content>
 										</Select.Root>

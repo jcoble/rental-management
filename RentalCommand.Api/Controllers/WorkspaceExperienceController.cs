@@ -51,7 +51,7 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
         {
             return BadRequest(new
             {
-                error = "A valid Idempotency-Key is required (maximum 200 characters).",
+                error = "A request key is required and cannot exceed 200 characters.",
             });
         }
 

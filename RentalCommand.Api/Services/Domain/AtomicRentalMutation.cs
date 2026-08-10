@@ -190,7 +190,7 @@ public sealed class AtomicRentalMutationHandler
         }
 
         if (command.Operation != AtomicRentalMutationOperation.Update)
-            throw new ArgumentException("Unsupported Unit mutation operation.");
+            throw new ArgumentException("That unit action is not supported.");
         var update = Read<UpdateUnitRequest>(command);
         var normalizedUpdateNumber = update.UnitNumber is null
             ? null
@@ -336,7 +336,7 @@ public sealed class AtomicRentalMutationHandler
                 await WithdrawApplicationAsync(command, application, attempt, now, ct),
             AtomicRentalMutationOperation.Delete =>
                 await DeleteApplicationAsync(command, application, attempt, now, ct),
-            _ => throw new ArgumentException("Unsupported Application mutation operation."),
+            _ => throw new ArgumentException("That application action is not supported."),
         };
     }
 
@@ -453,7 +453,7 @@ public sealed class AtomicRentalMutationHandler
             return Applied(entity.Id, entity.ApprovedTenantId);
         }
         if (entity.Status is ApplicationStatus.Declined or ApplicationStatus.Withdrawn)
-            throw new InvalidOperationException($"Application is {entity.Status.ToString().ToLowerInvariant()} and cannot be approved.");
+            throw new InvalidOperationException("This application cannot be approved in its current status.");
         await RequireCompatibleScreeningDecisionAsync(
             command.PortfolioId, entity.Id, ScreeningDecision.Accept, ScreeningDecision.Conditional,
             _db, ct);
@@ -977,7 +977,7 @@ public sealed class AtomicRentalMutationHandler
 
     private T Read<T>(AtomicRentalMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Rental mutation request payload is invalid.");
+        ?? throw new ArgumentException("The rental update is invalid.");
 
     private void Validate(AtomicRentalMutationCommand command)
     {
@@ -1069,7 +1069,7 @@ public static class AtomicRentalMutation
         UpdateUnitRequest request)
     {
         var payload = JsonSerializer.SerializeToNode(request, SparseUpdateJson)?.AsObject()
-            ?? throw new ArgumentException("Unit update request payload is invalid.", nameof(request));
+            ?? throw new ArgumentException("The unit update is invalid.", nameof(request));
         if (request.FloorPlanSpecified && request.FloorPlan is null)
             payload[nameof(UpdateUnitRequest.FloorPlan)] = null;
         if (request.NotesSpecified && request.Notes is null)

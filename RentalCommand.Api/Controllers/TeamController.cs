@@ -314,7 +314,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
         var normalized = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
         {
-            failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            failure = BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
             return false;
         }
         if (!TryGetActiveAccessContext(out var active))

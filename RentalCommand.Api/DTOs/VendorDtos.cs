@@ -77,7 +77,7 @@ public sealed class RequestVendorW9Request
 {
     [Required]
     [StringLength(160, MinimumLength = 1)]
-    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    [RegularExpression(@".*\S.*", ErrorMessage = "A request key cannot be blank.")]
     public string ClientOperationId { get; set; } = string.Empty;
 }
 

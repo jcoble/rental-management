@@ -11,7 +11,8 @@
 	import { workOrderSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { money } from '../money';
-	import { formatDateOnly } from '$lib/utils/date';
+import { formatDateOnly } from '$lib/utils/date';
+import { formatStatusLabel } from '$lib/utils/status-labels';
 	import {
 		defaultWorkOrderReceiptScanContext,
 		workOrderReceiptScanContext
@@ -279,9 +280,9 @@
 							<div>
 								<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-priority">Priority</label>
 								<Select.Root type="single" bind:value={createForm.priority}>
-									<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{createForm.priority}</Select.Trigger>
+									<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{formatStatusLabel(createForm.priority)}</Select.Trigger>
 									<Select.Content>
-										{#each WO_PRIORITIES as p}<Select.Item value={p} label={p}>{p}</Select.Item>{/each}
+										{#each WO_PRIORITIES as p}<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>{/each}
 									</Select.Content>
 								</Select.Root>
 							</div>

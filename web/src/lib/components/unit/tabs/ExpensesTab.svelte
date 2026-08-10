@@ -11,6 +11,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { money, unitMoneySectionGates } from '../money';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
@@ -324,9 +325,9 @@
 						<div>
 							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-status">Status</label>
 							<Select.Root type="single" bind:value={createForm.status}>
-								<Select.Trigger id="exp-status" class="w-full" data-testid="expenses-status-input">{createForm.status}</Select.Trigger>
+								<Select.Trigger id="exp-status" class="w-full" data-testid="expenses-status-input">{formatStatusLabel(createForm.status)}</Select.Trigger>
 								<Select.Content>
-									{#each EXPENSE_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+									{#each EXPENSE_STATUSES as s}<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>{/each}
 								</Select.Content>
 							</Select.Root>
 						</div>
@@ -404,7 +405,7 @@
 		<section class="space-y-3 border-t pt-6" data-testid="property-expenses-section">
 			<div>
 				<h3 class="font-semibold">Property expenses</h3>
-				<p class="text-sm text-muted-foreground">Costs persisted against this SingleRental Property rather than its Unit.</p>
+				<p class="text-sm text-muted-foreground">Costs are recorded for this single-rental property instead of its unit.</p>
 			</div>
 			{#if propertyExpensesQuery.isLoading}
 				<LoadingState label="Loading Property expenses" testid="property-expenses-loading" />
@@ -460,7 +461,7 @@
 								<span class="truncate text-sm font-medium">{loan.lender}</span>
 								<span class="font-semibold">{money(loan.currentBalance)}</span>
 							</div>
-							<p class="text-xs text-muted-foreground">{money(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month · {loan.status}</p>
+							<p class="text-xs text-muted-foreground">{money(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month · {formatStatusLabel(loan.status)}</p>
 						</li>
 					{/each}
 				</ul>

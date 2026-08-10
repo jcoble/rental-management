@@ -13,7 +13,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert, Download } from '@lucide/svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import { formatAuditChangeValue } from '$lib/utils/status-labels';
+	import { formatAuditChangeValue, formatStatusLabel } from '$lib/utils/status-labels';
 
 	// The (admin) route group already gates this page behind the Admin role server-side. This is the
 	// forensic view: every audit row, plus actor identity and the captured IP address/raw old→new JSON.
@@ -124,7 +124,8 @@
 
 	function entityLabel(entry: AdminAuditEntry): string {
 		if (!entry.entityType) return '';
-		return entry.entityId ? `${entry.entityType} #${entry.entityId}` : entry.entityType;
+		const label = formatStatusLabel(entry.entityType);
+		return entry.entityId ? `${label} #${entry.entityId}` : label;
 	}
 
 	/** Pretty-print a JSON string column; falls back to the raw text if it isn't valid JSON. */
@@ -198,12 +199,12 @@
 			</Select.Root>
 			<Select.Root type="single" bind:value={entityTypeFilter}>
 				<Select.Trigger class="w-44" data-testid="admin-audit-entity-type-filter">
-					{entityTypeFilter || 'All entities'}
+					{entityTypeFilter ? formatStatusLabel(entityTypeFilter) : 'All records'}
 				</Select.Trigger>
 				<Select.Content>
-					<Select.Item value="" label="All entities">All entities</Select.Item>
+					<Select.Item value="" label="All records">All records</Select.Item>
 					{#each ENTITY_TYPES as e}
-						<Select.Item value={e} label={e}>{e}</Select.Item>
+						<Select.Item value={e} label={formatStatusLabel(e)}>{formatStatusLabel(e)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>

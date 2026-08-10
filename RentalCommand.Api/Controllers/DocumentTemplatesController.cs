@@ -106,7 +106,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.CreateAsync(scope, request, key, ct);
         return result.Outcome switch
@@ -133,7 +133,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (file is null || file.Length == 0)
         {
             return BadRequest(new { error = "A non-empty PDF file is required." });
@@ -200,7 +200,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.UpdateAsync(scope, id, request, key, ct);
         return Map(result);
@@ -217,7 +217,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.AddFieldAsync(scope, id, request, key, ct);
         return result.Outcome switch
@@ -241,7 +241,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.UpdateFieldAsync(scope, id, fieldId, request, key, ct);
         return Map(result);
@@ -257,7 +257,7 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.DeleteFieldAsync(scope, id, fieldId, key, ct);
         return result.Outcome switch

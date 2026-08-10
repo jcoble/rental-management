@@ -100,8 +100,8 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         string fileName, string contentType, byte[] bytes, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
-        var operationId = CleanRequired(clientOperationId, "Client operation ID");
-        if (operationId.Length > 160) throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
+        var operationId = CleanRequired(clientOperationId, "Request key");
+        if (operationId.Length > 160) throw new DomainValidationException("A request key cannot exceed 160 characters.");
         var photoExists = await _db.ListingPhotos.AsNoTracking().AnyAsync(photo =>
             photo.Id == photoId && photo.PortfolioId == portfolioId
             && photo.RentalListing != null && photo.RentalListing.UnitId == unitId, ct);
@@ -207,7 +207,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, int publicationId, string clientOperationId,
         CancellationToken ct = default)
     {
-        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
+        var operationId = CleanRequiredMax(clientOperationId, "Request key", 160);
         var snapshot = await LoadConnectedSnapshotAsync(scope.PortfolioId, unitId, publicationId, ct);
         if (snapshot is null) return null;
         var admitted = await AdmitConnectedIntentAsync(
@@ -263,7 +263,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, int publicationId, string clientOperationId,
         ConnectedListingOperation operation, CancellationToken ct)
     {
-        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
+        var operationId = CleanRequiredMax(clientOperationId, "Request key", 160);
 
         var snapshot = await LoadConnectedSnapshotAsync(scope.PortfolioId, unitId, publicationId, ct);
         if (snapshot is null) return null;
@@ -533,7 +533,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     private static AtomicCommandIdentity ClientIdentity(
         string commandType, int portfolioId, int unitId, string clientOperationId)
     {
-        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
+        var operationId = CleanRequiredMax(clientOperationId, "Request key", 160);
         return new AtomicCommandIdentity(commandType,
             $"{portfolioId}:{unitId}:{OperationHash(operationId)}");
     }

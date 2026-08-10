@@ -64,7 +64,7 @@ public class OwnerDistributionController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var created = await _service.CreateAsync(scope, request, operationKey, ct);
@@ -87,7 +87,7 @@ public class OwnerDistributionController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
@@ -108,7 +108,7 @@ public class OwnerDistributionController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var approved = await _service.ApproveAsync(scope, id, request, operationKey, ct);
@@ -129,7 +129,7 @@ public class OwnerDistributionController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var rejected = await _service.RejectAsync(scope, id, request, operationKey, ct);
@@ -149,7 +149,7 @@ public class OwnerDistributionController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);

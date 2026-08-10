@@ -46,6 +46,7 @@
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import type { UnitLeaseSummary } from '$lib/types';
 	import { ArrowLeft } from '@lucide/svelte';
 
@@ -516,7 +517,7 @@
 									{:else}
 										<ul class="divide-y rounded-lg border">
 											{#each unitInspectionsQuery.data.items as inspection (inspection.id)}
-												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={`inspection-${inspection.id}`}><span class="font-medium">{inspection.type}</span><span class="text-muted-foreground">{inspection.status} · {new Date(inspection.scheduledFor).toLocaleDateString()}</span></li>
+												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={`inspection-${inspection.id}`}><span class="font-medium">{formatStatusLabel(inspection.type)}</span><span class="text-muted-foreground">{formatStatusLabel(inspection.status)} · {new Date(inspection.scheduledFor).toLocaleDateString()}</span></li>
 											{/each}
 										</ul>
 									{/if}
