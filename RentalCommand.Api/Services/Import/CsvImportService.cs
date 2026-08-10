@@ -360,7 +360,7 @@ public sealed class CsvImportService : ICsvImportService
                 errors.Add("propertyName or propertyId is required.");
             commands.Add(new AtomicUnitImportRow(
                 row.RowNumber, propertyId, NullIfEmpty(Cell("propertyName")),
-                request.UnitNumber.Trim(), request.Bedrooms, request.Bathrooms, request.MarketRent,
+                request.UnitNumber.Trim(), request.Bedrooms ?? 0m, request.Bathrooms ?? 0m, request.MarketRent,
                 errors.ToArray()));
         }
 

@@ -18,7 +18,8 @@
 		settingsSchema,
 		ownerSchema,
 		propertySchema,
-		unitSchema,
+		unitSchemaForPropertyType,
+		isResidentialDwellingType,
 		tenantSchema,
 		leaseSchema,
 		parseForm,
@@ -726,6 +727,7 @@
 	// RentalStructure is an explicit persisted choice. Property type does not imply whether an
 	// address has one rentable space or several (for example, a mixed-use address may have either).
 	const isSingleRental = $derived(propertyForm.rentalStructure === 'SingleRental');
+	const isResidentialUnit = $derived(isResidentialDwellingType(propertyForm.type));
 	let unitCount = $state('');
 
 	function unitsAreDefaultEmpty() {
@@ -884,7 +886,7 @@
 		unitRows.forEach((row, i) => {
 			const blank = !row.unitNumber.trim() && !row.floorPlan.trim() && !row.bedrooms.trim() && !row.bathrooms.trim() && !row.squareFeet.trim() && !row.marketRent.trim() && !row.notes.trim();
 			if (blank) return;
-			const res = parseForm(unitSchema, row);
+			const res = parseForm(unitSchemaForPropertyType(propertyForm.type), row);
 			if (res.errors) {
 				errors[i] = res.errors;
 				hasUnitError = true;
@@ -1785,23 +1787,25 @@
 									<div class="space-y-3" data-testid="onboarding-units">
 										{#each unitRows as row, i (i)}
 											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
-												<div class="grid gap-2 {isSingleRental ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}">
-													{#if !isSingleRental}<div>
+													<div class="grid gap-2 {isResidentialUnit ? (isSingleRental ? 'sm:grid-cols-3' : 'sm:grid-cols-4') : (isSingleRental ? 'sm:grid-cols-1' : 'sm:grid-cols-2')}" data-testid="onboarding-unit-fields">
+														{#if !isSingleRental}<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Unit #</span>
 														<Input data-testid="onboarding-unit-number-{i}" bind:value={row.unitNumber} placeholder="1, A, etc." />
 														{#if unitRowErrors[i]?.unitNumber}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].unitNumber}</p>{/if}
 													</div>{/if}
-													<div>
-														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
-														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
-														{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
-													</div>
-													<div>
-														<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
-														<Input type="text" inputmode="decimal" mask="decimal" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
-														{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
-													</div>
-													<div>
+														{#if isResidentialUnit}
+															<div>
+															<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
+															<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
+															{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
+															</div>
+															<div>
+															<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
+															<Input type="text" inputmode="decimal" mask="decimal" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
+															{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
+															</div>
+														{/if}
+														<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
 														<div class="flex items-center gap-1">
 															<Input type="text" inputmode="decimal" mask="currency" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
@@ -1810,7 +1814,7 @@
 																	<Trash2 class="h-4 w-4" />
 																</button>
 															{/if}
-														</div>
+															</div>
 														{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
 													</div>
 												</div>

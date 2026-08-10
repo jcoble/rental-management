@@ -341,10 +341,10 @@ public sealed class SetupUnitRequest
     public string? FloorPlan { get; set; }
 
     [Range(0, 99)]
-    public decimal Bedrooms { get; set; }
+    public decimal? Bedrooms { get; set; }
 
     [Range(0, 99)]
-    public decimal Bathrooms { get; set; }
+    public decimal? Bathrooms { get; set; }
 
     [Range(0, 99999)]
     public int? SquareFeet { get; set; }

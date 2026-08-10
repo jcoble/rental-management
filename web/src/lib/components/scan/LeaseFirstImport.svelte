@@ -18,7 +18,7 @@
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import LeaseScanSignatureChoice, { type LeaseScanReviewDisposition } from './LeaseScanSignatureChoice.svelte';
-	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, unitSchemaForPropertyType, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
@@ -110,6 +110,14 @@
 		queryFn: () => properties.listPage(portfolioId, { search: propertyForm.name || propertyForm.addressLine1, skip: 0, take: 20, sort: 'name' }),
 		enabled: phase === 'steps'
 	}));
+	const selectedPropertyQuery = createQuery(() => ({
+		queryKey: ['new-rental-selected-property', portfolioId, propertyChoice],
+		queryFn: () => properties.get(Number(propertyChoice)),
+		enabled: phase === 'steps' && !isCreatingProperty && Number(propertyChoice) > 0
+	}));
+	const unitPropertyType = $derived(
+		isCreatingProperty ? propertyForm.type : selectedPropertyQuery.data?.type
+	);
 	const unitsQuery = createQuery(() => ({
 		queryKey: ['units-for-new-rental', propertyChoice, unitForm.unitNumber],
 		queryFn: () => units.listWithHealthPage({ propertyId: Number(propertyChoice), search: unitForm.unitNumber, skip: 0, take: 20, sort: 'unitNumber' }),
@@ -344,7 +352,7 @@
 		}
 		if (i === 1) {
 			if (!isCreatingProperty && unitChoice !== CREATE) { unitErrors = {}; return !!unitChoice; }
-			const r = parseForm(unitSchema, unitForm);
+			const r = parseForm(unitSchemaForPropertyType(unitPropertyType), unitForm);
 			unitErrors = r.errors ?? {};
 			return !r.errors;
 		}
@@ -582,7 +590,7 @@
 				</div>
 			{/if}
 			{#if isCreatingProperty || unitChoice === CREATE}
-				<UnitFields bind:form={unitForm} errors={unitErrors} {autoFilled} {confidence} testidPrefix="new-rental-unit" />
+				<UnitFields bind:form={unitForm} errors={unitErrors} {autoFilled} {confidence} propertyType={unitPropertyType} testidPrefix="new-rental-unit" />
 			{/if}
 		</div>
 	{:else if step === 2}

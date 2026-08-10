@@ -49,6 +49,9 @@ public sealed class AtomicRentalMutationHandler
 {
     private readonly RentalCommandDbContext _db;
 
+    private const string ResidentialUnitDetailsRequired =
+        "Bedrooms and bathrooms are required for residential dwellings.";
+
     public AtomicRentalMutationHandler(RentalCommandDbContext db) => _db = db;
 
     private const string UnitEntityType = "Unit";
@@ -121,6 +124,12 @@ public sealed class AtomicRentalMutationHandler
             var normalizedUnitNumber = RequireNonBlank(request.UnitNumber, "Unit number");
             if (!await AuthorizeUnitCreateAsync(command, db, now, ct))
                 throw Denied();
+            var propertyType = await ReadUnitPropertyTypeAsync(
+                command.PortfolioId, request.PropertyId, db, ct)
+                ?? throw Conflict("Property not found.");
+            if (propertyType.RequiresResidentialUnitDetails()
+                && (!request.Bedrooms.HasValue || !request.Bathrooms.HasValue))
+                throw new DomainValidationException(ResidentialUnitDetailsRequired);
             if (await db.Set<Unit>().AnyAsync(unit =>
                     unit.PortfolioId == command.PortfolioId
                     && unit.PropertyId == request.PropertyId
@@ -137,8 +146,8 @@ public sealed class AtomicRentalMutationHandler
                 PropertyId = request.PropertyId,
                 UnitNumber = normalizedUnitNumber,
                 FloorPlan = request.FloorPlan,
-                Bedrooms = request.Bedrooms,
-                Bathrooms = request.Bathrooms,
+                Bedrooms = request.Bedrooms ?? 0m,
+                Bathrooms = request.Bathrooms ?? 0m,
                 SquareFeet = request.SquareFeet,
                 MarketRent = request.MarketRent,
                 Notes = request.Notes,
@@ -154,6 +163,7 @@ public sealed class AtomicRentalMutationHandler
             {
                 Id = entity.Id,
                 PropertyId = entity.PropertyId,
+                PropertyType = propertyType,
                 UnitNumber = entity.UnitNumber,
                 FloorPlan = entity.FloorPlan,
                 Bedrooms = entity.Bedrooms,
@@ -192,6 +202,13 @@ public sealed class AtomicRentalMutationHandler
         if (command.Operation != AtomicRentalMutationOperation.Update)
             throw new ArgumentException("That unit action is not supported.");
         var update = Read<UpdateUnitRequest>(command);
+        var propertyTypeForUpdate = await ReadUnitPropertyTypeAsync(
+            command.PortfolioId, unit.PropertyId, db, ct)
+            ?? throw Conflict("Property not found.");
+        if (propertyTypeForUpdate.RequiresResidentialUnitDetails()
+            && ((update.BedroomsSpecified && !update.Bedrooms.HasValue)
+                || (update.BathroomsSpecified && !update.Bathrooms.HasValue)))
+            throw new DomainValidationException(ResidentialUnitDetailsRequired);
         var normalizedUpdateNumber = update.UnitNumber is null
             ? null
             : RequireNonBlank(update.UnitNumber, "Unit number");
@@ -224,14 +241,14 @@ public sealed class AtomicRentalMutationHandler
                 changed = true;
             }
         }
-        if (update.Bedrooms.HasValue && unit.Bedrooms != update.Bedrooms.Value)
+        if (update.BedroomsSpecified && unit.Bedrooms != (update.Bedrooms ?? 0m))
         {
-            unit.Bedrooms = update.Bedrooms.Value;
+            unit.Bedrooms = update.Bedrooms ?? 0m;
             changed = true;
         }
-        if (update.Bathrooms.HasValue && unit.Bathrooms != update.Bathrooms.Value)
+        if (update.BathroomsSpecified && unit.Bathrooms != (update.Bathrooms ?? 0m))
         {
-            unit.Bathrooms = update.Bathrooms.Value;
+            unit.Bathrooms = update.Bathrooms ?? 0m;
             changed = true;
         }
         if (update.SquareFeet.HasValue && unit.SquareFeet != update.SquareFeet.Value)
@@ -666,6 +683,18 @@ public sealed class AtomicRentalMutationHandler
             CapabilityKeys.RentalsManage, requireAllProperties: false, ct);
     }
 
+    private static async Task<PropertyType?> ReadUnitPropertyTypeAsync(
+        int portfolioId,
+        int propertyId,
+        RentalCommandDbContext db,
+        CancellationToken ct) =>
+        await db.Set<Property>().AsNoTracking()
+            .Where(property => property.Id == propertyId
+                && property.PortfolioId == portfolioId
+                && property.DeletedAt == null)
+            .Select(property => (PropertyType?)property.PropertyType)
+            .SingleOrDefaultAsync(ct);
+
     private async Task<bool> AuthorizeUnitAsync(
         AtomicRentalMutationCommand command,
         RentalCommandDbContext db,
@@ -1072,6 +1101,10 @@ public static class AtomicRentalMutation
             ?? throw new ArgumentException("The unit update is invalid.", nameof(request));
         if (request.FloorPlanSpecified && request.FloorPlan is null)
             payload[nameof(UpdateUnitRequest.FloorPlan)] = null;
+        if (request.BedroomsSpecified && request.Bedrooms is null)
+            payload[nameof(UpdateUnitRequest.Bedrooms)] = null;
+        if (request.BathroomsSpecified && request.Bathrooms is null)
+            payload[nameof(UpdateUnitRequest.Bathrooms)] = null;
         if (request.NotesSpecified && request.Notes is null)
             payload[nameof(UpdateUnitRequest.Notes)] = null;
 

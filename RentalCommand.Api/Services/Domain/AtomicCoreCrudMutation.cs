@@ -306,6 +306,10 @@ public sealed class AtomicCoreCrudMutationHandler
             throw Conflict("A SingleRental Property must contain exactly one Unit.");
         if (request.RentalStructure == RentalStructure.MultiRental && totalUnitCount < 1)
             throw Conflict("A MultiRental Property must contain at least one Unit.");
+        if (request.PropertyType.RequiresResidentialUnitDetails()
+            && setup.Units.Any(unit => !unit.Bedrooms.HasValue || !unit.Bathrooms.HasValue))
+            throw new DomainValidationException(
+                "Bedrooms and bathrooms are required for residential dwellings.");
 
         if (!updated)
             await attempt.FlushBusinessAsync(ct);
@@ -326,8 +330,8 @@ public sealed class AtomicCoreCrudMutationHandler
             Property = property,
             UnitNumber = unit.UnitNumber.Trim(),
             FloorPlan = unit.FloorPlan,
-            Bedrooms = unit.Bedrooms,
-            Bathrooms = unit.Bathrooms,
+            Bedrooms = unit.Bedrooms ?? 0m,
+            Bathrooms = unit.Bathrooms ?? 0m,
             SquareFeet = unit.SquareFeet,
             MarketRent = unit.MarketRent,
             Notes = unit.Notes,
@@ -360,7 +364,7 @@ public sealed class AtomicCoreCrudMutationHandler
         {
             Property = propertySnapshot,
             Updated = updated,
-            Units = currentUnits.Select(ToUnitResponse).ToList(),
+            Units = currentUnits.Select(unit => ToUnitResponse(unit, property.PropertyType)).ToList(),
         };
         return Applied(property.Id, JsonSerializer.Serialize(response));
     }
@@ -630,12 +634,13 @@ public sealed class AtomicCoreCrudMutationHandler
         IReadOnlyList<PropertyOwnership> Updated,
         IReadOnlyList<PropertyOwnership> Created);
 
-    private UnitResponse ToUnitResponse(Unit unit) => new()
+    private static UnitResponse ToUnitResponse(Unit unit, PropertyType propertyType) => new()
     {
         Id = unit.Id,
         PropertyId = unit.PropertyId,
         UnitNumber = unit.UnitNumber,
         FloorPlan = unit.FloorPlan,
+        PropertyType = propertyType,
         Bedrooms = unit.Bedrooms,
         Bathrooms = unit.Bathrooms,
         SquareFeet = unit.SquareFeet,

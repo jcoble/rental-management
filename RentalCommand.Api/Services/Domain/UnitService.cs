@@ -122,6 +122,10 @@ public class UnitService : IUnitService
             PropertyId = unit.PropertyId,
             UnitNumber = unit.UnitNumber,
             FloorPlan = unit.FloorPlan,
+            PropertyType = _db.Properties
+                .Where(property => property.Id == unit.PropertyId)
+                .Select(property => property.PropertyType)
+                .FirstOrDefault(),
             Bedrooms = unit.Bedrooms,
             Bathrooms = unit.Bathrooms,
             SquareFeet = unit.SquareFeet,
@@ -162,6 +166,10 @@ public class UnitService : IUnitService
                 PropertyId = unit.PropertyId,
                 UnitNumber = unit.UnitNumber,
                 FloorPlan = unit.FloorPlan,
+                PropertyType = _db.Properties
+                    .Where(property => property.Id == unit.PropertyId)
+                    .Select(property => property.PropertyType)
+                    .FirstOrDefault(),
                 Bedrooms = unit.Bedrooms,
                 Bathrooms = unit.Bathrooms,
                 SquareFeet = unit.SquareFeet,

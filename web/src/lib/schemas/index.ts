@@ -196,21 +196,40 @@ export const propertyOperationsSchema = z.object({
 	notes: optionalTextMax('Notes', 2000),
 });
 
-export const unitSchema = z.object({
-	// unitNumber: server [MaxLength(50)]
-	unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
-	// floorPlan: server [MaxLength(100)]
-	floorPlan: optionalTextMax('Floor plan', 100),
-	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative, max 99
-	bedrooms: nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99'),
-	bathrooms: nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99'),
-	// squareFeet: server nullable int [Range(0, 99999)]
-	squareFeet: optionalWholeNumberMax('Square feet', 99999),
-	// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
-	marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
-	// notes: server [MaxLength(2000)]
-	notes: optionalTextMax('Notes', 2000),
-});
+const RESIDENTIAL_PROPERTY_TYPES = new Set(['SingleFamily', 'MultiFamily', 'Condo', 'Townhome']);
+
+export function isResidentialDwellingType(propertyType: string | null | undefined): boolean {
+	// Unknown/omitted types stay residential so a form never silently drops required dwelling data.
+	return propertyType == null || propertyType === '' || RESIDENTIAL_PROPERTY_TYPES.has(propertyType);
+}
+
+export function unitSchemaForPropertyType(propertyType?: string | null) {
+	const residential = isResidentialDwellingType(propertyType);
+	const bedrooms = residential
+		? nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99')
+		: optionalNonNegative('Bedrooms').refine((v) => v == null || v <= 99, 'Bedrooms cannot exceed 99');
+	const bathrooms = residential
+		? nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99')
+		: optionalNonNegative('Bathrooms').refine((v) => v == null || v <= 99, 'Bathrooms cannot exceed 99');
+
+	return z.object({
+		// unitNumber: server [MaxLength(50)]
+		unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
+		// floorPlan: server [MaxLength(100)]
+		floorPlan: optionalTextMax('Floor plan', 100),
+		// Beds/baths are required only for residential dwelling property types.
+		bedrooms,
+		bathrooms,
+		// squareFeet: server nullable int [Range(0, 99999)]
+		squareFeet: optionalWholeNumberMax('Square feet', 99999),
+		// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
+		marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
+		// notes: server [MaxLength(2000)]
+		notes: optionalTextMax('Notes', 2000),
+	});
+}
+
+export const unitSchema = unitSchemaForPropertyType('MultiFamily');
 
 export const tenantSchema = z.object({
 	firstName: required('First name').max(100, 'First name must be 100 characters or fewer'),

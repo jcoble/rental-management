@@ -117,6 +117,25 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             .Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(PropertyType.Storage)]
+    [InlineData(PropertyType.Parking)]
+    [InlineData(PropertyType.Commercial)]
+    public async Task Setup_allows_blank_beds_and_baths_for_non_residential_property_types(
+        PropertyType propertyType)
+    {
+        var request = SingleRentalRequest();
+        request.Property.PropertyType = propertyType;
+        request.Units[0].Bedrooms = null;
+        request.Units[0].Bathrooms = null;
+
+        var created = await _sut.SetupAsync(_scope, request, $"optional-bed-bath-{propertyType}");
+
+        created.Should().NotBeNull();
+        created!.Units.Should().ContainSingle().Which.Should().Match<UnitResponse>(unit =>
+            unit.Bedrooms == 0m && unit.Bathrooms == 0m && unit.PropertyType == propertyType);
+    }
+
     [Fact]
     public async Task Setup_uses_injected_app_clock_for_property_and_unit_business_timestamps()
     {
