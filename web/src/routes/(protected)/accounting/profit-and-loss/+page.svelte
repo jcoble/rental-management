@@ -10,7 +10,7 @@
 	} from '$lib/api/endpoints/accounting-books';
 	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
 	import FinancialStatementTable from '$lib/components/accounting/FinancialStatementTable.svelte';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { getAuthState } from '$lib/stores/auth.svelte';
@@ -121,13 +121,9 @@
 		>
 			{#snippet actions()}
 				<div class="flex flex-wrap items-end gap-3 print:hidden">
-					<label class="grid w-44 gap-1 text-sm" for="profit-and-loss-from">
-						<span class="text-xs font-medium text-muted-foreground">From</span>
-						<DatePicker id="profit-and-loss-from" testid="profit-and-loss-from-input" bind:value={from} />
-					</label>
-					<label class="grid w-44 gap-1 text-sm" for="profit-and-loss-to">
-						<span class="text-xs font-medium text-muted-foreground">To</span>
-						<DatePicker id="profit-and-loss-to" testid="profit-and-loss-to-input" bind:value={to} />
+					<label class="grid w-72 gap-1 text-sm" for="profit-and-loss-range">
+						<span class="text-xs font-medium text-muted-foreground">Date range</span>
+						<RangeDatePicker id="profit-and-loss-range" testid="profit-and-loss-range" bind:start={from} bind:end={to} placeholder="Choose statement dates" />
 					</label>
 					<Button variant="outline" class="gap-2" onclick={printStatement} data-testid="profit-and-loss-print">
 						<Printer class="size-4" aria-hidden="true" />

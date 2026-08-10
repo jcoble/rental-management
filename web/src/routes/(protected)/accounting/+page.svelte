@@ -50,6 +50,7 @@
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -1182,8 +1183,12 @@
 						}}
 						testid="transaction-property-filter"
 					/>
-					<DatePicker testid="transaction-from-filter" bind:value={transactionFromFilter} placeholder="From date" max={transactionToFilter || undefined} />
-					<DatePicker testid="transaction-to-filter" bind:value={transactionToFilter} placeholder="To date" min={transactionFromFilter || undefined} />
+					<RangeDatePicker
+						testid="transaction-date-range-filter"
+						bind:start={transactionFromFilter}
+						bind:end={transactionToFilter}
+						placeholder="Transaction date range"
+					/>
 				</div>
 			{/snippet}
 		</DataGrid>

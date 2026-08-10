@@ -12,8 +12,9 @@
 		class: className,
 		value,
 		onchange,
+		testid,
 		...restProps
-	}: WithoutChildrenOrChild<CalendarPrimitive.MonthSelectProps> = $props();
+	}: WithoutChildrenOrChild<CalendarPrimitive.MonthSelectProps> & { testid?: string } = $props();
 </script>
 
 <span class={cn("relative flex", className)}>
@@ -24,8 +25,9 @@
 				options={monthItems.map((item) => ({ value: String(item.value), label: item.label }))}
 				disabled={calendarSelectDisabled(props)}
 				ariaLabel="Choose month"
+				testid={testid}
 				viewportPadding={{ bottom: 12 }}
-				triggerClass="h-(--cell-size) w-auto min-w-28 border-0 bg-transparent px-2 shadow-none"
+				triggerClass="h-(--cell-size) w-auto min-w-28 px-2 text-xs font-medium sm:text-sm"
 				onchange={(nextValue) => dispatchCalendarSelectChange(props, nextValue, onchange)}
 			/>
 		{/snippet}

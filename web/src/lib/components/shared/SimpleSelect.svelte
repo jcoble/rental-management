@@ -33,25 +33,44 @@
 	const selectedLabel = $derived(options.find((option) => option.value === value)?.label ?? placeholder);
 	const EMPTY_VALUE = '__rental_command_empty_value__';
 	const selectValue = $derived(value === '' ? EMPTY_VALUE : value);
+	const selectItems = $derived(
+		options.map((option) => ({
+			value: option.value === '' ? EMPTY_VALUE : option.value,
+			label: option.label,
+			disabled: option.disabled
+		}))
+	);
+
+	function optionTestId(option: Option): string | undefined {
+		if (!testid) return undefined;
+		const suffix = option.value.trim() || 'empty';
+		return `${testid}-option-${suffix.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
+	}
 </script>
 
-<Select.Root
-	type="single"
-	value={selectValue}
-	{disabled}
-	onValueChange={(next) => {
-		if (next === undefined) return;
-		const nextValue = next === EMPTY_VALUE ? '' : next;
-		value = nextValue;
-		onchange?.(nextValue);
-	}}
->
-	<Select.Trigger class={triggerClass} data-testid={testid} aria-label={ariaLabel}>{selectedLabel}</Select.Trigger>
-	<Select.Content {viewportPadding}>
-		{#each options as option (option.value)}
-			<Select.Item value={option.value === '' ? EMPTY_VALUE : option.value} label={option.label} disabled={option.disabled}>
-				{option.label}
-			</Select.Item>
-		{/each}
-	</Select.Content>
-</Select.Root>
+	<Select.Root
+		type="single"
+		value={selectValue}
+		items={selectItems}
+		{disabled}
+		onValueChange={(next) => {
+			if (next === undefined) return;
+			const nextValue = next === EMPTY_VALUE ? '' : next;
+			value = nextValue;
+			onchange?.(nextValue);
+		}}
+	>
+		<Select.Trigger class={triggerClass} data-testid={testid} aria-label={ariaLabel}>{selectedLabel}</Select.Trigger>
+		<Select.Content {viewportPadding} data-testid={testid ? `${testid}-content` : undefined}>
+			{#each options as option (option.value)}
+				<Select.Item
+					value={option.value === '' ? EMPTY_VALUE : option.value}
+					label={option.label}
+					disabled={option.disabled}
+					data-testid={optionTestId(option)}
+				>
+					{option.label}
+				</Select.Item>
+			{/each}
+		</Select.Content>
+	</Select.Root>

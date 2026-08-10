@@ -41,7 +41,7 @@
 		maskDateInput,
 		parseCompleteLooseDate
 	} from '$lib/utils/parse-date';
-	import { commitDatePickerText } from './date-picker-state';
+	import { commitDatePickerText, datePickerYearOptions } from './date-picker-state';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import {
 		CalendarDate,
@@ -110,13 +110,7 @@
 
 	// Year range for the year dropdown. Default reaches back to 1900 (so dates of
 	// birth are reachable). When min/max are supplied, honor them as boundaries.
-	const years = $derived.by(() => {
-		const now = new Date().getUTCFullYear();
-		const lo = minDate ? minDate.year : 1900;
-		const hi = maxDate ? maxDate.year : now + 10;
-		if (lo > hi) return [hi];
-		return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
-	});
+	const years = $derived(datePickerYearOptions(minDate?.year, maxDate?.year));
 
 	function commit(iso: string) {
 		if (iso === value) return;

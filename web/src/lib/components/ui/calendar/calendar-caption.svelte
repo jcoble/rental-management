@@ -45,6 +45,7 @@
 		{months}
 		{monthFormat}
 		value={month.month}
+		testid={`calendar-month-select-${monthIndex}`}
 		onchange={(e) => {
 			if (!placeholder) return;
 			const v = Number.parseInt(e.currentTarget.value);
@@ -55,7 +56,7 @@
 {/snippet}
 
 {#snippet YearSelect()}
-	<CalendarYearSelect {years} {yearFormat} value={month.year} />
+	<CalendarYearSelect {years} {yearFormat} value={month.year} testid={`calendar-year-select-${monthIndex}`} />
 {/snippet}
 
 {#if captionLayout === "dropdown"}
