@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { pushState } from '$app/navigation';
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import {
 		resolveUnitUrlDestination,
 		UNIT_SUBNAV_ITEM_CLASS,
 		UNIT_SUBNAV_LIST_CLASS,
+		type UnitView,
 	} from '$lib/components/unit/unit-tabs';
 	import RentTab from './RentTab.svelte';
 	import ExpensesTab from './ExpensesTab.svelte';
@@ -14,9 +14,11 @@
 	let {
 		dashboard,
 		onScan,
+		onOpenTab,
 	}: {
 		dashboard: UnitDashboard;
 		onScan: (context?: Partial<ScanContext>) => void;
+		onOpenTab: (tab: string, view?: UnitView) => void;
 	} = $props();
 
 	const unitId = $derived(dashboard.unit.id);
@@ -38,14 +40,10 @@
 	}
 
 	function setView(view: 'tenant-account' | 'operating-costs') {
-		if (view === activeView) return;
-		pushState(ledgerUrl(view), {
-			...(page.state ?? {}),
-			unitTab: 'money',
-			unitView: view,
-			unitPaymentId: null,
-			unitExpenseId: null,
-		});
+		// Nested Money clicks use the same URL/state adapter as primary tabs. This
+		// keeps a user view click authoritative after arriving from a deep record URL
+		// and lets the write-once synchronizer converge without a stale pushState.
+		onOpenTab('money', view);
 	}
 </script>
 
@@ -53,8 +51,8 @@
 	<div class="min-w-0 overflow-x-auto">
 		<nav aria-label="Money sections" data-testid="unit-money-subnav">
 			<div class={UNIT_SUBNAV_LIST_CLASS}>
-				<button type="button" aria-current={activeView === 'tenant-account' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('tenant-account')}>Rent &amp; payments</button>
-				<button type="button" aria-current={activeView === 'operating-costs' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('operating-costs')}>Property expenses</button>
+				<button type="button" aria-current={activeView === 'tenant-account' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('tenant-account')} data-testid="unit-money-view-tenant-account">Rent &amp; payments</button>
+				<button type="button" aria-current={activeView === 'operating-costs' ? 'page' : undefined} class={UNIT_SUBNAV_ITEM_CLASS} onclick={() => setView('operating-costs')} data-testid="unit-money-view-operating-costs">Property expenses</button>
 			</div>
 		</nav>
 	</div>
