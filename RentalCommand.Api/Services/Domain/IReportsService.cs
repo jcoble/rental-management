@@ -26,6 +26,9 @@ public interface IReportsService
     /// <summary>Current rent-roll snapshot: one row per active/under-notice lease, plus totals.</summary>
     Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
+    /// <summary>Open tenant-account balances aged by charge date with property and portfolio rollups.</summary>
+    Task<AgedReceivablesResponse> GetAgedReceivablesAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
+
     /// <summary>Accrual rent ledger per lease over the range: charges due vs. payments received, running balance.</summary>
     Task<RentLedgerResponse> GetRentLedgerAsync(
         LeaseManagementReadContext access, ReportRangeQuery query, CancellationToken ct = default);
