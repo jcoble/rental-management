@@ -5,6 +5,7 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	type Kind = 'pipeline' | 'rentals' | 'calendar' | 'inbox';
 	let { kind }: { kind: Kind } = $props();
@@ -93,7 +94,7 @@
 					{@const item = raw as Record<string, any>}
 					<a href={itemHref(item)} class="block rounded-xl border bg-card p-4 transition-colors hover:border-primary/40 hover:bg-accent/30">
 						{#if kind === 'pipeline'}
-							<div class="flex items-start justify-between gap-4"><div><p class="text-xs font-medium uppercase tracking-wide text-primary">{item.kind}</p><h2 class="font-semibold">{item.title}</h2><p class="text-sm text-muted-foreground">{[item.propertyName, item.unitNumber && `Unit ${item.unitNumber}`].filter(Boolean).join(' · ') || 'Workspace-wide'}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{item.stage}</span></div>
+							<div class="flex items-start justify-between gap-4"><div><p class="text-xs font-medium uppercase tracking-wide text-primary">{formatStatusLabel(String(item.kind))}</p><h2 class="font-semibold">{item.title}</h2><p class="text-sm text-muted-foreground">{[item.propertyName, item.unitNumber && `Unit ${item.unitNumber}`].filter(Boolean).join(' · ') || 'Workspace-wide'}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{formatStatusLabel(String(item.stage))}</span></div>
 							<p class="mt-3 text-xs text-muted-foreground">Next date: {date(item.nextActionAtUtc)}</p>
 						{:else if kind === 'rentals'}
 							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.propertyName} · Unit {item.unitNumber}</h2><p class="text-sm text-muted-foreground">{item.address}</p><p class="mt-2 text-sm">{item.listingHeadline || 'No listing started'} · {money(item.askingRent)}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{item.listingStatus || 'Not listed'}</span></div>
@@ -105,7 +106,7 @@
 								</p>
 							{/if}
 						{:else if kind === 'calendar'}
-							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.title}</h2><p class="text-sm text-muted-foreground">{item.prospectName || 'Prospect'} · {[item.propertyName, item.unitNumber && `Unit ${item.unitNumber}`].filter(Boolean).join(' · ')}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{item.status}</span></div><p class="mt-3 text-sm font-medium">{date(item.scheduledStart)}</p>
+							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.title}</h2><p class="text-sm text-muted-foreground">{item.prospectName || 'Prospect'} · {[item.propertyName, item.unitNumber && `Unit ${item.unitNumber}`].filter(Boolean).join(' · ')}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{formatStatusLabel(String(item.status))}</span></div><p class="mt-3 text-sm font-medium">{date(item.scheduledStart)}</p>
 						{:else}
 							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.tenantName}</h2><p class="text-sm text-muted-foreground">{item.subject}{item.propertyName ? ` · ${item.propertyName}` : ''}</p><p class="mt-2 line-clamp-2 text-sm">{item.lastMessagePreview || 'No message preview'}</p></div>{#if item.unreadCount > 0}<span class="rounded-full bg-primary px-2 py-1 text-xs font-semibold text-primary-foreground">{item.unreadCount}</span>{/if}</div><p class="mt-3 text-xs text-muted-foreground">{date(item.lastMessageAt)}</p>
 						{/if}

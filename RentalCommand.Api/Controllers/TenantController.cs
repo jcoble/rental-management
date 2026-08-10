@@ -54,7 +54,7 @@ public class TenantController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
         if (created is null)
         {
@@ -76,7 +76,7 @@ public class TenantController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         var created = await _service.CreateGuidedSetupBatchAsync(
             GetWorkspaceReadScope(), request, operationKey, ct);
@@ -93,7 +93,7 @@ public class TenantController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Tenant not found" }) : Ok(updated);
     }
@@ -107,7 +107,7 @@ public class TenantController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Tenant not found" });
     }

@@ -158,7 +158,7 @@
 			{ label: 'Term type', oldValue: source.termType, newValue: form.termType },
 			{ label: 'Term starts', oldValue: source.termStartOn, newValue: form.termStartOn },
 			{ label: 'Term ends', oldValue: source.termEndOn ?? 'Month-to-month', newValue: form.termEndOn || 'Month-to-month' },
-			{ label: 'Governs from', oldValue: source.governingFromOn, newValue: form.governingFromOn },
+			{ label: 'Effective from', oldValue: source.governingFromOn, newValue: form.governingFromOn },
 			{ label: 'Monthly rent', oldValue: String(source.baseRentAmount), newValue: form.baseRentAmount }
 		];
 		return {
@@ -178,7 +178,7 @@
 		const gracePeriodDays = Number(form.gracePeriodDays);
 		if (!form.agreementNumber.trim()) validationError = 'Agreement number is required.';
 		else if (!form.termStartOn || !form.governingFromOn)
-			validationError = 'Term start and governing dates are required.';
+			validationError = 'Term start and effective dates are required.';
 		else if (form.termType === 'FixedTerm' && !form.termEndOn)
 			validationError = 'A fixed-term agreement needs an end date.';
 		else if (form.termEndOn && form.termEndOn < form.termStartOn)
@@ -187,7 +187,7 @@
 			form.governingFromOn < form.termStartOn ||
 			(form.termEndOn && form.governingFromOn > form.termEndOn)
 		)
-			validationError = 'The governing date must fall within the agreement term.';
+			validationError = 'The effective date must fall within the lease term.';
 		else if (!Number.isFinite(baseRentAmount) || baseRentAmount < 0)
 			validationError = 'Base rent must be zero or greater.';
 		else if (!Number.isInteger(rentDueDay) || rentDueDay < 1 || rentDueDay > 31)
@@ -357,7 +357,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Edit agreement draft</Dialog.Title>
 			<Dialog.Description>
-				Reloaded from the canonical draft with its exact revision. Issuing freezes this version and its signer snapshots.
+				Reloaded from the current draft with its exact revision. Issuing freezes this version and the signer details.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -372,8 +372,8 @@
 			<div class="space-y-5">
 				{#if draft.changeType === 'Correction'}
 					<div class="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm" data-testid="agreement-correction-governing-notice">
-						<p class="font-medium">The old agreement still governs</p>
-						<p class="mt-1 text-muted-foreground">This replacement is only a draft. The old agreement keeps governing until this correction is fully signed and executed.</p>
+						<p class="font-medium">The old lease is still in effect</p>
+						<p class="mt-1 text-muted-foreground">This replacement is only a draft. The old lease stays in effect until this correction is fully signed and completed.</p>
 						{#if draft.correctionReason}<p class="mt-2"><span class="font-medium">Reason:</span> {draft.correctionReason}</p>{/if}
 					</div>
 				{/if}
@@ -475,14 +475,14 @@
 				{#if validationError}<p class="text-sm text-destructive" data-testid="agreement-draft-error">{validationError}</p>{/if}
 				{#if issueConfirmationOpen}
 					<div class="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4" data-testid="agreement-issue-confirmation">
-						<div><p class="font-medium">Issue this exact revision for signature?</p><p class="text-sm text-muted-foreground">The server will render and fingerprint the PDF, then freeze the agreement and signer snapshots.</p></div>
+						<div><p class="font-medium">Issue this exact revision for signature?</p><p class="text-sm text-muted-foreground">Rental Command will prepare the PDF, then lock the lease and signer details.</p></div>
 						<label class="space-y-1"><span class="text-sm font-medium">Signature request subject</span><Input bind:value={issueSubject} /></label>
 						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (issueConfirmationOpen = false)} disabled={issueMutation.isPending}>Not yet</Button><Button onclick={issueAgreement} disabled={!issueSubject.trim() || issueMutation.isPending} class="gap-2">{#if issueMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Preparing and issuing…{:else}<FileSignature class="h-4 w-4" /> Prepare and issue{/if}</Button></div>
 					</div>
 				{/if}
 				{#if cancelConfirmationOpen}
 					<div class="space-y-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4" data-testid="agreement-cancel-draft-confirmation">
-						<div><p class="font-medium">Cancel this abandoned successor draft?</p><p class="text-sm text-muted-foreground">Its source agreement is unchanged and continues governing. This canceled draft cannot be issued.</p></div>
+						<div><p class="font-medium">Cancel this abandoned successor draft?</p><p class="text-sm text-muted-foreground">Its source lease is unchanged and still applies. This canceled draft cannot be issued.</p></div>
 						<label class="space-y-1"><span class="text-sm font-medium">Cancellation reason</span><textarea class="m3-field-surface min-h-20 w-full resize-y px-3 py-2 text-sm" bind:value={cancellationReason} maxlength="1000" data-testid="agreement-cancel-draft-reason"></textarea></label>
 						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (cancelConfirmationOpen = false)} disabled={cancelMutation.isPending}>Keep draft</Button><Button variant="destructive" onclick={cancelSuccessorDraft} disabled={!cancellationReason.trim() || cancelMutation.isPending} class="gap-2">{#if cancelMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Canceling…{:else}<Trash2 class="h-4 w-4" /> Cancel draft{/if}</Button></div>
 					</div>

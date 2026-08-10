@@ -112,7 +112,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         var series = await _queryService.GetEffectiveAddendumSeriesAsync(
             access, leaseManagementId, sourceAgreementId, ct);
         return series is null
-            ? NotFound(new { error = "Current governing source Agreement not found" })
+            ? NotFound(new { error = "The current lease source document was not found." })
             : Ok(series);
     }
 
@@ -196,7 +196,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         if (request.TermType is null || request.TermsPayload.ValueKind != JsonValueKind.Object
             || request.Signers.Any(signer => signer.SignerRole is null))
         {
-            return BadRequest(new { error = "TermType, an object TermsPayload, and every SignerRole are required." });
+            return BadRequest(new { error = "Lease term, lease details, and every signer role are required." });
         }
         var command = new EditLeaseAgreementDraftCommand(
             envelope.PortfolioId, leaseManagementId, leaseAgreementId, request.DraftRevision,
@@ -557,7 +557,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         var normalized = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
         {
-            error = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            error = BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
             return false;
         }
         if (!TryGetActiveAccessContext(out var active))

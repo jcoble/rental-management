@@ -66,5 +66,5 @@ public class DevicesController : AuthenticatedPortfolioControllerBase
     }
 
     private BadRequestObjectResult InvalidKey() =>
-        BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 }

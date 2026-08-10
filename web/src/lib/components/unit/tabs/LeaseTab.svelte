@@ -19,6 +19,7 @@
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
 	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
+	import { leaseAgreementStatusLabel } from '$lib/leases/lease-list-labels';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -174,7 +175,7 @@
 			{#each relationshipsQuery.data?.items ?? [] as relationship}
 				<div class="p-4">
 					<a href={`/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements&leaseManagement=${relationship.leaseManagementId}`} class="flex items-center justify-between gap-4 transition-colors hover:bg-muted/40">
-						<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-medium">{relationship.primaryTenantName ?? 'No primary tenant'}</p><StatusBadge status={relationship.lifecycle} /></div><p class="mt-1 text-sm text-muted-foreground">{relationship.agreementNumber ?? 'No governing agreement'}{relationship.agreementStatus ? ` · ${relationship.agreementStatus}` : ''}{relationship.termEndOn ? ` · ends ${relationship.termEndOn}` : ''}</p></div><ArrowRight class="h-4 w-4 shrink-0 text-muted-foreground" />
+						<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-medium">{relationship.primaryTenantName ?? 'No primary tenant'}</p><StatusBadge status={relationship.lifecycle} /></div><p class="mt-1 text-sm text-muted-foreground">{relationship.agreementNumber ?? 'No lease in effect'}{relationship.agreementStatus ? ` · ${leaseAgreementStatusLabel(relationship.agreementStatus)}` : ''}{relationship.termEndOn ? ` · ends ${relationship.termEndOn}` : ''}</p></div><ArrowRight class="h-4 w-4 shrink-0 text-muted-foreground" />
 					</a>
 						{#if canManageLifecycle}
 							<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">

@@ -31,7 +31,7 @@ describe("lease scan signature review contract", () => {
     assert.match(choiceSource, /Keep this exact PDF as the executed agreement/);
     assert.match(
       choiceSource,
-      /It will not govern until the required people sign it/
+      /It will not take effect until the required people sign it/
     );
   });
 
@@ -85,7 +85,7 @@ describe("lease scan signature review contract", () => {
   it("requires an explicit rent-charge start choice in both lease scan review entry points", () => {
     for (const source of [generalReviewSource, leaseFirstImportSource]) {
       assert.match(source, /Start from the current date/);
-      assert.match(source, /Backfill from the lease start/);
+      assert.match(source, /Add past rent from the lease start/);
       assert.match(source, /Start from a custom date/);
       assert.match(source, /rentTrackingStartMode/);
       assert.match(source, /rentTrackingStartOn/);

@@ -255,7 +255,7 @@ public sealed class LegalDocumentIssuancePreparationService : ILegalDocumentIssu
         if (!draft.MatchesExpectedDraftRevision)
         {
             throw new DomainValidationException(
-                $"DraftRevision is stale; reload the {expectedKind} draft before preparing issuance.");
+                $"This {expectedKind} draft has changed; reload it before preparing the document.");
         }
         if (!draft.IsOpenDraft)
         {
@@ -271,7 +271,7 @@ public sealed class LegalDocumentIssuancePreparationService : ILegalDocumentIssu
         if (rendered.DocumentSourceVersionId != draft.DocumentSourceVersionId)
         {
             throw new InvalidOperationException(
-                "The legal-document renderer returned bytes from a different immutable source version.");
+                "The lease document could not be matched to its source.");
         }
     }
 

@@ -234,7 +234,7 @@ public sealed class DevClockController : AuthenticatedPortfolioControllerBase
         failure = null!;
         if (!TryValidateIdempotencyKey(idempotencyKey, out deliveryKey))
         {
-            failure = BadRequest(new { error = "Idempotency-Key header is required and must be 128 characters or fewer." });
+            failure = BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
             return false;
         }
 

@@ -165,7 +165,7 @@ public class ReportsService : IReportsService
                         {
                             Key = "rent-roll",
                             Title = "Rent Roll",
-                            Description = "Current snapshot of the governing agreement for every occupied unit: tenant, rent, deposit, term, status.",
+                            Description = "Current lease details for every occupied unit: tenant, rent, deposit, term, status.",
                             Endpoint = "/api/v1/reports/rent-roll",
                             Params = [ReportParamKeys.PropertyIds],
                         },

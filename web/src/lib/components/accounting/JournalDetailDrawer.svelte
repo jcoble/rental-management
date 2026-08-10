@@ -19,6 +19,7 @@
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import { accountingBooks, type JournalDetailLine } from '$lib/api/endpoints/accounting-books';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	let {
 		journalPublicId = $bindable<string | null>(null)
@@ -81,7 +82,7 @@
 		const evidence = detail.bankReconciliationEvidence;
 		if (!evidence) return '—';
 		const account = evidence.bankAccountLabel ?? 'Bank account';
-		const status = evidence.status ? ` · ${evidence.status}` : '';
+		const status = evidence.status ? ` · ${formatStatusLabel(evidence.status)}` : '';
 		const matched = evidence.matchedOn ? ` · matched ${formatAccountingDate(evidence.matchedOn)}` : '';
 		return `${account}${status}${matched}`;
 	}

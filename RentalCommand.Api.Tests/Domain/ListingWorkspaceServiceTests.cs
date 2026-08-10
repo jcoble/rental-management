@@ -61,7 +61,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         var action = () => _service.GenerateAsync(Scope(), listing.UnitId, operationKey);
 
         await action.Should().ThrowAsync<DomainValidationException>()
-            .WithMessage("*Client operation ID is required*");
+            .WithMessage("*Request key is required*");
         _atomic.LastCommand.Should().BeNull();
     }
 

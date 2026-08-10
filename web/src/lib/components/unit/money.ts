@@ -98,7 +98,7 @@ export function tenantLedgerReversalReason(entry: {
 	return reason.length > 500 ? reason.slice(0, 500) : reason;
 }
 
-export const PAYMENT_CORRECTION_REASON = 'Correction of immutable payment receipt';
+export const PAYMENT_CORRECTION_REASON = 'Correction of original payment receipt';
 
 export interface PaymentCorrectionContext {
 	tenantAccountId: number;

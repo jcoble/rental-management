@@ -350,7 +350,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             || request.Signers.Any(item => item.SignerRole is null)
             || request.FinancialEffects.Any(item => item.EffectType is null))
         {
-            error = BadRequest(new { error = "Purpose, object TermsPayload, signer roles, and effect types are required." });
+            error = BadRequest(new { error = "A purpose, lease details, signer roles, and what changes are required." });
             return false;
         }
         signers = request.Signers.Select(item => new LeaseAddendumDraftSignerInput(
@@ -367,7 +367,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         envelope = default; error = null;
         var normalized = key?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
-        { error = BadRequest(new { error = "A valid Idempotency-Key is required." }); return false; }
+        { error = BadRequest(new { error = "A request key is required." }); return false; }
         if (!TryGetActiveAccessContext(out var active))
         { error = Forbid(); return false; }
         envelope = new(active.PortfolioId, active.UserId, active.SessionId,

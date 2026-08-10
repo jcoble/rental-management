@@ -371,7 +371,7 @@ public sealed class AtomicRecurringMaintenanceMutationHandler
 
     private T Read<T>(AtomicRecurringMaintenanceMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Recurring maintenance mutation request payload is invalid.");
+        ?? throw new ArgumentException("The recurring maintenance update is invalid.");
 
     private void Validate(AtomicRecurringMaintenanceMutationCommand command)
     {

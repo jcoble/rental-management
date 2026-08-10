@@ -88,7 +88,7 @@ public sealed class SandboxLifecycleCommandHandler
                 AuditLogOperation.Updated,
                 command.ActorUserId,
                 ChangeReason: seed.AlreadyPresent
-                    ? "Canonical demo facts reconciled during Sandbox onboarding."
+                    ? "Existing demo information brought up to date during Sandbox onboarding."
                     : "Rich demo portfolio graph seeded during Sandbox onboarding."));
             portfolio.IsSandbox = true;
             portfolio.SandboxSeededAtUtc = now;
@@ -197,7 +197,7 @@ public sealed class SandboxLifecycleCommandHandler
         if (!authorized)
         {
             throw new UnauthorizedAccessException(
-                "The active workspace context cannot mutate this Sandbox lifecycle.");
+                "The current workspace cannot update this Sandbox setup.");
         }
     }
 
@@ -213,7 +213,7 @@ public sealed class SandboxLifecycleCommandHandler
             || command.DeliveryIdempotencyKey.Length > 200
             || !Enum.IsDefined(command.Operation))
         {
-            throw new DomainValidationException("A complete Sandbox lifecycle command is required.");
+            throw new DomainValidationException("Complete Sandbox setup details are required.");
         }
 
         if (command.Operation == SandboxLifecycleOperation.ApplyOnboardingChoice

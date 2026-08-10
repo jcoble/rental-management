@@ -88,7 +88,7 @@ public sealed class PublicApplicationsController : ControllerBase
 
         var operationKey = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(operationKey) || operationKey.Length > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         var result = await _applications.SubmitAsync(token, request, ip, operationKey, ct);

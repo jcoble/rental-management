@@ -31,7 +31,7 @@ public sealed class OpeningSecurityDepositRecoveryController
         if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
             return BadRequest(new
             {
-                error = "A valid Idempotency-Key is required (maximum 200 characters).",
+                error = "A request key is required and cannot exceed 200 characters.",
             });
         if (request.EffectiveOn == default)
             return BadRequest(new { error = "EffectiveOn is required." });

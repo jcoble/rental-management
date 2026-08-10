@@ -245,7 +245,7 @@ public sealed class AtomicWorkspaceCoreMutationHandler
 
     private T Read<T>(AtomicWorkspaceCoreMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Workspace mutation request payload is invalid.");
+        ?? throw new ArgumentException("The workspace update is invalid.");
 
     private string GenerateToken()
     {

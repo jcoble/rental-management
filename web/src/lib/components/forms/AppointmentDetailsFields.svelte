@@ -3,6 +3,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { appointmentSchema } from '$lib/schemas';
 	import { clearFieldErrorWhen } from '$lib/forms/form-errors';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	type AppointmentForm = {
 		title: string;
@@ -62,10 +63,10 @@
 			<span class="mb-2 block text-sm font-medium text-muted-foreground">Status</span>
 			<Select.Root type="single" bind:value={form.status}>
 				<Select.Trigger class="w-full" data-testid={`${testidPrefix}-status-input`}>
-					{form.status || 'Select status'}
+					{form.status ? formatStatusLabel(form.status) : 'Select status'}
 				</Select.Trigger>
 				<Select.Content>
-					{#each APPT_STATUSES as status}<Select.Item value={status} label={status}>{status}</Select.Item>{/each}
+					{#each APPT_STATUSES as status}<Select.Item value={status} label={formatStatusLabel(status)}>{formatStatusLabel(status)}</Select.Item>{/each}
 				</Select.Content>
 			</Select.Root>
 		</div>

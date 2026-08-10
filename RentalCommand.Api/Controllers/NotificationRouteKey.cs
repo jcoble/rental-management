@@ -20,6 +20,6 @@ internal static class NotificationRouteKey
     internal static BadRequestObjectResult Invalid() =>
         new(new
         {
-            error = "Idempotency-Key is required and must be at most 128 characters.",
+            error = "A request key is required and cannot exceed 128 characters.",
         });
 }

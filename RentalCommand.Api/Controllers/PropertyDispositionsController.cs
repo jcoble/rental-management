@@ -51,9 +51,9 @@ public class PropertyDispositionsController : ManagementControllerBase
         [FromBody] CreatePropertyDispositionRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey))
-            return BadRequest(new { error = "Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         if (idempotencyKey.Trim().Length > 200)
-            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+            return BadRequest(new { error = "A request key cannot exceed 200 characters." });
         var created = await _service.CreateAsync(
             GetActiveAccessContext(), request, idempotencyKey.Trim(), ct);
         return created is null
@@ -70,7 +70,7 @@ public class PropertyDispositionsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAuthorizedAsync(
             GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null ? NotFound(new { error = "Property disposition not found" }) : Ok(updated);
@@ -83,7 +83,7 @@ public class PropertyDispositionsController : ManagementControllerBase
         int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property disposition not found" });
     }

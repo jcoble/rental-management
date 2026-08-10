@@ -186,7 +186,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         var answer = await _qa.AskManagementAsync(
             access, leaseManagementId, request.Question.Trim(), ct);
         return answer is null
-            ? NotFound(new { error = "No governing agreement document is available." })
+            ? NotFound(new { error = "No active lease document is available." })
             : Ok(answer);
     }
 
@@ -203,12 +203,12 @@ public sealed class LeaseManagementController : ManagementControllerBase
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            return BadRequest(new { error = "Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         }
         var normalizedKey = idempotencyKey.Trim();
         if (normalizedKey.Length > 200)
         {
-            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+            return BadRequest(new { error = "A request key cannot exceed 200 characters." });
         }
         if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
         {
@@ -218,7 +218,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
             || request.Parties.Any(party => party.Role is null)
             || request.TermsPayload.ValueKind != JsonValueKind.Object)
         {
-            return BadRequest(new { error = "Parties and an object TermsPayload are required." });
+            return BadRequest(new { error = "Tenant names and lease details are required." });
         }
 
         var portfolioId = GetPortfolioId();
@@ -621,13 +621,13 @@ public sealed class LeaseManagementController : ManagementControllerBase
         error = null;
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            error = BadRequest(new { error = "Idempotency-Key is required." });
+            error = BadRequest(new { error = "A request key is required." });
             return false;
         }
         var normalizedKey = idempotencyKey.Trim();
         if (normalizedKey.Length > 200)
         {
-            error = BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+            error = BadRequest(new { error = "A request key cannot exceed 200 characters." });
             return false;
         }
         if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
@@ -1193,7 +1193,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         failure = null;
         if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
         {
-            failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            failure = BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
             return false;
         }
         if (!TryReadAccessContext(out sessionId, out accessContextId, out accessRevision))

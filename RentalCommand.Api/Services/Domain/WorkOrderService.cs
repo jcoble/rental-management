@@ -544,7 +544,7 @@ public class WorkOrderService : IWorkOrderService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Atomic work-order mutations are not configured.");
+        "Work-order changes are not available right now.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

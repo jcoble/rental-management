@@ -180,15 +180,15 @@
 			return null;
 		}
 		if (!termStartOn || !governingFromOn) {
-			validationError = 'Term start and governing date are required.';
+			validationError = 'Term start and effective date are required.';
 			return null;
 		}
 		if (isReplacement && governingFromOn <= source.governingFromOn) {
-			validationError = 'A correction or restatement must begin governing after the current version.';
+			validationError = 'A correction or restatement must take effect after the current version.';
 			return null;
 		}
 		if (isRenewal && governingFromOn !== termStartOn) {
-			validationError = 'A renewal must begin governing on its term start date.';
+			validationError = 'A renewal must take effect on its term start date.';
 			return null;
 		}
 		if (isRenewal && source.termEndOn && termStartOn <= source.termEndOn) {

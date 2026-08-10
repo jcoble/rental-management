@@ -13,6 +13,7 @@
 	import { workOrderSchema, inspectionSchema, parseForm } from '$lib/schemas';
 	import { localInputToOffsetIso } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -785,23 +786,23 @@
 			</div>
 			<Select.Root type="single" bind:value={woStatusFilter}>
 				<Select.Trigger class="w-40 shrink-0" data-testid="work-order-status-filter">
-					{woStatusFilter ? woStatusFilter : 'All statuses'}
+					{woStatusFilter ? formatStatusLabel(woStatusFilter) : 'All statuses'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="All statuses">All statuses</Select.Item>
 					{#each WO_STATUSES as s}
-						<Select.Item value={s} label={s}>{s}</Select.Item>
+						<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
 			<Select.Root type="single" bind:value={woPriorityFilter}>
 				<Select.Trigger class="w-36 shrink-0" data-testid="work-order-priority-filter">
-					{woPriorityFilter ? woPriorityFilter : 'All priorities'}
+					{woPriorityFilter ? formatStatusLabel(woPriorityFilter) : 'All priorities'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="All priorities">All priorities</Select.Item>
 					{#each WO_PRIORITIES as p}
-						<Select.Item value={p} label={p}>{p}</Select.Item>
+						<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>
 					{/each}
 				</Select.Content>
 			</Select.Root>
@@ -954,11 +955,11 @@
 								<span class="mb-1 block text-xs font-medium text-muted-foreground">Priority</span>
 							<Select.Root type="single" bind:value={woForm.priority}>
 								<Select.Trigger class="w-full" data-testid="work-order-priority-input">
-									{woForm.priority || 'Priority'}
+									{woForm.priority ? formatStatusLabel(woForm.priority) : 'Priority'}
 								</Select.Trigger>
 								<Select.Content>
 									{#each WO_PRIORITIES as p}
-										<Select.Item value={p} label={p}>{p}</Select.Item>
+										<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>
 									{/each}
 								</Select.Content>
 							</Select.Root>
@@ -1115,11 +1116,11 @@
 					</div>
 					<Select.Root type="single" bind:value={inspectionForm.type}>
 						<Select.Trigger class="w-full" data-testid="inspection-type-input">
-							{inspectionForm.type || 'Select type'}
+							{inspectionForm.type ? inspectionTypeLabel(inspectionForm.type as InspectionType) : 'Select type'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each INSPECTION_TYPES as type}
-								<Select.Item value={type} label={type}>{type}</Select.Item>
+								<Select.Item value={type} label={inspectionTypeLabel(type)}>{inspectionTypeLabel(type)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1208,11 +1209,11 @@
 					<label for="inspection-template-type" class="mb-1 block text-xs font-medium text-muted-foreground">Type</label>
 					<Select.Root type="single" bind:value={templateForm.inspectionType}>
 						<Select.Trigger id="inspection-template-type" class="w-full" data-testid="inspection-template-type-input">
-							{templateForm.inspectionType}
+							{templateForm.inspectionType ? inspectionTypeLabel(templateForm.inspectionType as InspectionType) : 'Select type'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each INSPECTION_TYPES as type}
-								<Select.Item value={type} label={type}>{type}</Select.Item>
+								<Select.Item value={type} label={inspectionTypeLabel(type)}>{inspectionTypeLabel(type)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>

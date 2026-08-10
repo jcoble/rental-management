@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Services.Auditing;
 /// Turns a raw <see cref="AtomicAuditLog"/> row into one plain-English sentence for a non-technical
 /// landlord, e.g. "Recorded a payment", "Updated lease", "Deleted expense". Deterministic — no LLM.
 /// Soft-deletes already arrive as <see cref="AuditLogOperation.Deleted"/> from the interceptor, so a
-/// delete reads as "Deleted {entity}". Falls back to "{Operation} {EntityType} #{Id}" for anything
+/// delete reads as "Deleted {entity}". Falls back to "{Operation} {entity} #{Id}" for anything
 /// unmapped, so a new audited entity is never blank.
 /// </summary>
 public sealed class AuditDescriber
@@ -23,7 +23,7 @@ public sealed class AuditDescriber
             AuditLogOperation.Deleted => $"Deleted {noun}",
             AuditLogOperation.Approved => $"Approved {noun}",
             AuditLogOperation.Rejected => $"Rejected {noun}",
-            _ => $"{row.Operation} {row.EntityType} #{row.EntityId}",
+            _ => $"{row.Operation} {noun} #{row.EntityId}",
         };
     }
 

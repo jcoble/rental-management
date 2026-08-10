@@ -141,7 +141,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 systemTemplate.Version))
             .TagWith("TSK-668 immutable tenant notice delivery foundation")
             .SingleOrDefaultAsync(ct)
-            ?? throw new InvalidOperationException("Draft has no active tenant notice policy and immutable template version.");
+            ?? throw new InvalidOperationException("Draft has no active tenant notice policy and current template version.");
 
         if (foundation.Mode == TenantNoticeMode.Off)
             throw new InvalidOperationException("A disabled policy cannot deliver a notice.");
@@ -531,10 +531,10 @@ public sealed class AtomicNoticeDeliveryHandler
         {
             attempt.StageSemanticEvent(Audit(
                 command, nameof(Conversation), portalMessage.ConversationId, AuditLogOperation.Created,
-                "Approved tenant notice opened a canonical tenant conversation"), securityNow);
+                "Approved tenant notice opened a tenant conversation"), securityNow);
             attempt.StageSemanticEvent(Audit(
                 command, nameof(ConversationMessage), portalMessage.Id, AuditLogOperation.Created,
-                "Approved tenant notice committed to the canonical tenant inbox"), securityNow);
+                "Approved tenant notice was saved to the tenant inbox"), securityNow);
         }
         foreach (var evidence in evidenceRows)
         {
@@ -555,7 +555,7 @@ public sealed class AtomicNoticeDeliveryHandler
         {
             attempt.StageSemanticEvent(Audit(
                 command, nameof(Notification), 0, AuditLogOperation.Updated,
-                $"Reconciled {reconciledNotifications} tenant notice payment notification intent(s)"), securityNow);
+                $"Updated {reconciledNotifications} tenant payment notification(s)"), securityNow);
         }
         if (completedWorkItem is not null)
         {
@@ -642,13 +642,13 @@ public sealed class AtomicNoticeDeliveryHandler
             if (correctedRows <= 0)
             {
                 throw new InvalidOperationException(
-                    "Approved tenant notice persisted an incomplete delivery graph.");
+                    "Could not save complete tenant notice delivery details.");
             }
 
             finalApprovedAt = now;
             attempt.StageSemanticEvent(Audit(
                 command, nameof(NoticeDraft), draft.Id, AuditLogOperation.Updated,
-                "Corrected tenant notice approval business chronology after exact graph reconciliation"), auditNow);
+                "Corrected tenant notice approval timing after checking delivery records"), auditNow);
         }
 
         await RequireApprovalCompletionAsync(
@@ -667,11 +667,11 @@ public sealed class AtomicNoticeDeliveryHandler
         {
             attempt.StageSemanticEvent(Audit(
                 command, nameof(Notification), 0, AuditLogOperation.Updated,
-                $"Reconciled {reconciledNotifications} tenant notice payment notification intent(s)"), auditNow);
+                $"Updated {reconciledNotifications} tenant payment notification(s)"), auditNow);
         }
         attempt.StageSemanticEvent(Audit(
             command, nameof(NoticeDraft), draft.Id, AuditLogOperation.Updated,
-            "Tenant notice approval reconciled an existing durable delivery graph"), auditNow);
+            "Tenant notice approval updated an existing delivery record"), auditNow);
         return new AtomicNoticeDeliveryResult(rendered.Id, draft.Id, destinations.Count);
     }
 
@@ -778,12 +778,12 @@ public sealed class AtomicNoticeDeliveryHandler
             ct);
         attempt.StageSemanticEvent(Audit(
             command, nameof(NoticeDraft), draft.Id, AuditLogOperation.Updated,
-            "Tenant notice approval recovered an existing durable delivery graph"), auditNow);
+            "Tenant notice approval recovered an existing delivery record"), auditNow);
         if (reconciledNotifications > 0)
         {
             attempt.StageSemanticEvent(Audit(
                 command, nameof(Notification), 0, AuditLogOperation.Updated,
-                $"Reconciled {reconciledNotifications} tenant notice payment notification intent(s)"), auditNow);
+                $"Updated {reconciledNotifications} tenant payment notification(s)"), auditNow);
         }
         if (completedWorkItem is not null)
         {
@@ -871,7 +871,7 @@ public sealed class AtomicNoticeDeliveryHandler
         if (!validation.IsMatch)
         {
             throw new InvalidOperationException(
-                "Approved tenant notice persisted an incomplete delivery graph.");
+                "Could not save complete tenant notice delivery details.");
         }
 
         return validation;

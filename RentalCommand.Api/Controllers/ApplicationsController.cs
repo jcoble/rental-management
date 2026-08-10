@@ -89,7 +89,7 @@ public class ApplicationsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var item = await _service.UpdateAuthorizedAsync(
@@ -125,7 +125,7 @@ public class ApplicationsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var result = await _service.ApproveAuthorizedAsync(
@@ -150,7 +150,7 @@ public class ApplicationsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var result = await _service.DeclineAuthorizedAsync(
@@ -174,7 +174,7 @@ public class ApplicationsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var result = await _service.WithdrawAuthorizedAsync(
@@ -196,7 +196,7 @@ public class ApplicationsController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         try
         {
             var deleted = await _service.DeleteAuthorizedAsync(
@@ -296,7 +296,7 @@ public class ApplicationsController : ManagementControllerBase
     {
         var normalized = idempotencyKey?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
 
         var portfolioId = GetPortfolioId();
         var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
@@ -518,7 +518,7 @@ public class ApplicationsController : ManagementControllerBase
         }
 
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         var result = await _service.GenerateLinkAsync(GetWorkspaceReadScope(), operationKey, ct);
         return Ok(result);

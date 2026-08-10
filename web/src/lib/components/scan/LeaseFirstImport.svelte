@@ -636,12 +636,12 @@
 							{rentTrackingStartMode === 'ForwardOnly'
 								? 'Start from the current date'
 								: rentTrackingStartMode === 'BackfillFromLeaseStart'
-									? 'Backfill from the lease start'
+									? 'Add past rent from the lease start'
 									: 'Start from a custom date'}
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="ForwardOnly" label="Start from the current date">Start from the current date</Select.Item>
-							<Select.Item value="BackfillFromLeaseStart" label="Backfill from the lease start">Backfill from the lease start</Select.Item>
+							<Select.Item value="BackfillFromLeaseStart" label="Add past rent from the lease start">Add past rent from the lease start</Select.Item>
 							<Select.Item value="CustomCutoffDate" label="Start from a custom date">Start from a custom date</Select.Item>
 						</Select.Content>
 					</Select.Root>

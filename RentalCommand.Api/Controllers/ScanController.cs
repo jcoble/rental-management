@@ -95,14 +95,14 @@ public class ScanController : ManagementControllerBase
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "A non-empty file is required." });
         if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
-            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 160 characters." });
 
         // When a targetEntityType is explicitly provided it must be a recognised value.
         // Empty/null is allowed — the LLM worker will classify it during processing.
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrEmpty(target) && !ValidTargets.Contains(target))
         {
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
+            return BadRequest(new { error = "That document type isn't valid. Choose an expense, payment, work order, lease, application, loan, lease ending notice, or property purchase, or leave it blank to classify automatically." });
         }
         if (!string.IsNullOrEmpty(target))
             target = ValidTargets.First(validTarget =>
@@ -173,7 +173,7 @@ public class ScanController : ManagementControllerBase
         if (nonEmpty.Count == 0)
             return BadRequest(new { error = "At least one non-empty file is required." });
         if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
-            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 160 characters." });
 
         if (nonEmpty.Count > MaxBatchFiles)
             return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
@@ -182,7 +182,7 @@ public class ScanController : ManagementControllerBase
         // independently routed to its own typed review draft; an explicit target skips that pass.
         var target = targetEntityType?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(target) && !ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan, LeaseEndingNotice, PropertyAcquisition (or omit to auto-classify)." });
+            return BadRequest(new { error = "That document type isn't valid. Choose an expense, payment, work order, lease, application, loan, lease ending notice, or property purchase, or leave it blank to classify automatically." });
         if (!string.IsNullOrWhiteSpace(target))
             target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
 
@@ -897,7 +897,7 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Trim().Length > 200)
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
 
         var scope = GetWorkspaceReadScope();
         var operationDigest = Convert.ToHexString(SHA256.HashData(
@@ -956,7 +956,7 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new
             {
-                error = "tenantAccountId and a non-blank clientOperationId of at most 160 characters are required.",
+                error = "A tenant account and request key are required; the request key cannot exceed 160 characters.",
             });
         }
 
@@ -1222,7 +1222,7 @@ public class ScanController : ManagementControllerBase
         if (body is null || string.IsNullOrWhiteSpace(body.ClientOperationId)
             || body.ClientOperationId.Trim().Length > 160)
         {
-            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 160 characters." });
         }
 
         var scope = GetWorkspaceReadScope();

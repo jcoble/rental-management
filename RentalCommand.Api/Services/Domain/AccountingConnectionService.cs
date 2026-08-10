@@ -438,9 +438,9 @@ public class AccountingConnectionService
         var externalType = RequireMappingValue(request.ExternalType, nameof(request.ExternalType));
         var externalId = RequireMappingValue(request.ExternalId, nameof(request.ExternalId));
         var localEntityType = RequireMappingValue(request.LocalEntityType, nameof(request.LocalEntityType));
-        var clientOperationId = RequireMappingValue(request.ClientOperationId, nameof(request.ClientOperationId));
+        var clientOperationId = RequireMappingValue(request.ClientOperationId, "request key");
         if (clientOperationId.Length > 160)
-            throw new InvalidOperationException("Accounting mapping ClientOperationId cannot exceed 160 characters.");
+            throw new InvalidOperationException("A request key cannot exceed 160 characters.");
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "accounting.mapping.confirm",
@@ -524,9 +524,9 @@ public class AccountingConnectionService
             .Select(row => (int?)row.Id)
             .SingleOrDefaultAsync(ct)
             ?? throw new InvalidOperationException($"No {provider} connection. Connect the provider first.");
-        var clientOperationId = RequireMappingValue(request.ClientOperationId, nameof(request.ClientOperationId));
+        var clientOperationId = RequireMappingValue(request.ClientOperationId, "request key");
         if (clientOperationId.Length > 160)
-            throw new InvalidOperationException("Accounting continuation ClientOperationId cannot exceed 160 characters.");
+            throw new InvalidOperationException("A request key cannot exceed 160 characters.");
         var outcome = await _atomic.ExecuteAsync(
             new AtomicCommandIdentity(
                 "accounting.mapping.promote.continue",

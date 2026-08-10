@@ -130,7 +130,7 @@ public class AuthController : ControllerBase
         CancellationToken ct)
     {
         if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         var result = await _authService.RegisterAsync(request, operationKey, ct);
         if (!result.Success)
         {
@@ -302,7 +302,7 @@ public class AuthController : ControllerBase
         CancellationToken ct)
     {
         if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         var result = await _authService.ConfirmEmailAsync(request.UserId, request.Token, operationKey, ct);
         if (!result.Success)
         {
@@ -324,7 +324,7 @@ public class AuthController : ControllerBase
         CancellationToken ct)
     {
         if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         const string genericMessage = "If an account exists with that email, a password reset link has been sent.";
 
         var token = await _authService.GeneratePasswordResetTokenAsync(request.Email, operationKey, ct);
@@ -354,7 +354,7 @@ public class AuthController : ControllerBase
         CancellationToken ct)
     {
         if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         var result = await _authService.ResetPasswordAsync(
             request.UserId, request.Token, request.NewPassword, operationKey, ct);
         if (!result.Success)
@@ -373,7 +373,7 @@ public class AuthController : ControllerBase
         CancellationToken ct)
     {
         if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         var result = await _authService.ResendVerificationEmailAsync(request.Email, operationKey, ct);
 
         // Neutral response either way (no account enumeration). When the account is already
@@ -407,13 +407,13 @@ public class AuthController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            return BadRequest(new { error = "Idempotency-Key is required." });
+            return BadRequest(new { error = "A request key is required." });
         }
 
         var operationKey = idempotencyKey.Trim();
         if (operationKey.Length > 200)
         {
-            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+            return BadRequest(new { error = "A request key cannot exceed 200 characters." });
         }
         var result = await _authService.ChangePasswordAsync(
             active,

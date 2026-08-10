@@ -162,7 +162,7 @@ public sealed class AtomicCoreCrudMutationHandler
         }
 
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
-            throw new ArgumentException("Unsupported Property mutation operation.");
+            throw new ArgumentException("That property action is not supported.");
         var mutationNow = command.ChangedAtUtc ?? now;
         var update = Read<UpdatePropertyRequest>(command);
         await EnsurePropertyYearBuiltIsNotFutureAsync(
@@ -375,7 +375,7 @@ public sealed class AtomicCoreCrudMutationHandler
         if (setup.PropertyId.GetValueOrDefault() != commandPropertyId)
             throw new ArgumentException("The setup Property id does not match the command target.");
         if (!Enum.IsDefined(setup.Property.RentalStructure))
-            throw new ArgumentException("RentalStructure must be SingleRental or MultiRental.");
+            throw new ArgumentException("Rental setup must be single-rental or multi-rental.");
         if (string.IsNullOrWhiteSpace(setup.Property.Name)
             || string.IsNullOrWhiteSpace(setup.Property.AddressLine1)
             || string.IsNullOrWhiteSpace(setup.Property.City)
@@ -444,7 +444,7 @@ public sealed class AtomicCoreCrudMutationHandler
         if (requests.Count == 0) return [];
         var ownerIds = requests.Select(request => request.OwnerEntityId).ToArray();
         if (ownerIds.Any(id => id <= 0) || ownerIds.Distinct().Count() != ownerIds.Length)
-            throw new ArgumentException("Each ownership row must reference one distinct OwnerEntity.");
+            throw new ArgumentException("Each ownership row must name a different owner.");
         if (requests.Sum(request => request.OwnershipSharePercent) != 100m)
             throw new ArgumentException("Current Property ownership shares must total exactly 100 percent.");
 
@@ -456,7 +456,7 @@ public sealed class AtomicCoreCrudMutationHandler
             .ToListAsync(ct);
         if (owners.Count != ownerIds.Length)
             throw new AtomicReceiptInvariantException(
-                "One or more OwnerEntities are missing or outside this workspace.");
+                "One or more owners are missing or outside this workspace.");
 
         var ownerById = owners.ToDictionary(owner => owner.Id);
         var result = new List<PropertyOwnership>(requests.Count);
@@ -670,7 +670,7 @@ public sealed class AtomicCoreCrudMutationHandler
             return Applied(owner.Id);
         }
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
-            throw new ArgumentException("Unsupported OwnerEntity mutation operation.");
+            throw new ArgumentException("That owner action is not supported.");
         var update = Read<UpdateOwnerEntityRequest>(command);
         if (update.OwnerEntityType.HasValue) owner.OwnerEntityType = update.OwnerEntityType.Value;
         if (update.Name is not null) owner.Name = update.Name;
@@ -751,7 +751,7 @@ public sealed class AtomicCoreCrudMutationHandler
             return Applied(tenant.Id);
         }
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
-            throw new ArgumentException("Unsupported Tenant mutation operation.");
+            throw new ArgumentException("That tenant action is not supported.");
         var update = Read<UpdateTenantRequest>(command);
         if (update.FirstName is not null) tenant.FirstName = update.FirstName;
         if (update.LastName is not null) tenant.LastName = update.LastName;
@@ -818,7 +818,7 @@ public sealed class AtomicCoreCrudMutationHandler
             return Applied(vendor.Id);
         }
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
-            throw new ArgumentException("Unsupported Vendor mutation operation.");
+            throw new ArgumentException("That vendor action is not supported.");
         var update = Read<UpdateVendorRequest>(command);
         if (update.Name is not null) vendor.Name = update.Name;
         if (update.ServiceType is not null) vendor.ServiceType = update.ServiceType;
@@ -1215,7 +1215,7 @@ public sealed class AtomicCoreCrudMutationHandler
 
     private T Read<T>(AtomicCoreCrudMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Core CRUD mutation request payload is invalid.");
+        ?? throw new ArgumentException("The record update is invalid.");
 
     private string? NormalizeOptionalText(string value)
     {

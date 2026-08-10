@@ -29,6 +29,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
@@ -600,11 +601,11 @@
 					<span class="mb-1 block text-sm font-medium">Priority</span>
 					<Select.Root type="single" bind:value={form.priority}>
 						<Select.Trigger class="w-full" data-testid="recurring-task-priority-input">
-							{form.priority || 'Priority'}
+							{form.priority ? formatStatusLabel(form.priority) : 'Priority'}
 						</Select.Trigger>
 						<Select.Content>
 							{#each PRIORITIES as p}
-								<Select.Item value={p} label={p}>{p}</Select.Item>
+								<Select.Item value={p} label={formatStatusLabel(p)}>{formatStatusLabel(p)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>

@@ -47,7 +47,7 @@ public class InspectionService : IInspectionService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped inspection mutations require the atomic persistence kernel.");
+        "Inspection changes must use the standard save process.");
 
     // Internal portfolio-id entry points exist only for the focused service tests via
     // InternalsVisibleTo. Production callers resolve IInspectionService, whose only surface requires

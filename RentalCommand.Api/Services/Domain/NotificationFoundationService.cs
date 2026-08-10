@@ -317,7 +317,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                     tenant.Phone,
                     tenant.DeletedAt != null ? "The tenant record is inactive." :
                     lifecycle.TenantAccountId == null || lifecycle.HasReconciliationException
-                        ? "The lease relationship must be reconciled before a notice can be delivered." :
+                        ? "The lease and move-in details must match before a notice can be sent." :
                     !effective ? "This person is not effective in the relationship on the current business date." :
                     party.Role == LeaseManagementPartyRole.PrimaryTenant && !policy.IncludePrimaryTenant
                         ? "Primary tenants are excluded by this automation policy." :

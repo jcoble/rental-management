@@ -194,7 +194,7 @@ public sealed class ConfirmScanRequest
 {
     [Required]
     [MaxLength(160)]
-    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    [RegularExpression(@".*\S.*", ErrorMessage = "A request key cannot be blank.")]
     public string ClientOperationId { get; set; } = string.Empty;
 
     public string? OverridesJson { get; set; }
@@ -272,7 +272,7 @@ public sealed class SetScanDraftPaymentAccountRequest
 
     [Required]
     [MaxLength(160)]
-    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    [RegularExpression(@".*\S.*", ErrorMessage = "A request key cannot be blank.")]
     public string ClientOperationId { get; set; } = string.Empty;
 }
 

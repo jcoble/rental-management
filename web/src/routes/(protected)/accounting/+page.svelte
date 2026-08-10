@@ -18,6 +18,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import {
 		EXPENSE_CATEGORIES,
@@ -1148,7 +1149,7 @@
 						<Select.Content>
 							<Select.Item value="" label="All statuses">All statuses</Select.Item>
 							{#each transactionStatusOptions as s}
-								<Select.Item value={s} label={s}>{s}</Select.Item>
+								<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1363,11 +1364,11 @@
 								<span class="mb-1 block text-xs text-muted-foreground">Status</span>
 								<Select.Root type="single" bind:value={expenseForm.status}>
 									<Select.Trigger class="w-full" data-testid="expense-status-input">
-										{expenseForm.status || 'Select status'}
+										{expenseForm.status ? formatStatusLabel(expenseForm.status) : 'Select status'}
 									</Select.Trigger>
 									<Select.Content>
 										{#each EXPENSE_STATUSES as s}
-											<Select.Item value={s} label={s}>{s}</Select.Item>
+											<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
 										{/each}
 									</Select.Content>
 								</Select.Root>

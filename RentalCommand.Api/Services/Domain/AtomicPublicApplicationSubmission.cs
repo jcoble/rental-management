@@ -47,7 +47,7 @@ public sealed class AtomicPublicApplicationSubmissionHandler
         if (portfolioId is null) return Missing();
 
         var request = JsonSerializer.Deserialize<SubmitApplicationRequest>(command.RequestJson)
-            ?? throw new ArgumentException("Public application payload is invalid.");
+            ?? throw new ArgumentException("The application details are invalid.");
         if (!request.ConsentGiven)
             throw new DomainValidationException(
                 "You must consent to a background/credit check to submit an application.");

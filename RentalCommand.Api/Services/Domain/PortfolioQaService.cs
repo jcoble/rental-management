@@ -55,7 +55,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_active_leases",
-            "Returns governing agreements for currently occupied units with tenant name, unit number, " +
+            "Returns active leases for currently occupied units with tenant name, unit number, " +
             "monthly rent, rent due day, lease start and end dates.",
             """{"type":"object","properties":{},"required":[]}"""),
 
@@ -68,7 +68,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_expiring_leases",
-            "Returns governing agreements for currently occupied units whose end date falls within the next N days. " +
+            "Returns active leases for currently occupied units whose end date falls within the next N days. " +
             "Useful for 'any leases expiring soon?' questions.",
             """{"type":"object","properties":{"withinDays":{"type":"integer","description":"Number of days to look ahead. Defaults to 60."}},"required":[]}"""),
 
@@ -554,7 +554,7 @@ public class PortfolioQaService : IPortfolioQaService
         if (value.Length is 0 or > 128)
         {
             throw new ArgumentException(
-                "Idempotency-Key is required for Q&A delivery and must be at most 128 characters.",
+                "A request key is required for Q&A delivery and cannot exceed 128 characters.",
                 nameof(deliveryOperationId));
         }
         return value;
