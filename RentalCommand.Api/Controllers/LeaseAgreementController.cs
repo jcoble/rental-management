@@ -78,7 +78,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         var draft = await _queryService.GetAgreementDraftAsync(
             access, leaseManagementId, leaseAgreementId, ct);
         return draft is null
-            ? NotFound(new { error = "Agreement draft not found" })
+            ? NotFound(new { error = "Lease draft not found" })
             : Ok(draft);
     }
 
@@ -95,7 +95,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         var progress = await _queryService.GetAgreementSignatureProgressAsync(
             access, leaseManagementId, leaseAgreementId, ct);
         return progress is null
-            ? NotFound(new { error = "Issued Agreement signature packet not found" })
+            ? NotFound(new { error = "Lease signing packet not found" })
             : Ok(progress);
     }
 
@@ -128,7 +128,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         if (!TryReadAccessContext(out var access)) return Forbid();
         var reference = await _queryService.GetAgreementArtifactAsync(
             access, leaseManagementId, leaseAgreementId, artifactId, ct);
-        if (reference is null) return NotFound(new { error = "Agreement artifact not found" });
+        if (reference is null) return NotFound(new { error = "Lease document not found" });
 
         Stream stream;
         try
@@ -141,7 +141,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         }
         catch
         {
-            return NotFound(new { error = "Agreement artifact file not found on storage" });
+            return NotFound(new { error = "Lease document file not found" });
         }
 
         Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -159,7 +159,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         if (!TryReadAccessContext(out var access)) return Forbid();
         var reference = await _queryService.GetAgreementSourceScanAsync(
             access, leaseManagementId, leaseAgreementId, ct);
-        if (reference is null) return NotFound(new { error = "Agreement source scan not found" });
+        if (reference is null) return NotFound(new { error = "Lease source scan not found" });
 
         Stream stream;
         try
@@ -172,7 +172,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         }
         catch
         {
-            return NotFound(new { error = "Agreement source scan file not found on storage" });
+            return NotFound(new { error = "Lease source scan file not found" });
         }
 
         Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -420,7 +420,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             leaseAgreementId,
             ct);
         if (signerIds.Count == 0)
-            return UnprocessableEntity(new { error = "The Agreement is unavailable or has no signer snapshot." });
+            return UnprocessableEntity(new { error = "The lease is unavailable or has no signer snapshot." });
         var command = new IssueLeaseAgreementCommand(
             request.PendingUploadId, request.DocumentSourceVersionId, request.IssuanceFingerprint, envelope.PortfolioId,
             leaseManagementId, leaseAgreementId, request.DraftRevision, envelope.KeyDigest,

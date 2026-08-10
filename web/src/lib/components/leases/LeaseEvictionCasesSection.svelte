@@ -268,7 +268,7 @@
 								</div>
 								<p class="text-sm text-muted-foreground">
 									{caseItem.respondents.map((party) => party.tenantName).join(', ')}
-									· {caseItem.agreementNumber ? `Agreement ${caseItem.agreementNumber}` : 'No agreement linked'}
+									· {caseItem.agreementNumber ? `Lease ${caseItem.agreementNumber}` : 'No lease linked'}
 								</p>
 								<p class="text-sm text-muted-foreground">
 									{caseItem.courtName ?? 'Court not entered'}
@@ -380,7 +380,7 @@
 					<textarea bind:value={caseNotes} rows="3" maxlength="1000" class="w-full rounded-md border bg-background px-3 py-2"></textarea>
 				</label>
 				{#if leaseAgreementId}
-					<p class="text-xs text-muted-foreground">This case will be linked to the current agreement.</p>
+					<p class="text-xs text-muted-foreground">This case will be linked to the current lease.</p>
 				{/if}
 				{#if createValidationError}<p class="text-sm text-destructive">{createValidationError}</p>{/if}
 			</div>

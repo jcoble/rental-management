@@ -54,9 +54,9 @@ describe('canonical lease lifecycle action hub', () => {
 	});
 
 	it('uses the mobile-approved prepare-and-issue wording without weakening revision confirmation', () => {
-		assert.match(draftDialogSource, /Issue this exact revision for signature\?/);
-		assert.match(draftDialogSource, /> Prepare and issue</);
-		assert.match(draftDialogSource, /Preparing and issuing…/);
+		assert.match(draftDialogSource, /Send this exact lease revision for signature\?/);
+		assert.match(draftDialogSource, /> Prepare and send</);
+		assert.match(draftDialogSource, /Preparing and sending…/);
 		assert.doesNotMatch(draftDialogSource, /Prepare &amp; issue|> Issue for signature/);
 	});
 
@@ -82,8 +82,8 @@ describe('canonical lease lifecycle action hub', () => {
 	it('puts every current, upcoming, and ending fact in the first-read summary', () => {
 		for (const label of [
 			'Current status',
-			'Current agreement',
-			'Agreement status',
+			'Current lease',
+			'Lease status',
 			'Term',
 			'Base rent',
 			'Upcoming lease document',

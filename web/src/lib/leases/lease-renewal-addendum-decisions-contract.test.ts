@@ -33,8 +33,8 @@ describe('lease renewal effective addendum decisions', () => {
 		assert.match(successorDialogSource, /Select\.Item value="End"/);
 		assert.match(successorDialogSource, /Select\.Item value="IncorporateIntoBase"/);
 		assert.match(successorDialogSource, /Select\.Item value="ReissueAsAddendum"/);
-		assert.match(successorDialogSource, /Stops this addendum when the new agreement begins/);
-		assert.match(successorDialogSource, /folded into the new base agreement/);
+		assert.match(successorDialogSource, /Stops this addendum when the new lease begins/);
+		assert.match(successorDialogSource, /folded into the new base lease/);
 		assert.match(successorDialogSource, /Creates a new editable addendum draft/);
 	});
 

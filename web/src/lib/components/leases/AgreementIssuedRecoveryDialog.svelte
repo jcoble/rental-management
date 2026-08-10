@@ -39,11 +39,11 @@
 		onSuccess: (result) => {
 			showSuccess(alreadyVoided
 				? 'Replacement draft created.'
-				: 'Issued agreement voided and replacement draft created.');
+				: 'Issued lease voided and replacement draft created.');
 			oncreated(result);
 		},
 		onError: (error) => showError(apiErrorMessage(error,
-			'The agreement was not changed. Retry the atomic replacement action with the same request key.'))
+			'The lease was not changed. Retry the atomic replacement action with the same request key.'))
 	}));
 
 	function submit() {
@@ -63,9 +63,9 @@
 <Dialog.Root open onOpenChange={(open) => { if (!open && !mutation.isPending) onclose(); }}>
 	<Dialog.Content class="max-w-xl" data-testid="agreement-issued-recovery-dialog">
 		<Dialog.Header>
-			<Dialog.Title>{alreadyVoided ? 'Create replacement draft' : 'Void and replace issued agreement'}</Dialog.Title>
+			<Dialog.Title>{alreadyVoided ? 'Create replacement draft' : 'Void and replace issued lease'}</Dialog.Title>
 			<Dialog.Description>
-				The issued PDF, content hash, signer snapshot, and audit history remain attached to {source.agreementNumber}. The new version keeps the same agreement type and does not govern until fully executed.
+				The issued PDF, content hash, signer snapshot, and audit history remain attached to {source.agreementNumber}. The new version keeps the same lease type and does not take effect until fully signed.
 			</Dialog.Description>
 		</Dialog.Header>
 

@@ -6,7 +6,7 @@ const source = readFileSync(new URL('./tabs/LeaseTab.svelte', import.meta.url), 
 
 describe('unit lease tab create action', () => {
 	it('offers only the canonical Prepare move-in and agreement-import entry points', () => {
-		assert.match(source, /onclick=\{onScan\}[^>]*>[^<]*<ScanLine[^>]*\/> Import agreement/s);
+		assert.match(source, /onclick=\{onScan\}[^>]*>[^<]*<ScanLine[^>]*\/> Import signed lease/s);
 		assert.match(source, /prepareMoveInHrefForApprovedTenant/);
 		assert.match(source, /<Users[^>]*\/> Prepare move-in/s);
 		assert.doesNotMatch(source, /href="\/applications"/);
