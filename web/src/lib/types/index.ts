@@ -5,7 +5,9 @@ export type PropertyType =
 	| 'Condo'
 	| 'Townhome'
 	| 'Commercial'
-	| 'MixedUse';
+	| 'MixedUse'
+	| 'Storage'
+	| 'Parking';
 export type RentalStructure = 'SingleRental' | 'MultiRental';
 export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type DerivedUnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
@@ -179,6 +181,7 @@ export interface PropertyOwnership {
 export interface Unit {
 	id: number;
 	propertyId: number;
+	propertyType?: PropertyType;
 	unitNumber: string;
 	floorPlan?: string;
 	bedrooms: number;
@@ -1629,6 +1632,8 @@ export interface DashboardActivity {
 	entityId: number;
 	/** Owning unit when the touched entity belongs to a unit. */
 	unitId?: number | null;
+	/** Owning lease-management record for a lease-agreement activity row. */
+	leaseManagementId?: number | null;
 	action?: string;
 	description?: string;
 	/** Human label naming the specific record this row touched (null when the type has no cheap label). */

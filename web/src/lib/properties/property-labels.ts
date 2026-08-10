@@ -7,6 +7,8 @@ export const PROPERTY_TYPE_OPTIONS: { value: PropertyType; label: string }[] = [
 	{ value: 'Townhome', label: 'Townhome' },
 	{ value: 'Commercial', label: 'Commercial' },
 	{ value: 'MixedUse', label: 'Mixed-use' },
+	{ value: 'Storage', label: 'Storage' },
+	{ value: 'Parking', label: 'Parking' },
 ];
 
 export const PROPERTY_STATUS_OPTIONS: { value: PropertyStatus; label: string }[] = [

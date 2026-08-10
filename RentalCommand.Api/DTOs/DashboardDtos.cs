@@ -92,6 +92,8 @@ public class DashboardActivity
     /// links land inside the unit Command Center tab instead of a generic detail page.
     /// </summary>
     public int? UnitId { get; set; }
+    /// <summary>Lease-management record that owns a lease-agreement activity row.</summary>
+    public int? LeaseManagementId { get; set; }
     public string? Action { get; set; }
     public string? Description { get; set; }
     /// <summary>

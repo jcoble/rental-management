@@ -76,6 +76,45 @@ public sealed class AtomicCsvImportAliasPostgreSqlTests : IAsyncLifetime
             && row.UnitNumber == "101");
     }
 
+    [SkippableTheory]
+    [InlineData(PropertyType.SingleFamily, false)]
+    [InlineData(PropertyType.MultiFamily, false)]
+    [InlineData(PropertyType.Condo, false)]
+    [InlineData(PropertyType.Townhome, false)]
+    [InlineData(PropertyType.Storage, true)]
+    [InlineData(PropertyType.Parking, true)]
+    [InlineData(PropertyType.Commercial, true)]
+    public async Task UnitPreview_PreservesMissingBedsAndBathsThroughPropertyTypeValidation(
+        PropertyType propertyType,
+        bool expectedValid)
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext();
+        var scenario = await SeedScenarioAsync(db, $"unit-details-{propertyType}");
+        var property = await db.Properties.SingleAsync(row => row.Id == scenario.PropertyId);
+        property.PropertyType = propertyType;
+        await db.SaveChangesAsync();
+
+        var result = await new AtomicUnitImportPersistence(db).PreviewAsync(
+            scenario.Scope,
+            [new AtomicUnitImportRow(
+                1,
+                scenario.PropertyId,
+                null,
+                "101",
+                null,
+                null,
+                1250m,
+                [])]);
+
+        result.Rows.Should().ContainSingle().Which.Valid.Should().Be(expectedValid);
+        if (expectedValid)
+            result.Rows.Single().Errors.Should().BeEmpty();
+        else
+            result.Rows.Single().Errors.Should().Contain(
+                "Bedrooms and bathrooms are required for residential dwellings.");
+    }
+
     [SkippableFact]
     public async Task CorePropertyPreview_ExecutesAuthorizationCteWithoutAliasFailure_AndReturnsValidRow()
     {

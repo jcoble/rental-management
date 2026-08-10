@@ -30,6 +30,7 @@ public interface ICanonicalAccountBootstrapService
         string displayName,
         string? password,
         bool emailConfirmed,
+        bool termsPrivacyAccepted,
         string operationKey,
         CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default);
@@ -63,6 +64,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         string displayName,
         string? password,
         bool emailConfirmed,
+        bool termsPrivacyAccepted,
         string operationKey,
         CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default)
@@ -130,6 +132,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
             passwordHash,
             intentHash,
             emailConfirmed,
+            termsPrivacyAccepted,
             portfolioName,
             managementCompanyName,
             ownerName,

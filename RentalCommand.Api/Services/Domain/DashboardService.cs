@@ -656,6 +656,7 @@ public class DashboardService : IDashboardService
                     Type = row.Audit.EntityType,
                     EntityId = row.Audit.EntityId,
                     UnitId = fact?.UnitId,
+                    LeaseManagementId = fact?.LeaseManagementId,
                     Action = row.Audit.Operation.ToString(),
                     Description = _auditDescriber.Describe(row.Audit),
                     Label = string.IsNullOrWhiteSpace(fact?.Label) ? null : fact!.Label!.Trim(),
@@ -733,6 +734,7 @@ public class DashboardService : IDashboardService
                     EntityId = property.Id,
                     Label = property.Name,
                     UnitId = null,
+                    LeaseManagementId = null,
                 });
             Append(ref entityRows, propertyRows);
         }
@@ -755,6 +757,7 @@ public class DashboardService : IDashboardService
                     EntityId = unit.Id,
                     Label = property.Name + " · Unit " + unit.UnitNumber,
                     UnitId = unit.Id,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, unitRows);
         }
@@ -804,6 +807,7 @@ public class DashboardService : IDashboardService
                     EntityId = tenant.Id,
                     Label = tenant.FirstName + " " + tenant.LastName,
                     UnitId = latestParty.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, tenantRows);
         }
@@ -821,6 +825,7 @@ public class DashboardService : IDashboardService
                     EntityId = management.Id,
                     Label = management.RelationshipNumber,
                     UnitId = management.UnitId,
+                    LeaseManagementId = null,
                 });
             Append(ref entityRows, managementRows);
         }
@@ -841,6 +846,7 @@ public class DashboardService : IDashboardService
                     EntityId = agreement.Id,
                     Label = agreement.AgreementNumber,
                     UnitId = management.UnitId,
+                    LeaseManagementId = management.Id,
                 };
             Append(ref entityRows, agreementRows);
         }
@@ -861,6 +867,7 @@ public class DashboardService : IDashboardService
                     EntityId = addendum.Id,
                     Label = addendum.AddendumNumber,
                     UnitId = management.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, addendumRows);
         }
@@ -881,6 +888,7 @@ public class DashboardService : IDashboardService
                     EntityId = account.Id,
                     Label = account.AccountNumber,
                     UnitId = management.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, accountRows);
         }
@@ -905,6 +913,7 @@ public class DashboardService : IDashboardService
                     EntityId = entry.Id,
                     Label = entry.Description,
                     UnitId = management.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, ledgerRows);
         }
@@ -954,6 +963,7 @@ public class DashboardService : IDashboardService
                     EntityId = entry.Id,
                     Label = entry.Description,
                     UnitId = management.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, depositEntryRows);
         }
@@ -971,6 +981,7 @@ public class DashboardService : IDashboardService
                     EntityId = workOrder.Id,
                     Label = workOrder.Title,
                     UnitId = workOrder.UnitId,
+                    LeaseManagementId = null,
                 });
             Append(ref entityRows, workOrderRows);
         }
@@ -997,6 +1008,7 @@ public class DashboardService : IDashboardService
                     EntityId = expense.Id,
                     Label = expense.Description,
                     UnitId = expense.UnitId ?? (workOrder == null ? null : workOrder.UnitId),
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, expenseRows);
         }
@@ -1016,6 +1028,7 @@ public class DashboardService : IDashboardService
                     EntityId = appointment.Id,
                     Label = appointment.Title,
                     UnitId = appointment.UnitId,
+                    LeaseManagementId = null,
                 });
             Append(ref entityRows, appointmentRows);
         }
@@ -1038,6 +1051,7 @@ public class DashboardService : IDashboardService
                     EntityId = inspection.Id,
                     Label = property.Name,
                     UnitId = inspection.UnitId,
+                    LeaseManagementId = null,
                 };
             Append(ref entityRows, inspectionRows);
         }
@@ -1057,6 +1071,7 @@ public class DashboardService : IDashboardService
                     EntityId = application.Id,
                     Label = application.FirstName + " " + application.LastName,
                     UnitId = application.UnitId,
+                    LeaseManagementId = null,
                 });
             Append(ref entityRows, applicationRows);
         }
@@ -1064,7 +1079,8 @@ public class DashboardService : IDashboardService
         return entityRows ?? _db.Database.SqlQuery<DashboardActivityEntityReadRow>(
             $"""
             SELECT ''::text AS "EntityType", 0::bigint AS "EntityId",
-                   NULL::text AS "Label", NULL::integer AS "UnitId"
+                   NULL::text AS "Label", NULL::integer AS "UnitId",
+                   NULL::integer AS "LeaseManagementId"
             WHERE FALSE
             """);
     }
@@ -1092,6 +1108,7 @@ public class DashboardService : IDashboardService
                 EntityId = deposit.Id,
                 Label = account.AccountNumber + " deposit",
                 UnitId = management.UnitId,
+                LeaseManagementId = null,
             };
     }
 
@@ -1107,6 +1124,7 @@ public class DashboardService : IDashboardService
         public long EntityId { get; set; }
         public string? Label { get; set; }
         public int? UnitId { get; set; }
+        public int? LeaseManagementId { get; set; }
     }
 
     private async Task<IReadOnlyList<DashboardAppointment>> BuildUpcomingAppointmentsAsync(

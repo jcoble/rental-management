@@ -17,7 +17,10 @@ function recordTypeForEntity(entityType: string | null | undefined): RecordType 
 export function dashboardActivityHref(activity: DashboardActivity): string | null {
 	if (activity.entityId == null) return null;
 	if (activity.type === 'LeaseAgreement' && activity.unitId != null) {
-		return `/units/${activity.unitId}?tab=leasing`;
+		return recordHref('leaseManagement', {
+			id: activity.leaseManagementId ?? activity.entityId,
+			unitId: activity.unitId,
+		});
 	}
 	if (activity.type === 'TenantAccount' && activity.unitId != null) {
 		return `/units/${activity.unitId}?tab=money&view=tenant-account&tenantAccount=${activity.entityId}`;

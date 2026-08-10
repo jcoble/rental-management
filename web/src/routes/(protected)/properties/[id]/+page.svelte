@@ -12,7 +12,7 @@
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { propertySchema, propertyBasisSchema, propertyOperationsSchema, unitSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, propertyBasisSchema, propertyOperationsSchema, isResidentialDwellingType, unitSchemaForPropertyType, parseForm } from '$lib/schemas';
 	import PropertyCapitalAssetsSection from '$lib/components/property/PropertyCapitalAssetsSection.svelte';
 	import PropertyDispositionsSection from '$lib/components/property/PropertyDispositionsSection.svelte';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
@@ -332,7 +332,12 @@
 	function openAddUnit() {
 		if (!canManageRentals) return;
 		editingUnitId = null;
-		unitForm = { ...emptyUnit };
+		const residential = isResidentialDwellingType(property?.type);
+		unitForm = {
+			...emptyUnit,
+			bedrooms: residential ? '1' : '',
+			bathrooms: residential ? '1' : '',
+		};
 		unitFormErrors = {};
 		showUnitForm = true;
 	}
@@ -360,7 +365,7 @@
 	}
 
 	function submitUnit() {
-		const result = parseForm(unitSchema, unitForm);
+		const result = parseForm(unitSchemaForPropertyType(property?.type), unitForm);
 		if (result.errors) {
 			unitFormErrors = result.errors;
 			return;
@@ -919,7 +924,7 @@
 			<Dialog.Title>{editingUnitId == null ? 'Add Unit' : 'Edit Unit'}</Dialog.Title>
 		</Dialog.Header>
 		<div data-testid="unit-form">
-			<UnitFields bind:form={unitForm} errors={unitFormErrors} />
+		<UnitFields bind:form={unitForm} errors={unitFormErrors} propertyType={property?.type} />
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeUnitForm}>Cancel</Button>

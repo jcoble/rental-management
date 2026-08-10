@@ -547,6 +547,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
         }
         else
         {
+            ValidateNewUnitDetails(
+                property.PropertyType, target.UnitBedrooms, target.UnitBathrooms);
             unit = new Unit
             {
                 PortfolioId = command.PortfolioId,
@@ -580,6 +582,19 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 && relationship.CanceledAtUtc == null
                 && relationship.PossessionReturnedAtUtc == null, ct);
         return new HomeFacts(unit.Id, property.Id, currency, hasOpenRelationship);
+    }
+
+    private static void ValidateNewUnitDetails(
+        PropertyType propertyType,
+        decimal? bedrooms,
+        decimal? bathrooms)
+    {
+        if (propertyType.RequiresResidentialUnitDetails()
+            && (!bedrooms.HasValue || !bathrooms.HasValue))
+        {
+            throw new ScanConfirmationValidationException(
+                "Bedrooms and bathrooms are required for residential dwellings.");
+        }
     }
 
     private static string RequireHomeText(string? value, string fieldName)

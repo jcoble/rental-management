@@ -154,6 +154,21 @@ public class CsvImportServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UnitCommit_PreservesOmittedBedsAndBathsForServerSidePropertyValidation()
+    {
+        const string csv =
+            "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
+            "Maple Court,101,,,1200\n";
+
+        await _sut.ImportAsync(
+            _scope, "Unit", Csv(csv), dryRun: false, commandContext: LiveCommandContext);
+
+        var row = _atomic.UnitCommands.Single().Rows.Should().ContainSingle().Subject;
+        row.Bedrooms.Should().BeNull();
+        row.Bathrooms.Should().BeNull();
+    }
+
+    [Fact]
     public async Task UnitPreview_MapsUnknownPropertyResolutionError()
     {
         _atomic.ReturnUnitPreviewError("Property was not found in this portfolio.");

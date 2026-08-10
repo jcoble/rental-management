@@ -43,11 +43,12 @@ test('S26-POT-4 mirrors appointment field maximums on the client', () => {
 	assert.ok(parseForm(appointmentSchema, { ...base, prospectEmail: 'e'.repeat(201) }).errors?.prospectEmail);
 });
 
-test('S26-POT-1 rejects an appointment ending before it starts but permits an equal end', () => {
+test('S26-POT-1 rejects an appointment ending at or before its start', () => {
 	const base = {
 		title: 'Showing', type: 'Showing', status: 'Scheduled', scheduledStart: '2027-01-01T09:00', scheduledEnd: '2027-01-01T09:00',
 		propertyId: '', unitId: '', tenantId: '', workOrderId: '', prospectName: '', prospectEmail: '', assignedTo: ''
 	};
-	assert.equal(parseForm(appointmentSchema, base).errors, null);
+	assert.equal(parseForm(appointmentSchema, base).errors?.scheduledEnd, 'The end time must be after the start time');
 	assert.ok(parseForm(appointmentSchema, { ...base, scheduledEnd: '2027-01-01T08:59' }).errors?.scheduledEnd);
+	assert.equal(parseForm(appointmentSchema, { ...base, scheduledEnd: '2027-01-01T09:01' }).errors, null);
 });

@@ -25,7 +25,10 @@ vi.mock('$lib/api/endpoints/accounting-books', async () => {
 	};
 });
 
-afterEach(() => cleanup());
+afterEach(async () => {
+	cleanup();
+	await new Promise((resolve) => setTimeout(resolve, 100));
+});
 
 const lines = [
 	{

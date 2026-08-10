@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import UnitRecurringMaintenanceViewHarness from './UnitRecurringMaintenanceViewHarness.svelte';
 import { recurringMaintenance, type RecurringMaintenanceTask } from '$lib/api/endpoints/recurring-maintenance';
 
-afterEach(() => {
+afterEach(async () => {
 	cleanup();
 	vi.restoreAllMocks();
+	await new Promise((resolve) => setTimeout(resolve, 50));
 });
 
 const createdTask = {

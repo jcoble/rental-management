@@ -14,6 +14,7 @@
 	let email = $state('');
 	let password = $state('');
 	let confirmPassword = $state('');
+	let termsPrivacyAccepted = $state(false);
 
 	// Repopulate fields after a failed submit.
 	$effect(() => {
@@ -108,6 +109,22 @@
 							class="h-11"
 						/>
 					</div>
+
+					<label for="register-terms-privacy" class="flex items-start gap-2 text-sm text-muted-foreground">
+						<input
+							id="register-terms-privacy"
+							name="termsPrivacyAccepted"
+							type="checkbox"
+							data-testid="register-terms-privacy-checkbox"
+							bind:checked={termsPrivacyAccepted}
+							required
+							class="mt-0.5 h-4 w-4 rounded border-border text-primary accent-primary"
+						/>
+						<span>
+							I agree to the <a href="/terms" class="text-primary underline underline-offset-4 hover:text-primary/80">Terms of Service</a>
+							and <a href="/privacy" class="text-primary underline underline-offset-4 hover:text-primary/80">Privacy Policy</a>.
+						</span>
+					</label>
 
 					<div>
 						<label for="register-email" class="mb-1.5 block text-sm font-medium text-foreground">

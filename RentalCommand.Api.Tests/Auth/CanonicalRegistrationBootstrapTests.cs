@@ -117,12 +117,16 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = "sole@example.test",
                 Password = "Password123!",
                 DisplayName = "Sole Landlord",
+                TermsPrivacyAccepted = true,
             }, "test-register"));
 
         registered.Success.Should().BeTrue();
         var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
         user.Should().NotBeNull();
-        (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
+        user!.TermsPrivacyAccepted.Should().BeTrue();
+        user.TermsPrivacyAcceptedAtUtc.Should().NotBeNull();
+        user.TermsPrivacyVersion.Should().Be(ApplicationUser.RegistrationTermsPrivacyVersion);
+        (await _users.ConfirmEmailAsync(user, registered.EmailConfirmationToken!)).Succeeded
             .Should().BeTrue();
         var context = await _ctx.Db.WorkspaceAccessContexts
             .Include(row => row.Membership!)
@@ -195,6 +199,31 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Register_RequiresTermsPrivacyConsent()
+    {
+        var email = $"consent-required-{Guid.NewGuid():N}@example.test";
+        var auth = CreateService(
+            CreateAtomicCredentials(),
+            new AccessEnvelopeQuery(_ctx.Db),
+            CreateCanonicalTokens());
+
+        var result = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = email,
+                Password = "Password123!",
+                DisplayName = "Consent Required",
+            }, $"consent-required-{Guid.NewGuid():N}"));
+
+        result.Success.Should().BeFalse();
+        result.ErrorType.Should().Be(AuthErrorType.BadRequest);
+        result.ValidationErrors.Should().ContainSingle(
+            "You must agree to the Terms of Service and Privacy Policy.");
+        (await _ctx.Db.Users.AnyAsync(user => user.NormalizedEmail == email.ToUpperInvariant()))
+            .Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Register_EnablesLockout_AndLocksAfterFifthFailureUntilExpiry()
     {
         var email = $"lockout-{Guid.NewGuid():N}@example.test";
@@ -209,6 +238,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = email,
                 Password = "Password123!",
                 DisplayName = "Lockout Regression",
+                TermsPrivacyAccepted = true,
             }, $"lockout-register-{Guid.NewGuid():N}"));
 
         registered.Success.Should().BeTrue();
@@ -263,12 +293,16 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = email,
                 Password = "Password123!",
                 DisplayName = "Verification Regression",
+                TermsPrivacyAccepted = true,
             }, $"verification-register-{Guid.NewGuid():N}"));
 
         registered.Success.Should().BeTrue();
         var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
         user.Should().NotBeNull();
-        (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
+        user!.TermsPrivacyAccepted.Should().BeTrue();
+        user.TermsPrivacyAcceptedAtUtc.Should().NotBeNull();
+        user.TermsPrivacyVersion.Should().Be(ApplicationUser.RegistrationTermsPrivacyVersion);
+        (await _users.ConfirmEmailAsync(user, registered.EmailConfirmationToken!)).Succeeded
             .Should().BeTrue();
 
         var confirmedUserWithBogusToken = await ExecuteAsApiDatabaseIdentityAsync(() =>
@@ -301,6 +335,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = email,
                 Password = "Password123!",
                 DisplayName = "Logout Regression",
+                TermsPrivacyAccepted = true,
             }, $"logout-register-{Guid.NewGuid():N}"));
         registered.Success.Should().BeTrue();
         var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
@@ -440,6 +475,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = email,
                 Password = "Password123!",
                 DisplayName = "Revoke Authority Regression",
+                TermsPrivacyAccepted = true,
             }, $"revoke-authority-register-{Guid.NewGuid():N}"));
         registered.Success.Should().BeTrue();
 

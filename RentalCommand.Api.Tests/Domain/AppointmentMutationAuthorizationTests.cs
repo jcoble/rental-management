@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -120,6 +121,37 @@ public sealed class AppointmentMutationAuthorizationTests : IDisposable
         created.Should().BeNull();
         (await _ctx.Db.Appointments.CountAsync(item => item.PortfolioId == PortfolioId))
             .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAndUpdateAuthorizedAsync_RejectAnEndThatIsNotAfterTheStart()
+    {
+        var scenario = SeedLeasedUnit();
+        var scope = _ctx.Db.SeedPropertyManagerScope(
+            PortfolioId, scenario.PropertyId, nameof(CreateAndUpdateAuthorizedAsync_RejectAnEndThatIsNotAfterTheStart));
+        var request = MaintenanceVisitRequest(scenario);
+        request.ScheduledEnd = request.ScheduledStart;
+
+        var create = () => _sut.CreateAuthorizedAsync(
+            scope, request, "appointment-equal-end-create");
+        await create.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("The end time must be after the start time");
+
+        request.ScheduledEnd = request.ScheduledStart.AddHours(1);
+        var created = await _sut.CreateAuthorizedAsync(scope, request, "appointment-equal-end-seed");
+        created.Should().NotBeNull();
+
+        var update = () => _sut.UpdateAuthorizedAsync(
+            scope,
+            created!.Id,
+            new UpdateAppointmentRequest
+            {
+                ScheduledStart = request.ScheduledStart,
+                ScheduledEnd = request.ScheduledStart,
+            },
+            "appointment-equal-end-update");
+        await update.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("The end time must be after the start time");
     }
 
     private Scenario SeedLeasedUnit()

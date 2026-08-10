@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -7,6 +8,7 @@ using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -73,6 +75,55 @@ public class UnitServiceCreateTests : IAsyncLifetime
 
         created.Should().NotBeNull();
         created!.UnitNumber.Should().Be("101");
+    }
+
+    [Theory]
+    [InlineData(PropertyType.SingleFamily, true)]
+    [InlineData(PropertyType.MultiFamily, true)]
+    [InlineData(PropertyType.Condo, true)]
+    [InlineData(PropertyType.Townhome, true)]
+    [InlineData(PropertyType.Storage, false)]
+    [InlineData(PropertyType.Parking, false)]
+    [InlineData(PropertyType.Commercial, false)]
+    public async Task CreateAsync_applies_bed_bath_requirement_by_property_type(
+        PropertyType propertyType, bool requiresResidentialDetails)
+    {
+        var property = SeedProperty($"{propertyType} property", propertyType);
+        var request = NewUnit(property.Id, "101");
+        request.Bedrooms = null;
+        request.Bathrooms = null;
+
+        if (requiresResidentialDetails)
+        {
+            var act = async () => await _sut.CreateAsync(
+                _scope, request, Guid.NewGuid().ToString("N"));
+
+            var ex = await act.Should().ThrowAsync<DomainValidationException>();
+            ex.Which.Message.Should().Be("Bedrooms and bathrooms are required for residential dwellings.");
+            (await _ctx.Db.Units.CountAsync(unit => unit.PropertyId == property.Id)).Should().Be(0);
+        }
+        else
+        {
+            var created = await _sut.CreateAsync(
+                _scope, request, Guid.NewGuid().ToString("N"));
+
+            created.Should().NotBeNull();
+            created!.Bedrooms.Should().Be(0m);
+            created.Bathrooms.Should().Be(0m);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_rejects_explicitly_clearing_beds_or_baths_on_residential_property()
+    {
+        var property = SeedProperty("Residential property", PropertyType.SingleFamily);
+        var unit = await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
+
+        var act = async () => await _sut.UpdateAsync(
+            _scope, unit!.Id, new UpdateUnitRequest { Bedrooms = null }, Guid.NewGuid().ToString("N"));
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Be("Bedrooms and bathrooms are required for residential dwellings.");
     }
 
     [Fact]
@@ -181,13 +232,14 @@ public class UnitServiceCreateTests : IAsyncLifetime
             && row.IdempotencyKey == identity.IdempotencyKey).Should().Be(1);
     }
 
-    private Property SeedProperty(string name = "Test Property")
+    private Property SeedProperty(string name = "Test Property", PropertyType propertyType = PropertyType.MultiFamily)
     {
         var now = DateTime.UtcNow;
         var property = new Property
         {
             PortfolioId = PortfolioId,
             Name = name,
+            PropertyType = propertyType,
             AddressLine1 = "1 Main Street",
             City = "Columbus",
             State = "OH",
@@ -204,5 +256,7 @@ public class UnitServiceCreateTests : IAsyncLifetime
     {
         PropertyId = propertyId,
         UnitNumber = unitNumber,
+        Bedrooms = 1m,
+        Bathrooms = 1m,
     };
 }

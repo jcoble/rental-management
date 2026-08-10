@@ -8,13 +8,15 @@
 	import { Input } from '$lib/components/ui/input';
 	import AutoFilledBadge from './AutoFilledBadge.svelte';
 	import { STEP_FIELD_TO_EXTRACTION } from '$lib/scan/lease-prefill';
+	import { isResidentialDwellingType } from '$lib/schemas';
 
 	let {
 		form = $bindable(),
 		errors = {},
 		autoFilled,
 		confidence,
-		testidPrefix = 'unit'
+		testidPrefix = 'unit',
+		propertyType
 	}: {
 		form: {
 			unitNumber: string;
@@ -29,8 +31,10 @@
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
 		testidPrefix?: string;
+		propertyType?: string | null;
 	} = $props();
 
+	const showBedBath = $derived(isResidentialDwellingType(propertyType));
 	const filled = (key: string) => !!autoFilled?.has(key);
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
 </script>
@@ -44,13 +48,14 @@
 		<Input data-testid={`${testidPrefix}-number-input`} bind:value={form.unitNumber} placeholder="Unit number" />
 		{#if errors.unitNumber}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-number-error`}>{errors.unitNumber}</p>{/if}
 	</div>
-	<div class="grid grid-cols-3 gap-2">
+	<div class:grid-cols-3={showBedBath} class:grid-cols-1={!showBedBath} class="grid gap-2">
+		{#if showBedBath}
 		<div>
 			<div class="mb-1 flex items-center gap-2">
 				<span class="text-xs font-medium text-muted-foreground">Beds</span>
 				<AutoFilledBadge show={filled('bedrooms')} confidence={conf('bedrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" inputmode="numeric" mask="integer" />
+			<Input data-testid={`${testidPrefix}-bedrooms-input`} bind:value={form.bedrooms} placeholder="Beds" inputmode="numeric" mask="integer" required={showBedBath} />
 			{#if errors.bedrooms}<p class="mt-1 text-xs text-destructive">{errors.bedrooms}</p>{/if}
 		</div>
 		<div>
@@ -58,9 +63,10 @@
 				<span class="text-xs font-medium text-muted-foreground">Baths</span>
 				<AutoFilledBadge show={filled('bathrooms')} confidence={conf('bathrooms')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" inputmode="decimal" mask="decimal" />
+			<Input data-testid={`${testidPrefix}-bathrooms-input`} bind:value={form.bathrooms} placeholder="Baths" inputmode="decimal" mask="decimal" required={showBedBath} />
 			{#if errors.bathrooms}<p class="mt-1 text-xs text-destructive">{errors.bathrooms}</p>{/if}
 		</div>
+		{/if}
 		<div>
 			<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent</span>
 			<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.marketRent} placeholder="Rent" inputmode="decimal" mask="currency" />
