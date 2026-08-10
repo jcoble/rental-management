@@ -370,7 +370,8 @@ public class BankingServiceTests : IAsyncLifetime
     [Fact]
     public async Task MatchAsync_ConcurrentSameOperation_ReplaysOneAuthorizedReconciliation()
     {
-        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var payment = await SeedProviderRentPaymentAsync(
+            new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
         var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
         {
             Provider = "Manual",
@@ -416,24 +417,75 @@ public class BankingServiceTests : IAsyncLifetime
         outcomes.Should().OnlyContain(outcome =>
             outcome != null && outcome.MatchStatus == "Matched");
         _ctx.Db.ChangeTracker.Clear();
-        (await _ctx.Db.BankTransactions.AsNoTracking()
+        var bankTransaction = await _ctx.Db.BankTransactions.AsNoTracking()
             .Where(transaction => transaction.Id == transactionId)
-            .Select(transaction => transaction.MatchedTenantLedgerEntryId)
-            .SingleAsync()).Should().Be(payment.Id);
-        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            .SingleAsync();
+        bankTransaction.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        bankTransaction.MatchStatus.Should().Be("Matched");
+
+        var commandReceipts = await _ctx.Db.AtomicCommandReceipts
+            .Where(receipt =>
             receipt.CommandType == "banking.transaction.reconcile" &&
-            receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation")))
-            .Should().Be(1);
+            receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation"))
+            .ToListAsync();
+        commandReceipts.Should().ContainSingle();
+        commandReceipts.Single().Status.Should().Be(AtomicCommandReceiptStatus.Completed);
+
         (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == "banking.transaction.reconcile" &&
             audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
             audit.EntityType == nameof(BankTransaction)))
             .Should().Be(1);
+
+        var settlementJournals = await _ctx.Db.JournalEntries.AsNoTracking()
+            .Where(journal =>
+                journal.SourceType == JournalSourceType.ProviderSettlement &&
+                journal.SourceId == transactionId)
+            .ToListAsync();
+        settlementJournals.Should().ContainSingle();
+        var settlementJournal = settlementJournals.Single();
         (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == "banking.transaction.reconcile" &&
             audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
-            audit.EntityType == nameof(JournalEntry)))
+            audit.EntityType == nameof(JournalEntry) &&
+            audit.EntityId == settlementJournal.Id))
             .Should().Be(1);
+
+        var operatingCashId = await _ctx.Db.LedgerAccounts
+            .Where(account => account.PortfolioId == 1 && account.SystemKey == "operating-cash")
+            .Select(account => account.Id)
+            .SingleAsync();
+        var undepositedFundsId = await _ctx.Db.LedgerAccounts
+            .Where(account => account.PortfolioId == 1 && account.SystemKey == "undeposited-funds")
+            .Select(account => account.Id)
+            .SingleAsync();
+        var settlementLines = await _ctx.Db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == settlementJournal.Id)
+            .ToListAsync();
+        settlementLines.Should().HaveCount(2);
+        var operatingCashLines = settlementLines
+            .Where(line => line.LedgerAccountId == operatingCashId)
+            .ToArray();
+        operatingCashLines.Should().ContainSingle();
+        operatingCashLines[0].DebitAmount.Should().Be(payment.Amount);
+        operatingCashLines[0].CreditAmount.Should().Be(0m);
+        var undepositedFundsLines = settlementLines
+            .Where(line => line.LedgerAccountId == undepositedFundsId)
+            .ToArray();
+        undepositedFundsLines.Should().ContainSingle();
+        undepositedFundsLines[0].DebitAmount.Should().Be(0m);
+        undepositedFundsLines[0].CreditAmount.Should().Be(payment.Amount);
+        var settlementBalance = await _ctx.Db.JournalLines.AsNoTracking()
+            .Where(line => line.JournalEntryId == settlementJournal.Id)
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Debit = group.Sum(line => line.DebitAmount),
+                Credit = group.Sum(line => line.CreditAmount),
+            })
+            .SingleAsync();
+        settlementBalance.Debit.Should().Be(payment.Amount);
+        settlementBalance.Credit.Should().Be(payment.Amount);
     }
 
     [Fact]
@@ -2138,7 +2190,8 @@ public class BankingServiceTests : IAsyncLifetime
         decimal amount,
         DateTime paidAt,
         string leaseNumber,
-        Property? property = null)
+        Property? property = null,
+        bool providerShaped = false)
     {
         property ??= new Property
         {
@@ -2213,6 +2266,26 @@ public class BankingServiceTests : IAsyncLifetime
             BusinessKey = $"test-receipt:{leaseNumber}",
             CreatedByUserId = 1,
         };
+        if (providerShaped)
+        {
+            receipt.ProviderPaymentAttempt = new TenantPaymentAttempt
+            {
+                PortfolioId = 1,
+                TenantAccount = account,
+                Provider = "stripe",
+                ProviderObjectId = $"pi-provider-fixture-{leaseNumber}",
+                IdempotencyKey = $"provider-fixture:{leaseNumber}",
+                AttemptType = TenantPaymentAttemptType.UnappliedReceipt,
+                State = TenantPaymentAttemptState.Succeeded,
+                Amount = amount,
+                Currency = "USD",
+                PreparedAtUtc = paidAt,
+                SubmittedAtUtc = paidAt,
+                SettledAtUtc = paidAt,
+                UpdatedAtUtc = paidAt,
+                CreatedByUserId = 1,
+            };
+        }
         ctx.Db.TenantLedgerEntries.Add(receipt);
         ctx.Db.SaveChanges();
         return receipt;
@@ -2260,6 +2333,28 @@ public class BankingServiceTests : IAsyncLifetime
 
     private TenantLedgerEntry SeedRentPayment(DateTime paidAt) =>
         SeedRentPaymentInto(_ctx, "Emily", "Chen", 1400m, paidAt, "L2024-008");
+
+    private async Task<TenantLedgerEntry> SeedProviderRentPaymentAsync(DateTime paidAt)
+    {
+        var receipt = SeedRentPaymentInto(
+            _ctx, "Emily", "Chen", 1400m, paidAt, "L-provider-fixture", providerShaped: true);
+
+        // Convert the provider-shaped receipt before the concurrent match so production's
+        // settlement branch sees the same TenantReceipt debit from undeposited-funds as a live
+        // provider payment would.
+        await new AccountingConversionService(_ctx.Db).ConvertPortfolioAsync(1);
+        var receiptJournal = await _ctx.Db.JournalEntries
+            .Include(entry => entry.Lines)
+            .ThenInclude(line => line.LedgerAccount)
+            .SingleAsync(entry =>
+                entry.SourceType == JournalSourceType.TenantReceipt &&
+                entry.SourceId == receipt.Id);
+        receiptJournal.Lines.Should().Contain(line =>
+            line.DebitAmount == receipt.Amount &&
+            line.LedgerAccount!.SystemKey == "undeposited-funds");
+        _ctx.Db.ChangeTracker.Clear();
+        return receipt;
+    }
 
     private BankTransactionMutationRequest Mutation(int transactionId, string key)
     {
