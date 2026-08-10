@@ -228,7 +228,7 @@ public class CsvImportServiceTests : IDisposable
         result.Rows.Should().ContainSingle();
         result.Rows[0].Valid.Should().BeFalse();
         result.Rows[0].Errors.Should().Contain(
-            "Rental setup 'duplex' is invalid. Use \"SingleRental\" for one rental or \"MultiRental\" for multiple rentals.");
+            "Rental setup 'duplex' is invalid. Use “SingleRental” for one rental or “MultiRental” for multiple rentals.");
     }
 
     // -------------------------------------------------------------------------
