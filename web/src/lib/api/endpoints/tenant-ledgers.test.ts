@@ -19,6 +19,9 @@ describe('tenant ledger API contract', () => {
 		assert.match(source, /`\/tenant-accounts\/\$\{tenantAccountId\}\/month-summary/);
 		assert.match(source, /`\/tenant-accounts\/\$\{tenantAccountId\}\/ledger-summary/);
 		assert.match(source, /months: TenantLedgerSummaryMonths = 12/);
+		assert.match(source, /`\/tenant-accounts\/\$\{tenantAccountId\}\/credit-targets/);
+		assert.match(source, /targetEntryId: params\.targetEntryId/);
+		assert.match(source, /creditTargets: \(tenantAccountId: number, params\?: TenantCreditTargetParams\)/);
 		assert.match(source, /`\/tenant-accounts\/\$\{tenantAccountId\}\/recurring-charges/);
 	});
 

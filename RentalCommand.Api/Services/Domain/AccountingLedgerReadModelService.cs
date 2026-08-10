@@ -42,6 +42,9 @@ public interface IAccountingLedgerReadModelService
     Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(
         WorkspaceReadScope scope, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
 
+    Task<AccountingPage<TenantCreditTargetRow>?> GetTenantCreditTargetsAsync(
+        WorkspaceReadScope scope, int tenantAccountId, TenantCreditTargetQuery query, CancellationToken ct = default);
+
     Task<TenantLedgerPeriodSummary?> GetTenantLedgerPeriodSummaryAsync(
         int portfolioId, int tenantAccountId, int months, CancellationToken ct = default);
 
@@ -688,6 +691,75 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
         return await GetTenantLedgerPageAsync(entries, scope.PortfolioId, tenantAccountId, query, ct);
     }
 
+    public async Task<AccountingPage<TenantCreditTargetRow>?> GetTenantCreditTargetsAsync(
+        WorkspaceReadScope scope, int tenantAccountId, TenantCreditTargetQuery query, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, now);
+        var eligibleEntries =
+            from account in _db.TenantAccounts.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, LeaseManagementId = account.LeaseManagementId }
+                equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join entry in _db.TenantLedgerEntries.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { entry.PortfolioId, entry.TenantAccountId }
+            where account.PortfolioId == scope.PortfolioId
+                && account.Id == tenantAccountId
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
+                && entry.Direction == TenantLedgerDirection.Debit
+                && TargetedCreditEntryTypes.Contains(entry.EntryType)
+                && entry.EntryType != TenantLedgerEntryType.DepositCharge
+                && entry.Amount - (_db.TenantLedgerEntries
+                    .Where(correction => correction.PortfolioId == entry.PortfolioId
+                        && correction.TenantAccountId == entry.TenantAccountId
+                        && ((correction.EntryType == TenantLedgerEntryType.Reversal
+                                && correction.ReversesEntryId == entry.Id)
+                            || (correction.EntryType == TenantLedgerEntryType.Credit
+                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                    .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
+            select entry;
+
+        var totalCount = await eligibleEntries.CountAsync(ct);
+        var skip = query.NormalizedSkip;
+        var take = query.NormalizedTake;
+        var ordered = eligibleEntries
+            .OrderByDescending(entry => query.TargetEntryId != null && entry.Id == query.TargetEntryId.Value)
+            .ThenByDescending(entry => entry.EffectiveOn)
+            .ThenByDescending(entry => entry.PostedAtUtc)
+            .ThenByDescending(entry => entry.Id);
+        var rows = await ordered
+            .Skip(skip)
+            .Take(take)
+            .Select(entry => new TenantCreditTargetRow
+            {
+                TenantLedgerEntryId = entry.Id,
+                PublicId = entry.PublicId,
+                Description = entry.Description,
+                ChargeAmount = entry.Amount,
+                RemainingTargetableAmount = entry.Amount - (_db.TenantLedgerEntries
+                    .Where(correction => correction.PortfolioId == entry.PortfolioId
+                        && correction.TenantAccountId == entry.TenantAccountId
+                        && ((correction.EntryType == TenantLedgerEntryType.Reversal
+                                && correction.ReversesEntryId == entry.Id)
+                            || (correction.EntryType == TenantLedgerEntryType.Credit
+                                && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                    .Sum(correction => (decimal?)correction.Amount) ?? 0m),
+                EffectiveOn = entry.EffectiveOn,
+                Currency = entry.Currency,
+            })
+            .ToListAsync(ct);
+
+        return new AccountingPage<TenantCreditTargetRow>
+        {
+            Items = rows,
+            TotalCount = totalCount,
+            Skip = skip,
+            Take = take,
+        };
+    }
+
     private async Task<AccountingPage<TenantLedgerRow>> GetTenantLedgerPageAsync(
         IQueryable<TenantLedgerEntry> entries, int portfolioId, int tenantAccountId,
         TenantLedgerQuery query, CancellationToken ct)
@@ -788,8 +860,15 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         on line.LedgerAccountId equals account.Id
                     where journal.PortfolioId == portfolioId
                         && journal.SourceId == entry.Id
-                        && (journal.SourceType == JournalSourceType.TenantCharge
-                            || journal.SourceType == JournalSourceType.TenantConcession)
+                        && ((ChargeEntryTypes.Contains(entry.EntryType)
+                                && journal.SourceType == JournalSourceType.TenantCharge)
+                            || (entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                                && journal.SourceType == JournalSourceType.TenantReceipt)
+                            || ((entry.EntryType == TenantLedgerEntryType.Credit
+                                    || entry.EntryType == TenantLedgerEntryType.Adjustment)
+                                && journal.SourceType == JournalSourceType.TenantConcession)
+                            || (entry.EntryType == TenantLedgerEntryType.OpeningBalance
+                                && journal.SourceType == JournalSourceType.OpeningBalance))
                         && account.AccountType == AccountType.Income
                     orderby journal.Id descending, line.Id
                     select account.Name)
@@ -806,7 +885,17 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Select(reversal => (long?)reversal.Id)
                     .FirstOrDefault(),
                 JournalEntryPublicId = _db.JournalEntries
-                    .Where(journal => journal.PortfolioId == portfolioId && journal.SourceId == entry.Id)
+                    .Where(journal => journal.PortfolioId == portfolioId
+                        && journal.SourceId == entry.Id
+                        && ((ChargeEntryTypes.Contains(entry.EntryType)
+                                && journal.SourceType == JournalSourceType.TenantCharge)
+                            || (entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                                && journal.SourceType == JournalSourceType.TenantReceipt)
+                            || ((entry.EntryType == TenantLedgerEntryType.Credit
+                                    || entry.EntryType == TenantLedgerEntryType.Adjustment)
+                                && journal.SourceType == JournalSourceType.TenantConcession)
+                            || (entry.EntryType == TenantLedgerEntryType.OpeningBalance
+                                && journal.SourceType == JournalSourceType.OpeningBalance)))
                     .OrderByDescending(journal => journal.Id)
                     .Select(journal => (Guid?)journal.PublicId)
                     .FirstOrDefault(),
@@ -827,7 +916,9 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
                         && entry.ReversesEntryId == null
                         && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
-                            && journal.SourceId == entry.Id)
+                            && journal.SourceId == entry.Id
+                            && ChargeEntryTypes.Contains(entry.EntryType)
+                            && journal.SourceType == JournalSourceType.TenantCharge)
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
@@ -839,7 +930,9 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             || entry.EntryType == TenantLedgerEntryType.ManualCharge)
                         && entry.ReversesEntryId == null
                         && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
-                            && journal.SourceId == entry.Id)
+                            && journal.SourceId == entry.Id
+                            && ChargeEntryTypes.Contains(entry.EntryType)
+                            && journal.SourceType == JournalSourceType.TenantCharge)
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
@@ -851,7 +944,9 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                             || entry.EntryType == TenantLedgerEntryType.ManualCharge)
                         && entry.ReversesEntryId == null
                         && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
-                            && journal.SourceId == entry.Id)
+                            && journal.SourceId == entry.Id
+                            && ChargeEntryTypes.Contains(entry.EntryType)
+                            && journal.SourceType == JournalSourceType.TenantCharge)
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
@@ -860,7 +955,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         && entry.EntryType == TenantLedgerEntryType.OpeningBalance
                         && entry.ReversesEntryId == null
                         && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
-                            && journal.SourceId == entry.Id)
+                            && journal.SourceId == entry.Id
+                            && journal.SourceType == JournalSourceType.OpeningBalance)
                         && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
                             && reversal.TenantAccountId == entry.TenantAccountId
                             && reversal.EntryType == TenantLedgerEntryType.Reversal
@@ -965,12 +1061,13 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                           WHERE allocation."PortfolioId" = entry."PortfolioId"
                             AND allocation."TenantAccountId" = entry."TenantAccountId"
                             AND allocation."DebitEntryId" = entry."Id"), 0) > 0))
-                  AND (NOT {{settledOnly}} OR entry."Direction" <> 'Debit' OR (
-                      entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
+                  AND (NOT {{settledOnly}} OR entry."Direction" <> 'Debit'
+                      OR entry."EntryType" NOT IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                      OR entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
                           FROM "TenantLedgerAllocations" AS allocation
                           WHERE allocation."PortfolioId" = entry."PortfolioId"
                             AND allocation."TenantAccountId" = entry."TenantAccountId"
-                            AND allocation."DebitEntryId" = entry."Id"), 0) <= 0))
+                            AND allocation."DebitEntryId" = entry."Id"), 0) <= 0)
             ),
             entry_facts AS MATERIALIZED (
                 SELECT
@@ -1120,6 +1217,14 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     FROM "JournalEntries" AS journal
                     WHERE journal."PortfolioId" = entry_facts."PortfolioId"
                       AND journal."SourceId" = entry_facts."Id"
+                      AND ((entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                              AND journal."SourceType" = 'TenantCharge')
+                          OR (entry_facts."EntryType" = 'PaymentReceipt'
+                              AND journal."SourceType" = 'TenantReceipt')
+                          OR (entry_facts."EntryType" IN ('Credit','Adjustment')
+                              AND journal."SourceType" = 'TenantConcession')
+                          OR (entry_facts."EntryType" = 'OpeningBalance'
+                              AND journal."SourceType" = 'OpeningBalance'))
                     ORDER BY journal."Id" DESC
                     LIMIT 1
                 ) AS journal_public ON TRUE
@@ -1147,6 +1252,14 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 INNER JOIN "JournalEntries" AS journal
                     ON journal."PortfolioId" = entry."PortfolioId"
                    AND journal."SourceId" = entry."Id"
+                   AND ((entry."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                           AND journal."SourceType" = 'TenantCharge')
+                       OR (entry."EntryType" = 'PaymentReceipt'
+                           AND journal."SourceType" = 'TenantReceipt')
+                       OR (entry."EntryType" IN ('Credit','Adjustment')
+                           AND journal."SourceType" = 'TenantConcession')
+                       OR (entry."EntryType" = 'OpeningBalance'
+                           AND journal."SourceType" = 'OpeningBalance'))
                    AND journal."Currency" = entry."Currency"
                 INNER JOIN "JournalLines" AS line
                     ON line."JournalEntryId" = journal."Id"

@@ -100,6 +100,20 @@ export interface TenantMonthSummaryParams {
 	take?: number;
 }
 
+export interface TenantCreditTarget {
+	tenantLedgerEntryId: number;
+	publicId: string;
+	description: string;
+	chargeAmount: number;
+	remainingTargetableAmount: number;
+	effectiveOn: string;
+	currency: string;
+}
+
+export interface TenantCreditTargetParams extends Pick<ListParams, 'skip' | 'take' | 'sort'> {
+	targetEntryId?: number;
+}
+
 export interface TenantMonthSummary {
 	year: number;
 	month: number;
@@ -219,6 +233,20 @@ export function buildTenantLedgerSummaryPath(
 	return `/tenant-accounts/${tenantAccountId}/ledger-summary${buildListQuery(undefined, { months })}`;
 }
 
+export function buildTenantCreditTargetsPath(
+	tenantAccountId: number,
+	params: TenantCreditTargetParams = {}
+): string {
+	return `/tenant-accounts/${tenantAccountId}/credit-targets${buildListQuery(
+		{
+			skip: params.skip,
+			take: params.take,
+			sort: params.sort
+		},
+		{ targetEntryId: params.targetEntryId }
+	)}`;
+}
+
 export function buildRecurringTenantChargesPath(
 	tenantAccountId: number,
 	params: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'> = {}
@@ -233,6 +261,10 @@ export const tenantLedgers = {
 		api.get<TenantMonthSummary[]>(buildTenantMonthSummaryPath(tenantAccountId, params)),
 	ledgerSummary: (tenantAccountId: number, months: TenantLedgerSummaryMonths = 12) =>
 		api.get<TenantLedgerPeriodSummary>(buildTenantLedgerSummaryPath(tenantAccountId, months)),
+	creditTargets: (tenantAccountId: number, params?: TenantCreditTargetParams) =>
+		api.get<AccountingPage<TenantCreditTarget>>(
+			buildTenantCreditTargetsPath(tenantAccountId, params)
+		),
 	recurringCharges: (tenantAccountId: number, params?: Pick<ListParams, 'skip' | 'take' | 'search' | 'sort'>) =>
 		api.get<AccountingPage<RecurringTenantChargeRow>>(
 			buildRecurringTenantChargesPath(tenantAccountId, params)

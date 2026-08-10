@@ -136,7 +136,6 @@
 	const currency = $derived(
 		accountSummary?.currency ?? ledgerSummary?.currency ?? monthSummaries[0]?.currency ?? 'USD'
 	);
-	const rows = $derived(monthSummaries.flatMap((summary) => summary.rows));
 	const activeSchedules = $derived((recurringQuery.data?.items ?? []).filter((schedule) => schedule.isActive));
 	const hasHistory = $derived(monthSummaries.length > 0);
 	const nextDueOn = $derived(accountSummary?.nextDueOn ?? null);
@@ -446,8 +445,7 @@
 	open={sheet === 'credit'}
 	tenantAccountId={tenantAccountId ?? 0}
 	currency={currency}
-	ledgerRows={rows}
-	initialTarget={creditTarget}
+	initialTargetEntryId={creditTarget?.tenantLedgerEntryId ?? null}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />

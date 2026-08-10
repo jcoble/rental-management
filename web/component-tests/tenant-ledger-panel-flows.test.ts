@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TenantLedgerRow, TenantMonthSummary } from '$lib/api/endpoints/tenant-ledgers';
 import type { UnitDashboard } from '$lib/types';
@@ -6,7 +6,7 @@ import TenantLedgerPanelFlowHarness from './TenantLedgerPanelFlowHarness.svelte'
 
 const mocks = vi.hoisted(() => ({
 	account: vi.fn(),
-	list: vi.fn(),
+	creditTargets: vi.fn(),
 	monthSummary: vi.fn(),
 	ledgerSummary: vi.fn(),
 	recurringCharges: vi.fn(),
@@ -28,12 +28,12 @@ vi.mock('$lib/api/endpoints/tenant-ledgers', async () => {
 	);
 	return {
 		...actual,
-		 tenantLedgers: {
+		tenantLedgers: {
 			...actual.tenantLedgers,
 			monthSummary: mocks.monthSummary,
 			ledgerSummary: mocks.ledgerSummary,
 			recurringCharges: mocks.recurringCharges,
-			list: mocks.list
+			creditTargets: mocks.creditTargets
 		}
 	};
 });
@@ -148,7 +148,20 @@ function setupQueries(entry: TenantLedgerRow): void {
 		pastDueAmount: 0, pastDueCount: 0, nextDueOn: entry.dueOn, nextDueAmount: entry.openAmount,
 		oldestOpenChargeDueOn: entry.dueOn, oldestOpenChargeAmount: entry.openAmount
 	});
-	mocks.list.mockResolvedValue({ items: [], totalCount: 0, skip: 0, take: 200 });
+	mocks.creditTargets.mockResolvedValue({
+		items: entry.actionCapabilities.canGiveCredit ? [{
+			tenantLedgerEntryId: entry.tenantLedgerEntryId,
+			publicId: entry.publicId,
+			description: entry.description,
+			chargeAmount: entry.chargeAmount,
+			remainingTargetableAmount: entry.openAmount,
+			effectiveOn: entry.effectiveOn,
+			currency: entry.currency
+		}] : [],
+		totalCount: entry.actionCapabilities.canGiveCredit ? 1 : 0,
+		skip: 0,
+		take: 50
+	});
 	mocks.monthSummary.mockResolvedValue([summary(entry)]);
 	mocks.ledgerSummary.mockResolvedValue({
 		periodMonths: 12, currency: 'USD', chargeAmount: entry.chargeAmount, paymentAmount: entry.paymentAmount,
@@ -185,7 +198,98 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		const entry = row({ tenantLedgerEntryId: 43 });
 		const view = await renderPanel(entry);
 		await fireEvent.click(view.getByRole('menuitem', { name: 'Give credit' }));
-		expect(view.getByTestId('tenant-credit-sheet').textContent).toContain('Rent for February 2027');
+		await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent).toContain('Rent for February 2027'));
+	});
+
+	it('invokes every offered action for every supported charge class', async () => {
+		for (const [index, entryType] of (['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'ManualCharge'] as const).entries()) {
+			const entry = row({
+				tenantLedgerEntryId: 100 + index,
+				type: entryType,
+				description: `${entryType} for February 2027`
+			});
+
+			let view = await renderPanel(entry);
+			await fireEvent.click(view.getByRole('menuitem', { name: 'View detail' }));
+			expect(view.getByTestId('panel-flow-view-destination').textContent)
+				.toContain(`Tenant entry #${entry.tenantLedgerEntryId}`);
+			view.unmount();
+
+			view = await renderPanel(entry);
+			await fireEvent.click(view.getByRole('menuitem', { name: 'Give credit' }));
+			await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent)
+				.toContain(entry.description));
+			await waitFor(() => expect(mocks.creditTargets).toHaveBeenLastCalledWith(
+				20,
+				expect.objectContaining({ skip: 0, take: 50, targetEntryId: entry.tenantLedgerEntryId })
+			));
+			view.unmount();
+
+			view = await renderPanel(entry);
+			await fireEvent.click(view.getByRole('menuitem', { name: 'Add related charge' }));
+			await waitFor(() => expect(view.getByTestId('one-time-charge-sheet')).toBeTruthy());
+			expect((view.getByLabelText('Description') as HTMLInputElement).value)
+				.toBe(`Additional charge related to ${entry.description}`);
+			view.unmount();
+
+			mocks.reverseCharge.mockClear();
+			view = await renderPanel(entry);
+			await fireEvent.click(view.getByRole('menuitem', { name: 'Reverse charge' }));
+			await fireEvent.click(view.getByRole('button', { name: /Reverse the posted charge/ }));
+			await fireEvent.click(view.getByRole('button', { name: 'Continue' }));
+			await waitFor(() => expect(mocks.reverseCharge).toHaveBeenCalledOnce());
+			const [tenantAccountId, chargeEntryId, , body] = mocks.reverseCharge.mock.calls[0];
+			expect(tenantAccountId).toBe(20);
+			expect(chargeEntryId).toBe(entry.tenantLedgerEntryId);
+			expect(body).toEqual({
+				effectiveOn: expect.any(String),
+				reason: `Reverse charge: ${entry.description}`
+			});
+			view.unmount();
+		}
+	});
+
+	it('preselects the requested target and renders a later eligible server page', async () => {
+		const entry = row({ tenantLedgerEntryId: 90 });
+		const laterTarget = {
+			tenantLedgerEntryId: 91,
+			publicId: 'entry-91',
+			description: 'Later eligible charge',
+			chargeAmount: 875,
+			remainingTargetableAmount: 875,
+			effectiveOn: '2027-01-15',
+			currency: 'USD'
+		};
+		const firstPage = {
+			items: [{
+				tenantLedgerEntryId: entry.tenantLedgerEntryId,
+				publicId: entry.publicId,
+				description: entry.description,
+				chargeAmount: entry.chargeAmount,
+				remainingTargetableAmount: entry.openAmount,
+				effectiveOn: entry.effectiveOn,
+				currency: entry.currency
+			}],
+			totalCount: 51,
+			skip: 0,
+			take: 50
+		};
+		const view = await renderPanel(entry);
+		mocks.creditTargets.mockImplementation((_tenantAccountId: number, params: { skip?: number }) =>
+			Promise.resolve(params.skip === 0 ? firstPage : { items: [laterTarget], totalCount: 51, skip: 50, take: 50 }));
+
+		await fireEvent.click(view.getByRole('menuitem', { name: 'Give credit' }));
+		await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent)
+			.toContain(entry.description));
+		await fireEvent.click(view.getByTestId('tenant-credit-next-page'));
+		await waitFor(() => expect(mocks.creditTargets).toHaveBeenLastCalledWith(
+			20,
+			expect.objectContaining({ skip: 50, take: 50 })
+		));
+		const targetTrigger = view.getByRole('button', { name: 'Choose an original charge' });
+		await fireEvent.keyDown(targetTrigger, { key: 'ArrowDown' });
+		expect(targetTrigger.getAttribute('aria-expanded')).toBe('true');
+		await waitFor(() => expect(screen.getByText('Later eligible charge', { exact: false })).toBeTruthy());
 	});
 
 	it('opens Add related charge with a normalized related-charge seed', async () => {

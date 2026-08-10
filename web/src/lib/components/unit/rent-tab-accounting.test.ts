@@ -69,8 +69,8 @@ describe('W2 unit tenant ledger composition', () => {
 			assert.match(recurringSheet, new RegExp(label));
 		}
 		assert.doesNotMatch(creditSheet, /DepositCharge/);
-		assert.match(creditSheet, /row\.actionCapabilities\.canGiveCredit/);
-		assert.match(creditSheet, /selectedTarget\.openAmount/);
+		assert.match(creditSheet, /tenantLedgers\.creditTargets/);
+		assert.match(creditSheet, /remainingTargetableAmount/);
 		assert.match(creditSheet, /formatAccountingCurrency\(projectedRemainingAmount, currency\)/);
 		assert.match(
 			creditSheet,

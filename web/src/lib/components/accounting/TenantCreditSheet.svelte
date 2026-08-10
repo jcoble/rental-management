@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { ApiError } from '$lib/api/client';
-	import { tenantLedgers, type TenantLedgerRow } from '$lib/api/endpoints/tenant-ledgers';
+	import { tenantLedgers, type TenantCreditTarget } from '$lib/api/endpoints/tenant-ledgers';
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
@@ -22,16 +22,14 @@
 		open,
 		tenantAccountId,
 		currency = 'USD',
-		ledgerRows = [],
-		initialTarget = null,
+		initialTargetEntryId = null,
 		onclose,
 		onsaved
 	}: {
 		open: boolean;
 		tenantAccountId: number;
 		currency?: string;
-		ledgerRows?: TenantLedgerRow[];
-		initialTarget?: TenantLedgerRow | null;
+		initialTargetEntryId?: number | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
@@ -49,42 +47,40 @@
 	let documentName = $state('');
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
+	let targetSkip = $state(0);
 
 	const targetQuery = createQuery(() => ({
-		queryKey: ['tenant-ledger-credit-targets', tenantAccountId],
+		queryKey: ['tenant-ledger-credit-targets', tenantAccountId, targetSkip, initialTargetEntryId],
 		enabled: open && tenantAccountId > 0,
-		queryFn: () => tenantLedgers.list(tenantAccountId, { take: 200, sort: '-effectiveOn' })
+		queryFn: () => tenantLedgers.creditTargets(tenantAccountId, {
+			skip: targetSkip,
+			take: 50,
+			targetEntryId: targetSkip === 0 ? initialTargetEntryId ?? undefined : undefined
+		})
 	}));
-	const allRows = $derived.by(() => {
-		const rows = new Map<number, TenantLedgerRow>();
-		for (const row of ledgerRows) rows.set(row.tenantLedgerEntryId, row);
-		for (const row of targetQuery.data?.items ?? []) rows.set(row.tenantLedgerEntryId, row);
-		return [...rows.values()];
-	});
-	const eligibleCharges = $derived(
-		allRows.filter((row) => row.actionCapabilities.canGiveCredit)
-	);
+	const eligibleCharges = $derived(targetQuery.data?.items ?? []);
 	const selectedTarget = $derived(
-		eligibleCharges.find((row) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
+		eligibleCharges.find((row: TenantCreditTarget) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
 	);
 	const projectedRemainingAmount = $derived(
-		selectedTarget ? projectedRemainingCharge(selectedTarget.openAmount, form.amount) : 0
+		selectedTarget ? projectedRemainingCharge(selectedTarget.remainingTargetableAmount, form.amount) : 0
 	);
 
 	$effect(() => {
-		const nextKey = open ? String(initialTarget?.tenantLedgerEntryId ?? 'new') : '';
+		const nextKey = open ? String(initialTargetEntryId ?? 'new') : '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',
 				effectiveOn: today(),
 				reason: '',
 				applyToCharge: true,
-				targetChargeEntryId: initialTarget ? String(initialTarget.tenantLedgerEntryId) : '',
+				targetChargeEntryId: initialTargetEntryId ? String(initialTargetEntryId) : '',
 				categoryAccountId: null
 			};
 			errors = {};
 			documentName = '';
 			operationKey = null;
+			targetSkip = 0;
 			initializedKey = nextKey;
 		}
 		if (!open) initializedKey = '';
@@ -186,13 +182,25 @@
 								<div class="px-3 py-2 text-sm text-muted-foreground">No eligible charges.</div>
 							{:else}
 								{#each eligibleCharges as charge (charge.tenantLedgerEntryId)}
-									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.openAmount, currency)}`}>
-										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.openAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.remainingTargetableAmount, currency)}`}>
+										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.remainingTargetableAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
 									</Select.Item>
 								{/each}
 							{/if}
 						</Select.Content>
 					</Select.Root>
+					{#if targetQuery.data && targetQuery.data.totalCount > targetQuery.data.skip + targetQuery.data.take}
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							class="mt-1"
+							onclick={() => targetSkip = targetQuery.data!.skip + targetQuery.data!.take}
+							data-testid="tenant-credit-next-page"
+						>
+							Show more eligible charges
+						</Button>
+					{/if}
 					{#if errors.targetChargeEntryId}<span class="block text-xs font-normal text-destructive">{errors.targetChargeEntryId}</span>{/if}
 				</div>
 			{:else}
@@ -204,7 +212,7 @@
 			{/if}
 		</div>
 
-		{#if selectedTarget && selectedTarget.openAmount > 0}
+		{#if selectedTarget && selectedTarget.remainingTargetableAmount > 0}
 			<section class="mt-4 rounded-lg border border-border bg-muted/20 p-3" data-testid="tenant-credit-preview">
 				<h3 class="text-sm font-semibold">Preview</h3>
 				<dl class="mt-3 grid gap-2 text-sm sm:grid-cols-3">

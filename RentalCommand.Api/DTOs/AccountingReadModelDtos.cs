@@ -116,6 +116,12 @@ public sealed class TenantMonthSummaryQuery
     public int NormalizedTake => Math.Clamp(Take, 1, 500);
 }
 
+public sealed class TenantCreditTargetQuery : ListQuery
+{
+    [FromQuery(Name = "targetEntryId")]
+    public long? TargetEntryId { get; set; }
+}
+
 public sealed class TenantLedgerPeriodSummaryQuery
 {
     [FromQuery(Name = "months")]
@@ -236,6 +242,17 @@ public sealed class TenantLedgerActionCapabilities
     public bool CanReverseCharge { get; init; }
     public bool CanReverseLedgerEntry { get; init; }
     public bool CanReviewPaymentAllocation { get; init; }
+}
+
+public sealed class TenantCreditTargetRow
+{
+    public long TenantLedgerEntryId { get; init; }
+    public Guid PublicId { get; init; }
+    public string Description { get; init; } = string.Empty;
+    public decimal ChargeAmount { get; init; }
+    public decimal RemainingTargetableAmount { get; init; }
+    public DateOnly EffectiveOn { get; init; }
+    public string Currency { get; init; } = string.Empty;
 }
 
 public sealed class TenantMonthSummary
