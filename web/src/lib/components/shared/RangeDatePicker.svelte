@@ -82,7 +82,11 @@
 	let lastSyncedEnd = $state(end);
 
 	$effect(() => {
-		const media = window.matchMedia('(max-width: 639px)');
+		const media = window.matchMedia?.('(max-width: 639px)') ?? {
+			matches: false,
+			addEventListener: () => undefined,
+			removeEventListener: () => undefined
+		};
 		const updateMonths = () => {
 			calendarMonths = media.matches ? 1 : 2;
 		};

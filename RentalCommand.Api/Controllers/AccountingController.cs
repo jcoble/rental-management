@@ -349,32 +349,39 @@ public class AccountingController : ManagementControllerBase
     // ── Owner Statement endpoints ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Lists all owners that have at least one property in the portfolio, with their net distribution
-    /// for <paramref name="year"/>. Defaults to the current UTC year when omitted.
+    /// Lists all owners that have at least one property in the portfolio, with their net for the
+    /// requested owner-statement period. The default is the completed month immediately before today.
     /// </summary>
     [HttpGet("owner-statements")]
     [ProducesResponseType(typeof(IReadOnlyList<OwnerStatementSummary>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<OwnerStatementSummary>>> OwnerStatements(
-        [FromQuery] int? year, CancellationToken ct)
+        [FromQuery] int? year,
+        [FromQuery] string? period,
+        [FromQuery] DateOnly? asOf,
+        CancellationToken ct)
     {
-        var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var summaries = await _ownerStatements.ListOwnersWithNetAsync(GetWorkspaceReadScope(), reportYear, ct);
+        var statementPeriod = OwnerStatementPeriod.Resolve(period, asOf, _timeProvider.UtcNow(), year);
+        var summaries = await _ownerStatements.ListOwnersWithNetPeriodAsync(GetWorkspaceReadScope(), statementPeriod, ct);
         return Ok(summaries);
     }
 
     /// <summary>
     /// Full owner statement for a single owner: per-property income, expenses, management fee, and
-    /// net distribution, plus portfolio-level totals. Defaults to the current UTC year when omitted.
+    /// net distribution, plus portfolio-level totals. Defaults to the completed prior month.
     /// Returns 404 if <paramref name="ownerId"/> is not found in the portfolio.
     /// </summary>
     [HttpGet("owner-statement")]
     [ProducesResponseType(typeof(OwnerStatementReport), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerStatementReport>> OwnerStatement(
-        [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
+        [FromQuery] int ownerId,
+        [FromQuery] int? year,
+        [FromQuery] string? period,
+        [FromQuery] DateOnly? asOf,
+        CancellationToken ct)
     {
-        var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _ownerStatements.GetForOwnerAsync(GetWorkspaceReadScope(), ownerId, reportYear, ct);
+        var statementPeriod = OwnerStatementPeriod.Resolve(period, asOf, _timeProvider.UtcNow(), year);
+        var report = await _ownerStatements.GetForOwnerPeriodAsync(GetWorkspaceReadScope(), ownerId, statementPeriod, ct);
         if (report is null)
             return NotFound();
         return Ok(report);
@@ -392,16 +399,20 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> OwnerStatementExport(
-        [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
+        [FromQuery] int ownerId,
+        [FromQuery] int? year,
+        [FromQuery] string? period,
+        [FromQuery] DateOnly? asOf,
+        CancellationToken ct)
     {
-        var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _ownerStatements.GetForOwnerAsync(GetWorkspaceReadScope(), ownerId, reportYear, ct);
+        var statementPeriod = OwnerStatementPeriod.Resolve(period, asOf, _timeProvider.UtcNow(), year);
+        var report = await _ownerStatements.GetForOwnerPeriodAsync(GetWorkspaceReadScope(), ownerId, statementPeriod, ct);
         if (report is null)
             return NotFound();
 
         var csv = BuildOwnerStatementCsv(report);
         var bytes = Encoding.UTF8.GetBytes(csv);
-        return File(bytes, "text/csv", $"owner-statement-{ownerId}-{reportYear}.csv");
+        return File(bytes, "text/csv", $"owner-statement-{ownerId}-{statementPeriod.Label.Replace(' ', '-')}.csv");
     }
 
     // ── Owner Statement email endpoint ──────────────────────────────────────────────────────────

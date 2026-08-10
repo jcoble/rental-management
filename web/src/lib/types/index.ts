@@ -708,6 +708,10 @@ export interface OwnerStatementReport {
 	ownerId: number;
 	ownerName: string;
 	year: number;
+	period: string;
+	periodLabel: string;
+	periodStart: string;
+	periodEnd: string;
 	properties: OwnerStatementPropertyLine[];
 	totalIncome: number;
 	totalExpenses: number;

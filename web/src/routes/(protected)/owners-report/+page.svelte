@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { accounting, downloadOwnerStatementCsv } from '$lib/api/endpoints/accounting';
 	import { owners as ownersApi } from '$lib/api/endpoints/owners';
@@ -15,11 +16,6 @@
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
-	import {
-		currentOwnerStatementYear,
-		ownerStatementYearOptions,
-		watchOwnerStatementYear
-	} from '$lib/accounting/owner-statement-years';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -27,8 +23,8 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
+	import { currentOwnerStatementYear, ownerStatementYearOptions, watchOwnerStatementYear } from '$lib/accounting/owner-statement-years';
 	import { Check, FileBarChart, Mail, Plus, Trash2, XCircle } from '@lucide/svelte';
-	import { onMount } from 'svelte';
 
 	const DISTRIBUTION_METHODS: { value: DistributionMethod; label: string }[] = [
 		{ value: 'Ach', label: 'ACH' },
@@ -42,33 +38,29 @@
 	let selectedDistributionId = $state<number | null>(null);
 	let selectedContributionId = $state<number | null>(null);
 	const portfolioId = $derived(getCurrentPortfolioId());
-	let yearOptions = $state(ownerStatementYearOptions());
-	let selectedYear = $state(String(currentOwnerStatementYear()));
+	let selectedPeriod = $state('monthly');
+	const initialPeriodAsOf = defaultOwnerPeriodAsOf();
+	const initialSelectedYear = initialPeriodAsOf.slice(0, 4);
+	let periodAsOf = $state(initialPeriodAsOf);
+	let selectedYear = $state(initialSelectedYear);
 	let selectedOwnerId = $state<number | null>(null);
 	let downloading = $state(false);
 	let distributionFormContext = $state('');
-	let distributionForm = $state(makeDistributionForm(currentOwnerStatementYear()));
+	let distributionForm = $state(makeDistributionForm(Number(initialSelectedYear)));
 	let approvalReferences = $state<Record<number, string>>({});
 	let rejectionReasons = $state<Record<number, string>>({});
 
-	function applyBusinessYear(businessYear: number) {
-		yearOptions = ownerStatementYearOptions(businessYear);
-		selectedYear = String(businessYear);
-	}
-
-	onMount(() => watchOwnerStatementYear(applyBusinessYear));
-
 	const ownersQuery = createQuery(() => ({
-		queryKey: ['owner-statements', portfolioId, selectedYear],
-		queryFn: () => accounting.ownerStatements(Number(selectedYear)),
+		queryKey: ['owner-statements', portfolioId, selectedPeriod, periodAsOf],
+		queryFn: () => accounting.ownerStatements({ period: selectedPeriod, asOf: periodAsOf }),
 		enabled: !!portfolioId
 	}));
 
 	const owners = $derived((ownersQuery.data as OwnerStatementSummary[] | undefined) ?? []);
 
 	const reportQuery = createQuery(() => ({
-		queryKey: ['owner-statement', portfolioId, selectedOwnerId, selectedYear],
-		queryFn: () => accounting.ownerStatement(selectedOwnerId!, Number(selectedYear)),
+		queryKey: ['owner-statement', portfolioId, selectedOwnerId, selectedPeriod, periodAsOf],
+		queryFn: () => accounting.ownerStatement(selectedOwnerId!, { period: selectedPeriod, asOf: periodAsOf }),
 		enabled: !!portfolioId && selectedOwnerId !== null
 	}));
 
@@ -114,6 +106,22 @@
 		const day = String(date.getDate()).padStart(2, '0');
 		return `${year}-${month}-${day}`;
 	}
+
+	function defaultOwnerPeriodAsOf() {
+		const now = new Date();
+		return localDateString(new Date(currentOwnerStatementYear(now), now.getMonth(), 0));
+	}
+
+	function applyBusinessYear(year: number) {
+		// The period picker owns report dates; this shared watcher keeps the legacy
+		// distribution/contribution side panels aligned when the business year rolls over.
+		const options = ownerStatementYearOptions(year);
+		if (options.length > 0 && periodAsOf.slice(0, 4) === String(currentOwnerStatementYear())) {
+			selectedYear = String(options[0]);
+		}
+	}
+
+	onMount(() => watchOwnerStatementYear(applyBusinessYear));
 
 	function defaultDistributionDate(year: number) {
 		const today = new Date();
@@ -165,10 +173,12 @@
 		selectedOwnerId = ownerId;
 	}
 
-	// Reset selected owner when year changes
+	// Reset selected owner and keep legacy distribution endpoints aligned to the period year.
 	$effect(() => {
 		// eslint-disable-next-line @typescript-eslint/no-unused-expressions
-		selectedYear;
+		selectedPeriod;
+		periodAsOf;
+		selectedYear = (periodAsOf || new Date().toISOString().slice(0, 10)).slice(0, 4);
 		selectedOwnerId = null;
 	});
 
@@ -184,7 +194,7 @@
 		if (selectedOwnerId === null) return;
 		downloading = true;
 		try {
-			await downloadOwnerStatementCsv(selectedOwnerId, Number(selectedYear));
+			await downloadOwnerStatementCsv(selectedOwnerId, { period: selectedPeriod, asOf: periodAsOf });
 		} catch {
 			showError('Could not download CSV. Please try again.');
 		} finally {
@@ -334,17 +344,24 @@
 				</p>
 			</details>
 		</div>
-		<div class="flex items-center gap-2">
-			<Select.Root type="single" bind:value={selectedYear}>
-				<Select.Trigger class="w-28" data-testid="owners-report-year-select">
-					{selectedYear}
-				</Select.Trigger>
-				<Select.Content>
-					{#each yearOptions as year}
-						<Select.Item value={String(year)} label={String(year)}>{year}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
+		<div class="flex flex-wrap items-end gap-2">
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="owner-statement-period">Statement period</label>
+				<Select.Root type="single" bind:value={selectedPeriod}>
+					<Select.Trigger class="w-40" data-testid="owners-report-period-select">
+						{selectedPeriod === 'monthly' ? 'Monthly' : selectedPeriod === 'quarterly' ? 'Quarterly' : 'Year to date'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="monthly" label="Monthly">Monthly</Select.Item>
+						<Select.Item value="quarterly" label="Quarterly">Quarterly</Select.Item>
+						<Select.Item value="year-to-date" label="Year to date">Year to date</Select.Item>
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="owner-statement-as-of">As of date</label>
+				<DatePicker id="owner-statement-as-of" bind:value={periodAsOf} testid="owners-report-as-of" />
+			</div>
 		</div>
 	</div>
 
@@ -357,7 +374,7 @@
 		</div>
 	{:else if owners.length === 0}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-empty">
-			No owner data for {selectedYear}.
+			No owner data for the selected period.
 		</p>
 	{:else}
 		<div class="grid gap-6 lg:grid-cols-[280px_1fr]">
@@ -400,7 +417,7 @@
 				{:else if report}
 					<!-- Header + download -->
 					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-						<h2 class="text-lg font-semibold">{report.ownerName} — {report.year}</h2>
+						<h2 class="text-lg font-semibold">{report.ownerName} — {report.periodLabel || report.year}</h2>
 						<div class="flex items-center gap-2">
 							<Button
 								variant="outline"

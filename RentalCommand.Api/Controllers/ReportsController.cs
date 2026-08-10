@@ -48,6 +48,17 @@ public class ReportsController : ManagementControllerBase
         => Ok(await _service.GetRentRollAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
+    /// Aged receivables — open tenant-account charges aged by charge date into 0-30 / 31-60 / 61-90 /
+    /// 90+ buckets, with tenant-account rows, property subtotals, and portfolio totals. Defaults to
+    /// the portfolio business date and accepts an explicit <c>asOf</c> date.
+    /// </summary>
+    [HttpGet("aged-receivables")]
+    [ProducesResponseType(typeof(AgedReceivablesResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AgedReceivablesResponse>> AgedReceivables(
+        [FromQuery] ReportRangeQuery query, CancellationToken ct)
+        => Ok(await _service.GetAgedReceivablesAsync(GetWorkspaceReadScope(), query, ct));
+
+    /// <summary>
     /// Rent Ledger — per lease over <c>from</c>..<c>to</c>: charges due (accrual) vs. payments received,
     /// with a running balance per lease and portfolio totals. Range defaults to year-to-date.
     /// </summary>

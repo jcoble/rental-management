@@ -165,9 +165,17 @@ public class ReportsService : IReportsService
                         {
                             Key = "rent-roll",
                             Title = "Rent Roll",
-                            Description = "Current lease details for every occupied unit: tenant, rent, deposit, term, status.",
+                            Description = "Every unit at a glance: who lives there, what it costs, and what is owed.",
                             Endpoint = "/api/v1/reports/rent-roll",
-                            Params = [ReportParamKeys.PropertyIds],
+                            Params = [ReportParamKeys.AsOf, ReportParamKeys.PropertyIds],
+                        },
+                        new ReportCatalogEntry
+                        {
+                            Key = "aged-receivables",
+                            Title = "Aged receivables",
+                            Description = "Who owes what and for how long.",
+                            Endpoint = "/api/v1/reports/aged-receivables",
+                            Params = [ReportParamKeys.AsOf, ReportParamKeys.PropertyIds],
                         },
                         new ReportCatalogEntry
                         {
@@ -197,9 +205,9 @@ public class ReportsService : IReportsService
                         {
                             Key = "owner-statement",
                             Title = "Owner Statement",
-                            Description = "Full per-owner statement: income, expenses, management fee, net distribution.",
+                            Description = "Income, expenses, and net for each property in the selected period.",
                             Endpoint = "/api/v1/accounting/owner-statement",
-                            Params = [ReportParamKeys.OwnerId, ReportParamKeys.Year],
+                            Params = [ReportParamKeys.OwnerId, ReportParamKeys.Year, ReportParamKeys.AsOf],
                             External = true,
                         },
                         new ReportCatalogEntry
@@ -268,131 +276,574 @@ public class ReportsService : IReportsService
 
     public async Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
-        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
+        var asOf = query.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var asOfUtc = asOf.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddTicks(-1);
+        var propertyIds = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
 
-        var q =
-            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
-                on new { lifecycle.PortfolioId, lifecycle.UnitId }
-                equals new { occupancy.PortfolioId, occupancy.UnitId }
-            join agreement in _db.LeaseAgreements.AsNoTracking()
-                on new { management.PortfolioId, LeaseManagementId = management.Id }
-                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { lifecycle.PortfolioId, LeaseManagementId = lifecycle.LeaseManagementId }
-                equals new { account.PortfolioId, account.LeaseManagementId }
-            join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
-                on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
-                equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
-            where lifecycle.PortfolioId == portfolioId
-                && occupancy.IsOccupied
-                && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
-                && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
-                && agreement.FullyExecutedAtUtc != null
-                && agreement.VoidedAtUtc == null
-                && agreement.DraftCanceledAtUtc == null
-                && agreement.GoverningFromOn <= lifecycle.BusinessDate
-                && !_db.LeaseAgreements.Any(candidate =>
-                    candidate.PortfolioId == agreement.PortfolioId &&
-                    candidate.LeaseManagementId == agreement.LeaseManagementId &&
-                    candidate.FullyExecutedAtUtc != null &&
-                    candidate.VoidedAtUtc == null &&
-                    candidate.DraftCanceledAtUtc == null &&
-                    candidate.GoverningFromOn <= lifecycle.BusinessDate &&
-                    (candidate.GoverningFromOn > agreement.GoverningFromOn ||
-                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
-                      candidate.VersionNumber > agreement.VersionNumber) ||
-                     (candidate.GoverningFromOn == agreement.GoverningFromOn &&
-                      candidate.VersionNumber == agreement.VersionNumber &&
-                      candidate.Id > agreement.Id)))
-            select new { lifecycle, management, agreement, account, agreementStatus };
+        var parameters = new NpgsqlParameter[]
+        {
+            new("portfolioId", NpgsqlDbType.Integer) { Value = scope.PortfolioId },
+            new("userId", NpgsqlDbType.Integer) { Value = scope.UserId },
+            new("sessionId", NpgsqlDbType.Uuid) { Value = scope.SessionId },
+            new("accessContextId", NpgsqlDbType.Integer) { Value = scope.AccessContextId },
+            new("accessRevision", NpgsqlDbType.Bigint) { Value = scope.AccessRevision },
+            new("asOfDate", NpgsqlDbType.Date) { Value = asOf },
+            new("asOfUtc", NpgsqlDbType.TimestampTz) { Value = asOfUtc },
+            new("applyPropertyFilter", NpgsqlDbType.Boolean) { Value = propertyIds.Length > 0 },
+            new("propertyIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = propertyIds },
+        };
 
-        q = q.Where(row => authorizedProperties.Any(property =>
-            property.Id == row.management.PropertyId));
-
-        var totals = await q
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                LeaseCount = g.Count(),
-                TotalMonthlyRent = g.Sum(row => row.agreement.BaseRentAmount +
-                    (_db.LeaseAddendumFinancialEffects
-                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
-                            && effect.EffectType == LeaseAddendumFinancialEffectType.RecurringRentDelta
-                            && _db.LeaseAddendumStatusProjections.Any(status =>
-                                status.PortfolioId == effect.PortfolioId
-                                && status.LeaseAddendumId == effect.LeaseAddendumId
-                                && status.LeaseManagementId == row.management.Id
-                                && status.AddendumStatus == "Active"))
-                        .Sum(effect => (decimal?)effect.Amount) ?? 0m)),
-                TotalSecurityDeposit = g.Sum(row => row.agreement.SecurityDepositObligation +
-                    (_db.LeaseAddendumFinancialEffects
-                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
-                            && effect.EffectType == LeaseAddendumFinancialEffectType.DepositObligationDelta
-                            && _db.LeaseAddendumStatusProjections.Any(status =>
-                                status.PortfolioId == effect.PortfolioId
-                                && status.LeaseAddendumId == effect.LeaseAddendumId
-                                && status.LeaseManagementId == row.management.Id
-                                && status.AddendumStatus == "Active"))
-                        .Sum(effect => (decimal?)effect.Amount) ?? 0m)),
-            })
-            .SingleOrDefaultAsync(ct);
-
-        var rows = await q
-            .OrderBy(row => row.management.Property!.Name)
-            .ThenBy(row => row.management.Unit!.UnitNumber)
-            .Select(row => new RentRollRow
-            {
-                LeaseManagementId = row.management.Id,
-                TenantAccountId = row.account.Id,
-                AgreementId = row.agreement.Id,
-                RelationshipNumber = row.management.RelationshipNumber,
-                AgreementNumber = row.agreement.AgreementNumber,
-                PropertyId = row.management.PropertyId,
-                PropertyName = row.management.Property!.Name,
-                UnitId = row.management.UnitId,
-                UnitNumber = row.management.Unit!.UnitNumber,
-                TenantId = row.lifecycle.CurrentPrimaryTenantId,
-                TenantName = row.lifecycle.CurrentPrimaryTenantName ?? "Tenant",
-                MonthlyRent = row.agreement.BaseRentAmount +
-                    (_db.LeaseAddendumFinancialEffects
-                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
-                            && effect.EffectType == LeaseAddendumFinancialEffectType.RecurringRentDelta
-                            && _db.LeaseAddendumStatusProjections.Any(status =>
-                                status.PortfolioId == effect.PortfolioId
-                                && status.LeaseAddendumId == effect.LeaseAddendumId
-                                && status.LeaseManagementId == row.management.Id
-                                && status.AddendumStatus == "Active"))
-                        .Sum(effect => (decimal?)effect.Amount) ?? 0m),
-                SecurityDeposit = row.agreement.SecurityDepositObligation +
-                    (_db.LeaseAddendumFinancialEffects
-                        .Where(effect => effect.PortfolioId == row.agreement.PortfolioId
-                            && effect.EffectType == LeaseAddendumFinancialEffectType.DepositObligationDelta
-                            && _db.LeaseAddendumStatusProjections.Any(status =>
-                                status.PortfolioId == effect.PortfolioId
-                                && status.LeaseAddendumId == effect.LeaseAddendumId
-                                && status.LeaseManagementId == row.management.Id
-                                && status.AddendumStatus == "Active"))
-                        .Sum(effect => (decimal?)effect.Amount) ?? 0m),
-                StartOn = row.agreement.TermStartOn,
-                EndOn = row.agreement.TermEndOn,
-                StatusName = row.agreementStatus.AgreementStatus,
-            })
+        var rows = await _db.Database
+            .SqlQueryRaw<RentRollDatabaseRow>(RentRollSql, parameters)
             .ToListAsync(ct);
+        if (rows.Count != 1)
+            throw new InvalidOperationException($"The rent-roll query returned {rows.Count} summary rows instead of one.");
+
+        var result = rows[0];
+        var allRows = DeserializeReportJson<RentRollRow>(result.RowsJson);
+        var properties = DeserializeReportJson<RentRollPropertyGroup>(result.PropertiesJson);
+        var legacyRows = allRows.Where(row => !row.IsVacant).ToArray();
 
         return new RentRollResponse
         {
             GeneratedAt = _timeProvider.UtcNow(),
-            Rows = rows,
-            LeaseCount = totals?.LeaseCount ?? 0,
-            TotalMonthlyRent = totals?.TotalMonthlyRent ?? 0m,
-            TotalSecurityDeposit = totals?.TotalSecurityDeposit ?? 0m,
+            AsOf = asOf,
+            Rows = legacyRows,
+            Properties = properties,
+            PortfolioTotals = new RentRollTotals
+            {
+                UnitCount = result.UnitCount,
+                LeaseCount = result.PortfolioLeaseCount,
+                TotalBaseRent = result.PortfolioBaseRent,
+                TotalMonthlyRent = result.PortfolioMonthlyRent,
+                TotalSecurityDeposit = result.PortfolioSecurityDeposit,
+                TotalDepositHeld = result.PortfolioDepositHeld,
+                TotalCurrentBalance = result.PortfolioCurrentBalance,
+            },
+            LeaseCount = result.LegacyLeaseCount,
+            TotalMonthlyRent = result.LegacyMonthlyRent,
+            TotalSecurityDeposit = result.LegacySecurityDeposit,
         };
     }
+
+    /// <summary>
+    /// Aged receivables uses the canonical tenant-charge balance view for open amounts. The requested
+    /// snapshot date controls which charge dates are included; the view supplies the same reversal and
+    /// allocation math used by the tenant ledger screens.
+    /// </summary>
+    public async Task<AgedReceivablesResponse> GetAgedReceivablesAsync(
+        WorkspaceReadScope scope,
+        ReportRangeQuery query,
+        CancellationToken ct = default)
+    {
+        var asOf = query.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var propertyIds = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
+        var parameters = new NpgsqlParameter[]
+        {
+            new("portfolioId", NpgsqlDbType.Integer) { Value = scope.PortfolioId },
+            new("userId", NpgsqlDbType.Integer) { Value = scope.UserId },
+            new("sessionId", NpgsqlDbType.Uuid) { Value = scope.SessionId },
+            new("accessContextId", NpgsqlDbType.Integer) { Value = scope.AccessContextId },
+            new("accessRevision", NpgsqlDbType.Bigint) { Value = scope.AccessRevision },
+            new("asOfDate", NpgsqlDbType.Date) { Value = asOf },
+            new("cutoff30", NpgsqlDbType.Date) { Value = asOf.AddDays(-30) },
+            new("cutoff60", NpgsqlDbType.Date) { Value = asOf.AddDays(-60) },
+            new("cutoff90", NpgsqlDbType.Date) { Value = asOf.AddDays(-90) },
+            new("applyPropertyFilter", NpgsqlDbType.Boolean) { Value = propertyIds.Length > 0 },
+            new("propertyIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = propertyIds },
+        };
+
+        var rows = await _db.Database
+            .SqlQueryRaw<AgedReceivablesDatabaseRow>(AgedReceivablesSql, parameters)
+            .ToListAsync(ct);
+        if (rows.Count != 1)
+            throw new InvalidOperationException($"The aged-receivables query returned {rows.Count} summary rows instead of one.");
+
+        var result = rows[0];
+        var reportRows = DeserializeReportJson<AgedReceivablesRow>(result.RowsJson);
+        var properties = DeserializeReportJson<AgedReceivablesPropertyGroup>(result.PropertiesJson);
+        var totals = new AgedReceivablesBuckets
+        {
+            Current = result.Current,
+            Days31To60 = result.Days31To60,
+            Days61To90 = result.Days61To90,
+            Over90 = result.Over90,
+        };
+
+        return new AgedReceivablesResponse
+        {
+            AsOf = asOf,
+            Rows = reportRows,
+            Properties = properties,
+            Totals = totals,
+            PortfolioTotals = new AgedReceivablesBuckets
+            {
+                Current = totals.Current,
+                Days31To60 = totals.Days31To60,
+                Days61To90 = totals.Days61To90,
+                Over90 = totals.Over90,
+            },
+            TotalOutstanding = result.TotalOutstanding,
+        };
+    }
+
+    internal const string RentRollSql = """
+        WITH report_scopes AS MATERIALIZED (
+            SELECT scope."AssignmentId",
+                   scope."WorkspaceMembershipId",
+                   scope."ScopeKind",
+                   scope."PropertyId"
+            FROM public.rc_api_effective_capability_scopes(
+                @portfolioId,
+                @sessionId,
+                @userId,
+                @accessContextId,
+                @accessRevision,
+                ARRAY['reports.read']::text[],
+                'Property') AS scope
+        ),
+        authorized_properties AS MATERIALIZED (
+            SELECT property."Id", property."Name"
+            FROM "Properties" AS property
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND (NOT @applyPropertyFilter OR property."Id" = ANY(@propertyIds))
+              AND EXISTS (
+                  SELECT 1
+                  FROM report_scopes AS report_scope
+                  WHERE report_scope."ScopeKind" = 'AllProperties'
+                     OR (report_scope."ScopeKind" = 'SelectedProperties'
+                         AND report_scope."PropertyId" = property."Id")
+              )
+        ),
+        unit_scope AS MATERIALIZED (
+            SELECT property."Id" AS "PropertyId",
+                   property."Name" AS "PropertyName",
+                   unit."Id" AS "UnitId",
+                   unit."UnitNumber"
+            FROM authorized_properties AS property
+            JOIN "Units" AS unit
+              ON unit."PortfolioId" = @portfolioId
+             AND unit."PropertyId" = property."Id"
+             AND unit."DeletedAt" IS NULL
+        ),
+        management_ranked AS (
+            SELECT management.*,
+                   row_number() OVER (
+                       PARTITION BY management."UnitId"
+                       ORDER BY management."PossessionGivenAtUtc" DESC, management."Id" DESC
+                   ) AS "ManagementRank"
+            FROM "LeaseManagements" AS management
+            JOIN authorized_properties AS property
+              ON property."Id" = management."PropertyId"
+            WHERE management."PortfolioId" = @portfolioId
+              AND (management."CanceledAtUtc" IS NULL OR management."CanceledAtUtc" > @asOfUtc)
+              AND management."PossessionGivenAtUtc" IS NOT NULL
+              AND management."PossessionGivenAtUtc" <= @asOfUtc
+              AND (management."PossessionReturnedAtUtc" IS NULL
+                   OR management."PossessionReturnedAtUtc" > @asOfUtc)
+        ),
+        current_management AS MATERIALIZED (
+            SELECT *
+            FROM management_ranked
+            WHERE "ManagementRank" = 1
+        ),
+        agreement_ranked AS (
+            SELECT agreement.*,
+                   row_number() OVER (
+                       PARTITION BY agreement."LeaseManagementId"
+                       ORDER BY agreement."GoverningFromOn" DESC,
+                                agreement."VersionNumber" DESC,
+                                agreement."Id" DESC
+                   ) AS "AgreementRank"
+            FROM "LeaseAgreements" AS agreement
+            JOIN current_management AS management
+              ON management."PortfolioId" = agreement."PortfolioId"
+             AND management."Id" = agreement."LeaseManagementId"
+            WHERE agreement."PortfolioId" = @portfolioId
+              AND agreement."FullyExecutedAtUtc" <= @asOfUtc
+              AND (agreement."VoidedAtUtc" IS NULL OR agreement."VoidedAtUtc" > @asOfUtc)
+              AND (agreement."DraftCanceledAtUtc" IS NULL OR agreement."DraftCanceledAtUtc" > @asOfUtc)
+              AND agreement."GoverningFromOn" <= @asOfDate
+              AND (agreement."SupersededEffectiveOn" IS NULL
+                   OR agreement."SupersededEffectiveOn" > @asOfDate)
+        ),
+        current_agreement AS MATERIALIZED (
+            SELECT *
+            FROM agreement_ranked
+            WHERE "AgreementRank" = 1
+        ),
+        tenant_names AS MATERIALIZED (
+            SELECT party."PortfolioId",
+                   party."LeaseManagementId",
+                   min(party."TenantId") FILTER (WHERE party."Role" = 'PrimaryTenant') AS "PrimaryTenantId",
+                   min(concat_ws(' ', tenant."FirstName", tenant."LastName"))
+                       FILTER (WHERE party."Role" = 'PrimaryTenant') AS "PrimaryName",
+                   jsonb_agg(
+                       DISTINCT trim(concat_ws(' ', tenant."FirstName", tenant."LastName"))
+                       ORDER BY trim(concat_ws(' ', tenant."FirstName", tenant."LastName"))) AS "NamesJson"
+            FROM "LeaseManagementParties" AS party
+            JOIN "Tenants" AS tenant
+              ON tenant."PortfolioId" = party."PortfolioId"
+             AND tenant."Id" = party."TenantId"
+             AND tenant."DeletedAt" IS NULL
+            WHERE party."PortfolioId" = @portfolioId
+              AND party."Role" IN ('PrimaryTenant', 'CoTenant', 'Occupant')
+              AND party."EffectiveFrom" <= @asOfDate
+              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= @asOfDate)
+            GROUP BY party."PortfolioId", party."LeaseManagementId"
+        ),
+        account_balances AS MATERIALIZED (
+            SELECT balance."PortfolioId",
+                   balance."TenantAccountId",
+                   COALESCE(sum(balance."OpenAmount"), 0::numeric) AS "CurrentBalance"
+            FROM "vw_tenant_charge_balances" AS balance
+            WHERE balance."PortfolioId" = @portfolioId
+              AND balance."OpenAmount" > 0::numeric
+              AND balance."EffectiveOn" <= @asOfDate
+            GROUP BY balance."PortfolioId", balance."TenantAccountId"
+        ),
+        deposit_reversals AS MATERIALIZED (
+            SELECT reversal."PortfolioId",
+                   reversal."SecurityDepositAccountId",
+                   reversal."ReversesEntryId",
+                   sum(reversal."Amount") AS "ReversedAmount"
+            FROM "SecurityDepositEntries" AS reversal
+            WHERE reversal."PortfolioId" = @portfolioId
+              AND reversal."EntryType" = 'Reversal'
+              AND reversal."EffectiveOn" <= @asOfDate
+            GROUP BY reversal."PortfolioId", reversal."SecurityDepositAccountId", reversal."ReversesEntryId"
+        ),
+        deposit_balances AS MATERIALIZED (
+            SELECT deposit_account."PortfolioId",
+                   deposit_account."TenantAccountId",
+                   COALESCE(sum(
+                       CASE WHEN entry."Direction" = 'Increase' THEN 1 ELSE -1 END *
+                       GREATEST(entry."Amount" - COALESCE(reversal."ReversedAmount", 0::numeric), 0::numeric)
+                   ), 0::numeric) AS "DepositHeld"
+            FROM "SecurityDepositAccounts" AS deposit_account
+            JOIN "SecurityDepositEntries" AS entry
+              ON entry."PortfolioId" = deposit_account."PortfolioId"
+             AND entry."SecurityDepositAccountId" = deposit_account."Id"
+            LEFT JOIN deposit_reversals AS reversal
+              ON reversal."PortfolioId" = entry."PortfolioId"
+             AND reversal."SecurityDepositAccountId" = entry."SecurityDepositAccountId"
+             AND reversal."ReversesEntryId" = entry."Id"
+            WHERE deposit_account."PortfolioId" = @portfolioId
+              AND entry."EntryType" <> 'Reversal'
+              AND entry."EffectiveOn" <= @asOfDate
+            GROUP BY deposit_account."PortfolioId", deposit_account."TenantAccountId"
+        ),
+        addendum_effects AS MATERIALIZED (
+            SELECT addendum."PortfolioId",
+                   addendum."LeaseManagementId",
+                   COALESCE(sum(effect."Amount") FILTER (WHERE effect."EffectType" = 'RecurringRentDelta'), 0::numeric)
+                       AS "RecurringRentDelta",
+                   COALESCE(sum(effect."Amount") FILTER (WHERE effect."EffectType" = 'DepositObligationDelta'), 0::numeric)
+                       AS "DepositObligationDelta"
+            FROM "LeaseAddenda" AS addendum
+            JOIN "LeaseAddendumFinancialEffects" AS effect
+              ON effect."PortfolioId" = addendum."PortfolioId"
+             AND effect."LeaseAddendumId" = addendum."Id"
+            WHERE addendum."PortfolioId" = @portfolioId
+              AND addendum."FullyExecutedAtUtc" <= @asOfUtc
+              AND (addendum."VoidedAtUtc" IS NULL OR addendum."VoidedAtUtc" > @asOfUtc)
+              AND (addendum."DraftCanceledAtUtc" IS NULL OR addendum."DraftCanceledAtUtc" > @asOfUtc)
+              AND addendum."EffectiveFromOn" <= @asOfDate
+              AND (addendum."EffectiveThroughOn" IS NULL OR addendum."EffectiveThroughOn" >= @asOfDate)
+              AND (addendum."SupersededEffectiveOn" IS NULL OR addendum."SupersededEffectiveOn" > @asOfDate)
+              AND (effect."EffectiveFromOn" IS NULL OR effect."EffectiveFromOn" <= @asOfDate)
+              AND (effect."EffectiveThroughOn" IS NULL OR effect."EffectiveThroughOn" >= @asOfDate)
+            GROUP BY addendum."PortfolioId", addendum."LeaseManagementId"
+        ),
+        row_values AS MATERIALIZED (
+            SELECT unit."PropertyId",
+                   unit."PropertyName",
+                   unit."UnitId",
+                   unit."UnitNumber",
+                   COALESCE(management."Id", 0) AS "LeaseManagementId",
+                   COALESCE(management."RelationshipNumber", '') AS "RelationshipNumber",
+                   COALESCE(account."Id", 0) AS "TenantAccountId",
+                   COALESCE(agreement."Id", 0) AS "AgreementId",
+                   COALESCE(agreement."AgreementNumber", '') AS "AgreementNumber",
+                   names."PrimaryTenantId" AS "TenantId",
+                   COALESCE(names."PrimaryName", CASE WHEN management."Id" IS NULL THEN '' ELSE 'Tenant' END) AS "TenantName",
+                   COALESCE(names."NamesJson", '[]'::jsonb) AS "TenantNamesJson",
+                   COALESCE(agreement."BaseRentAmount", 0::numeric)
+                       + COALESCE(effects."RecurringRentDelta", 0::numeric) AS "MonthlyRent",
+                   COALESCE(agreement."BaseRentAmount", 0::numeric) AS "BaseRent",
+                   COALESCE(agreement."SecurityDepositObligation", 0::numeric)
+                       + COALESCE(effects."DepositObligationDelta", 0::numeric) AS "SecurityDeposit",
+                   COALESCE(deposit."DepositHeld", 0::numeric) AS "DepositHeld",
+                   COALESCE(balance."CurrentBalance", 0::numeric) AS "CurrentBalance",
+                   COALESCE(agreement."TermStartOn", @asOfDate) AS "StartOn",
+                   agreement."TermEndOn" AS "EndOn",
+                   CASE
+                       WHEN management."Id" IS NULL THEN 'Vacant'
+                       WHEN agreement."Id" IS NULL THEN 'Possession without agreement'
+                       WHEN agreement."TermEndOn" IS NOT NULL AND agreement."TermEndOn" < @asOfDate THEN 'Expired'
+                       WHEN agreement."TermEndOn" IS NOT NULL AND agreement."TermEndOn" <= @asOfDate + 60 THEN 'Ending'
+                       ELSE 'Active'
+                   END AS "StatusName",
+                   (management."Id" IS NULL) AS "IsVacant"
+            FROM unit_scope AS unit
+            LEFT JOIN current_management AS management
+              ON management."PortfolioId" = @portfolioId
+             AND management."UnitId" = unit."UnitId"
+            LEFT JOIN current_agreement AS agreement
+              ON agreement."PortfolioId" = @portfolioId
+             AND agreement."LeaseManagementId" = management."Id"
+            LEFT JOIN "TenantAccounts" AS account
+              ON account."PortfolioId" = @portfolioId
+             AND account."LeaseManagementId" = management."Id"
+            LEFT JOIN tenant_names AS names
+              ON names."PortfolioId" = @portfolioId
+             AND names."LeaseManagementId" = management."Id"
+            LEFT JOIN account_balances AS balance
+              ON balance."PortfolioId" = @portfolioId
+             AND balance."TenantAccountId" = account."Id"
+            LEFT JOIN deposit_balances AS deposit
+              ON deposit."PortfolioId" = @portfolioId
+             AND deposit."TenantAccountId" = account."Id"
+            LEFT JOIN addendum_effects AS effects
+              ON effects."PortfolioId" = @portfolioId
+             AND effects."LeaseManagementId" = management."Id"
+        ),
+        row_json AS (
+            SELECT row_values.*,
+                   jsonb_build_object(
+                       'leaseManagementId', row_values."LeaseManagementId",
+                       'tenantAccountId', row_values."TenantAccountId",
+                       'agreementId', row_values."AgreementId",
+                       'relationshipNumber', row_values."RelationshipNumber",
+                       'agreementNumber', row_values."AgreementNumber",
+                       'propertyId', row_values."PropertyId",
+                       'propertyName', row_values."PropertyName",
+                       'unitId', row_values."UnitId",
+                       'unitNumber', row_values."UnitNumber",
+                       'tenantId', row_values."TenantId",
+                       'tenantName', row_values."TenantName",
+                       'tenantNames', row_values."TenantNamesJson",
+                       'monthlyRent', row_values."MonthlyRent",
+                       'baseRent', row_values."BaseRent",
+                       'securityDeposit', row_values."SecurityDeposit",
+                       'depositHeld', row_values."DepositHeld",
+                       'currentBalance', row_values."CurrentBalance",
+                       'startOn', row_values."StartOn",
+                       'endOn', row_values."EndOn",
+                       'statusName', row_values."StatusName",
+                       'isVacant', row_values."IsVacant"
+                   ) AS "RowJson"
+            FROM row_values
+        ),
+        property_rollups AS (
+            SELECT row_json."PropertyId",
+                   row_json."PropertyName",
+                   jsonb_agg(row_json."RowJson" ORDER BY lower(row_json."UnitNumber"), row_json."UnitId") AS "RowsJson",
+                   count(*)::int AS "UnitCount",
+                   count(*) FILTER (WHERE NOT row_json."IsVacant")::int AS "LeaseCount",
+                   COALESCE(sum(row_json."BaseRent"), 0::numeric) AS "TotalBaseRent",
+                   COALESCE(sum(row_json."MonthlyRent"), 0::numeric) AS "TotalMonthlyRent",
+                   COALESCE(sum(row_json."SecurityDeposit"), 0::numeric) AS "TotalSecurityDeposit",
+                   COALESCE(sum(row_json."DepositHeld"), 0::numeric) AS "TotalDepositHeld",
+                   COALESCE(sum(row_json."CurrentBalance"), 0::numeric) AS "TotalCurrentBalance"
+            FROM row_json
+            GROUP BY row_json."PropertyId", row_json."PropertyName"
+        )
+        SELECT COALESCE(
+                   (SELECT jsonb_agg(
+                       jsonb_build_object(
+                           'propertyId', rollup."PropertyId",
+                           'propertyName', rollup."PropertyName",
+                           'rows', rollup."RowsJson",
+                           'unitCount', rollup."UnitCount",
+                           'leaseCount', rollup."LeaseCount",
+                           'totalBaseRent', rollup."TotalBaseRent",
+                           'totalMonthlyRent', rollup."TotalMonthlyRent",
+                           'totalSecurityDeposit', rollup."TotalSecurityDeposit",
+                           'totalDepositHeld', rollup."TotalDepositHeld",
+                           'totalCurrentBalance', rollup."TotalCurrentBalance"
+                       ) ORDER BY lower(rollup."PropertyName"), rollup."PropertyId")
+                    FROM property_rollups AS rollup), '[]'::jsonb)::text AS "PropertiesJson",
+               COALESCE((SELECT jsonb_agg(row_json."RowJson" ORDER BY lower(row_json."PropertyName"), lower(row_json."UnitNumber"), row_json."UnitId")
+                         FROM row_json WHERE NOT row_json."IsVacant"), '[]'::jsonb)::text AS "RowsJson",
+               (SELECT count(*)::int FROM row_values) AS "UnitCount",
+               (SELECT count(*)::int FROM row_values WHERE NOT row_values."IsVacant") AS "PortfolioLeaseCount",
+               COALESCE((SELECT sum(row_values."BaseRent") FROM row_values), 0::numeric) AS "PortfolioBaseRent",
+               COALESCE((SELECT sum(row_values."MonthlyRent") FROM row_values), 0::numeric) AS "PortfolioMonthlyRent",
+               COALESCE((SELECT sum(row_values."SecurityDeposit") FROM row_values), 0::numeric) AS "PortfolioSecurityDeposit",
+               COALESCE((SELECT sum(row_values."DepositHeld") FROM row_values), 0::numeric) AS "PortfolioDepositHeld",
+               COALESCE((SELECT sum(row_values."CurrentBalance") FROM row_values), 0::numeric) AS "PortfolioCurrentBalance",
+               (SELECT count(*)::int FROM row_values WHERE NOT row_values."IsVacant") AS "LegacyLeaseCount",
+               COALESCE((SELECT sum(row_values."MonthlyRent") FROM row_values WHERE NOT row_values."IsVacant"), 0::numeric) AS "LegacyMonthlyRent",
+               COALESCE((SELECT sum(row_values."SecurityDeposit") FROM row_values WHERE NOT row_values."IsVacant"), 0::numeric) AS "LegacySecurityDeposit"
+        """;
+
+    internal const string AgedReceivablesSql = """
+        WITH report_scopes AS MATERIALIZED (
+            SELECT scope."AssignmentId",
+                   scope."WorkspaceMembershipId",
+                   scope."ScopeKind",
+                   scope."PropertyId"
+            FROM public.rc_api_effective_capability_scopes(
+                @portfolioId,
+                @sessionId,
+                @userId,
+                @accessContextId,
+                @accessRevision,
+                ARRAY['reports.read']::text[],
+                'Property') AS scope
+        ),
+        authorized_properties AS MATERIALIZED (
+            SELECT property."Id", property."Name"
+            FROM "Properties" AS property
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND (NOT @applyPropertyFilter OR property."Id" = ANY(@propertyIds))
+              AND EXISTS (
+                  SELECT 1
+                  FROM report_scopes AS report_scope
+                  WHERE report_scope."ScopeKind" = 'AllProperties'
+                     OR (report_scope."ScopeKind" = 'SelectedProperties'
+                         AND report_scope."PropertyId" = property."Id")
+              )
+        ),
+        tenant_names AS MATERIALIZED (
+            SELECT party."PortfolioId",
+                   party."LeaseManagementId",
+                   min(party."TenantId") FILTER (WHERE party."Role" = 'PrimaryTenant') AS "PrimaryTenantId",
+                   min(concat_ws(' ', tenant."FirstName", tenant."LastName"))
+                       FILTER (WHERE party."Role" = 'PrimaryTenant') AS "PrimaryName",
+                   jsonb_agg(
+                       DISTINCT trim(concat_ws(' ', tenant."FirstName", tenant."LastName"))
+                       ORDER BY trim(concat_ws(' ', tenant."FirstName", tenant."LastName"))) AS "NamesJson"
+            FROM "LeaseManagementParties" AS party
+            JOIN "Tenants" AS tenant
+              ON tenant."PortfolioId" = party."PortfolioId"
+             AND tenant."Id" = party."TenantId"
+             AND tenant."DeletedAt" IS NULL
+            WHERE party."PortfolioId" = @portfolioId
+              AND party."Role" IN ('PrimaryTenant', 'CoTenant', 'Occupant')
+              AND party."EffectiveFrom" <= @asOfDate
+              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= @asOfDate)
+            GROUP BY party."PortfolioId", party."LeaseManagementId"
+        ),
+        charge_rows AS MATERIALIZED (
+            SELECT balance."TenantAccountId",
+                   balance."TenantLedgerEntryId",
+                   balance."EffectiveOn",
+                   balance."OpenAmount",
+                   account."LeaseManagementId",
+                   management."PropertyId",
+                   property."Name" AS "PropertyName",
+                   management."UnitId",
+                   unit."UnitNumber",
+                   names."PrimaryTenantId" AS "TenantId",
+                   COALESCE(names."PrimaryName", 'Tenant') AS "TenantName",
+                   COALESCE(names."NamesJson", jsonb_build_array(COALESCE(names."PrimaryName", 'Tenant'))) AS "TenantNamesJson"
+            FROM "vw_tenant_charge_balances" AS balance
+            JOIN "TenantAccounts" AS account
+              ON account."PortfolioId" = balance."PortfolioId"
+             AND account."Id" = balance."TenantAccountId"
+            JOIN "LeaseManagements" AS management
+              ON management."PortfolioId" = account."PortfolioId"
+             AND management."Id" = account."LeaseManagementId"
+            JOIN authorized_properties AS property
+              ON property."Id" = management."PropertyId"
+            JOIN "Units" AS unit
+              ON unit."PortfolioId" = management."PortfolioId"
+             AND unit."Id" = management."UnitId"
+            LEFT JOIN tenant_names AS names
+              ON names."PortfolioId" = management."PortfolioId"
+             AND names."LeaseManagementId" = management."Id"
+            WHERE balance."PortfolioId" = @portfolioId
+              AND balance."OpenAmount" > 0::numeric
+              AND balance."EffectiveOn" <= @asOfDate
+        ),
+        account_rollups AS MATERIALIZED (
+            SELECT charge."TenantAccountId",
+                   max(charge."LeaseManagementId") AS "LeaseManagementId",
+                   max(charge."PropertyId") AS "PropertyId",
+                   max(charge."PropertyName") AS "PropertyName",
+                   max(charge."UnitId") AS "UnitId",
+                   max(charge."UnitNumber") AS "UnitNumber",
+                   max(charge."TenantId") AS "TenantId",
+                   max(charge."TenantName") AS "TenantName",
+                   (array_agg(charge."TenantNamesJson" ORDER BY charge."TenantLedgerEntryId"))[1] AS "TenantNamesJson",
+                   COALESCE(sum(CASE WHEN charge."EffectiveOn" >= @cutoff30 THEN charge."OpenAmount" ELSE 0::numeric END), 0::numeric) AS "Current",
+                   COALESCE(sum(CASE WHEN charge."EffectiveOn" < @cutoff30 AND charge."EffectiveOn" >= @cutoff60 THEN charge."OpenAmount" ELSE 0::numeric END), 0::numeric) AS "Days31To60",
+                   COALESCE(sum(CASE WHEN charge."EffectiveOn" < @cutoff60 AND charge."EffectiveOn" >= @cutoff90 THEN charge."OpenAmount" ELSE 0::numeric END), 0::numeric) AS "Days61To90",
+                   COALESCE(sum(CASE WHEN charge."EffectiveOn" < @cutoff90 THEN charge."OpenAmount" ELSE 0::numeric END), 0::numeric) AS "Over90",
+                   COALESCE(sum(charge."OpenAmount"), 0::numeric) AS "Total",
+                   min(charge."EffectiveOn") AS "OldestChargeDate"
+            FROM charge_rows AS charge
+            GROUP BY charge."TenantAccountId"
+        ),
+        row_json AS (
+            SELECT account_rollups.*,
+                   jsonb_build_object(
+                       'tenantAccountId', account_rollups."TenantAccountId",
+                       'leaseManagementId', account_rollups."LeaseManagementId",
+                       'propertyId', account_rollups."PropertyId",
+                       'propertyName', account_rollups."PropertyName",
+                       'unitId', account_rollups."UnitId",
+                       'unitNumber', account_rollups."UnitNumber",
+                       'tenantId', account_rollups."TenantId",
+                       'tenantName', account_rollups."TenantName",
+                       'tenantNames', account_rollups."TenantNamesJson",
+                       'buckets', jsonb_build_object(
+                           'current', account_rollups."Current",
+                           'days31To60', account_rollups."Days31To60",
+                           'days61To90', account_rollups."Days61To90",
+                           'over90', account_rollups."Over90"
+                       ),
+                       'total', account_rollups."Total",
+                       'oldestChargeDate', account_rollups."OldestChargeDate",
+                       'oldestChargeAgeDays', GREATEST(0, @asOfDate - account_rollups."OldestChargeDate")
+                   ) AS "RowJson"
+            FROM account_rollups
+        ),
+        property_rollups AS (
+            SELECT row_json."PropertyId",
+                   row_json."PropertyName",
+                   jsonb_agg(row_json."RowJson" ORDER BY row_json."OldestChargeDate", row_json."TenantName", row_json."TenantAccountId") AS "RowsJson",
+                   COALESCE(sum(row_json."Current"), 0::numeric) AS "Current",
+                   COALESCE(sum(row_json."Days31To60"), 0::numeric) AS "Days31To60",
+                   COALESCE(sum(row_json."Days61To90"), 0::numeric) AS "Days61To90",
+                   COALESCE(sum(row_json."Over90"), 0::numeric) AS "Over90",
+                   COALESCE(sum(row_json."Total"), 0::numeric) AS "TotalOutstanding"
+            FROM row_json
+            GROUP BY row_json."PropertyId", row_json."PropertyName"
+        )
+        SELECT COALESCE(
+                   (SELECT jsonb_agg(
+                       jsonb_build_object(
+                           'propertyId', rollup."PropertyId",
+                           'propertyName', rollup."PropertyName",
+                           'rows', rollup."RowsJson",
+                           'buckets', jsonb_build_object(
+                               'current', rollup."Current",
+                               'days31To60', rollup."Days31To60",
+                               'days61To90', rollup."Days61To90",
+                               'over90', rollup."Over90"
+                           ),
+                           'totalOutstanding', rollup."TotalOutstanding"
+                       ) ORDER BY lower(rollup."PropertyName"), rollup."PropertyId")
+                    FROM property_rollups AS rollup), '[]'::jsonb)::text AS "PropertiesJson",
+               COALESCE((SELECT jsonb_agg(row_json."RowJson" ORDER BY row_json."OldestChargeDate", row_json."TenantName", row_json."TenantAccountId")
+                         FROM row_json), '[]'::jsonb)::text AS "RowsJson",
+               COALESCE((SELECT sum(row_json."Current") FROM row_json), 0::numeric) AS "Current",
+               COALESCE((SELECT sum(row_json."Days31To60") FROM row_json), 0::numeric) AS "Days31To60",
+               COALESCE((SELECT sum(row_json."Days61To90") FROM row_json), 0::numeric) AS "Days61To90",
+               COALESCE((SELECT sum(row_json."Over90") FROM row_json), 0::numeric) AS "Over90",
+               COALESCE((SELECT sum(row_json."Total") FROM row_json), 0::numeric) AS "TotalOutstanding"
+        """;
 
     // ── Rent Ledger (accrual, per lease over a range) ──────────────────────────────────────────────
 
@@ -1946,6 +2397,37 @@ public class ReportsService : IReportsService
             TotalMonthlyRent = summary?.TotalMonthlyRent ?? 0m,
         };
     }
+
+    private sealed class RentRollDatabaseRow
+    {
+        public string PropertiesJson { get; set; } = "[]";
+        public string RowsJson { get; set; } = "[]";
+        public int UnitCount { get; set; }
+        public int PortfolioLeaseCount { get; set; }
+        public decimal PortfolioBaseRent { get; set; }
+        public decimal PortfolioMonthlyRent { get; set; }
+        public decimal PortfolioSecurityDeposit { get; set; }
+        public decimal PortfolioDepositHeld { get; set; }
+        public decimal PortfolioCurrentBalance { get; set; }
+        public int LegacyLeaseCount { get; set; }
+        public decimal LegacyMonthlyRent { get; set; }
+        public decimal LegacySecurityDeposit { get; set; }
+    }
+
+    private sealed class AgedReceivablesDatabaseRow
+    {
+        public string PropertiesJson { get; set; } = "[]";
+        public string RowsJson { get; set; } = "[]";
+        public decimal Current { get; set; }
+        public decimal Days31To60 { get; set; }
+        public decimal Days61To90 { get; set; }
+        public decimal Over90 { get; set; }
+        public decimal TotalOutstanding { get; set; }
+    }
+
+    private static IReadOnlyList<T> DeserializeReportJson<T>(string json) =>
+        JsonSerializer.Deserialize<T[]>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        ?? throw new InvalidOperationException("PostgreSQL returned an invalid report JSON aggregate.");
 
     private sealed class RentLedgerDatabaseRow
     {

@@ -22,6 +22,7 @@ import { fetchApi } from '../client';
 export type ReportParamKey =
 	| 'from'
 	| 'to'
+	| 'asOf'
 	| 'propertyId'
 	| 'propertyIds'
 	| 'year'
@@ -60,6 +61,8 @@ export interface ReportRequestParams {
 	/** ISO yyyy-MM-dd (inclusive). Defaults to year-to-date server-side when omitted. */
 	from?: string;
 	to?: string;
+	/** ISO yyyy-MM-dd snapshot date. */
+	asOf?: string;
 	/** Single-property filter (general-ledger). */
 	propertyId?: number;
 	/** Multi-property filter — repeated `propertyIds` query params. */
@@ -89,21 +92,92 @@ export interface RentRollRow {
 	propertyName: string;
 	unitId: number;
 	unitNumber: string;
-	tenantId: number;
+	tenantId: number | null;
 	tenantName: string;
+	tenantNames: string[];
 	monthlyRent: number;
+	baseRent: number;
 	securityDeposit: number;
+	depositHeld: number;
+	currentBalance: number;
 	startOn: string;
 	endOn: string | null;
 	statusName: string;
+	isVacant: boolean;
+}
+
+export interface RentRollPropertyGroup {
+	propertyId: number;
+	propertyName: string;
+	rows: RentRollRow[];
+	unitCount: number;
+	leaseCount: number;
+	totalBaseRent: number;
+	totalMonthlyRent: number;
+	totalSecurityDeposit: number;
+	totalDepositHeld: number;
+	totalCurrentBalance: number;
+}
+
+export interface RentRollTotals {
+	unitCount: number;
+	leaseCount: number;
+	totalBaseRent: number;
+	totalMonthlyRent: number;
+	totalSecurityDeposit: number;
+	totalDepositHeld: number;
+	totalCurrentBalance: number;
 }
 
 export interface RentRollResponse {
 	generatedAt: string;
+	asOf: string;
 	rows: RentRollRow[];
+	properties: RentRollPropertyGroup[];
+	portfolioTotals: RentRollTotals;
 	leaseCount: number;
 	totalMonthlyRent: number;
 	totalSecurityDeposit: number;
+}
+
+export interface AgedReceivablesBuckets {
+	current: number;
+	days31To60: number;
+	days61To90: number;
+	over90: number;
+}
+
+export interface AgedReceivablesRow {
+	tenantAccountId: number;
+	leaseManagementId: number;
+	propertyId: number;
+	propertyName: string;
+	unitId: number;
+	unitNumber: string;
+	tenantId: number | null;
+	tenantName: string;
+	tenantNames: string[];
+	buckets: AgedReceivablesBuckets;
+	total: number;
+	oldestChargeDate: string | null;
+	oldestChargeAgeDays: number;
+}
+
+export interface AgedReceivablesPropertyGroup {
+	propertyId: number;
+	propertyName: string;
+	rows: AgedReceivablesRow[];
+	buckets: AgedReceivablesBuckets;
+	totalOutstanding: number;
+}
+
+export interface AgedReceivablesResponse {
+	asOf: string;
+	rows: AgedReceivablesRow[];
+	properties: AgedReceivablesPropertyGroup[];
+	totals: AgedReceivablesBuckets;
+	portfolioTotals: AgedReceivablesBuckets;
+	totalOutstanding: number;
 }
 
 export interface RentLedgerEntry {
@@ -365,6 +439,7 @@ export interface WorkOrderReportResponse {
 /** Any non-external report response shape (discriminated at the call site by report key). */
 export type ReportData =
 	| RentRollResponse
+	| AgedReceivablesResponse
 	| RentLedgerResponse
 	| DelinquencyResponse
 	| CashFlowResponse
@@ -398,6 +473,7 @@ export function buildReportQuery(params: ReportRequestParams, accepts: ReportPar
 
 	if (set.has('from') && params.from) qs.set('from', params.from);
 	if (set.has('to') && params.to) qs.set('to', params.to);
+	if (set.has('asOf') && params.asOf) qs.set('asOf', params.asOf);
 	if (set.has('propertyId') && params.propertyId != null) qs.set('propertyId', String(params.propertyId));
 	if (set.has('propertyIds') && params.propertyIds?.length) {
 		for (const id of params.propertyIds) qs.append('propertyIds', String(id));
@@ -433,7 +509,9 @@ export const reports = {
 
 	// Typed convenience accessors (paths relative to /api/v1).
 	rentRoll: (params: ReportRequestParams = {}) =>
-		fetchApi<RentRollResponse>(`/reports/rent-roll${buildReportQuery(params, ['propertyIds'])}`),
+		fetchApi<RentRollResponse>(`/reports/rent-roll${buildReportQuery(params, ['asOf', 'propertyIds'])}`),
+	agedReceivables: (params: ReportRequestParams = {}) =>
+		fetchApi<AgedReceivablesResponse>(`/reports/aged-receivables${buildReportQuery(params, ['asOf', 'propertyIds'])}`),
 	rentLedger: (params: ReportRequestParams = {}) =>
 		fetchApi<RentLedgerResponse>(`/reports/rent-ledger${buildReportQuery(params, ['from', 'to', 'propertyIds'])}`),
 	delinquency: (params: ReportRequestParams = {}) =>

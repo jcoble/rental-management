@@ -301,6 +301,101 @@ public class ReportsServiceTests : IAsyncLifetime
             .Should().BeTrue("bucket and total amounts must be summed in SQL");
     }
 
+    [Fact]
+    public async Task GetRentRollAsync_UsesOneSqlStatementWithAsOfAndPropertyRollups()
+    {
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentRollAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = new DateOnly(2026, 7, 15),
+        }, CancellationToken.None);
+
+        report.AsOf.Should().Be(new DateOnly(2026, 7, 15));
+        var sql = string.Join("\n---\n", _executedSql);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "rent roll rows, property totals, and portfolio totals must be one SQL statement");
+        sql.Should().Contain("jsonb_agg", "property groups and rows must be aggregated in SQL");
+        sql.Should().Contain("rc_api_effective_capability_scopes", "authorization must stay in the report query");
+        sql.Should().Contain("@asOfDate", "the requested snapshot date must be parameterized");
+        sql.Should().Contain("vw_tenant_charge_balances", "rent-roll current balance must reuse the canonical charge projection");
+    }
+
+    [Fact]
+    public async Task GetAgedReceivablesAsync_UsesOneSqlStatementWithCaseBucketsAndRollups()
+    {
+        _executedSql.Clear();
+
+        var report = await _sut.GetAgedReceivablesAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = new DateOnly(2026, 7, 15),
+        }, CancellationToken.None);
+
+        report.AsOf.Should().Be(new DateOnly(2026, 7, 15));
+        var sql = string.Join("\n---\n", _executedSql);
+        _executedSql.Count(command => command.Contains("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(1, "aged rows, property buckets, and portfolio buckets must be one SQL statement");
+        sql.Should().Contain("CASE", "aging buckets must be computed in SQL");
+        sql.Should().Contain("jsonb_agg", "property rollups and rows must be aggregated in SQL");
+        sql.Should().Contain("vw_tenant_charge_balances", "the report must reuse the canonical tenant charge balance projection");
+    }
+
+    [Fact]
+    public async Task GetRentRollAsync_IncludesVacantUnitsAndPropertyPortfolioTotals()
+    {
+        var property = SeedProperty("Rent Roll QA");
+        var occupiedUnit = SeedUnit("1", property.Id);
+        SeedLease(property, occupiedUnit, SeedTenant("Occupied", "Tenant"), 1_250m);
+        SeedUnit("2", property.Id); // explicit vacancy must remain visible in the real report
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentRollAsync(_scope, new ReportRangeQuery
+        {
+            AsOf = DateOnly.FromDateTime(DateTime.UtcNow),
+        }, CancellationToken.None);
+
+        var propertyGroup = report.Properties.Should().ContainSingle().Subject;
+        propertyGroup.UnitCount.Should().Be(2);
+        propertyGroup.LeaseCount.Should().Be(1);
+        propertyGroup.Rows.Should().ContainSingle(row => row.IsVacant);
+        propertyGroup.Rows.Should().ContainSingle(row => !row.IsVacant && row.BaseRent == 1_250m);
+        report.PortfolioTotals.UnitCount.Should().Be(2);
+        report.PortfolioTotals.LeaseCount.Should().Be(1);
+        report.PortfolioTotals.TotalBaseRent.Should().Be(1_250m);
+        _executedSql.Should().ContainSingle(sql => sql.Contains("RentRoll", StringComparison.OrdinalIgnoreCase) ||
+            (sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase) &&
+             sql.Contains("row_values", StringComparison.OrdinalIgnoreCase)),
+            "the complete rent-roll snapshot and totals must be one SQL statement");
+    }
+
+    [Fact]
+    public async Task GetAgedReceivablesAsync_BucketsThreeAgesFromCanonicalOpenCharges()
+    {
+        var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+        var property = SeedProperty("Aging QA");
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Behind", "Tenant"), 1_000m);
+        SeedPayment(lease, 100m, asOf.AddDays(-10).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        SeedPayment(lease, 200m, asOf.AddDays(-45).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        SeedPayment(lease, 300m, asOf.AddDays(-75).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), paidInFull: false);
+        _executedSql.Clear();
+
+        var report = await _sut.GetAgedReceivablesAsync(_scope, new ReportRangeQuery { AsOf = asOf }, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.Buckets.Current.Should().Be(100m);
+        row.Buckets.Days31To60.Should().Be(200m);
+        row.Buckets.Days61To90.Should().Be(300m);
+        row.Buckets.Over90.Should().Be(0m);
+        row.Total.Should().Be(600m);
+        report.TotalOutstanding.Should().Be(600m);
+        report.PortfolioTotals.Should().BeEquivalentTo(report.Totals);
+        _executedSql.Should().ContainSingle(sql =>
+            sql.Contains("vw_tenant_charge_balances", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase),
+            "canonical charge balances, age buckets, and rollups must be one SQL statement");
+    }
+
     // ── General Ledger running balance (DB) ────────────────────────────────────────────────────────
 
     [Fact]
