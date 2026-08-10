@@ -242,13 +242,8 @@ public sealed class AtomicCoreCrudMutationHandler
             request.Ownerships, request.ClearOwnership) ?? [];
         if (requestedOwnerships.Count == 0 && !request.ClearOwnership)
         {
-            var primaryOwnerId = await db.Set<OwnerEntity>().AsNoTracking()
-                .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
-                    && owner.DeletedAt == null)
-                .Select(owner => (int?)owner.Id)
-                .FirstOrDefaultAsync(ct);
-            if (primaryOwnerId.HasValue)
-                requestedOwnerships = [new PropertyOwnershipRequest { OwnerEntityId = primaryOwnerId.Value }];
+            var primaryOwnerId = await EnsureSelfOwnerAsync(command, attempt, now, ct);
+            requestedOwnerships = [new PropertyOwnershipRequest { OwnerEntityId = primaryOwnerId }];
         }
 
         var requestedUnitNumbers = setup.Units
@@ -487,6 +482,62 @@ public sealed class AtomicCoreCrudMutationHandler
             });
         }
         return result;
+    }
+
+    private async Task<int> EnsureSelfOwnerAsync(
+        AtomicCoreCrudMutationCommand command,
+        IAtomicCommandContext attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var db = _db;
+        var existingPrimaryId = await db.Set<OwnerEntity>().AsNoTracking()
+            .Where(owner => owner.PortfolioId == command.PortfolioId
+                && owner.IsPrimary && owner.DeletedAt == null)
+            .Select(owner => (int?)owner.Id)
+            .FirstOrDefaultAsync(ct);
+        if (existingPrimaryId.HasValue)
+            return existingPrimaryId.Value;
+
+        var actor = await db.Set<ApplicationUser>().AsNoTracking()
+            .Where(user => user.Id == command.ActorUserId)
+            .Select(user => new { user.DisplayName, user.Email })
+            .SingleOrDefaultAsync(ct)
+            ?? throw new AtomicReceiptInvariantException("The landlord account is required to create a self-owner record.");
+        var fallbackName = actor.Email?.Split('@', 2)[0].Trim();
+        var ownerName = string.IsNullOrWhiteSpace(actor.DisplayName)
+            ? (string.IsNullOrWhiteSpace(fallbackName) ? "Property owner" : fallbackName)
+            : actor.DisplayName.Trim();
+        var owner = new OwnerEntity
+        {
+            PortfolioId = command.PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = ownerName,
+            Email = actor.Email,
+            IsPrimary = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.Add(owner);
+        attempt.BindSemanticAudit(owner, Audit(command, nameof(OwnerEntity),
+            AuditLogOperation.Created, "Self-owner record created during Property setup", entityId: 0));
+        await attempt.FlushBusinessAsync(ct);
+
+        db.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = command.PortfolioId,
+            AccessContextId = command.AccessContextId,
+            ApplicationUserId = command.ActorUserId,
+            OwnerEntityId = owner.Id,
+            EffectiveFromUtc = now,
+            GrantedAtUtc = now,
+            GrantedByUserId = command.ActorUserId,
+            Reason = "Self-owner relationship created during Property setup",
+        });
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(OwnerEntity), owner.Id, now, "self-owner");
+        return owner.Id;
     }
 
     private async Task<OwnershipLifecycleChange> ReplaceCurrentOwnershipsAsync(

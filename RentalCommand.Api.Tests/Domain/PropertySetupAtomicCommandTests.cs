@@ -7,6 +7,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -68,6 +69,52 @@ public sealed class PropertySetupAtomicCommandTests : IDisposable
             "setup creates only the Unit explicitly supplied by the caller");
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "rental.property.setup")).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Setup_defaults_ownership_to_a_new_self_owner_when_the_portfolio_has_none()
+    {
+        var created = await _sut.SetupAsync(_scope, SingleRentalRequest(), "self-owner-default");
+
+        created.Should().NotBeNull();
+        var owner = await _ctx.Db.OwnerEntities.AsNoTracking()
+            .SingleAsync(entity => entity.PortfolioId == PortfolioId && entity.IsPrimary);
+        (await _ctx.Db.PropertyOwnerships.AsNoTracking()
+            .SingleAsync(ownership => ownership.PropertyId == created!.Property.Id))
+            .Should().Match<PropertyOwnership>(ownership =>
+                ownership.OwnerEntityId == owner.Id && ownership.OwnershipSharePercent == 100m);
+        (await _ctx.Db.OwnerUserAccesses.AsNoTracking()
+            .SingleAsync(access => access.OwnerEntityId == owner.Id))
+            .ApplicationUserId.Should().Be(_scope.UserId);
+    }
+
+    [Fact]
+    public async Task Setup_honors_an_explicit_owner_instead_of_defaulting_to_self_owner()
+    {
+        var explicitOwner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntityType = OwnerEntityType.LLC,
+            Name = "Explicit Holdings LLC",
+            IsPrimary = false,
+            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            UpdatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+        };
+        _ctx.Db.OwnerEntities.Add(explicitOwner);
+        await _ctx.Db.SaveChangesAsync();
+
+        var request = SingleRentalRequest();
+        request.Property.Ownerships =
+        [new PropertyOwnershipRequest { OwnerEntityId = explicitOwner.Id }];
+        var created = await _sut.SetupAsync(_scope, request, "explicit-owner-default");
+
+        created.Should().NotBeNull();
+        (await _ctx.Db.PropertyOwnerships.AsNoTracking()
+            .SingleAsync(ownership => ownership.PropertyId == created!.Property.Id))
+            .OwnerEntityId.Should().Be(explicitOwner.Id);
+        (await _ctx.Db.OwnerEntities.AsNoTracking()
+            .CountAsync(entity => entity.PortfolioId == PortfolioId && entity.IsPrimary))
+            .Should().Be(0);
     }
 
     [Fact]

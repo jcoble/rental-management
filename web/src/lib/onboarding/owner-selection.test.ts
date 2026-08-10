@@ -29,6 +29,17 @@ test('falls back to the first existing owner when onboarding resumes after refre
 	);
 });
 
+test('prefers the landlord self-owner when it is not first in the owner list', () => {
+	assert.equal(
+		ownerEntityIdForOnboarding({
+			selectedOwnerId: '',
+			createdOwner: null,
+			existingOwners: [{ id: 1, isPrimary: false }, { id: 8, isPrimary: true }]
+		}),
+		'8'
+	);
+});
+
 test('returns empty when no owner exists yet', () => {
 	assert.equal(
 		ownerEntityIdForOnboarding({
