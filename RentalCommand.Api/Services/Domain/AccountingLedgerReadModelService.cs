@@ -722,6 +722,14 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 ServicePeriodStartOn = entry.ServicePeriodStartOn,
                 ServicePeriodEndOn = entry.ServicePeriodEndOn,
                 ReversesEntryId = entry.ReversesEntryId,
+                ReplacedByEntryId = _db.TenantLedgerEntries
+                    .Where(reversal => reversal.PortfolioId == portfolioId
+                        && reversal.TenantAccountId == tenantAccountId
+                        && reversal.EntryType == TenantLedgerEntryType.Reversal
+                        && reversal.ReversesEntryId == entry.Id)
+                    .OrderByDescending(reversal => reversal.Id)
+                    .Select(reversal => (long?)reversal.Id)
+                    .FirstOrDefault(),
                 JournalEntryPublicId = _db.JournalEntries
                     .Where(journal => journal.PortfolioId == portfolioId && journal.SourceId == entry.Id)
                     .OrderByDescending(journal => journal.Id)

@@ -8,6 +8,7 @@
 	} from '$lib/accounting/accounting-display';
 	import { formatMoneyCategoryLabel, formatMoneyEntryLabel } from '$lib/accounting/money-display';
 	import { tenantMonthSummaryReconciles } from '$lib/accounting/tenant-ledger-summary';
+	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 	import TenantPaymentAllocationDetails from './TenantPaymentAllocationDetails.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Table from '$lib/components/ui/table';
@@ -29,6 +30,10 @@
 		onaction?: (row: TenantLedgerRow, action: TenantLedgerRowAction) => void;
 	} = $props();
 
+	const detailMode = getAccountingDetailMode();
+	const advanced = $derived((detailMode?.mode ?? 'simple') === 'advanced');
+	const summaryReconciles = $derived(tenantMonthSummaryReconciles(summary));
+
 	const monthLabel = $derived(
 		new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
 			new Date(Date.UTC(summary.year, summary.month - 1, 1))
@@ -41,6 +46,13 @@
 
 	function isCharge(row: TenantLedgerRow): boolean {
 		return row.type !== 'DepositCharge' && row.chargeAmount !== 0;
+	}
+
+	function canReverseCharge(row: TenantLedgerRow): boolean {
+		return isCharge(row)
+			&& ['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'ManualCharge', 'OpeningBalance'].includes(row.type)
+			&& row.reversesEntryId == null
+			&& row.replacedByEntryId == null;
 	}
 
 	function isCredit(row: TenantLedgerRow): boolean {
@@ -73,7 +85,15 @@
 			<span>Payments <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.paymentAmount, summary.currency)}</strong></span>
 			<span data-testid="tenant-ledger-summary-credits">Credits <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.creditAmount, summary.currency)}</strong></span>
 			<span>Closing <strong class="font-mono font-medium tabular-nums">{formatAccountingCurrency(summary.closingBalance, summary.currency)}</strong></span>
-			<span data-testid="tenant-ledger-summary-reconciliation" class={tenantMonthSummaryReconciles(summary) ? 'text-emerald-700 dark:text-emerald-300' : 'text-destructive'}>{tenantMonthSummaryReconciles(summary) ? 'Reconciled' : 'Check total'}</span>
+			{#if !summaryReconciles}
+				<span
+					class="text-destructive"
+					role="status"
+					data-testid="tenant-ledger-summary-reconciliation-warning"
+				>
+					Needs review: month totals do not match.
+				</span>
+			{/if}
 		</div>
 	</div>
 
@@ -117,6 +137,15 @@
 									{row.paymentMethod ?? formatMoneyCategoryLabel(row.categoryName)}{#if row.recurringScheduleContext} · {row.recurringScheduleContext}{/if}
 								</p>
 							{/if}
+							{#if advanced}
+								<div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground" data-testid={`tenant-ledger-advanced-facts-${row.tenantLedgerEntryId}`}>
+									<span class="font-medium text-foreground">Bookkeeping</span>
+									{#if row.accountLabel}<span>{row.accountLabel}</span>{/if}
+									{#if row.categoryName}<span>{row.categoryName}</span>{/if}
+									{#if row.sourceType}<span>Source: {row.sourceType}</span>{/if}
+									{#if row.journalEntryPublicId}<span>Journal: {row.journalEntryPublicId}</span>{/if}
+								</div>
+							{/if}
 							{#if isPayment(row)}
 								<TenantPaymentAllocationDetails
 									allocations={row.allocations}
@@ -137,17 +166,19 @@
 					</Table.Cell>
 					<Table.Cell class="px-2 py-3 text-right" onclick={(event) => event.stopPropagation()} onkeydown={(event) => event.stopPropagation()}>
 						<DropdownMenu.Root>
-							<DropdownMenu.Trigger aria-label={`Actions for ${displayLabel(row)}`} class="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground">
+							<DropdownMenu.Trigger aria-label={`Actions for ${displayLabel(row)}`} class="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground" data-testid={`tenant-ledger-actions-trigger-${row.tenantLedgerEntryId}`}>
 								<MoreHorizontal class="size-4" />
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Content align="end">
-								<DropdownMenu.Item onSelect={() => action(row, 'view')}>View detail</DropdownMenu.Item>
+								<DropdownMenu.Item onSelect={() => action(row, 'view')} data-testid={`tenant-ledger-action-view-${row.tenantLedgerEntryId}`}>View detail</DropdownMenu.Item>
 								{#if isCharge(row)}
-									<DropdownMenu.Item onSelect={() => action(row, 'give-credit')}>Give credit</DropdownMenu.Item>
-									<DropdownMenu.Item onSelect={() => action(row, 'related-charge')}>Add related charge</DropdownMenu.Item>
-									<DropdownMenu.Item onSelect={() => action(row, 'fix-charge')}>Reverse charge</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => action(row, 'give-credit')} data-testid={`tenant-ledger-action-give-credit-${row.tenantLedgerEntryId}`}>Give credit</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => action(row, 'related-charge')} data-testid={`tenant-ledger-action-related-charge-${row.tenantLedgerEntryId}`}>Add related charge</DropdownMenu.Item>
+									{#if canReverseCharge(row)}
+										<DropdownMenu.Item onSelect={() => action(row, 'fix-charge')} data-testid={`tenant-ledger-action-fix-charge-${row.tenantLedgerEntryId}`}>Reverse charge</DropdownMenu.Item>
+									{/if}
 								{:else if isPayment(row)}
-									<DropdownMenu.Item onSelect={() => action(row, 'fix-payment')}>Review payment allocation</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => action(row, 'fix-payment')} data-testid={`tenant-ledger-action-fix-payment-${row.tenantLedgerEntryId}`}>Review payment allocation</DropdownMenu.Item>
 								{/if}
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>

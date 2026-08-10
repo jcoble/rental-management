@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { pushState, replaceState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import type { UnitDashboard } from '$lib/types';
 	import AccountingDetailMode from '$lib/components/accounting/AccountingDetailMode.svelte';
 	import TenantLedgerPanel from '$lib/components/accounting/TenantLedgerPanel.svelte';
@@ -38,22 +38,11 @@
 	}
 
 	function openReceipt(id: number): void {
-		pushState(unitUrl(id), {
-			...(page.state ?? {}),
-			unitTab: 'money',
-			unitView: 'tenant-account',
-			unitPaymentId: id,
-			unitExpenseId: null
-		});
+		void goto(unitUrl(id), { keepFocus: true, noScroll: true });
 	}
 
 	function clearSelection(): void {
-		replaceState(unitUrl(), {
-			...(page.state ?? {}),
-			unitTab: 'money',
-			unitView: 'tenant-account',
-			unitPaymentId: null
-		});
+		void goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 </script>
 

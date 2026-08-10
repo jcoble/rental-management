@@ -36,7 +36,7 @@ describe('unit rent canonical tenant ledger workflows', () => {
 		assert.match(source, /AccountingDetailMode/);
 		assert.match(source, /TenantLedgerPanel \{dashboard\} \{onScan\} onopenpayment=\{openReceipt\}/);
 		assert.match(source, /PaymentDetail/);
-		assert.match(source, /unitPaymentId: id/);
+		assert.match(source, /goto\(unitUrl\(id\)/);
 		assert.doesNotMatch(source, /tenantAccounts\.(accountEntriesPage|chargesPage|depositsPage)/);
 		assert.doesNotMatch(source, /payments\.(recordReceipt|postCharge)/);
 	});

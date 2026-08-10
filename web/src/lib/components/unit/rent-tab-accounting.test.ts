@@ -52,6 +52,7 @@ describe('W2 unit tenant ledger composition', () => {
 		assert.match(panel, /Posts a related charge for the amount that was missed/);
 		assert.match(panel, /Removes this charge with a linked reversal entry/);
 		assert.match(panel, /tenantMoney\.reverseCharge/);
+		assert.match(panel, /tenantMoney\.reverseLedgerEntry/);
 	});
 
 	it('keeps sheet fields and server-side correction boundaries explicit', () => {

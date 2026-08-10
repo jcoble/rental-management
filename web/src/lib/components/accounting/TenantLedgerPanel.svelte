@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ArrowRight, ChevronDown, ScanLine } from '@lucide/svelte';
 	import type { UnitDashboard } from '$lib/types';
@@ -228,10 +229,23 @@
 		}
 	}
 
+	function openEntryDetail(row: TenantLedgerRow): void {
+		if (onopenpayment) {
+			onopenpayment(row.tenantLedgerEntryId);
+			return;
+		}
+		if (row.journalEntryPublicId) {
+			journalPublicId = row.journalEntryPublicId;
+			return;
+		}
+		if (tenantAccountId != null) {
+			void goto(`/tenant-accounts/${tenantAccountId}/entries/${row.tenantLedgerEntryId}`);
+		}
+	}
+
 	function handleRowAction(row: TenantLedgerRow, action: TenantLedgerRowAction): void {
 		if (action === 'view') {
-			if (row.type === 'PaymentReceipt') onopenpayment?.(row.tenantLedgerEntryId);
-			else if (row.journalEntryPublicId) journalPublicId = row.journalEntryPublicId;
+			openEntryDetail(row);
 			return;
 		}
 		if (action === 'give-credit') {
@@ -253,7 +267,7 @@
 			openFixCharge(row);
 			return;
 		}
-		if (action === 'fix-payment') onopenpayment?.(row.tenantLedgerEntryId);
+		if (action === 'fix-payment') openEntryDetail(row);
 	}
 
 	function applyFix(): void {
@@ -283,10 +297,16 @@
 
 	const reverseMutation = createMutation(() => ({
 		mutationFn: (target: TenantLedgerRow) =>
-			tenantMoney.reverseCharge(tenantAccountId as number, target.tenantLedgerEntryId, crypto.randomUUID(), {
-				effectiveOn: new Date().toISOString().slice(0, 10),
-				reason: `Reverse charge: ${target.description}`
-			}),
+			target.type === 'OpeningBalance'
+				? tenantMoney.reverseLedgerEntry(tenantAccountId as number, crypto.randomUUID(), {
+						reversesEntryId: target.tenantLedgerEntryId,
+						effectiveOn: new Date().toISOString().slice(0, 10),
+						reason: `Reverse charge: ${target.description}`
+					})
+				: tenantMoney.reverseCharge(tenantAccountId as number, target.tenantLedgerEntryId, crypto.randomUUID(), {
+						effectiveOn: new Date().toISOString().slice(0, 10),
+						reason: `Reverse charge: ${target.description}`
+				}),
 		onSuccess: () => {
 				showSuccess('Charge reversed.');
 				closeFixCharge();
