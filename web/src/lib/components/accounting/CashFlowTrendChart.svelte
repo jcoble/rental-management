@@ -12,7 +12,19 @@
 		advanced?: boolean;
 	}
 
+	type TooltipSeries = 'income' | 'operating-costs' | 'loan-payments' | 'net';
+
+	interface ChartTooltip {
+		id: string;
+		x: number;
+		y: number;
+		text: string;
+	}
+
 	let { points, scale, advanced = false }: Props = $props();
+	let activeTooltip = $state<ChartTooltip | null>(null);
+	let hoveredTooltipId = $state<string | null>(null);
+	let focusedTooltipId = $state<string | null>(null);
 
 	const CHART_WIDTH = 960;
 	const CHART_HEIGHT = 320;
@@ -43,10 +55,6 @@
 		return Math.min(18, Math.max(8, pointSpacing() * 0.18));
 	}
 
-	function barGap(): number {
-		return Math.max(3, Math.min(6, barWidth() * 0.3));
-	}
-
 	function barHeight(value: number): number {
 		return cashFlowBarPixels(value, scale, HALF_PLOT_HEIGHT);
 	}
@@ -58,6 +66,50 @@
 
 	function monthAriaLabel(point: CashFlowChartPoint): string {
 		return `${point.label}: ${advanced ? 'income' : 'money in'} ${formatAccountingCurrency(point.income)}, ${advanced ? 'operating expenses' : 'operating costs'} ${formatOutflow(point.operatingExpenses)}, ${advanced ? 'debt service' : 'loan payments'} ${formatOutflow(point.debtService)}, ${advanced ? 'net cash flow' : 'cash flow'} ${formatAccountingCurrency(point.cashFlow)}`;
+	}
+
+	function tooltipSeriesLabel(series: TooltipSeries): string {
+		if (series === 'income') return advanced ? 'Income' : 'Money in';
+		if (series === 'operating-costs') return advanced ? 'Operating expenses' : 'Operating costs';
+		if (series === 'loan-payments') return advanced ? 'Debt service' : 'Loan payments';
+		return advanced ? 'Net cash flow' : 'Cash flow';
+	}
+
+	function tooltipAmount(series: TooltipSeries, value: number): string {
+		return series === 'operating-costs' || series === 'loan-payments'
+			? formatOutflow(value)
+			: formatAccountingCurrency(value);
+	}
+
+	function chartTooltip(
+		point: CashFlowChartPoint,
+		series: TooltipSeries,
+		value: number,
+		x: number,
+		y: number
+	): ChartTooltip {
+		return {
+			id: `cash-flow-tooltip-${point.key}-${series}`,
+			x,
+			y,
+			text: `${point.label} · ${tooltipSeriesLabel(series)}: ${tooltipAmount(series, value)}`
+		};
+	}
+
+	function showTooltip(tooltip: ChartTooltip, source: 'hover' | 'focus'): void {
+		if (source === 'hover') hoveredTooltipId = tooltip.id;
+		else focusedTooltipId = tooltip.id;
+		activeTooltip = tooltip;
+	}
+
+	function hideTooltip(id: string, source: 'hover' | 'focus'): void {
+		if (source === 'hover' && hoveredTooltipId === id) hoveredTooltipId = null;
+		if (source === 'focus' && focusedTooltipId === id) focusedTooltipId = null;
+		if (activeTooltip?.id === id && hoveredTooltipId !== id && focusedTooltipId !== id) activeTooltip = null;
+	}
+
+	function tooltipTop(y: number): number {
+		return Math.max(2, Math.min(82, (y / CHART_HEIGHT) * 100 - 8));
 	}
 
 	function gridTemplateColumns(): string {
@@ -77,15 +129,17 @@
 </script>
 
 
+
 <div class="overflow-x-auto px-4 py-5 sm:px-5" data-testid="cash-flow-chart-scroll-region">
 	<div class="min-w-[56rem]" data-testid="cash-flow-chart-canvas">
-		<svg
-			class="h-auto w-full overflow-visible"
-			viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-			role="img"
-			aria-labelledby="cash-flow-chart-title cash-flow-chart-description"
-			data-testid="cash-flow-trend-svg"
-		>
+		<div class="relative" data-testid="cash-flow-chart-plot">
+			<svg
+				class="h-auto w-full overflow-visible"
+				viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
+				role="img"
+				aria-labelledby="cash-flow-chart-title cash-flow-chart-description"
+				data-testid="cash-flow-trend-svg"
+			>
 			<title id="cash-flow-chart-title" data-testid="cash-flow-chart-title">Monthly cash flow trend</title>
 			<desc id="cash-flow-chart-description" data-testid="cash-flow-chart-description">Money in rises above one shared zero baseline. Operating costs and loan payments fall below it. Net cash flow markers use the same dollar scale.</desc>
 
@@ -126,11 +180,15 @@
 			{#each points as point, index (point.key)}
 				{@const x = pointX(index)}
 				{@const width = barWidth()}
-				{@const gap = barGap()}
 				{@const incomeHeight = barHeight(point.income)}
 				{@const costHeight = barHeight(point.operatingExpenses)}
 				{@const loanHeight = barHeight(point.debtService)}
+				{@const loanY = BASELINE + costHeight}
 				{@const netY = netPositionY(point.cashFlow)}
+				{@const incomeTooltip = chartTooltip(point, 'income', point.income, x, BASELINE - incomeHeight)}
+				{@const costsTooltip = chartTooltip(point, 'operating-costs', point.operatingExpenses, x, BASELINE + costHeight / 2)}
+				{@const loansTooltip = chartTooltip(point, 'loan-payments', point.debtService, x, loanY + loanHeight / 2)}
+				{@const netTooltip = chartTooltip(point, 'net', point.cashFlow, x, netY)}
 				<g
 					role="group"
 					aria-label={monthAriaLabel(point)}
@@ -146,50 +204,71 @@
 						width={width}
 						height={incomeHeight}
 						rx={2}
-						class="fill-emerald-500"
-						role="img"
+						class="cash-flow-mark fill-emerald-500"
+						role="button"
 						aria-label={`${point.label} ${advanced ? 'income' : 'money in'} ${formatAccountingCurrency(point.income)}`}
+						aria-describedby={activeTooltip?.id === incomeTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
+						tabindex="0"
+						focusable="true"
 						data-testid={`cash-flow-bar-income-${point.key}`}
 						data-series="income"
 						data-value={point.income}
 						data-scaled-height={incomeHeight}
 						data-scaled-position={BASELINE - incomeHeight}
+						onmouseenter={() => showTooltip(incomeTooltip, 'hover')}
+						onmouseleave={() => hideTooltip(incomeTooltip.id, 'hover')}
+						onfocus={() => showTooltip(incomeTooltip, 'focus')}
+						onblur={() => hideTooltip(incomeTooltip.id, 'focus')}
 					>
 						<title>{`${advanced ? 'Income' : 'Money in'} ${formatAccountingCurrency(point.income)}`}</title>
 					</rect>
 
 					<rect
-						x={x - width - gap / 2}
+						x={x - width / 2}
 						y={BASELINE}
 						width={width}
 						height={costHeight}
 						rx={2}
-						class="fill-amber-500"
-						role="img"
+						class="cash-flow-mark fill-amber-500"
+						role="button"
 						aria-label={`${point.label} ${advanced ? 'operating expenses' : 'operating costs'} ${formatOutflow(point.operatingExpenses)}`}
+						aria-describedby={activeTooltip?.id === costsTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
+						tabindex="0"
+						focusable="true"
 						data-testid={`cash-flow-bar-costs-${point.key}`}
 						data-series="operating-costs"
 						data-value={point.operatingExpenses}
 						data-scaled-height={costHeight}
 						data-scaled-position={BASELINE}
+						onmouseenter={() => showTooltip(costsTooltip, 'hover')}
+						onmouseleave={() => hideTooltip(costsTooltip.id, 'hover')}
+						onfocus={() => showTooltip(costsTooltip, 'focus')}
+						onblur={() => hideTooltip(costsTooltip.id, 'focus')}
 					>
 						<title>{`${advanced ? 'Operating expenses' : 'Operating costs'} ${formatOutflow(point.operatingExpenses)}`}</title>
 					</rect>
 
 					<rect
-						x={x + gap / 2}
-						y={BASELINE}
+						x={x - width / 2}
+						y={loanY}
 						width={width}
 						height={loanHeight}
 						rx={2}
-						class="fill-orange-500"
-						role="img"
+						class="cash-flow-mark fill-orange-500"
+						role="button"
 						aria-label={`${point.label} ${advanced ? 'debt service' : 'loan payments'} ${formatOutflow(point.debtService)}`}
+						aria-describedby={activeTooltip?.id === loansTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
+						tabindex="0"
+						focusable="true"
 						data-testid={`cash-flow-bar-loans-${point.key}`}
 						data-series="loan-payments"
 						data-value={point.debtService}
 						data-scaled-height={loanHeight}
-						data-scaled-position={BASELINE}
+						data-scaled-position={loanY}
+						onmouseenter={() => showTooltip(loansTooltip, 'hover')}
+						onmouseleave={() => hideTooltip(loansTooltip.id, 'hover')}
+						onfocus={() => showTooltip(loansTooltip, 'focus')}
+						onblur={() => hideTooltip(loansTooltip.id, 'focus')}
 					>
 						<title>{`${advanced ? 'Debt service' : 'Loan payments'} ${formatOutflow(point.debtService)}`}</title>
 					</rect>
@@ -198,20 +277,40 @@
 						cx={x}
 						cy={netY}
 						r={5}
-						class="fill-primary stroke-card"
+						class="cash-flow-mark fill-primary stroke-card"
 						stroke-width={2}
-						role="img"
+						role="button"
 						aria-label={`${point.label} ${advanced ? 'net cash flow' : 'cash flow'} ${formatAccountingCurrency(point.cashFlow)}`}
+						aria-describedby={activeTooltip?.id === netTooltip.id ? 'cash-flow-chart-tooltip' : undefined}
+						tabindex="0"
+						focusable="true"
 						data-testid={`cash-flow-marker-net-${point.key}`}
 						data-series="net"
 						data-value={point.cashFlow}
 						data-scaled-position={netY}
+						onmouseenter={() => showTooltip(netTooltip, 'hover')}
+						onmouseleave={() => hideTooltip(netTooltip.id, 'hover')}
+						onfocus={() => showTooltip(netTooltip, 'focus')}
+						onblur={() => hideTooltip(netTooltip.id, 'focus')}
 					>
 						<title>{`${advanced ? 'Net cash flow' : 'Cash flow'} ${formatAccountingCurrency(point.cashFlow)}`}</title>
 					</circle>
 				</g>
 			{/each}
-		</svg>
+			</svg>
+
+			{#if activeTooltip}
+				<div
+					id="cash-flow-chart-tooltip"
+					role="tooltip"
+					class="cash-flow-chart-tooltip pointer-events-none absolute z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs font-medium text-popover-foreground shadow-md"
+					style={`left: ${(activeTooltip.x / CHART_WIDTH) * 100}%; top: ${tooltipTop(activeTooltip.y)}%;`}
+					data-testid="cash-flow-chart-tooltip"
+				>
+					{activeTooltip.text}
+				</div>
+			{/if}
+		</div>
 
 		<div
 			class="grid gap-y-0.5"
@@ -232,3 +331,16 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	.cash-flow-mark {
+		cursor: pointer;
+		outline: none;
+	}
+
+	.cash-flow-mark:focus-visible {
+		stroke: var(--ring, currentColor);
+		stroke-width: 3px;
+		paint-order: stroke;
+	}
+</style>
