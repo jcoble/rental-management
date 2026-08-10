@@ -189,6 +189,9 @@ public class PastDueLeaseResponse
     /// <summary>Total amount this lease is behind (sum of its past-due payments).</summary>
     public decimal PastDueAmount { get; set; }
 
+    /// <summary>Server-owned total open balance for this tenant account, used to cap a receipt.</summary>
+    public decimal TotalOpenBalance { get; set; }
+
     /// <summary>How many of this lease's payments are past due.</summary>
     public int OverduePaymentCount { get; set; }
 

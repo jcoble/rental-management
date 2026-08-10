@@ -11,6 +11,10 @@ const dashboardSource = readFileSync(
 	'utf8'
 );
 const endpointSource = readFileSync(new URL('../api/endpoints/portal.ts', import.meta.url), 'utf8');
+const historyRowsSource = readFileSync(
+	new URL('../components/accounting/PortalAccountHistoryRows.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('canonical portal money contract', () => {
 	it('uses only tenant-account page, detail, entries, charges, and deposit reads', () => {
@@ -44,8 +48,8 @@ describe('canonical portal money contract', () => {
 		assert.match(pageSource, /page\.url\.searchParams\.get\('account'\)/);
 		assert.match(pageSource, /page\.url\.searchParams\.get\('entry'\)/);
 		assert.match(pageSource, /entry: focusedEntryId/);
-		assert.match(pageSource, /id=\{`portal-ledger-entry-\$\{entry\.tenantLedgerEntryId\}`\}/);
-		assert.match(pageSource, /data-focused=\{entry\.isFocused\}/);
+		assert.match(historyRowsSource, /id=\{`portal-ledger-entry-\$\{entry\.tenantLedgerEntryId\}`\}/);
+		assert.match(historyRowsSource, /data-focused=\{entry\.isFocused\}/);
 		assert.match(pageSource, /url\.searchParams\.delete\('entry'\)/);
 		assert.doesNotMatch(pageSource, /historyQuery\.data\?\.items\.filter/);
 		assert.doesNotMatch(pageSource, /historyQuery\.data\?\.items\.find/);

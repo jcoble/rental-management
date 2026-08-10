@@ -71,6 +71,9 @@ public sealed class AccountingApiContractFreezeTests
         typeof(TenantLedgerRow).GetProperty(nameof(TenantLedgerRow.Allocations))
             .Should().NotBeNull()
             .And.Subject!.PropertyType.Should().Be(typeof(IReadOnlyList<AllocationRef>));
+        typeof(AllocationRef).GetProperty(nameof(AllocationRef.AllocationId))
+            .Should().NotBeNull()
+            .And.Subject!.PropertyType.Should().Be(typeof(long));
         typeof(GeneralLedgerRow).GetProperty(nameof(GeneralLedgerRow.RunningBalance))
             .Should().NotBeNull()
             .And.Subject!.PropertyType.Should().Be(typeof(decimal?));

@@ -130,6 +130,16 @@ export interface PortalTenantAccountHistoryItem {
 	reversesEntryId?: number | null;
 	reversedByEntryId?: number | null;
 	isFocused: boolean;
+	allocations: PortalTenantAllocationRef[];
+}
+
+export interface PortalTenantAllocationRef {
+	allocationId: number;
+	targetSourceId: number;
+	targetPublicId: string;
+	targetDescription: string;
+	amount: number;
+	effectiveOn: string;
 }
 
 export interface PortalTenantAccountHistory {

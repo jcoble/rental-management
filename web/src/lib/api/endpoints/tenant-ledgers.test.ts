@@ -13,7 +13,7 @@ describe('tenant ledger API contract', () => {
 		assert.match(source, /openOnly: params\.openOnly/);
 		assert.match(source, /settledOnly: params\.settledOnly/);
 		assert.match(source, /export type TenantLedgerSort =/);
-		for (const sort of ['effectiveOn', '-effectiveOn', 'postedAtUtc', '-postedAtUtc']) {
+		for (const sort of ['effectiveOn', '-effectiveOn', 'oldestDueOn', 'postedAtUtc', '-postedAtUtc']) {
 			assert.match(source, new RegExp(`['"]${sort}['"]`));
 		}
 		assert.match(source, /`\/tenant-accounts\/\$\{tenantAccountId\}\/month-summary/);

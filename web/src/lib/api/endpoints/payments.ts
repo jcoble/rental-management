@@ -11,6 +11,7 @@ export interface RecordTenantReceiptRequest {
 	bankName?: string;
 	sourceStoredFileId?: number;
 	targetChargeEntryId?: number | null;
+	allocateOldestCharges?: boolean;
 }
 
 export interface PostTenantChargeRequest {

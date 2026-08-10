@@ -1004,6 +1004,8 @@ export interface PastDueLease {
 	propertyName?: string | null;
 	unitNumber?: string | null;
 	pastDueAmount: number;
+	/** Server-owned total receivable balance used to cap a partial receipt. */
+	totalOpenBalance: number;
 	overduePaymentCount: number;
 	/** Due date of the oldest past-due payment (drives the "N days late" label). */
 	oldestDueOn: string;
