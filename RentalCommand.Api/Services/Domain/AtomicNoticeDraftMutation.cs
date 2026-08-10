@@ -434,7 +434,7 @@ public sealed class AtomicNoticeDraftMutationHandler
 
     private T Read<T>(AtomicNoticeDraftMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Tenant notice mutation request payload is invalid.");
+        ?? throw new ArgumentException("The tenant notice update is invalid.");
 
     private void Validate(AtomicNoticeDraftMutationCommand command)
     {

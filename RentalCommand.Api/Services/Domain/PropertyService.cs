@@ -82,7 +82,7 @@ public class PropertyService : IPropertyService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped property mutations require the atomic persistence kernel.");
+        "Property changes must use the standard save process.");
 
     private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
         where TResponse : class =>

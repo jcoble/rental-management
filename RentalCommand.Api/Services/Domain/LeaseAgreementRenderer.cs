@@ -139,7 +139,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         if (string.IsNullOrWhiteSpace(source.SourceStoragePath))
         {
             throw new InvalidOperationException(
-                $"Legal-document source {documentSourceVersionId} has no immutable PDF bytes.");
+                "The lease PDF is missing.");
         }
 
         byte[] sourceBytes;
@@ -197,7 +197,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
                 || !LegalDocumentIssuanceBinding.IsSha256(source.SourceArtifactContentSha256))
             {
                 throw new InvalidOperationException(
-                    $"Imported legal-document source {source.DocumentSourceVersionId} has no complete immutable artifact identity.");
+                    "The imported lease file is incomplete.");
             }
 
             if (!LegalDocumentIssuanceBinding.Matches(
@@ -216,14 +216,14 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         if (!LegalDocumentIssuanceBinding.IsSha256(expectedHash))
         {
             throw new InvalidOperationException(
-                $"Legal-document source {source.DocumentSourceVersionId} has an invalid immutable content hash.");
+                "The imported lease file could not be validated.");
         }
 
         var actualHash = Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant();
         if (!LegalDocumentIssuanceBinding.Matches(actualHash, expectedHash))
         {
             throw new InvalidOperationException(
-                $"Legal-document source {source.DocumentSourceVersionId} bytes do not match its immutable content hash.");
+                "The imported lease file failed verification.");
         }
     }
 

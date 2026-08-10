@@ -48,7 +48,7 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var item = await _service.GetAsync(scope, id, ct);
-        return item == null ? NotFound(new { error = "Owner entity not found" }) : Ok(item);
+        return item == null ? NotFound(new { error = "Owner not found" }) : Ok(item);
     }
 
     [HttpPost]
@@ -60,9 +60,9 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _service.CreateAsync(scope, request, operationKey, ct);
-        if (created == null) return NotFound(new { error = "Owner entity not found" });
+        if (created == null) return NotFound(new { error = "Owner not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
@@ -77,9 +77,9 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
-        return updated == null ? NotFound(new { error = "Owner entity not found" }) : Ok(updated);
+        return updated == null ? NotFound(new { error = "Owner not found" }) : Ok(updated);
     }
 
     [HttpPost("{id:int}/portal-access/activate")]
@@ -96,7 +96,7 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         try
         {
@@ -136,7 +136,7 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         try
         {
@@ -166,8 +166,8 @@ public class OwnerEntityController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
-        return deleted ? NoContent() : NotFound(new { error = "Owner entity not found" });
+        return deleted ? NoContent() : NotFound(new { error = "Owner not found" });
     }
 }

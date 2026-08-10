@@ -198,12 +198,12 @@ public sealed class CsvImportService : ICsvImportService
                 if (Enum.TryParse<PropertyType>(typeRaw, true, out var propertyType))
                     request.PropertyType = propertyType;
                 else
-                    errors.Add($"type '{typeRaw}' is not a valid property type. Allowed: {string.Join(", ", Enum.GetNames<PropertyType>())}.");
+                    errors.Add($"type '{typeRaw}' is not a valid property type. Choose one of the listed property types.");
             }
             var structureRaw = NullIfEmpty(Cell("rentalStructure"));
             if (structureRaw is null)
             {
-                errors.Add("rentalStructure is required.");
+                errors.Add("Rental setup is required.");
             }
             else if (Enum.TryParse<RentalStructure>(structureRaw, true, out var rentalStructure))
             {
@@ -211,7 +211,7 @@ public sealed class CsvImportService : ICsvImportService
             }
             else
             {
-                errors.Add($"rentalStructure '{structureRaw}' is invalid. Allowed: {string.Join(", ", Enum.GetNames<RentalStructure>())}.");
+                errors.Add($"Rental setup '{structureRaw}' is invalid. Choose single-rental or multi-rental.");
             }
             var unitNumber = NullIfEmpty(Cell("unitNumber"));
             if (unitNumber is null)
@@ -713,7 +713,7 @@ public sealed class CsvImportService : ICsvImportService
             }
         }
 
-        errors.Add($"{column} '{raw}' is not valid. Allowed: {string.Join(", ", Enum.GetNames<TEnum>())}.");
+        errors.Add($"{column} '{raw}' is not valid. Choose one of the listed options.");
         return null;
     }
 
@@ -731,7 +731,7 @@ public sealed class CsvImportService : ICsvImportService
         "Payment" => PaymentColumns,
         "Expense" => ExpenseColumns,
         "Loan" => LoanColumns,
-        _ => throw new ArgumentException($"Unsupported import entity type '{entityType}'.", nameof(entityType)),
+        _ => throw new ArgumentException($"The import type '{entityType}' is not supported.", nameof(entityType)),
     };
 
     /// <summary>Normalizes a client-supplied entity type to its canonical name, or throws.</summary>
@@ -763,7 +763,7 @@ public sealed class CsvImportService : ICsvImportService
         }
 
         throw new ArgumentException(
-            $"Unsupported import entity type '{entityType}'. Supported: {string.Join(", ", ICsvImportService.SupportedEntityTypes)}.",
+            $"The import type '{entityType}' is not supported. Choose tenants, properties, units, payments, expenses, or loans.",
             nameof(entityType));
     }
 }

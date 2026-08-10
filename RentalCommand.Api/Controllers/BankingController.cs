@@ -69,7 +69,7 @@ public class BankingController : ManagementControllerBase
             || string.IsNullOrWhiteSpace(request.PublicToken)
             || string.IsNullOrWhiteSpace(request.AccountId))
         {
-            return BadRequest(new { error = "Plaid operation id, public token, and account id are required." });
+            return BadRequest(new { error = "A Plaid request key, public token, and account are required." });
         }
 
         return Ok(await _service.ExchangePlaidPublicTokenAsync(GetWorkspaceReadScope(), request, ct));

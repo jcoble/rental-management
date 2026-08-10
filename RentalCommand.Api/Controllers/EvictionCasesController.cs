@@ -51,7 +51,7 @@ public class EvictionCasesController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _service.CreateAuthorizedAsync(
             GetWorkspaceReadScope(), request, operationKey, ct);
         return created is null
@@ -67,7 +67,7 @@ public class EvictionCasesController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAuthorizedAsync(
             GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null ? NotFound(new { error = "Eviction case not found" }) : Ok(updated);
@@ -81,7 +81,7 @@ public class EvictionCasesController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.AddEventAuthorizedAsync(
             GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null
@@ -96,7 +96,7 @@ public class EvictionCasesController : ManagementControllerBase
         int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Eviction case not found" });
     }

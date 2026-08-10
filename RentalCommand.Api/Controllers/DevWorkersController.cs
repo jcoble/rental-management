@@ -81,7 +81,7 @@ public sealed class DevWorkersController : AuthenticatedPortfolioControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var deliveryKey))
         {
-            return BadRequest(new { error = "Idempotency-Key header is required and must be 128 characters or fewer." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         if (!TryGetActiveAccessContext(out var access))

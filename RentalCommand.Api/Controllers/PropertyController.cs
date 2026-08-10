@@ -63,11 +63,11 @@ public class PropertyController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
 
         var result = await _service.SetupAsync(scope, request, operationKey, ct);
         if (result is null)
-            return NotFound(new { error = "Property or OwnerEntity not found in this workspace" });
+            return NotFound(new { error = "Property or owner not found in this workspace" });
         return result.Updated
             ? Ok(result)
             : CreatedAtAction(nameof(Get), new { id = result.Property.Id }, result);
@@ -84,7 +84,7 @@ public class PropertyController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Property not found" }) : Ok(updated);
     }
@@ -99,7 +99,7 @@ public class PropertyController : ManagementControllerBase
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property not found" });
     }

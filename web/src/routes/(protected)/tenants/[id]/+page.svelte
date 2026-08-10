@@ -163,7 +163,7 @@
 		{
 			key: 'agreementNumber',
 			title: 'Agreement',
-			accessor: (relationship) => relationship.agreementNumber ?? 'No governing agreement',
+			accessor: (relationship) => relationship.agreementNumber ?? 'No lease in effect',
 			sortable: true,
 			mobileRole: 'title',
 		},

@@ -203,7 +203,7 @@ public sealed class ScanUploadService : IScanUploadService
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         var normalized = value.Trim();
         if (normalized.Length > 160)
-            throw new ArgumentOutOfRangeException(nameof(value), "Scan clientOperationId cannot exceed 160 characters.");
+            throw new ArgumentOutOfRangeException(nameof(value), "A request key cannot exceed 160 characters.");
         return normalized;
     }
 

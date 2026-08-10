@@ -59,7 +59,7 @@ public class VendorController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         VendorResponse? created;
         try
         {
@@ -84,7 +84,7 @@ public class VendorController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Vendor not found" }) : Ok(updated);
     }
@@ -99,7 +99,7 @@ public class VendorController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Vendor not found" });
     }
@@ -116,7 +116,7 @@ public class VendorController : ManagementControllerBase
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var created = await _dispatch.RateAsync(scope, id, request, idempotencyKey, ct);
         return created == null
             ? NotFound(new { error = "Vendor not found" })

@@ -36,7 +36,7 @@
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { money } from '$lib/components/unit/money';
-	import { leaseAgreementChangeTypeLabel } from '$lib/leases/lease-list-labels';
+	import { leaseAgreementChangeTypeLabel, leaseAgreementStatusLabel } from '$lib/leases/lease-list-labels';
 	import { outsideEsignLabel } from '$lib/leases/lease-signing-labels';
 	import type { LeaseManagementParty } from '$lib/types';
 	import type { ReturnPossessionActiveTenantUserAccess } from '$lib/api/endpoints/lease-managements';
@@ -293,8 +293,8 @@
 
 		{#if summary.hasReconciliationException}
 			<div class="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm">
-				<p class="font-medium">Lease and possession need reconciliation</p>
-				<p class="mt-1 text-muted-foreground">Review the governing agreement and possession dates before taking another lifecycle action.</p>
+				<p class="font-medium">Lease and move-in details don't match</p>
+				<p class="mt-1 text-muted-foreground">Review the lease dates and the move-in/move-out dates before making another change.</p>
 			</div>
 		{/if}
 
@@ -313,7 +313,7 @@
 							</div>
 							<div class="space-y-1">
 								<dt class="text-xs font-medium text-muted-foreground">Agreement status</dt>
-								<dd class="font-medium">{summary.agreementStatus ?? 'No governing agreement'}</dd>
+								<dd class="font-medium">{summary.agreementStatus ? leaseAgreementStatusLabel(summary.agreementStatus) : 'No lease in effect'}</dd>
 							</div>
 							<div class="space-y-1">
 								<dt class="text-xs font-medium text-muted-foreground">Term</dt>
@@ -420,7 +420,7 @@
 		<Card>
 			<CardHeader>
 				<div class="flex flex-wrap items-start justify-between gap-3">
-					<div><CardTitle class="flex items-center gap-2"><Users class="h-5 w-5" /> Household and responsibility</CardTitle><p class="mt-1 text-sm text-muted-foreground">Membership and login access can change over time. Signed agreement PDFs remain immutable.</p></div>
+					<div><CardTitle class="flex items-center gap-2"><Users class="h-5 w-5" /> Household and responsibility</CardTitle><p class="mt-1 text-sm text-muted-foreground">Membership and login access can change over time. Signed agreement PDFs never change.</p></div>
 					{#if canManageHousehold}<Button size="sm" onclick={() => (householdAction = { mode: 'add' })}>Add person</Button>{/if}
 				</div>
 			</CardHeader>

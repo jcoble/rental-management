@@ -1,6 +1,7 @@
 const STATUS_LABELS = new Map<string, string>([
 	['InProgress', 'In progress'],
 	['NeedsFollowUp', 'Needs follow-up'],
+	['NoGoverningAgreement', 'No lease in effect'],
 	['NoShow', 'No show'],
 	['NoticeGiven', 'Notice given'],
 	['OnHold', 'On hold'],

@@ -787,7 +787,7 @@ public sealed class AtomicMoneyMutationHandler
         }
         else
         {
-            throw new ArgumentException("Unsupported capital asset mutation operation.");
+            throw new ArgumentException("That capital asset action is not supported.");
         }
 
         await attempt.FlushBusinessAsync(ct);
@@ -1107,7 +1107,7 @@ public sealed class AtomicMoneyMutationHandler
         }
         else
         {
-            throw new ArgumentException("Unsupported owner contribution mutation operation.");
+            throw new ArgumentException("That owner contribution action is not supported.");
         }
 
         await attempt.FlushBusinessAsync(ct);
@@ -1611,7 +1611,7 @@ public sealed class AtomicMoneyMutationHandler
 
     private T Read<T>(AtomicMoneyMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Money mutation request payload is invalid.");
+        ?? throw new ArgumentException("The financial update is invalid.");
 
     private void Validate(AtomicMoneyMutationCommand command)
     {
@@ -1622,11 +1622,11 @@ public sealed class AtomicMoneyMutationHandler
             (command.Operation != AtomicMoneyOperation.Create && command.EntityId <= 0) ||
             command.BusinessNowUtc == default)
             throw new ArgumentException(
-                "Portfolio, actor, access revision, capability, operation, payload, and business clock are required.");
+                "Workspace, user, access details, action, and time are required.");
 
         if (command.BusinessNowUtc.Kind != DateTimeKind.Utc)
         {
-            throw new ArgumentException("Money mutation business clock must be UTC.");
+            throw new ArgumentException("Money action time must use UTC.");
         }
     }
 

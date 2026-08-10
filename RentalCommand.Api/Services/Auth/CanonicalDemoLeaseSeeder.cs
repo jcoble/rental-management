@@ -90,7 +90,7 @@ internal static class CanonicalDemoLeaseSeeder
                 PossessionGivenAtUtc = start,
                 PossessionAgreementExceptionReason = isCurrent
                     ? isIntentionalPossessionException
-                        ? "Demo imported possession is intentionally retained without a governing Agreement."
+                        ? "Demo imported move-in details are intentionally retained without an active lease."
                         : "Demo legal-document finalization is pending."
                     : null,
                 PossessionAgreementExceptionAuthorizedByUserId = isCurrent ? actorUserId : null,
@@ -164,7 +164,7 @@ internal static class CanonicalDemoLeaseSeeder
                 Role = LeaseManagementPartyRole.PrimaryTenant,
                 EffectiveFrom = effectiveOn,
                 EffectiveThrough = isCurrent ? null : DateOnly.FromDateTime(end),
-                ChangeReason = "Demo household created with its canonical lease relationship.",
+                ChangeReason = "Demo household created with its current lease relationship.",
                 CreatedAtUtc = createdAt,
                 CreatedByUserId = actorUserId,
             };

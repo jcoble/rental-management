@@ -345,7 +345,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
     }
 
     private static string MutationIdentity(int portfolioId, string? clientOperationId) =>
-        $"{portfolioId}:{Required(clientOperationId, nameof(clientOperationId), 160)}";
+        $"{portfolioId}:{Required(clientOperationId, "Request key", 160)}";
 
     private static string ApiKeyIntentDigest(string provider, string modelId, string apiKey)
     {

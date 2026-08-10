@@ -138,7 +138,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var normalizedKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!TryGetActiveAccessContext(out var active))
             return Forbid();
 

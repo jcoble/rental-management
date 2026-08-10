@@ -70,7 +70,7 @@ public class ImportController : ManagementControllerBase
             {
                 var normalizedKey = idempotencyKey?.Trim();
                 if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 128)
-                    return BadRequest(new { error = "A valid Idempotency-Key is required for live imports (maximum 128 characters)." });
+                    return BadRequest(new { error = "A request key is required for live imports and cannot exceed 128 characters." });
                 if (!TryGetActiveAccessContext(out var active))
                     return Forbid();
 

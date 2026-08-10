@@ -350,7 +350,7 @@
 								<a href={recordHref('workOrder', order)} class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
 									<div class="flex items-center justify-between gap-3">
 										<p class="truncate text-sm font-medium">{order.title}</p>
-										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{order.priority}</span>
+										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{formatStatusLabel(order.priority)}</span>
 									</div>
 									<p class="mt-1 truncate text-xs text-muted-foreground">{formatStatusLabel(order.status)} · {new Date(order.requestedAt).toLocaleDateString()}</p>
 								</a>
@@ -432,7 +432,7 @@
 						<div class="space-y-2 text-sm">
 							{#each Object.entries(data.leasing.byStatus) as [status, count]}
 								<div class="flex items-center justify-between rounded border border-border bg-background px-2 py-1">
-									<span>{status}</span>
+									<span>{formatStatusLabel(status)}</span>
 									<span class="text-muted-foreground">{count}</span>
 								</div>
 							{/each}

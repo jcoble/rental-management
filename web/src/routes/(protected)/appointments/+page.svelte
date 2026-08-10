@@ -9,6 +9,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { isOptionalEmailValid, appointmentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -475,11 +476,11 @@
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="w-full max-w-[160px]" data-testid="appointment-calendar-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
+						{statusFilter ? formatStatusLabel(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 				<!-- Legend: Type → color -->
@@ -541,11 +542,11 @@
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
+						{statusFilter ? formatStatusLabel(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 			{/snippet}

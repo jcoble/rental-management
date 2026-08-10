@@ -86,7 +86,7 @@ public sealed class AtomicCoreCsvImportHandler
                     row.RelatedId.Value,
                     AuditLogOperation.Created,
                     UserId: command.ActorUserId,
-                    ChangeReason: $"Canonical unit created from Property CSV row {row.RowNumber}"), now);
+                    ChangeReason: $"Unit created from Property CSV row {row.RowNumber}"), now);
             }
         }
 

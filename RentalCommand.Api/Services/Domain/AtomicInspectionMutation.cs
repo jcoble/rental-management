@@ -1068,7 +1068,7 @@ public sealed class AtomicInspectionMutationHandler
 
     private T Read<T>(AtomicInspectionMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)
-        ?? throw new ArgumentException("Inspection mutation request payload is invalid.");
+        ?? throw new ArgumentException("The inspection update is invalid.");
 
     private void Validate(AtomicInspectionMutationCommand command)
     {
@@ -1092,7 +1092,7 @@ public sealed class AtomicInspectionMutationHandler
     private DateTime NormalizeBusinessNow(DateTime value)
     {
         if (value == default)
-            throw new ArgumentException("Inspection mutation requires a business clock time.");
+            throw new ArgumentException("Inspection time is required.");
         return Utc(value);
     }
 

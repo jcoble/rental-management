@@ -58,7 +58,7 @@ public class NoticeDraftsController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
         {
-            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         return Ok(await _service.GenerateAsync(GetWorkspaceReadScope(), request, operationKey, ct));
@@ -76,7 +76,7 @@ public class NoticeDraftsController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
         {
-            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         var updated = await _service.UpdateAsync(
@@ -97,7 +97,7 @@ public class NoticeDraftsController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
         {
-            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
         if (!TryMapChannels(request.Channels, out var channels))
         {
@@ -137,7 +137,7 @@ public class NoticeDraftsController : ManagementControllerBase
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
         {
-            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         }
 
         var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, operationKey, ct);

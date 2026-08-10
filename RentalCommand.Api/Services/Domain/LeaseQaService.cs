@@ -78,7 +78,7 @@ public class LeaseQaService : ILeaseQaService
     {
         var sources = new List<string>
         {
-            $"Agreement number: {agreement.AgreementNumber}",
+            $"Lease number: {agreement.AgreementNumber}",
             agreement.TermEndOn.HasValue
                 ? $"Dates: {agreement.TermStartOn:MMMM d, yyyy} through {agreement.TermEndOn:MMMM d, yyyy}"
                 : $"Dates: month-to-month beginning {agreement.TermStartOn:MMMM d, yyyy}",
@@ -86,11 +86,11 @@ public class LeaseQaService : ILeaseQaService
             $"Security deposit: {agreement.SecurityDepositObligation:C}",
             $"Late fee: {agreement.LateFeeAmount:C}",
             $"Rent due day: {agreement.RentDueDay}",
-            $"Executed document: {agreement.ExecutedFileName} (stored file {agreement.ExecutedStoredFileId})",
+            $"Signed document: {agreement.ExecutedFileName} (stored file {agreement.ExecutedStoredFileId})",
         };
         if (!string.IsNullOrWhiteSpace(agreement.TermsPayload) && agreement.TermsPayload != "{}")
         {
-            sources.Add($"Agreement terms: {agreement.TermsPayload}");
+            sources.Add($"Lease terms: {agreement.TermsPayload}");
         }
 
         var fallback = BuildFallbackAnswer(question, sources);

@@ -8,6 +8,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { capitalizeExpenseSchema, expenseDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { formatDateOnly } from '$lib/utils/date';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -436,7 +437,7 @@
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
-			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatExpenseMoney(expense.amount)} · ${expense.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatExpenseMoney(expense.amount)} · ${formatStatusLabel(expense.status)}` : ''}</p>
 		</div>
 		{#if expense}
 			<div class="flex flex-wrap justify-end gap-2">
@@ -494,7 +495,7 @@
 			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
 				<InlineField label="Amount" bind:value={form.amount} display={formatExpenseMoney(expense.amount)} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
-				<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
+				<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(expense.status)} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
 				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: formatDateOnly(expense.incurredAt), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? formatDateOnly(expense.dueDate) : '', testid: 'expense-detail-due-date' })}
 				{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? formatDateOnly(expense.paidAt) : '', testid: 'expense-detail-paid-date' })}

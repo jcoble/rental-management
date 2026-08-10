@@ -219,7 +219,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
     private static ScanDraftReceiptSnapshot RequireApplied(ScanDraftMutationResult result) =>
         result.Outcome == ScanDraftMutationOutcome.Applied && result.Snapshot is not null
             ? result.Snapshot
-            : throw new InvalidOperationException("The voice draft mutation did not return a committed snapshot.");
+            : throw new InvalidOperationException("The voice draft did not return the saved details.");
 
     private static ScanDraft ToEntity(ScanDraftReceiptSnapshot snapshot) => new()
     {

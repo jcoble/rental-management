@@ -19,6 +19,7 @@
 	import { capabilityKeysForExperience } from '$lib/types/user';
 	import { technician } from '$lib/api/endpoints/technician';
 	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	const PAGE_SIZE = 20;
 
@@ -118,7 +119,7 @@
 			title: 'Type',
 			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (d) => d.targetEntityType || 'Document',
+			accessor: (d) => d.targetEntityType ? formatStatusLabel(d.targetEntityType) : 'Document',
 		},
 		{
 			key: 'createdAt',

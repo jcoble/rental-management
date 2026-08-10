@@ -29,7 +29,7 @@ public class VoiceController : ManagementControllerBase
         if ((audio is null || audio.Length == 0) && string.IsNullOrWhiteSpace(transcript))
             return BadRequest(new { error = "Provide an audio file or transcript." });
         if (!ValidOperationKey(idempotencyKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
 
         byte[] bytes = [];
         string? contentType = null;
@@ -86,7 +86,7 @@ public class VoiceController : ManagementControllerBase
         if ((audio is null || audio.Length == 0) && string.IsNullOrWhiteSpace(transcript))
             return BadRequest(new { error = "Provide an audio file or transcript." });
         if (!ValidOperationKey(idempotencyKey))
-            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 200 characters." });
 
         byte[] bytes = [];
         string? contentType = null;

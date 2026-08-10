@@ -372,7 +372,7 @@
 						{#each openWorkOrders as order}
 							<div class="rounded-md border border-border px-3 py-2">
 								<p class="text-sm font-medium">{order.title}</p>
-								<p class="text-xs text-muted-foreground">{order.status} · {order.priority}</p>
+								<p class="text-xs text-muted-foreground">{formatStatusLabel(order.status)} · {formatStatusLabel(order.priority)}</p>
 							</div>
 						{/each}
 					{/if}
@@ -423,7 +423,7 @@
 					<div class="grid gap-3 sm:grid-cols-2">
 						<Input bind:value={workOrderForm.category} placeholder="Category" />
 						<Select.Root type="single" bind:value={workOrderForm.priority}>
-							<Select.Trigger class="w-full">{workOrderForm.priority}</Select.Trigger>
+							<Select.Trigger class="w-full">{formatStatusLabel(workOrderForm.priority)}</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="Low" label="Low">Low</Select.Item>
 								<Select.Item value="Normal" label="Normal">Normal</Select.Item>

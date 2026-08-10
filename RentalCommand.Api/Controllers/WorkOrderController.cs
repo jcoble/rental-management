@@ -91,7 +91,7 @@ public class WorkOrderController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
@@ -114,7 +114,7 @@ public class WorkOrderController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
@@ -136,7 +136,7 @@ public class WorkOrderController : ManagementControllerBase
         CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var updated = await _service.CommentAuthorizedAsync(
             GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
@@ -158,7 +158,7 @@ public class WorkOrderController : ManagementControllerBase
         int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
-            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+            return BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Work order not found" });
     }
@@ -232,7 +232,7 @@ public class WorkOrderController : ManagementControllerBase
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new
             {
-                error = "Idempotency-Key is required and must be at most 128 characters.",
+                error = "A request key is required and cannot exceed 128 characters.",
             });
 
         try

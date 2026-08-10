@@ -148,7 +148,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
 
         var user = await _users.FindByIdAsync(outcome.Value.UserId.ToString());
         return user is null
-            ? Failure("Account bootstrap did not return a persisted user")
+            ? Failure("Account setup did not return a user record.")
             : new CanonicalAccountBootstrapResult(
                 user,
                 outcome.Value.PortfolioId,

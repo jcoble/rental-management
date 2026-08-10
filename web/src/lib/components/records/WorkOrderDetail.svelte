@@ -803,7 +803,7 @@
 			{:else}
 				<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} editing={false} error={formErrors.propertyId} testid="work-order-detail-property-field" />
 			{/if}
-			<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
+			<InlineField label="Priority" bind:value={form.priority} display={formatStatusLabel(wo.priority)} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
 			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
 		</DetailCard>
 

@@ -253,7 +253,7 @@
 		tone="rose"
 		eyebrow="Inbox"
 		title="Tenant notices"
-		description="Lease lifecycle drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send."
+		description="Lease reminder drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send."
 		actions={headerActions}
 		data-testid="notices-header"
 	/>

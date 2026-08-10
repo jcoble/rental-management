@@ -172,7 +172,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             PortfolioId, sourceVersionId, renderData, () => admittedBytes);
 
         await action.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*bytes do not match its immutable content hash*");
+            .WithMessage("The imported lease file failed verification.");
     }
 
     [Fact]

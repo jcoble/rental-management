@@ -7,6 +7,7 @@
 	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { settingsSchema, parseForm } from '$lib/schemas';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -440,7 +441,7 @@
 								<label for="settings-status" class="mb-1 block text-xs text-muted-foreground">Status</label>
 								<Select.Root type="single" bind:value={form.status}>
 									<Select.Trigger class="w-full" id="settings-status">
-										{form.status || 'Select status'}
+										{form.status ? formatStatusLabel(form.status) : 'Select status'}
 									</Select.Trigger>
 									<Select.Content>
 										<Select.Item value="Onboarding" label="Onboarding">Onboarding</Select.Item>

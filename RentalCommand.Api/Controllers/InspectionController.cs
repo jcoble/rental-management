@@ -302,7 +302,7 @@ public class InspectionController : ManagementControllerBase
             return true;
         }
 
-        error = BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        error = BadRequest(new { error = "A request key is required and cannot exceed 128 characters." });
         return false;
     }
 }

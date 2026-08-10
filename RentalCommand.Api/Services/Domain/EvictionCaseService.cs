@@ -138,7 +138,7 @@ public class EvictionCaseService : IEvictionCaseService
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Atomic eviction mutations are not configured.");
+        "Eviction case changes are not available right now.");
 
     private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
         scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);

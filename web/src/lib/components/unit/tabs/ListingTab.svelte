@@ -9,6 +9,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { ArrowDown, ArrowUp, Camera, Check, Clipboard, Eye, ExternalLink, FileDown, Link2, Pencil, RefreshCw, Save, Trash2, Upload, WifiOff } from '@lucide/svelte';
 
 	type Form = {
@@ -267,10 +268,10 @@
 
 				<DetailCard title="Zillow Connected" icon={WifiOff} accent={connected?.channelAvailable ? 'primary' : 'muted'}>
 					<div class="space-y-3">
-						<p class="text-sm text-muted-foreground">The same canonical listing is prepared, published, updated, or removed through an approved provider adapter. Guided mode remains available independently.</p>
+						<p class="text-sm text-muted-foreground">The same listing is prepared, published, updated, or removed through an approved provider connection. Guided mode remains available on its own.</p>
 						<div class="rounded-md bg-muted p-3 text-xs">
 							<strong>Connection:</strong> {connected?.channelState ?? 'Unavailable'}<br />
-							<strong>Publication:</strong> {connected?.status ?? 'Draft'}<br />
+							<strong>Publication:</strong> {connected?.status ? formatStatusLabel(connected.status) : 'Draft'}<br />
 							<strong>Last delivery:</strong> {connected?.lastDeliveryStatus ?? 'None'}
 							{#if connected?.lastDeliveryError}<br /><span class="text-destructive">{connected.lastDeliveryError}</span>{/if}
 						</div>
