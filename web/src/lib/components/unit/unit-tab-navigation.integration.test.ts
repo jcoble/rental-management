@@ -114,6 +114,25 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(synchronizeUnitTabState(url, coldState), null);
 	});
 
+	it('canonicalizes an inspection record key to the Maintenance inspections view', () => {
+		const url = new URL('https://rental.local/units/1?tab=maintenance&inspection=42');
+		const coldState = synchronizeUnitTabState(url, undefined);
+
+		assert.deepEqual(resolveUnitPageDestination(url, undefined), {
+			tab: 'maintenance',
+			view: 'inspections',
+		});
+		assert.deepEqual(coldState, {
+			unitPathname: '/units/1',
+			unitTab: 'maintenance',
+			unitView: 'inspections',
+			unitViewByPath: { '/units/1': { maintenance: 'inspections' } },
+			unitPaymentId: null,
+			unitExpenseId: null,
+		});
+		assert.equal(synchronizeUnitTabState(url, coldState), null);
+	});
+
 	it('converges unknown nested views once for every default-bearing tab and Summary', () => {
 		const cases: ReadonlyArray<{ url: string; destination: UnitDestination }> = [
 			{ url: 'https://rental.local/units/1?tab=leasing&view=unknown', destination: { tab: 'leasing', view: 'listing' } },
@@ -156,6 +175,43 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(container.url.searchParams.get('leaseManagement'), null);
 		assert.equal(container.state.unitTab, 'money');
 		assert.deepEqual(container.operations, ['navigate']);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('lets the Money nested view click win after deep-state arrival and converge once', () => {
+		const deepUrl = new URL('https://rental.local/units/19?tab=tenant-lease&view=agreements&leaseManagement=17');
+		const initialState = synchronizeUnitTabState(deepUrl, undefined);
+		assert.ok(initialState);
+		const container = createContainer(deepUrl.href, initialState);
+		const setTab = connect(container);
+
+		// Exact production sequence: arrive on a lease record, leave via Money, then
+		// select Property expenses from the already-mounted Money surface.
+		setTab('money');
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=money&view=tenant-account');
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+
+		setTab('money', 'operating-costs');
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/19?tab=money&view=operating-costs');
+		assert.equal(container.state.unitTab, 'money');
+		assert.equal(container.state.unitView, 'operating-costs');
+		assert.deepEqual(container.operations, ['navigate', 'navigate']);
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+	});
+
+	it('keeps fresh-load Money view switching working in both directions', () => {
+		const url = new URL('https://rental.local/units/1?tab=money');
+		const initialState = synchronizeUnitTabState(url, undefined);
+		assert.ok(initialState);
+		const container = createContainer(url.href, initialState);
+		const setTab = connect(container);
+
+		setTab('money', 'operating-costs');
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/1?tab=money&view=operating-costs');
+		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
+
+		setTab('money', 'tenant-account');
+		assert.equal(`${container.url.pathname}${container.url.search}`, '/units/1?tab=money&view=tenant-account');
 		assert.equal(synchronizeUnitTabState(container.url, container.state), null);
 	});
 
@@ -277,7 +333,7 @@ describe('unit tab page navigation integration', () => {
 
 	it('drops foreign record keys on primary-tab changes and clears the target on list re-entry', () => {
 		const container = createContainer(
-			'https://rental.local/units/10?tab=leasing&view=applications&wo=8&app=7&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15',
+			'https://rental.local/units/10?tab=leasing&view=applications&wo=8&app=7&payment=9&expense=10&tenantAccount=11&leaseManagement=12&agreement=13&ledger=14&action=15&inspection=16',
 			{ unitPathname: '/units/10', unitTab: 'leasing', unitView: 'applications' },
 		);
 		const setTab = connect(container);
@@ -286,6 +342,7 @@ describe('unit tab page navigation integration', () => {
 		assert.equal(container.url.searchParams.get('tab'), 'maintenance');
 		assert.equal(container.url.searchParams.get('view'), 'work-orders');
 		assert.equal(container.url.searchParams.get('wo'), '8');
+		assert.equal(container.url.searchParams.get('inspection'), '16', 'Maintenance-owned inspection survives the tab change');
 		for (const param of ['app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
 			assert.equal(container.url.searchParams.get(param), null, `foreign ${param} survived the tab change`);
 		}
@@ -294,7 +351,7 @@ describe('unit tab page navigation integration', () => {
 
 		assert.equal(container.url.searchParams.get('tab'), 'leasing');
 		assert.equal(container.url.searchParams.get('view'), 'applications');
-		for (const param of ['wo', 'app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action']) {
+		for (const param of ['wo', 'app', 'payment', 'expense', 'tenantAccount', 'leaseManagement', 'agreement', 'ledger', 'action', 'inspection']) {
 			assert.equal(container.url.searchParams.get(param), null, `record ${param} survived list re-entry`);
 		}
 	});
