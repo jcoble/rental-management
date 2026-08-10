@@ -146,10 +146,10 @@ public class CreateAppointmentRequest : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (ScheduledEnd.HasValue && ScheduledEnd.Value < ScheduledStart)
+        if (ScheduledEnd.HasValue && ScheduledEnd.Value <= ScheduledStart)
         {
             yield return new ValidationResult(
-                "End time must be at or after start time.",
+                "The end time must be after the start time",
                 [nameof(ScheduledEnd)]);
         }
     }
@@ -202,10 +202,10 @@ public class UpdateAppointmentRequest : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (ScheduledStart.HasValue && ScheduledEnd.HasValue && ScheduledEnd.Value < ScheduledStart.Value)
+        if (ScheduledStart.HasValue && ScheduledEnd.HasValue && ScheduledEnd.Value <= ScheduledStart.Value)
         {
             yield return new ValidationResult(
-                "End time must be at or after start time.",
+                "The end time must be after the start time",
                 [nameof(ScheduledEnd)]);
         }
     }

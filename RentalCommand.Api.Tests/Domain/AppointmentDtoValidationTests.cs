@@ -26,11 +26,11 @@ public sealed class AppointmentDtoValidationTests
         valid.Should().BeFalse();
         results.Should().Contain(result =>
             result.MemberNames.Contains(nameof(CreateAppointmentRequest.ScheduledEnd)) &&
-            result.ErrorMessage!.Contains("at or after", StringComparison.OrdinalIgnoreCase));
+            result.ErrorMessage == "The end time must be after the start time");
     }
 
     [Fact]
-    public void S26_POT_1_CreateAppointmentAllowsAnEndEqualToTheStart()
+    public void S26_POT_1_CreateAppointmentRejectsAnEndEqualToTheStart()
     {
         var request = new CreateAppointmentRequest
         {
@@ -46,6 +46,31 @@ public sealed class AppointmentDtoValidationTests
             results,
             validateAllProperties: true);
 
-        valid.Should().BeTrue();
+        valid.Should().BeFalse();
+        results.Should().ContainSingle(result =>
+            result.MemberNames.Contains(nameof(CreateAppointmentRequest.ScheduledEnd)) &&
+            result.ErrorMessage == "The end time must be after the start time");
+    }
+
+    [Fact]
+    public void S26_POT_1_UpdateAppointmentRejectsAnEndEqualToTheStart()
+    {
+        var request = new UpdateAppointmentRequest
+        {
+            ScheduledStart = new DateTime(2027, 1, 1, 9, 0, 0),
+            ScheduledEnd = new DateTime(2027, 1, 1, 9, 0, 0),
+        };
+
+        var results = new List<ValidationResult>();
+        var valid = Validator.TryValidateObject(
+            request,
+            new ValidationContext(request),
+            results,
+            validateAllProperties: true);
+
+        valid.Should().BeFalse();
+        results.Should().ContainSingle(result =>
+            result.MemberNames.Contains(nameof(UpdateAppointmentRequest.ScheduledEnd)) &&
+            result.ErrorMessage == "The end time must be after the start time");
     }
 }

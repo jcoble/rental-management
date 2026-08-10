@@ -483,11 +483,11 @@ export const appointmentSchema = z.object({
 	if (value.scheduledEnd == null) return;
 	const start = Date.parse(value.scheduledStart);
 	const end = Date.parse(value.scheduledEnd);
-	if (Number.isFinite(start) && Number.isFinite(end) && end < start) {
+	if (Number.isFinite(start) && Number.isFinite(end) && end <= start) {
 		context.addIssue({
 			code: 'custom',
 			path: ['scheduledEnd'],
-			message: 'End time must be at or after start time'
+			message: 'The end time must be after the start time'
 		});
 	}
 });
