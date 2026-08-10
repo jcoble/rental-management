@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Authorization;
@@ -35,10 +37,10 @@ public interface IAccountingLedgerReadModelService
         WorkspaceReadScope scope, MoneyPositionQuery query, CancellationToken ct = default);
 
     Task<AccountingPage<TenantLedgerRow>?> GetTenantLedgerAsync(
-        int portfolioId, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default);
 
     Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(
-        int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default);
 
     Task<TenantLedgerPeriodSummary?> GetTenantLedgerPeriodSummaryAsync(
         int portfolioId, int tenantAccountId, int months, CancellationToken ct = default);
@@ -53,6 +55,41 @@ public interface IAccountingLedgerReadModelService
 /// </summary>
 public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadModelService
 {
+    private sealed class TenantLedgerMonthSqlRow
+    {
+        public int Year { get; init; }
+        public int Month { get; init; }
+        public string Currency { get; init; } = string.Empty;
+        public decimal OpeningBalance { get; init; }
+        public decimal ChargeAmount { get; init; }
+        public decimal PaymentAmount { get; init; }
+        public decimal CreditAmount { get; init; }
+        public decimal ClosingBalance { get; init; }
+        public bool NeedsReview { get; init; }
+        public string RowsJson { get; init; } = "[]";
+    }
+
+    private static readonly JsonSerializerOptions LedgerJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
+    private static readonly TenantLedgerEntryType[] ChargeEntryTypes =
+    [
+        TenantLedgerEntryType.RentCharge,
+        TenantLedgerEntryType.AddendumCharge,
+        TenantLedgerEntryType.LateFeeCharge,
+        TenantLedgerEntryType.DepositCharge,
+        TenantLedgerEntryType.ManualCharge,
+    ];
+
+    private static readonly TenantLedgerEntryType[] TargetedCreditEntryTypes =
+    [
+        TenantLedgerEntryType.RentCharge,
+        TenantLedgerEntryType.AddendumCharge,
+        TenantLedgerEntryType.LateFeeCharge,
+        TenantLedgerEntryType.DepositCharge,
+        TenantLedgerEntryType.ManualCharge,
+    ];
     private readonly RentalCommandDbContext _db;
 
     public AccountingLedgerReadModelService(RentalCommandDbContext db) => _db = db;
@@ -243,6 +280,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 AccountCode = line.LedgerAccount!.Code,
                 AccountName = line.LedgerAccount.Name,
                 NormalBalance = line.LedgerAccount.NormalBalance,
+                AccountType = line.LedgerAccount.AccountType,
+                SystemKey = line.LedgerAccount.SystemKey,
                 DebitAmount = line.DebitAmount,
                 CreditAmount = line.CreditAmount,
                 Memo = line.Memo,
@@ -318,6 +357,7 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 PostedAtUtc = entry.PostedAtUtc,
                 SourceType = entry.SourceType,
                 Description = entry.Description,
+                Currency = entry.Currency,
                 TotalDebits = entry.Lines.Sum(line => line.DebitAmount),
                 TotalCredits = entry.Lines.Sum(line => line.CreditAmount),
                 IsReversal = entry.ReversesJournalEntryId != null,
@@ -333,6 +373,8 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                         AccountCode = line.LedgerAccount.Code,
                         AccountName = line.LedgerAccount.Name,
                         NormalBalance = line.LedgerAccount.NormalBalance,
+                        AccountType = line.LedgerAccount.AccountType,
+                        SystemKey = line.LedgerAccount.SystemKey,
                         DebitAmount = line.DebitAmount,
                         CreditAmount = line.CreditAmount,
                         Memo = line.Memo,
@@ -626,11 +668,30 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     public async Task<AccountingPage<TenantLedgerRow>?> GetTenantLedgerAsync(
-        int portfolioId, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, int tenantAccountId, TenantLedgerQuery query, CancellationToken ct = default)
     {
-        var entries = _db.TenantLedgerEntries
-            .AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId && entry.TenantAccountId == tenantAccountId);
+        var now = DateTime.UtcNow;
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyBalancesRead, now);
+        var entries =
+            from account in _db.TenantAccounts.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, LeaseManagementId = account.LeaseManagementId }
+                equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join entry in _db.TenantLedgerEntries.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { entry.PortfolioId, entry.TenantAccountId }
+            where account.PortfolioId == scope.PortfolioId
+                && account.Id == tenantAccountId
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
+            select entry;
+        return await GetTenantLedgerPageAsync(entries, scope.PortfolioId, tenantAccountId, query, ct);
+    }
+
+    private async Task<AccountingPage<TenantLedgerRow>> GetTenantLedgerPageAsync(
+        IQueryable<TenantLedgerEntry> entries, int portfolioId, int tenantAccountId,
+        TenantLedgerQuery query, CancellationToken ct)
+    {
         if (query.EntryType is TenantLedgerEntryType entryType)
             entries = entries.Where(entry => entry.EntryType == entryType);
         if (query.EffectiveFrom is DateOnly effectiveFrom)
@@ -640,11 +701,13 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
 
         if (query.OpenOnly is true)
             entries = entries.Where(entry => entry.Direction == TenantLedgerDirection.Debit
+                && ChargeEntryTypes.Contains(entry.EntryType)
                 && entry.Amount - _db.TenantLedgerAllocations
                     .Where(allocation => allocation.DebitEntryId == entry.Id)
                     .Sum(allocation => allocation.Amount) > 0m);
         if (query.SettledOnly is true)
             entries = entries.Where(entry => entry.Direction != TenantLedgerDirection.Debit
+                || !ChargeEntryTypes.Contains(entry.EntryType)
                 || entry.Amount - _db.TenantLedgerAllocations
                     .Where(allocation => allocation.DebitEntryId == entry.Id)
                     .Sum(allocation => allocation.Amount) <= 0m);
@@ -665,11 +728,21 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                 EffectiveOn = entry.EffectiveOn,
                 PostedAtUtc = entry.PostedAtUtc,
                 Type = entry.EntryType,
+                Direction = entry.Direction,
+                LedgerKind = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    && entry.Direction == TenantLedgerDirection.Credit
+                    ? "payment"
+                    : entry.Direction == TenantLedgerDirection.Credit
+                        && (entry.EntryType == TenantLedgerEntryType.Credit
+                            || entry.EntryType == TenantLedgerEntryType.Adjustment)
+                        ? "credit"
+                        : entry.Direction == TenantLedgerDirection.Debit
+                            && ChargeEntryTypes.Contains(entry.EntryType)
+                            ? "charge"
+                            : "other",
                 Description = entry.Description,
                 ChargeAmount = entry.Direction == TenantLedgerDirection.Debit
-                    && entry.EntryType != TenantLedgerEntryType.PaymentReceipt
-                    && entry.EntryType != TenantLedgerEntryType.Credit
-                    && entry.EntryType != TenantLedgerEntryType.Adjustment
+                    && ChargeEntryTypes.Contains(entry.EntryType)
                     ? entry.Amount : 0m,
                 PaymentAmount = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
                     && entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : 0m,
@@ -689,11 +762,13 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Sum(),
                 DueOn = entry.DueOn,
                 OpenAmount = entry.Direction == TenantLedgerDirection.Debit
+                    && ChargeEntryTypes.Contains(entry.EntryType)
                     ? entry.Amount - _db.TenantLedgerAllocations
                         .Where(allocation => allocation.DebitEntryId == entry.Id)
                         .Sum(allocation => allocation.Amount)
                     : 0m,
                 Status = entry.Direction == TenantLedgerDirection.Debit
+                    && ChargeEntryTypes.Contains(entry.EntryType)
                     ? (entry.Amount - _db.TenantLedgerAllocations
                         .Where(allocation => allocation.DebitEntryId == entry.Id)
                         .Sum(allocation => allocation.Amount) > 0m ? "Open" : "Settled")
@@ -736,6 +811,63 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
                     .Select(journal => (Guid?)journal.PublicId)
                     .FirstOrDefault(),
                 Currency = entry.Currency,
+                ActionCapabilities = new TenantLedgerActionCapabilities
+                {
+                    CanViewDetail = true,
+                    CanGiveCredit = entry.Direction == TenantLedgerDirection.Debit
+                        && TargetedCreditEntryTypes.Contains(entry.EntryType)
+                        && entry.EntryType != TenantLedgerEntryType.DepositCharge
+                        && entry.Amount - (_db.TenantLedgerEntries
+                            .Where(correction => correction.PortfolioId == entry.PortfolioId
+                                && correction.TenantAccountId == entry.TenantAccountId
+                                && ((correction.EntryType == TenantLedgerEntryType.Reversal
+                                        && correction.ReversesEntryId == entry.Id)
+                                    || (correction.EntryType == TenantLedgerEntryType.Credit
+                                        && correction.RelatedTenantLedgerEntryId == entry.Id)))
+                            .Sum(correction => (decimal?)correction.Amount) ?? 0m) > 0m
+                        && entry.ReversesEntryId == null
+                        && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
+                            && journal.SourceId == entry.Id)
+                        && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.EntryType == TenantLedgerEntryType.Reversal
+                            && reversal.ReversesEntryId == entry.Id),
+                    CanAddRelatedCharge = entry.Direction == TenantLedgerDirection.Debit
+                        && (entry.EntryType == TenantLedgerEntryType.RentCharge
+                            || entry.EntryType == TenantLedgerEntryType.AddendumCharge
+                            || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                            || entry.EntryType == TenantLedgerEntryType.ManualCharge)
+                        && entry.ReversesEntryId == null
+                        && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
+                            && journal.SourceId == entry.Id)
+                        && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.EntryType == TenantLedgerEntryType.Reversal
+                            && reversal.ReversesEntryId == entry.Id),
+                    CanReverseCharge = entry.Direction == TenantLedgerDirection.Debit
+                        && (entry.EntryType == TenantLedgerEntryType.RentCharge
+                            || entry.EntryType == TenantLedgerEntryType.AddendumCharge
+                            || entry.EntryType == TenantLedgerEntryType.LateFeeCharge
+                            || entry.EntryType == TenantLedgerEntryType.ManualCharge)
+                        && entry.ReversesEntryId == null
+                        && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
+                            && journal.SourceId == entry.Id)
+                        && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.EntryType == TenantLedgerEntryType.Reversal
+                            && reversal.ReversesEntryId == entry.Id),
+                    CanReverseLedgerEntry = entry.Direction == TenantLedgerDirection.Debit
+                        && entry.EntryType == TenantLedgerEntryType.OpeningBalance
+                        && entry.ReversesEntryId == null
+                        && _db.JournalEntries.Any(journal => journal.PortfolioId == entry.PortfolioId
+                            && journal.SourceId == entry.Id)
+                        && !_db.TenantLedgerEntries.Any(reversal => reversal.PortfolioId == entry.PortfolioId
+                            && reversal.TenantAccountId == entry.TenantAccountId
+                            && reversal.EntryType == TenantLedgerEntryType.Reversal
+                            && reversal.ReversesEntryId == entry.Id),
+                    CanReviewPaymentAllocation = entry.Direction == TenantLedgerDirection.Credit
+                        && entry.EntryType == TenantLedgerEntryType.PaymentReceipt,
+                },
                 Allocations = _db.TenantLedgerAllocations
                     .Where(allocation => allocation.PortfolioId == portfolioId
                         && allocation.TenantAccountId == tenantAccountId
@@ -772,56 +904,300 @@ public sealed class AccountingLedgerReadModelService : IAccountingLedgerReadMode
     }
 
     public async Task<IReadOnlyList<TenantMonthSummary>?> GetTenantMonthSummaryAsync(
-        int portfolioId, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, int tenantAccountId, TenantMonthSummaryQuery query, CancellationToken ct = default)
     {
-        var from = query.From;
-        var to = query.To;
-        var summaries = await _db.Database.SqlQuery<TenantMonthSummary>($$"""
-            WITH filtered AS (
+        var entryType = query.EntryType?.ToString();
+        var openOnly = query.OpenOnly == true;
+        var settledOnly = query.SettledOnly == true;
+        var capabilityKeys = new[] { CapabilityKeys.MoneyBalancesRead };
+        var targetKind = CapabilityAuthorizationTargetKind.Property.ToString();
+        var take = query.NormalizedTake;
+        var rows = await _db.Database.SqlQuery<TenantLedgerMonthSqlRow>($$"""
+            WITH effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    {{scope.PortfolioId}}, {{scope.SessionId}}, {{scope.UserId}},
+                    {{scope.AccessContextId}}, {{scope.AccessRevision}}, {{capabilityKeys}}, {{targetKind}})
+                    AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT property_row."Id" AS "PropertyId"
+                FROM "Properties" AS property_row
+                INNER JOIN "Portfolios" AS portfolio
+                    ON portfolio."Id" = property_row."PortfolioId"
+                   AND portfolio."DeletedAt" IS NULL
+                WHERE property_row."PortfolioId" = {{scope.PortfolioId}}
+                  AND property_row."DeletedAt" IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM effective_scopes
+                      WHERE effective_scopes."ScopeKind" = 'AllProperties'
+                         OR (effective_scopes."ScopeKind" = 'SelectedProperties'
+                             AND effective_scopes."PropertyId" = property_row."Id")
+                  )
+            ),
+            authorized_accounts AS MATERIALIZED (
+                SELECT account."PortfolioId", account."Id" AS "TenantAccountId"
+                FROM "TenantAccounts" AS account
+                INNER JOIN "LeaseManagements" AS management
+                    ON management."PortfolioId" = account."PortfolioId"
+                   AND management."Id" = account."LeaseManagementId"
+                INNER JOIN authorized_properties
+                    ON authorized_properties."PropertyId" = management."PropertyId"
+                WHERE account."PortfolioId" = {{scope.PortfolioId}}
+                  AND account."Id" = {{tenantAccountId}}
+            ),
+            filtered_entries AS MATERIALIZED (
+                SELECT entry.*
+                FROM authorized_accounts
+                INNER JOIN "TenantLedgerEntries" AS entry
+                    ON entry."PortfolioId" = authorized_accounts."PortfolioId"
+                   AND entry."TenantAccountId" = authorized_accounts."TenantAccountId"
+                WHERE entry."PortfolioId" = {{scope.PortfolioId}}
+                  AND entry."TenantAccountId" = {{tenantAccountId}}
+                  AND (CAST({{query.From}} AS date) IS NULL OR entry."EffectiveOn" >= CAST({{query.From}} AS date))
+                  AND (CAST({{query.To}} AS date) IS NULL OR entry."EffectiveOn" <= CAST({{query.To}} AS date))
+                  AND (CAST({{entryType}} AS text) IS NULL OR entry."EntryType" = CAST({{entryType}} AS text))
+                  AND (NOT {{openOnly}} OR (
+                      entry."Direction" = 'Debit'
+                      AND entry."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                      AND entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
+                          FROM "TenantLedgerAllocations" AS allocation
+                          WHERE allocation."PortfolioId" = entry."PortfolioId"
+                            AND allocation."TenantAccountId" = entry."TenantAccountId"
+                            AND allocation."DebitEntryId" = entry."Id"), 0) > 0))
+                  AND (NOT {{settledOnly}} OR entry."Direction" <> 'Debit' OR (
+                      entry."Amount" - COALESCE((SELECT SUM(allocation."Amount")
+                          FROM "TenantLedgerAllocations" AS allocation
+                          WHERE allocation."PortfolioId" = entry."PortfolioId"
+                            AND allocation."TenantAccountId" = entry."TenantAccountId"
+                            AND allocation."DebitEntryId" = entry."Id"), 0) <= 0))
+            ),
+            entry_facts AS MATERIALIZED (
                 SELECT
-                    "EffectiveOn",
-                    "Currency",
-                    CASE WHEN "Direction" = 'Debit'
-                              AND "EntryType" NOT IN ('Credit', 'Adjustment')
-                         THEN "Amount" ELSE 0 END AS "ChargeAmount",
-                    CASE WHEN "EntryType" = 'PaymentReceipt' AND "Direction" = 'Credit'
-                         THEN "Amount" ELSE 0 END AS "PaymentAmount",
-                    CASE WHEN "EntryType" IN ('Credit', 'Adjustment') AND "Direction" = 'Credit'
-                         THEN "Amount" ELSE 0 END AS "CreditAmount"
-                FROM "TenantLedgerEntries"
-                WHERE "PortfolioId" = {{portfolioId}}
-                  AND "TenantAccountId" = {{tenantAccountId}}
-                  AND ({{from}} IS NULL OR "EffectiveOn" >= {{from}})
-                  AND ({{to}} IS NULL OR "EffectiveOn" <= {{to}})
-            ), monthly AS (
+                    entry.*,
+                    replacement."Id" AS "ReplacedByEntryId",
+                    COALESCE((SELECT SUM(correction."Amount")
+                        FROM "TenantLedgerEntries" AS correction
+                        WHERE correction."PortfolioId" = entry."PortfolioId"
+                          AND correction."TenantAccountId" = entry."TenantAccountId"
+                          AND ((correction."EntryType" = 'Reversal' AND correction."ReversesEntryId" = entry."Id")
+                            OR (correction."EntryType" = 'Credit' AND correction."RelatedTenantLedgerEntryId" = entry."Id"))), 0) AS "CorrectedAmount"
+                FROM filtered_entries AS entry
+                LEFT JOIN LATERAL (
+                    SELECT reversal."Id"
+                    FROM "TenantLedgerEntries" AS reversal
+                    WHERE reversal."PortfolioId" = entry."PortfolioId"
+                      AND reversal."TenantAccountId" = entry."TenantAccountId"
+                      AND reversal."EntryType" = 'Reversal'
+                      AND reversal."ReversesEntryId" = entry."Id"
+                    ORDER BY reversal."Id" DESC
+                    LIMIT 1
+                ) AS replacement ON TRUE
+            ),
+            row_facts AS (
                 SELECT
-                    EXTRACT(YEAR FROM "EffectiveOn")::int AS "Year",
-                    EXTRACT(MONTH FROM "EffectiveOn")::int AS "Month",
-                    "Currency",
-                    SUM("ChargeAmount") AS "ChargeAmount",
-                    SUM("PaymentAmount") AS "PaymentAmount",
-                    SUM("CreditAmount") AS "CreditAmount",
-                    SUM("ChargeAmount" - "PaymentAmount" - "CreditAmount") AS "NetMovement"
-                FROM filtered
-                GROUP BY EXTRACT(YEAR FROM "EffectiveOn")::int,
-                         EXTRACT(MONTH FROM "EffectiveOn")::int,
-                         "Currency"
-            ), running AS (
-                SELECT
-                    "Year", "Month", "Currency", "ChargeAmount", "PaymentAmount", "CreditAmount",
-                    "NetMovement",
-                    COALESCE(SUM("NetMovement") OVER (
-                        PARTITION BY "Currency"
-                        ORDER BY "Year", "Month"
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS "OpeningBalance"
-                FROM monthly
+                    entry_facts.*,
+                    ROW_NUMBER() OVER (ORDER BY entry_facts."EffectiveOn" DESC,
+                        entry_facts."PostedAtUtc" DESC, entry_facts."Id" DESC) AS "RowNumber",
+                    jsonb_build_object(
+                        'tenantLedgerEntryId', entry_facts."Id",
+                        'publicId', entry_facts."PublicId",
+                        'sourceType', 'tenant-ledger',
+                        'sourceId', entry_facts."Id",
+                        'sourcePublicId', entry_facts."PublicId",
+                        'effectiveOn', entry_facts."EffectiveOn",
+                        'postedAtUtc', entry_facts."PostedAtUtc",
+                        'type', entry_facts."EntryType",
+                        'direction', entry_facts."Direction",
+                        'ledgerKind', CASE
+                            WHEN entry_facts."EntryType" = 'PaymentReceipt' AND entry_facts."Direction" = 'Credit' THEN 'payment'
+                            WHEN entry_facts."Direction" = 'Credit'
+                              AND entry_facts."EntryType" IN ('Credit','Adjustment') THEN 'credit'
+                            WHEN entry_facts."Direction" = 'Debit'
+                              AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') THEN 'charge'
+                            ELSE 'other' END,
+                        'description', entry_facts."Description",
+                        'chargeAmount', CASE WHEN entry_facts."Direction" = 'Debit'
+                            AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                            THEN entry_facts."Amount" ELSE 0 END,
+                        'paymentAmount', CASE WHEN entry_facts."EntryType" = 'PaymentReceipt' AND entry_facts."Direction" = 'Credit'
+                            THEN entry_facts."Amount" ELSE 0 END,
+                        'creditAmount', CASE WHEN entry_facts."EntryType" IN ('Credit','Adjustment') AND entry_facts."Direction" = 'Credit'
+                            THEN entry_facts."Amount" ELSE 0 END,
+                        'runningAmountOwed', (
+                            SELECT COALESCE(SUM(CASE WHEN prior."Direction" = 'Debit' THEN prior."Amount" ELSE -prior."Amount" END), 0)
+                            FROM "TenantLedgerEntries" AS prior
+                            WHERE prior."PortfolioId" = entry_facts."PortfolioId"
+                              AND prior."TenantAccountId" = entry_facts."TenantAccountId"
+                              AND prior."Currency" = entry_facts."Currency"
+                              AND (prior."EffectiveOn" < entry_facts."EffectiveOn"
+                                OR (prior."EffectiveOn" = entry_facts."EffectiveOn"
+                                  AND (prior."PostedAtUtc" < entry_facts."PostedAtUtc"
+                                    OR (prior."PostedAtUtc" = entry_facts."PostedAtUtc" AND prior."Id" <= entry_facts."Id"))))),
+                        'dueOn', entry_facts."DueOn",
+                        'openAmount', CASE WHEN entry_facts."Direction" = 'Debit'
+                            AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                            THEN entry_facts."Amount" - COALESCE((SELECT SUM(allocation."Amount")
+                                FROM "TenantLedgerAllocations" AS allocation
+                                WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
+                                  AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
+                                  AND allocation."DebitEntryId" = entry_facts."Id"), 0) ELSE 0 END,
+                        'status', CASE WHEN entry_facts."Direction" = 'Debit'
+                            AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                            AND entry_facts."Amount" - COALESCE((SELECT SUM(allocation."Amount")
+                                FROM "TenantLedgerAllocations" AS allocation
+                                WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
+                                  AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
+                                  AND allocation."DebitEntryId" = entry_facts."Id"), 0) > 0
+                            THEN 'Open' ELSE 'Settled' END,
+                        'paymentMethod', NULL,
+                        'reference', NULL,
+                        'accountLabel', entry_facts."EntryType",
+                        'recurringScheduleContext', NULL,
+                        'sourceDocumentContext', NULL,
+                        'relatedTenantLedgerEntryId', entry_facts."RelatedTenantLedgerEntryId",
+                        'relatedEntryDescription', related_entry."Description",
+                        'categoryName', NULL,
+                        'servicePeriodStartOn', entry_facts."ServicePeriodStartOn",
+                        'servicePeriodEndOn', entry_facts."ServicePeriodEndOn",
+                        'reversesEntryId', entry_facts."ReversesEntryId",
+                        'replacedByEntryId', entry_facts."ReplacedByEntryId",
+                        'journalEntryPublicId', journal_public."PublicId",
+                        'currency', entry_facts."Currency",
+                        'allocations', COALESCE((
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'allocationId', allocation."Id",
+                                'targetSourceId', target."Id",
+                                'targetPublicId', target."PublicId",
+                                'targetDescription', target."Description",
+                                'amount', allocation."Amount",
+                                'effectiveOn', target."EffectiveOn"
+                            ) ORDER BY allocation."Id")
+                            FROM "TenantLedgerAllocations" AS allocation
+                            INNER JOIN "TenantLedgerEntries" AS target
+                                ON target."PortfolioId" = allocation."PortfolioId"
+                               AND target."Id" = CASE WHEN allocation."DebitEntryId" = entry_facts."Id"
+                                    THEN allocation."CreditEntryId" ELSE allocation."DebitEntryId" END
+                            WHERE allocation."PortfolioId" = entry_facts."PortfolioId"
+                              AND allocation."TenantAccountId" = entry_facts."TenantAccountId"
+                              AND (allocation."DebitEntryId" = entry_facts."Id" OR allocation."CreditEntryId" = entry_facts."Id")
+                        ), '[]'::jsonb),
+                        'actionCapabilities', jsonb_build_object(
+                            'canViewDetail', TRUE,
+                            'canGiveCredit', entry_facts."Direction" = 'Debit'
+                                AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge')
+                                AND entry_facts."EntryType" <> 'DepositCharge'
+                                AND entry_facts."Amount" - entry_facts."CorrectedAmount" > 0
+                                AND entry_facts."ReversesEntryId" IS NULL
+                                AND journal_public."PublicId" IS NOT NULL
+                                AND entry_facts."ReplacedByEntryId" IS NULL,
+                            'canAddRelatedCharge', entry_facts."Direction" = 'Debit'
+                                AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','ManualCharge')
+                                AND entry_facts."ReversesEntryId" IS NULL
+                                AND journal_public."PublicId" IS NOT NULL
+                                AND entry_facts."ReplacedByEntryId" IS NULL,
+                            'canReverseCharge', entry_facts."Direction" = 'Debit'
+                                AND entry_facts."EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','ManualCharge')
+                                AND entry_facts."ReversesEntryId" IS NULL
+                                AND journal_public."PublicId" IS NOT NULL
+                                AND entry_facts."ReplacedByEntryId" IS NULL,
+                            'canReverseLedgerEntry', entry_facts."Direction" = 'Debit'
+                                AND entry_facts."EntryType" = 'OpeningBalance'
+                                AND entry_facts."ReversesEntryId" IS NULL
+                                AND journal_public."PublicId" IS NOT NULL
+                                AND entry_facts."ReplacedByEntryId" IS NULL,
+                            'canReviewPaymentAllocation', entry_facts."Direction" = 'Credit'
+                                AND entry_facts."EntryType" = 'PaymentReceipt'
+                        )
+                    ) AS "RowJson"
+                FROM entry_facts
+                LEFT JOIN "TenantLedgerEntries" AS related_entry
+                    ON related_entry."PortfolioId" = entry_facts."PortfolioId"
+                   AND related_entry."TenantAccountId" = entry_facts."TenantAccountId"
+                   AND related_entry."Id" = entry_facts."RelatedTenantLedgerEntryId"
+                LEFT JOIN LATERAL (
+                    SELECT journal."PublicId"
+                    FROM "JournalEntries" AS journal
+                    WHERE journal."PortfolioId" = entry_facts."PortfolioId"
+                      AND journal."SourceId" = entry_facts."Id"
+                    ORDER BY journal."Id" DESC
+                    LIMIT 1
+                ) AS journal_public ON TRUE
+            ),
+            ledger_months AS (
+                SELECT EXTRACT(YEAR FROM "EffectiveOn")::int AS "Year",
+                       EXTRACT(MONTH FROM "EffectiveOn")::int AS "Month",
+                       "Currency",
+                       SUM(CASE WHEN "Direction" = 'Debit'
+                           AND "EntryType" IN ('RentCharge','AddendumCharge','LateFeeCharge','DepositCharge','ManualCharge') THEN "Amount" ELSE 0 END) AS "ChargeAmount",
+                       SUM(CASE WHEN "EntryType" = 'PaymentReceipt' AND "Direction" = 'Credit' THEN "Amount" ELSE 0 END) AS "PaymentAmount",
+                       SUM(CASE WHEN "EntryType" IN ('Credit','Adjustment') AND "Direction" = 'Credit' THEN "Amount" ELSE 0 END) AS "CreditAmount",
+                       SUM(CASE WHEN "Direction" = 'Debit' THEN "Amount" ELSE -"Amount" END) AS "LedgerMovement",
+                       COUNT(*) AS "EntryCount"
+                FROM filtered_entries
+                GROUP BY EXTRACT(YEAR FROM "EffectiveOn")::int, EXTRACT(MONTH FROM "EffectiveOn")::int, "Currency"
+            ),
+            journal_months AS (
+                SELECT EXTRACT(YEAR FROM entry."EffectiveOn")::int AS "Year",
+                       EXTRACT(MONTH FROM entry."EffectiveOn")::int AS "Month",
+                       entry."Currency",
+                       COALESCE(SUM(line."DebitAmount" - line."CreditAmount"), 0) AS "JournalMovement",
+                       COUNT(DISTINCT journal."Id") AS "JournalCount"
+                FROM filtered_entries AS entry
+                INNER JOIN "JournalEntries" AS journal
+                    ON journal."PortfolioId" = entry."PortfolioId"
+                   AND journal."SourceId" = entry."Id"
+                   AND journal."Currency" = entry."Currency"
+                INNER JOIN "JournalLines" AS line
+                    ON line."JournalEntryId" = journal."Id"
+                   AND line."TenantAccountId" = entry."TenantAccountId"
+                INNER JOIN "LedgerAccounts" AS account
+                    ON account."Id" = line."LedgerAccountId"
+                   AND account."SystemKey" = 'tenant-accounts-receivable'
+                GROUP BY EXTRACT(YEAR FROM entry."EffectiveOn")::int, EXTRACT(MONTH FROM entry."EffectiveOn")::int, entry."Currency"
+            ),
+            running AS (
+                SELECT ledger_months.*,
+                       COALESCE(SUM(ledger_months."LedgerMovement") OVER (
+                           PARTITION BY ledger_months."Currency"
+                           ORDER BY ledger_months."Year", ledger_months."Month"
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS "OpeningBalance",
+                       COALESCE(journal_months."JournalMovement", 0) AS "JournalMovement",
+                       COALESCE(journal_months."JournalCount", 0) AS "JournalCount"
+                FROM ledger_months
+                LEFT JOIN journal_months
+                    ON journal_months."Year" = ledger_months."Year"
+                   AND journal_months."Month" = ledger_months."Month"
+                   AND journal_months."Currency" = ledger_months."Currency"
             )
-            SELECT "Year", "Month", "Currency", "OpeningBalance", "ChargeAmount", "PaymentAmount",
-                   "CreditAmount", "OpeningBalance" + "NetMovement" AS "ClosingBalance"
+            SELECT running."Year", running."Month", running."Currency", running."OpeningBalance",
+                   running."ChargeAmount", running."PaymentAmount", running."CreditAmount",
+                   running."OpeningBalance" + running."LedgerMovement" AS "ClosingBalance",
+                   (running."JournalCount" = 0 OR ABS(running."LedgerMovement" - running."JournalMovement") > 0.005) AS "NeedsReview",
+                   COALESCE((SELECT jsonb_agg(row_facts."RowJson" ORDER BY row_facts."EffectiveOn" DESC,
+                       row_facts."PostedAtUtc" DESC, row_facts."Id" DESC)
+                       FROM row_facts
+                       WHERE row_facts."RowNumber" <= {{take}}
+                         AND EXTRACT(YEAR FROM row_facts."EffectiveOn")::int = running."Year"
+                         AND EXTRACT(MONTH FROM row_facts."EffectiveOn")::int = running."Month"
+                         AND row_facts."Currency" = running."Currency"), '[]'::jsonb)::text AS "RowsJson"
             FROM running
-            ORDER BY "Year", "Month", "Currency"
+            ORDER BY running."Year" DESC, running."Month" DESC, running."Currency"
             """).ToListAsync(ct);
-        return summaries;
+
+        return rows.Select(row => new TenantMonthSummary
+        {
+            Year = row.Year,
+            Month = row.Month,
+            Currency = row.Currency,
+            OpeningBalance = row.OpeningBalance,
+            ChargeAmount = row.ChargeAmount,
+            PaymentAmount = row.PaymentAmount,
+            CreditAmount = row.CreditAmount,
+            ClosingBalance = row.ClosingBalance,
+            NeedsReview = row.NeedsReview,
+            Rows = JsonSerializer.Deserialize<IReadOnlyList<TenantLedgerRow>>(row.RowsJson, LedgerJsonOptions) ?? [],
+        }).ToArray();
     }
 
     public async Task<TenantLedgerPeriodSummary?> GetTenantLedgerPeriodSummaryAsync(

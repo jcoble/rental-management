@@ -100,6 +100,20 @@ public sealed class TenantMonthSummaryQuery
 
     [FromQuery(Name = "to")]
     public DateOnly? To { get; set; }
+
+    [FromQuery(Name = "entryType")]
+    public TenantLedgerEntryType? EntryType { get; set; }
+
+    [FromQuery(Name = "openOnly")]
+    public bool? OpenOnly { get; set; }
+
+    [FromQuery(Name = "settledOnly")]
+    public bool? SettledOnly { get; set; }
+
+    [FromQuery(Name = "take")]
+    public int Take { get; set; } = 200;
+
+    public int NormalizedTake => Math.Clamp(Take, 1, 500);
 }
 
 public sealed class TenantLedgerPeriodSummaryQuery
@@ -186,6 +200,8 @@ public sealed class TenantLedgerRow
     public DateOnly EffectiveOn { get; init; }
     public DateTime PostedAtUtc { get; init; }
     public TenantLedgerEntryType Type { get; init; }
+    public TenantLedgerDirection Direction { get; init; }
+    public string LedgerKind { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
     public decimal ChargeAmount { get; init; }
     public decimal PaymentAmount { get; init; }
@@ -209,6 +225,17 @@ public sealed class TenantLedgerRow
     public long? ReplacedByEntryId { get; init; }
     public Guid? JournalEntryPublicId { get; init; }
     public string Currency { get; init; } = string.Empty;
+    public TenantLedgerActionCapabilities ActionCapabilities { get; init; } = new();
+}
+
+public sealed class TenantLedgerActionCapabilities
+{
+    public bool CanViewDetail { get; init; }
+    public bool CanGiveCredit { get; init; }
+    public bool CanAddRelatedCharge { get; init; }
+    public bool CanReverseCharge { get; init; }
+    public bool CanReverseLedgerEntry { get; init; }
+    public bool CanReviewPaymentAllocation { get; init; }
 }
 
 public sealed class TenantMonthSummary
@@ -216,11 +243,13 @@ public sealed class TenantMonthSummary
     public int Year { get; init; }
     public int Month { get; init; }
     public string Currency { get; init; } = string.Empty;
-    public decimal OpeningBalance { get; set; }
+    public decimal OpeningBalance { get; init; }
     public decimal ChargeAmount { get; init; }
     public decimal PaymentAmount { get; init; }
     public decimal CreditAmount { get; init; }
-    public decimal ClosingBalance { get; set; }
+    public decimal ClosingBalance { get; init; }
+    public bool NeedsReview { get; init; }
+    public IReadOnlyList<TenantLedgerRow> Rows { get; init; } = [];
 }
 
 public sealed class TenantLedgerPeriodSummary
@@ -270,6 +299,8 @@ public sealed class JournalDetailLine
     public string AccountCode { get; init; } = string.Empty;
     public string AccountName { get; init; } = string.Empty;
     public NormalBalance NormalBalance { get; init; }
+    public AccountType AccountType { get; init; }
+    public string? SystemKey { get; init; }
     public decimal DebitAmount { get; init; }
     public decimal CreditAmount { get; init; }
     public string? Memo { get; init; }
@@ -289,6 +320,7 @@ public sealed class SourceJournalSummary
     public decimal TotalDebits { get; init; }
     public decimal TotalCredits { get; init; }
     public bool IsReversal { get; init; }
+    public string Currency { get; init; } = string.Empty;
     public Guid? ReversesPublicId { get; init; }
     public IReadOnlyList<JournalDetailLine> Lines { get; init; } = [];
 }

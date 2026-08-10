@@ -5,6 +5,7 @@
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { projectedRemainingCharge } from '$lib/accounting/tenant-credit-preview';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -61,7 +62,7 @@
 		return [...rows.values()];
 	});
 	const eligibleCharges = $derived(
-		allRows.filter((row) => row.chargeAmount !== 0 && row.type !== 'DepositCharge' && row.type !== 'PaymentReceipt')
+		allRows.filter((row) => row.actionCapabilities.canGiveCredit)
 	);
 	const selectedTarget = $derived(
 		eligibleCharges.find((row) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
@@ -177,7 +178,7 @@
 				<div class="space-y-1 text-sm font-medium">
 					<span>Original charge</span>
 					<Select.Root type="single" bind:value={form.targetChargeEntryId}>
-						<Select.Trigger class="w-full">{selectedTarget?.description ?? 'Choose an original charge'}</Select.Trigger>
+						<Select.Trigger class="w-full">{selectedTarget ? normalizeTenantLedgerDescription(selectedTarget.description) : 'Choose an original charge'}</Select.Trigger>
 						<Select.Content>
 							{#if targetQuery.isLoading}
 								<div class="px-3 py-2 text-sm text-muted-foreground">Loading charges…</div>
@@ -185,8 +186,8 @@
 								<div class="px-3 py-2 text-sm text-muted-foreground">No eligible charges.</div>
 							{:else}
 								{#each eligibleCharges as charge (charge.tenantLedgerEntryId)}
-									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} · ${formatAccountingCurrency(charge.chargeAmount, currency)}`}>
-										{charge.description} · {formatAccountingCurrency(charge.chargeAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.openAmount, currency)}`}>
+										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.openAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
 									</Select.Item>
 								{/each}
 							{/if}

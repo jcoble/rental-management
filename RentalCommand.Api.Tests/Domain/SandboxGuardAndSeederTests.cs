@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
@@ -645,6 +646,30 @@ public class SandboxGuardAndSeederTests : IAsyncLifetime
 
         await action.Should().NotThrowAsync<UploadOperationConflictException>();
         await AssertCanonicalArtifactsAsync(_ctx.Db, legalDocuments);
+
+        var rent = await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == 1
+                && entry.EntryType == TenantLedgerEntryType.RentCharge
+                && entry.BusinessKey.Contains(":rent:"))
+            .OrderBy(entry => entry.Id)
+            .FirstAsync();
+        var rentPeriod = rent.BusinessKey.Split(':').Last();
+        var expectedRentPeriod = DateTime.ParseExact(
+            rentPeriod, "yyyy-MM", CultureInfo.InvariantCulture).ToString("MMMM yyyy", CultureInfo.InvariantCulture);
+        rent.Description.Should().Be($"Rent for {expectedRentPeriod}");
+        rent.BusinessKey.Should().MatchRegex(@":rent:\d{4}-\d{2}$");
+
+        var payment = await _ctx.Db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == 1
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                && entry.BusinessKey.Contains(":rent-payment:"))
+            .OrderBy(entry => entry.Id)
+            .FirstAsync();
+        var paymentPeriod = payment.BusinessKey.Split(':').Last();
+        var expectedPaymentPeriod = DateTime.ParseExact(
+            paymentPeriod, "yyyy-MM", CultureInfo.InvariantCulture).ToString("MMMM yyyy", CultureInfo.InvariantCulture);
+        payment.Description.Should().Be($"Rent payment for {expectedPaymentPeriod}");
+        payment.BusinessKey.Should().MatchRegex(@":rent-payment:\d{4}-\d{2}$");
     }
 
     [Fact]

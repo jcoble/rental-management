@@ -291,10 +291,11 @@ internal static class CanonicalDemoLeaseSeeder
             for (var monthIndex = 0; month <= lastMonth && monthIndex < 13; monthIndex++, month = month.AddMonths(1))
             {
                 var period = month.ToString("yyyy-MM");
+                var displayPeriod = month.ToString("MMMM yyyy");
                 var effectiveOn = DateOnly.FromDateTime(month);
                 var charge = Entry(graph.Account, graph.Agreement, TenantLedgerEntryType.RentCharge,
                     TenantLedgerDirection.Debit, graph.Rent, effectiveOn, effectiveOn, month,
-                    $"Rent for {period}", $"demo:{graph.Management.RelationshipNumber}:rent:{period}",
+                    $"Rent for {displayPeriod}", $"demo:{graph.Management.RelationshipNumber}:rent:{period}",
                     portfolioId, currency, actorUserId);
                 db.TenantLedgerEntries.Add(charge);
                 ledgerEntryCount++;
@@ -306,7 +307,7 @@ internal static class CanonicalDemoLeaseSeeder
                 var paidAt = month.AddDays(graphIndex % 5 == 2 && monthIndex == 3 ? 12 : graphIndex % 3);
                 var receipt = Entry(graph.Account, null, TenantLedgerEntryType.PaymentReceipt,
                     TenantLedgerDirection.Credit, graph.Rent, DateOnly.FromDateTime(paidAt), null, paidAt,
-                    $"Rent payment for {period}",
+                    $"Rent payment for {displayPeriod}",
                     $"demo:{graph.Management.RelationshipNumber}:rent-payment:{period}",
                     portfolioId, currency, actorUserId);
                 db.TenantLedgerEntries.Add(receipt);

@@ -24,6 +24,15 @@ export type TenantLedgerSort =
 	| 'postedAtUtc'
 	| '-postedAtUtc';
 
+export interface TenantLedgerActionCapabilities {
+	canViewDetail: boolean;
+	canGiveCredit: boolean;
+	canAddRelatedCharge: boolean;
+	canReverseCharge: boolean;
+	canReverseLedgerEntry: boolean;
+	canReviewPaymentAllocation: boolean;
+}
+
 export interface AllocationRef {
 	allocationId: number;
 	targetSourceId: number;
@@ -42,6 +51,8 @@ export interface TenantLedgerRow {
 	effectiveOn: string;
 	postedAtUtc: string;
 	type: TenantLedgerEntryType;
+	direction: TenantLedgerDirection;
+	ledgerKind: string;
 	description: string;
 	chargeAmount: number;
 	paymentAmount: number;
@@ -65,6 +76,7 @@ export interface TenantLedgerRow {
 	categoryName: string | null;
 	servicePeriodStartOn: string | null;
 	servicePeriodEndOn: string | null;
+	actionCapabilities: TenantLedgerActionCapabilities;
 }
 
 export interface TenantLedgerParams {
@@ -82,6 +94,10 @@ export interface TenantLedgerParams {
 export interface TenantMonthSummaryParams {
 	from?: string;
 	to?: string;
+	entryType?: TenantLedgerEntryType;
+	openOnly?: boolean;
+	settledOnly?: boolean;
+	take?: number;
 }
 
 export interface TenantMonthSummary {
@@ -93,6 +109,8 @@ export interface TenantMonthSummary {
 	paymentAmount: number;
 	creditAmount: number;
 	closingBalance: number;
+	needsReview: boolean;
+	rows: TenantLedgerRow[];
 }
 
 export type TenantLedgerSummaryMonths = 3 | 6 | 9 | 12;
@@ -186,7 +204,11 @@ export function buildTenantMonthSummaryPath(
 ): string {
 	return `/tenant-accounts/${tenantAccountId}/month-summary${buildListQuery(undefined, {
 		from: params.from,
-		to: params.to
+		to: params.to,
+		entryType: params.entryType,
+		openOnly: params.openOnly == null ? undefined : String(params.openOnly),
+		settledOnly: params.settledOnly == null ? undefined : String(params.settledOnly),
+		take: params.take
 	})}`;
 }
 

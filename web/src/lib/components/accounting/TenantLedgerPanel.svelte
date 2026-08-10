@@ -11,11 +11,11 @@
 	import {
 		tenantLedgers,
 		type RecurringTenantChargeRow,
-		type TenantLedgerParams,
 		type TenantLedgerPeriodSummary,
 		type TenantLedgerRow,
 		type TenantLedgerSummaryMonths,
-		type TenantMonthSummary
+		type TenantMonthSummary,
+		type TenantMonthSummaryParams
 	} from '$lib/api/endpoints/tenant-ledgers';
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { tenantLedgerPeriodRange } from '$lib/components/unit/money';
@@ -25,6 +25,12 @@
 		formatAccountingDate
 	} from '$lib/accounting/accounting-display';
 	import { oldestOpenChargeDisplay } from '$lib/accounting/tenant-ledger-oldest-charge';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
+	import {
+		buildTenantLedgerReversalRequest,
+		buildTenantLedgerRowActionFlow,
+		type TenantLedgerRowAction
+	} from '$lib/accounting/tenant-ledger-action-flows';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -33,11 +39,12 @@
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
 	import JournalDetailDrawer from './JournalDetailDrawer.svelte';
-	import TenantLedgerMonth, { type TenantLedgerRowAction } from './TenantLedgerMonth.svelte';
+	import TenantLedgerMonth from './TenantLedgerMonth.svelte';
 	import RecordPaymentSheet from './RecordPaymentSheet.svelte';
 	import OneTimeChargeSheet, { type OneTimeChargeSeed } from './OneTimeChargeSheet.svelte';
 	import TenantCreditSheet from './TenantCreditSheet.svelte';
 	import RecurringChargeSheet from './RecurringChargeSheet.svelte';
+	import TenantPaymentAllocationReview from './TenantPaymentAllocationReview.svelte';
 
 	type TenantLedgerFilter = 'all' | 'open' | 'payments' | 'credits';
 	type SheetKind = 'payment' | 'charge' | 'credit' | 'recurring' | null;
@@ -62,11 +69,13 @@
 	let {
 		dashboard,
 		onScan,
-		onopenpayment
+		onopenpayment,
+		onopenallocationreview
 	}: {
 		dashboard: UnitDashboard;
 		onScan: () => void;
 		onopenpayment?: (tenantLedgerEntryId: number) => void;
+		onopenallocationreview?: (tenantLedgerEntryId: number, allocations: TenantLedgerRow['allocations']) => void;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -80,14 +89,14 @@
 	let fixTarget = $state<TenantLedgerRow | null>(null);
 	let fixChoice = $state<FixChoice>(null);
 	let journalPublicId = $state<string | null>(null);
+	let allocationReviewTarget = $state<TenantLedgerRow | null>(null);
 
 	const periodRange = $derived(tenantLedgerPeriodRange(periodMonths));
-	const ledgerParams = $derived.by(() => {
-		const params: TenantLedgerParams = {
-			take: 200,
-			sort: '-effectiveOn',
-			effectiveFrom: periodRange.from,
-			effectiveTo: periodRange.to
+	const monthSummaryParams = $derived.by(() => {
+		const params: TenantMonthSummaryParams = {
+			from: periodRange.from,
+			to: periodRange.to,
+			take: 200
 		};
 		if (filter === 'open') params.openOnly = true;
 		if (filter === 'payments') params.entryType = 'PaymentReceipt';
@@ -100,22 +109,10 @@
 		enabled: tenantAccountId != null,
 		queryFn: () => tenantAccounts.get(tenantAccountId as number) as Promise<TenantAccountSummary>
 	}));
-	const ledgerQuery = createQuery(() => ({
-		queryKey: [
-			'tenant-ledger',
-			tenantAccountId,
-			periodMonths,
-			filter,
-			periodRange.from,
-			periodRange.to
-		],
-		enabled: tenantAccountId != null,
-		queryFn: () => tenantLedgers.list(tenantAccountId as number, ledgerParams)
-	}));
 	const monthSummaryQuery = createQuery(() => ({
-		queryKey: ['tenant-ledger-month-summary', tenantAccountId, periodRange.from, periodRange.to],
+		queryKey: ['tenant-ledger-month-summary', tenantAccountId, periodMonths, filter, periodRange.from, periodRange.to],
 		enabled: tenantAccountId != null,
-		queryFn: () => tenantLedgers.monthSummary(tenantAccountId as number, periodRange)
+		queryFn: () => tenantLedgers.monthSummary(tenantAccountId as number, monthSummaryParams)
 	}));
 	const ledgerSummaryQuery = createQuery(() => ({
 		queryKey: ['tenant-ledger-summary', tenantAccountId, periodMonths],
@@ -135,13 +132,13 @@
 
 	const accountSummary = $derived(accountQuery.data);
 	const ledgerSummary = $derived(ledgerSummaryQuery.data as TenantLedgerPeriodSummary | null | undefined);
-	const currency = $derived(
-		accountSummary?.currency ?? ledgerSummary?.currency ?? ledgerQuery.data?.items[0]?.currency ?? 'USD'
-	);
-	const rows = $derived(ledgerQuery.data?.items ?? []);
 	const monthSummaries = $derived(monthSummaryQuery.data ?? []);
+	const currency = $derived(
+		accountSummary?.currency ?? ledgerSummary?.currency ?? monthSummaries[0]?.currency ?? 'USD'
+	);
+	const rows = $derived(monthSummaries.flatMap((summary) => summary.rows));
 	const activeSchedules = $derived((recurringQuery.data?.items ?? []).filter((schedule) => schedule.isActive));
-	const hasHistory = $derived(rows.length > 0 || monthSummaries.length > 0);
+	const hasHistory = $derived(monthSummaries.length > 0);
 	const nextDueOn = $derived(accountSummary?.nextDueOn ?? null);
 	const nextDueAmount = $derived(accountSummary?.nextDueAmount ?? null);
 	const balanceDue = $derived(accountSummary?.receivableBalance ?? ledgerSummary?.endingBalance ?? null);
@@ -159,21 +156,7 @@
 		})
 	);
 
-	const monthGroups = $derived.by(() => {
-		const rowsByMonth = new Map<string, TenantLedgerRow[]>();
-		for (const row of rows) {
-			const monthKey = row.effectiveOn.slice(0, 7);
-			const monthRows = rowsByMonth.get(monthKey);
-			if (monthRows) monthRows.push(row);
-			else rowsByMonth.set(monthKey, [row]);
-		}
-		return [...monthSummaries]
-			.sort((left, right) => right.year - left.year || right.month - left.month)
-			.map((summary) => ({
-				summary,
-				rows: rowsByMonth.get(`${summary.year}-${String(summary.month).padStart(2, '0')}`) ?? []
-			}));
-	});
+	const monthGroups = $derived(monthSummaries);
 
 	function errorStatus(error: unknown): number | undefined {
 		if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
@@ -181,14 +164,13 @@
 		return typeof status === 'number' ? status : undefined;
 	}
 
-	const coreReadError = $derived(ledgerQuery.error ?? monthSummaryQuery.error);
+	const coreReadError = $derived(monthSummaryQuery.error);
 	const summaryReadError = $derived(accountQuery.error ?? ledgerSummaryQuery.error);
 	const unavailable = $derived([401, 403, 404].includes(errorStatus(coreReadError) ?? 0));
-	const loading = $derived(ledgerQuery.isLoading || monthSummaryQuery.isLoading);
+	const loading = $derived(monthSummaryQuery.isLoading);
 
 	function invalidateMoney(): void {
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-summary', tenantAccountId] });
-		queryClient.invalidateQueries({ queryKey: ['tenant-ledger', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-ledger-month-summary', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-ledger-summary', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['tenant-ledger-open-charges', tenantAccountId] });
@@ -205,6 +187,7 @@
 		creditTarget = null;
 		chargeSeed = null;
 		recurringTarget = null;
+		allocationReviewTarget = null;
 	}
 
 	function openNewCharge(): void {
@@ -244,30 +227,22 @@
 	}
 
 	function handleRowAction(row: TenantLedgerRow, action: TenantLedgerRowAction): void {
-		if (action === 'view') {
-			openEntryDetail(row);
-			return;
-		}
-		if (action === 'give-credit') {
-			creditTarget = row;
+		const flow = buildTenantLedgerRowActionFlow(row, action);
+		if (flow.kind === 'view') {
+			openEntryDetail(flow.row);
+		} else if (flow.kind === 'give-credit') {
+			creditTarget = flow.row;
 			sheet = 'credit';
-			return;
-		}
-		if (action === 'related-charge') {
-			chargeSeed = {
-				description: `Additional charge related to ${row.description}`,
-				effectiveOn: row.effectiveOn,
-				dueOn: row.dueOn ?? row.effectiveOn,
-				chargeType: 'Other'
-			};
+		} else if (flow.kind === 'related-charge') {
+			chargeSeed = flow.seed;
 			sheet = 'charge';
-			return;
+		} else if (flow.kind === 'reverse') {
+			openFixCharge(flow.row);
+		} else if (onopenallocationreview) {
+			onopenallocationreview(flow.entryId, flow.allocations);
+		} else {
+			allocationReviewTarget = flow.row;
 		}
-		if (action === 'fix-charge') {
-			openFixCharge(row);
-			return;
-		}
-		if (action === 'fix-payment') openEntryDetail(row);
 	}
 
 	function applyFix(): void {
@@ -284,7 +259,7 @@
 			fixTarget = null;
 			fixChoice = null;
 			chargeSeed = {
-				description: `Additional charge for ${target.description}`,
+				description: `Additional charge for ${normalizeTenantLedgerDescription(target.description)}`,
 				effectiveOn: target.effectiveOn,
 				dueOn: target.dueOn ?? target.effectiveOn,
 				chargeType: 'Other'
@@ -297,16 +272,24 @@
 
 	const reverseMutation = createMutation(() => ({
 		mutationFn: (target: TenantLedgerRow) =>
-			target.type === 'OpeningBalance'
-				? tenantMoney.reverseLedgerEntry(tenantAccountId as number, crypto.randomUUID(), {
+			(() => {
+				const reversal = buildTenantLedgerReversalRequest(
+					tenantAccountId as number,
+					target,
+					new Date().toISOString().slice(0, 10)
+				);
+				if (target.type === 'OpeningBalance') {
+					return tenantMoney.reverseLedgerEntry(tenantAccountId as number, crypto.randomUUID(), {
 						reversesEntryId: target.tenantLedgerEntryId,
-						effectiveOn: new Date().toISOString().slice(0, 10),
-						reason: `Reverse charge: ${target.description}`
-					})
-				: tenantMoney.reverseCharge(tenantAccountId as number, target.tenantLedgerEntryId, crypto.randomUUID(), {
-						effectiveOn: new Date().toISOString().slice(0, 10),
-						reason: `Reverse charge: ${target.description}`
-				}),
+						effectiveOn: reversal.body.effectiveOn,
+						reason: reversal.body.reason
+					});
+				}
+				return tenantMoney.reverseCharge(tenantAccountId as number, target.tenantLedgerEntryId, crypto.randomUUID(), {
+					effectiveOn: reversal.body.effectiveOn,
+					reason: reversal.body.reason
+				});
+			})(),
 		onSuccess: () => {
 				showSuccess('Charge reversed.');
 				closeFixCharge();
@@ -317,7 +300,6 @@
 
 	function retryReads(): void {
 		void accountQuery.refetch();
-		void ledgerQuery.refetch();
 		void monthSummaryQuery.refetch();
 		void ledgerSummaryQuery.refetch();
 	}
@@ -433,8 +415,8 @@
 		</section>
 	{:else}
 		<div class="space-y-4" data-testid="tenant-ledger-months">
-			{#each monthGroups as group ( `${group.summary.year}-${group.summary.month}` )}
-				<TenantLedgerMonth summary={group.summary} rows={group.rows} onaction={handleRowAction} />
+			{#each monthGroups as summary ( `${summary.year}-${summary.month}-${summary.currency}` )}
+				<TenantLedgerMonth {summary} rows={summary.rows} onaction={handleRowAction} />
 			{/each}
 		</div>
 	{/if}
@@ -483,18 +465,22 @@
 <Dialog.Root open={fixTarget != null} onOpenChange={(next) => { if (!next) closeFixCharge(); }}>
 	<Dialog.Content class="max-w-lg" data-testid="fix-charge-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Fix this charge</Dialog.Title>
+		<Dialog.Title>{fixTarget?.actionCapabilities.canReverseLedgerEntry ? 'Reverse opening balance' : 'Fix this charge'}</Dialog.Title>
 			<Dialog.Description>
-				{#if fixTarget}{formatAccountingDate(fixTarget.effectiveOn)} · {fixTarget.description} · {formatAccountingCurrency(fixTarget.chargeAmount, fixTarget.currency)}{/if}
+				{#if fixTarget}{formatAccountingDate(fixTarget.effectiveOn)} · {normalizeTenantLedgerDescription(fixTarget.description)} · {formatAccountingCurrency(fixTarget.chargeAmount, fixTarget.currency)}{/if}
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-2">
-			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'reduce' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'reduce'} onclick={() => fixChoice = 'reduce'}>
+			{#if fixTarget?.actionCapabilities.canGiveCredit}
+				<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'reduce' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'reduce'} onclick={() => fixChoice = 'reduce'}>
 					<span class="block font-medium">Issue a credit</span><span class="block text-sm text-muted-foreground">Posts a credit to reduce this charge.</span>
-			</button>
-			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'increase' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'increase'} onclick={() => fixChoice = 'increase'}>
+				</button>
+			{/if}
+			{#if fixTarget?.actionCapabilities.canAddRelatedCharge}
+				<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'increase' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'increase'} onclick={() => fixChoice = 'increase'}>
 					<span class="block font-medium">Add the missing amount</span><span class="block text-sm text-muted-foreground">Posts a related charge for the amount that was missed.</span>
-			</button>
+				</button>
+			{/if}
 			<button type="button" class={`w-full rounded-lg border px-3 py-3 text-left ${fixChoice === 'remove' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`} aria-pressed={fixChoice === 'remove'} onclick={() => fixChoice = 'remove'}>
 					<span class="block font-medium">Reverse the posted charge</span><span class="block text-sm text-muted-foreground">Removes this charge with a linked reversal entry.</span>
 			</button>
@@ -505,5 +491,15 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+{#if allocationReviewTarget}
+	<TenantPaymentAllocationReview
+		open={allocationReviewTarget != null}
+		entryId={allocationReviewTarget.tenantLedgerEntryId}
+		allocations={allocationReviewTarget.allocations}
+		currency={allocationReviewTarget.currency}
+		onclose={() => allocationReviewTarget = null}
+	/>
+{/if}
 
 <JournalDetailDrawer bind:journalPublicId />

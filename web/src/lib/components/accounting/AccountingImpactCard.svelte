@@ -15,6 +15,7 @@
 		type JournalLineDisplayInput
 	} from '$lib/accounting/accounting-display';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import {
 		accountingBooks,
 		type JournalSourceType
@@ -59,13 +60,21 @@
 		selectedJournalPublicId = publicId;
 	}
 
-	function lineInput(line: (typeof journals)[number]['lines'][number]): JournalLineDisplayInput {
+	function lineInput(
+		line: (typeof journals)[number]['lines'][number],
+		journal: (typeof journals)[number]
+	): JournalLineDisplayInput {
 		return {
 			accountName: line.accountName,
 			accountCode: line.accountCode,
+			accountType: line.accountType,
+			systemKey: line.systemKey,
 			debitAmount: line.debitAmount,
 			creditAmount: line.creditAmount,
-			normalBalance: line.normalBalance
+			normalBalance: line.normalBalance,
+			currency: journal.currency,
+			effectiveOn: journal.effectiveOn,
+			sourceType: journal.sourceType
 		};
 	}
 </script>
@@ -96,7 +105,7 @@
 						<div class="flex items-start justify-between gap-4">
 							<div class="min-w-0">
 								<p class="truncate font-medium">
-									{advanced ? formatSourceTypeLabel(journal.sourceType) : journal.description}
+									{advanced ? formatSourceTypeLabel(journal.sourceType) : normalizeTenantLedgerDescription(journal.description)}
 								</p>
 								<p class="mt-1 text-xs text-muted-foreground">
 									{formatAccountingDate(journal.effectiveOn)} · {formatJournalPostingLabel(journal.isReversal)}
@@ -106,9 +115,9 @@
 						</div>
 						<div class="mt-3 divide-y divide-border rounded-lg border border-border/70">
 							{#each journal.lines as line (line.id)}
-								{@const input = lineInput(line)}
+								{@const input = lineInput(line, journal)}
 								{@const entry = getJournalLineEntry(input)}
-								<div class="flex items-start justify-between gap-4 px-3 py-2 text-sm">
+								<div class="flex items-start justify-between gap-4 px-3 py-2 text-sm" data-testid={`accounting-impact-line-${line.id}`}>
 									<span>{advanced ? `${line.accountCode} ${line.accountName} · ${formatJournalLineSide(entry.side)}` : formatSimpleJournalLineLabel(input)}</span>
 									<span class="shrink-0 font-medium tabular-nums">{formatAccountingCurrency(entry.amount)}</span>
 								</div>

@@ -233,7 +233,7 @@ public sealed class AccountingReadModelPostgreSqlTests
         commands.Reset();
 
         var page = await new AccountingLedgerReadModelService(setup.Db).GetTenantLedgerAsync(
-            1,
+            scope,
             account.Id,
             new TenantLedgerQuery { Take = 20, Sort = "effectiveOn" },
             CancellationToken.None);
@@ -246,6 +246,16 @@ public sealed class AccountingReadModelPostgreSqlTests
         page.Items.Single(row => row.TenantLedgerEntryId == receipt.Id)
             .Allocations.Select(allocation => allocation.AllocationId)
             .Should().Equal(original.Id, compensating.Id);
+        page.Items.Single(row => row.TenantLedgerEntryId == charge.Id).ActionCapabilities
+            .Should().Match<TenantLedgerActionCapabilities>(capabilities =>
+                !capabilities.CanGiveCredit
+                && !capabilities.CanAddRelatedCharge
+                && !capabilities.CanReverseCharge
+                && !capabilities.CanReviewPaymentAllocation);
+        page.Items.Single(row => row.TenantLedgerEntryId == receipt.Id).ActionCapabilities
+            .Should().Match<TenantLedgerActionCapabilities>(capabilities =>
+                !capabilities.CanGiveCredit
+                && capabilities.CanReviewPaymentAllocation);
 
         commands.Count.Should().BeLessThanOrEqualTo(3);
         commands.Sql.Should().Contain(sql =>
@@ -256,6 +266,100 @@ public sealed class AccountingReadModelPostgreSqlTests
             && sql.Contains("DebitEntryId", StringComparison.Ordinal)
             && sql.Contains("CreditEntryId", StringComparison.Ordinal)
             && sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task TenantLedgerMonthSummary_ProjectsIndependentReviewFactAndServerGroupsRowsInOneAuthorizedSql()
+    {
+        var commands = new SqlCommandCounter();
+        await using var setup = await _fixture.CreateContextAsync([commands]);
+        await new ChartOfAccountsSeedService(setup.Db).SeedAsync(1);
+        await setup.Db.SaveChangesAsync();
+        var scope = setup.Db.SeedAdministratorScope(
+            1, nameof(TenantLedgerMonthSummary_ProjectsIndependentReviewFactAndServerGroupsRowsInOneAuthorizedSql));
+        var now = new DateTime(2027, 2, 1, 12, 0, 0, DateTimeKind.Utc);
+        var property = new Property
+        {
+            PortfolioId = 1, Name = "Month projection property", AddressLine1 = "1 Month Way",
+            City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = 1, Property = property, UnitNumber = "M1", MarketRent = 1_000m,
+            CreatedAt = now, UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PortfolioId = 1, Property = property, Unit = unit, RelationshipNumber = "MONTH-PROJECTION",
+            PossessionGivenAtUtc = now, CreatedAtUtc = now, UpdatedAtUtc = now,
+            CreatedByUserId = scope.UserId, RowVersion = Guid.NewGuid(),
+        };
+        var account = new TenantAccount
+        {
+            PortfolioId = 1, LeaseManagement = relationship, AccountNumber = "MONTH-PROJECTION",
+            Currency = "USD", OpenedAtUtc = now, CreatedAtUtc = now, CreatedByUserId = scope.UserId,
+        };
+        setup.Db.AddRange(property, unit, relationship, account);
+        await setup.Db.SaveChangesAsync();
+
+        var charge = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = 1, TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.ManualCharge, Direction = TenantLedgerDirection.Debit,
+            Amount = 100m, Currency = "USD", EffectiveOn = new DateOnly(2027, 2, 1),
+            DueOn = new DateOnly(2027, 2, 1), PostedAtUtc = now, Description = "Rent for February 2027",
+            BusinessKey = "month-projection:charge", CreatedByUserId = scope.UserId,
+        };
+        setup.Db.TenantLedgerEntries.Add(charge);
+        await setup.Db.SaveChangesAsync();
+        var receivable = await AccountAsync(setup, "tenant-accounts-receivable");
+        var income = await AccountAsync(setup, "rental-income");
+        setup.Db.JournalEntries.Add(new JournalEntry
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = 1, EffectiveOn = charge.EffectiveOn,
+            PostedAtUtc = now, Currency = "USD", Description = "Mismatched rent posting",
+            SourceType = JournalSourceType.TenantCharge, SourceId = charge.Id,
+            SourceBusinessKey = "month-projection:journal", IdempotencyDigest = new string('a', 64), PostingRuleVersion = 1,
+            AttemptId = Guid.NewGuid(), AtomicReceiptId = Guid.NewGuid(),
+            Lines =
+            [
+                new JournalLine
+                {
+                    LedgerAccountId = receivable.Id, TenantAccountId = account.Id,
+                    DebitAmount = 80m, CreditAmount = 0m,
+                },
+                new JournalLine { LedgerAccountId = income.Id, CreditAmount = 80m },
+            ],
+        });
+        await setup.Db.SaveChangesAsync();
+        await setup.ActivateApiScopeAsync(scope);
+        commands.Reset();
+
+        var summaries = await new AccountingLedgerReadModelService(setup.Db).GetTenantMonthSummaryAsync(
+            scope, account.Id,
+            new TenantMonthSummaryQuery
+            {
+                From = new DateOnly(2027, 2, 1),
+                To = new DateOnly(2027, 2, 28),
+                Take = 20,
+            });
+
+        summaries.Should().ContainSingle();
+        summaries[0].NeedsReview.Should().BeTrue();
+        summaries[0].Rows.Should().ContainSingle().Which.Should().Match<TenantLedgerRow>(row =>
+            row.TenantLedgerEntryId == charge.Id
+            && row.ActionCapabilities.CanGiveCredit
+            && row.ActionCapabilities.CanAddRelatedCharge
+            && row.ActionCapabilities.CanReverseCharge);
+        commands.Count.Should().Be(1);
+        commands.Sql.Single().Should().Contain("authorized_properties AS MATERIALIZED")
+            .And.Contain("jsonb_agg")
+            .And.Contain("ROW_NUMBER() OVER")
+            .And.Contain("ReplacedByEntryId")
+            .And.Contain("TenantLedgerAllocations")
+            .And.Contain("ORDER BY running.\"Year\" DESC")
+            .And.Contain("entry.\"PortfolioId\" = @")
+            .And.Contain("entry.\"TenantAccountId\" = @");
     }
 
     [Fact]

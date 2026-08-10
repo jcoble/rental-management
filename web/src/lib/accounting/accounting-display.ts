@@ -158,9 +158,14 @@ export function formatJournalLineSide(side: AccountingEntrySide): string {
 export interface JournalLineDisplayInput {
 	accountName: string;
 	accountCode?: string;
+	accountType?: AccountType;
+	systemKey?: string | null;
 	debitAmount: number;
 	creditAmount: number;
 	normalBalance?: NormalBalance;
+	currency?: string;
+	effectiveOn?: string | Date | null;
+	sourceType?: JournalSourceType | string | null;
 }
 
 export function getJournalLineEntry(input: JournalLineDisplayInput): {
@@ -175,10 +180,53 @@ export function getJournalLineEntry(input: JournalLineDisplayInput): {
 
 export function formatSimpleJournalLineLabel(input: JournalLineDisplayInput): string {
 	const entry = getJournalLineEntry(input);
-	const change = input.normalBalance
-		? formatChangeLabel(accountingChangeForEntry(input.normalBalance, entry.side))
-		: 'changed';
-	return `${input.accountName} ${change}`;
+	const amount = formatLandlordAmount(entry.amount, input.currency);
+	const isReceivable = input.systemKey === 'tenant-accounts-receivable';
+	if (isReceivable) {
+		return `Tenant now owes ${amount} ${entry.side === 'debit' ? 'more' : 'less'}`;
+	}
+
+	const incomeLabel = input.systemKey === 'rental-income'
+		? 'rent earned'
+		: input.systemKey === 'late-fee-income'
+			? 'late fees earned'
+			: input.systemKey === 'other-rental-income'
+				? 'other rental income earned'
+				: input.accountType === 'Income'
+					? 'income earned'
+					: null;
+	if (incomeLabel) {
+		const period = formatAccountingMonthYear(input.effectiveOn);
+		return `Counted as ${incomeLabel}${period ? ` for ${period}` : ''}`;
+	}
+
+	if (input.accountType === 'Asset' && input.sourceType === 'TenantReceipt') {
+		return `Money received: ${amount}`;
+	}
+	if (input.accountType === 'Liability') {
+		return `Tenant-held balance changed by ${amount}`;
+	}
+	return `Accounting amount ${amount}`;
+}
+
+function formatLandlordAmount(value: number, currency = 'USD'): string {
+	if (!Number.isFinite(value)) return '—';
+	return new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: validCurrencyCode(currency),
+		minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+		maximumFractionDigits: 2
+	}).format(value);
+}
+
+function formatAccountingMonthYear(value: string | Date | null | undefined): string | null {
+	const date = validDate(value);
+	if (!date) return null;
+	return date.toLocaleDateString('en-US', {
+		month: 'long',
+		year: 'numeric',
+		timeZone: 'UTC'
+	});
 }
 
 export function accountingChangeForEntry(

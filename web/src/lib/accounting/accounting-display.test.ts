@@ -124,15 +124,22 @@ describe('normal-balance change labeling', () => {
 		assert.equal(
 			formatSimpleJournalLineLabel({
 				accountName: 'Operating Cash',
+				accountType: 'Asset',
+				systemKey: 'tenant-accounts-receivable',
 				debitAmount: 1400,
 				creditAmount: 0,
-				normalBalance: 'Debit'
+				normalBalance: 'Debit',
+				currency: 'USD'
 			}),
-			'Operating Cash increased'
+			'Tenant now owes $1,400 more'
 		);
 		assert.equal(
-			formatSimpleJournalLineLabel({ accountName: 'Unknown account', debitAmount: 0, creditAmount: 25 }),
-			'Unknown account changed'
+			formatSimpleJournalLineLabel({ accountName: 'Tenant Accounts Receivable', accountType: 'Asset', systemKey: 'tenant-accounts-receivable', debitAmount: 0, creditAmount: 25, currency: 'USD' }),
+			'Tenant now owes $25 less'
+		);
+		assert.equal(
+			formatSimpleJournalLineLabel({ accountName: 'Rental Income', accountType: 'Income', systemKey: 'rental-income', debitAmount: 0, creditAmount: 1950, currency: 'USD', effectiveOn: '2026-08-01' }),
+			'Counted as rent earned for August 2026'
 		);
 		assert.equal(accountingAmountClass(-1), 'text-destructive');
 		assert.equal(accountingAmountClass(null), 'text-foreground');
