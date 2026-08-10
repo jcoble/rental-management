@@ -525,7 +525,7 @@
 									<Button variant="outline" size="sm" class="gap-1" onclick={closeInspection} data-testid="inspection-detail-close">
 										<ArrowLeft class="h-4 w-4" /> Back to inspections
 									</Button>
-									<InspectionDetail inspectionId={selectedInspectionId} expectedUnitId={id} />
+									<InspectionDetail inspectionId={selectedInspectionId} expectedUnitId={id} onUnitMismatch={closeInspection} />
 								</div>
 								{:else}
 								<div class="space-y-3">

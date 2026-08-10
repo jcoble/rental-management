@@ -5,15 +5,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	let {
 		inspectionId,
 		expectedUnitId,
+		onUnitMismatch,
 	}: {
 		inspectionId: number;
 		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
 	} = $props();
 
 	const inspectionQuery = createQuery(() => ({
@@ -32,12 +35,11 @@
 	const inspectionTypeLabel = $derived(
 		inspection ? (inspectionTypeLabels[inspection.type] ?? formatStatusLabel(inspection.type)) : 'Inspection',
 	);
-	const belongsToUnit = $derived(
-		inspection == null || expectedUnitId == null || inspection.unitId == null || inspection.unitId === expectedUnitId,
-	);
-	const orderedItems = $derived.by(() =>
-		[...(inspection?.items ?? [])].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id),
-	);
+	const inspectionItems = $derived(inspection?.items ?? []);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(inspection, expectedUnitId)) onUnitMismatch?.();
+	});
 
 	function itemResultLabel(item: InspectionItem): string {
 		return formatStatusLabel(item.result);
@@ -53,7 +55,7 @@
 			<p class="mt-1 text-sm text-muted-foreground" data-testid="inspection-detail-error-message">Try again. No inspection changes have been made.</p>
 			<Button class="mt-3" variant="outline" size="sm" onclick={() => inspectionQuery.refetch()} data-testid="inspection-detail-retry">Try again</Button>
 		</div>
-	{:else if !inspection || !belongsToUnit}
+	{:else if !inspection || isMismatchedUnitSelection(inspection, expectedUnitId)}
 		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="inspection-detail-not-found">Inspection not found for this rental.</p>
 	{:else}
 		<div class="flex flex-wrap items-start justify-between gap-3" data-testid="inspection-detail-header">
@@ -106,11 +108,11 @@
 
 		<section class="space-y-2" data-testid="inspection-detail-checklist">
 			<h3 class="text-sm font-semibold" data-testid="inspection-detail-checklist-title">Checklist</h3>
-			{#if orderedItems.length === 0}
+			{#if inspectionItems.length === 0}
 				<p class="rounded-lg border p-3 text-sm text-muted-foreground" data-testid="inspection-detail-checklist-empty">No checklist items were recorded.</p>
 			{:else}
 				<div class="divide-y rounded-lg border" data-testid="inspection-detail-checklist-items">
-					{#each orderedItems as item (item.id)}
+					{#each inspectionItems as item (item.id)}
 						<article class="space-y-1 p-3" data-testid={`inspection-detail-item-${item.id}`}>
 							<div class="flex flex-wrap items-center justify-between gap-2" data-testid={`inspection-detail-item-heading-${item.id}`}>
 								<div class="min-w-0" data-testid={`inspection-detail-item-copy-${item.id}`}>
