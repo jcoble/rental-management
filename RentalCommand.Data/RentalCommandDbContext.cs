@@ -287,6 +287,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(e => e.DisplayName).HasMaxLength(200);
+            entity.Property(e => e.TermsPrivacyVersion).HasMaxLength(100);
         });
 
         modelBuilder.Entity<AtomicCommandReceipt>(entity =>

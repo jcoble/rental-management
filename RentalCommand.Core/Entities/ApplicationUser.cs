@@ -8,6 +8,8 @@ namespace RentalCommand.Core.Entities;
 /// </summary>
 public class ApplicationUser : IdentityUser<int>
 {
+    public const string RegistrationTermsPrivacyVersion = "terms-and-privacy-v1";
+
     public ApplicationUser()
     {
         // Failed-login lockout is a platform invariant. Keep the Identity default enabled even
@@ -18,6 +20,15 @@ public class ApplicationUser : IdentityUser<int>
     public string DisplayName { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
+
+    /// <summary>Whether this account accepted the registration Terms of Service and Privacy Policy.</summary>
+    public bool TermsPrivacyAccepted { get; set; }
+
+    /// <summary>UTC time the registration consent was captured.</summary>
+    public DateTime? TermsPrivacyAcceptedAtUtc { get; set; }
+
+    /// <summary>Immutable version label identifying the text accepted at registration.</summary>
+    public string? TermsPrivacyVersion { get; set; }
 
     public ICollection<WorkspaceAccessContext> WorkspaceAccessContexts { get; set; } =
         new List<WorkspaceAccessContext>();

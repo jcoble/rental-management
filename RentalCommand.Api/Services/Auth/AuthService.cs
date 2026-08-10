@@ -272,11 +272,19 @@ public class AuthService : IAuthService
         string operationKey,
         CancellationToken ct = default)
     {
+        if (request.TermsPrivacyAccepted != true)
+        {
+            return AuthResult.ValidationFail(
+                "Registration failed",
+                ["You must agree to the Terms of Service and Privacy Policy."]);
+        }
+
         var bootstrap = await _accountBootstrap.CreateAsync(
             request.Email,
             request.DisplayName,
             request.Password,
             emailConfirmed: false,
+            termsPrivacyAccepted: request.TermsPrivacyAccepted.Value,
             operationKey: operationKey,
             ct: ct);
         if (!bootstrap.Succeeded)

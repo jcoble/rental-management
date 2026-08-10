@@ -9,6 +9,7 @@ public sealed record BootstrapAccountCommand(
     [property: AtomicFingerprintIgnore] string? PasswordHash,
     string CredentialIntentHash,
     bool EmailConfirmed,
+    bool TermsPrivacyAccepted,
     string PortfolioName,
     string ManagementCompanyName,
     string OwnerName,

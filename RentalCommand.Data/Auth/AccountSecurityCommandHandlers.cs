@@ -44,6 +44,11 @@ public sealed class BootstrapAccountHandler
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = now,
+            TermsPrivacyAccepted = command.TermsPrivacyAccepted,
+            TermsPrivacyAcceptedAtUtc = command.TermsPrivacyAccepted ? now : null,
+            TermsPrivacyVersion = command.TermsPrivacyAccepted
+                ? ApplicationUser.RegistrationTermsPrivacyVersion
+                : null,
         };
         _db.Add(user);
         await context.FlushBusinessAsync(ct);
