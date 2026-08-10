@@ -31,10 +31,11 @@ describe("notification settings contract", () => {
   it("opens accessible help", () => {
     assert.match(helpSource, /min-h-11/);
     assert.match(helpSource, /aria-haspopup="dialog"/);
-    assert.match(helpSource, /showModal/);
-    assert.match(helpSource, /aria-labelledby/);
-    assert.match(helpSource, /aria-describedby/);
-    assert.match(helpSource, /onclose=\{returnFocus\}/);
+    assert.match(helpSource, /<Dialog\.Title/);
+    assert.match(helpSource, /<Dialog\.Description/);
+    assert.match(helpSource, /onOpenChange=\{/);
+    assert.match(helpSource, /showCloseButton=\{false\}/);
+    assert.match(helpSource, /data-testid="notification-help-dialog"/);
     assert.match(helpSource, /\/docs\/settings-and-notifications/);
   });
 
