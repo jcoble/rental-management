@@ -10,6 +10,10 @@ describe('Unit destination history contract', () => {
 	const navigationSource = readFileSync(new URL('./unit-tab-navigation.ts', import.meta.url), 'utf8');
 	const ledgerSource = readFileSync(new URL('./tabs/LedgerTab.svelte', import.meta.url), 'utf8');
 	const listingSource = readFileSync(new URL('./tabs/ListingTab.svelte', import.meta.url), 'utf8');
+	const recurringViewSource = readFileSync(
+		new URL('../maintenance/UnitRecurringMaintenanceView.svelte', import.meta.url),
+		'utf8',
+	);
 
 	test('uses subordinate section switchers so each destination shows one focused workspace', () => {
 		for (const surface of ['unit-leasing-surface', 'unit-tenant-lease-surface', 'unit-maintenance-surface', 'unit-documents-history-surface']) {
@@ -29,8 +33,9 @@ describe('Unit destination history contract', () => {
 	});
 
 	test('uses validated views as the visible panel authority without scroll-to-section navigation', () => {
+		const panelSource = `${pageSource}\n${recurringViewSource}`;
 		for (const section of ['applications', 'residents', 'inspections', 'recurring', 'turnover', 'history']) {
-			assert.match(pageSource, new RegExp(`data-testid="unit-${section}-section"`));
+			assert.match(panelSource, new RegExp(`data-testid="unit-${section}-section"`));
 		}
 		assert.match(ledgerSource, /resolveUnitUrlDestination\(page\.url\)/);
 		assert.match(ledgerSource, /operating-costs/);
