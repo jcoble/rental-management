@@ -66,6 +66,16 @@ describe('RangeDatePicker behavior', () => {
 		);
 		assert.equal(preset.invalid, false);
 	});
+
+	it('clears both range endpoints through the normal change contract', () => {
+		const cleared = applyRangeDatePickerValue(
+			{ start: '2026-01-01', end: '2026-01-31', invalid: true },
+			{ start: '', end: '' }
+		);
+		assert.deepEqual({ start: cleared.start, end: cleared.end }, { start: '', end: '' });
+		assert.equal(cleared.invalid, false);
+		assert.equal(cleared.changed, true);
+	});
 });
 
 describe('scan review date guard behavior', () => {

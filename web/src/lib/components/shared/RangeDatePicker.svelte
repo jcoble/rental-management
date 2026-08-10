@@ -134,7 +134,7 @@
 		return placeholder;
 	});
 
-	const hasValue = $derived(Boolean(start));
+	const hasValue = $derived(Boolean(start || end));
 
 	function apply(nextStart: string, nextEnd: string, close = false) {
 		const next = applyRangeDatePickerValue(
@@ -142,11 +142,17 @@
 			{ start: nextStart, end: nextEnd }
 		);
 		invalid = next.invalid;
+		startText = formatIsoToUsInput(next.start);
+		endText = formatIsoToUsInput(next.end);
 		if (!next.changed) return;
 		start = next.start;
 		end = next.end;
 		onchange?.({ start: next.start, end: next.end });
 		if (close) open = false;
+	}
+
+	function clearRange() {
+		apply('', '', true);
 	}
 
 	function commitTypedDate(field: 'start' | 'end') {
@@ -273,21 +279,40 @@
 </script>
 
 <Popover.Root bind:open>
-	<Popover.Trigger
-		{id}
-		data-testid={testid}
-		{disabled}
-		class={cn(
-			buttonVariants({ variant: 'outline' }),
-			'h-10 w-full justify-start text-left font-normal',
-			!hasValue && 'text-muted-foreground',
-			invalid && 'ring-2 ring-destructive'
-		)}
-		aria-invalid={invalid}
+	<div
+		class="flex w-full min-w-0 items-center gap-2"
+		data-testid={testid ? `${testid}-shell` : 'range-date-picker-shell'}
 	>
-		<CalendarIcon class="size-4 shrink-0 opacity-70" />
-		{label}
-	</Popover.Trigger>
+		<Popover.Trigger
+			{id}
+			data-testid={testid}
+			{disabled}
+			class={cn(
+				buttonVariants({ variant: 'outline' }),
+				'h-10 min-w-0 flex-1 justify-start text-left font-normal',
+				!hasValue && 'text-muted-foreground',
+				invalid && 'ring-2 ring-destructive'
+			)}
+			aria-invalid={invalid}
+		>
+			<CalendarIcon class="size-4 shrink-0 opacity-70" />
+			{label}
+		</Popover.Trigger>
+		{#if hasValue}
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				class="shrink-0 px-2 text-xs"
+				aria-label="Clear range"
+				data-testid={testid ? `${testid}-clear` : 'range-date-picker-clear'}
+				{disabled}
+				onclick={clearRange}
+			>
+				Clear range
+			</Button>
+		{/if}
+	</div>
 	<Popover.Content class="w-auto p-0" {align}>
 		<div class="flex flex-col sm:flex-row">
 			{#if presets}

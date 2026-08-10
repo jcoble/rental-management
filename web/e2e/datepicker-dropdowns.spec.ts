@@ -89,23 +89,86 @@ test.describe('TSK-846 calendar and range dropdowns', () => {
 		await page.getByTestId('report-date-range-start-input').fill('');
 		await page.getByTestId('report-date-range-end-input').fill('');
 
-		const values = await page.locator('[data-range-calendar-day][data-value]:not([data-outside-month])').evaluateAll((nodes) =>
+		const primaryMonthDays = page.locator('[data-range-calendar-day][data-value]:visible:not([data-outside-month])');
+		const values = await primaryMonthDays.evaluateAll((nodes) =>
 			nodes.map((node) => (node as HTMLElement).dataset.value).filter((value): value is string => Boolean(value))
 		);
 		const months = [...new Set(values.map((value) => value.slice(0, 7)))];
 		expect(months.length).toBeGreaterThanOrEqual(2);
-		const start = values.filter((value) => value.startsWith(months[0]))[2];
-		const end = values.filter((value) => value.startsWith(months[1]))[15];
-		expect(start).toBeTruthy();
-		expect(end).toBeTruthy();
-		await page.locator(`[data-range-calendar-day][data-value="${start}"]:not([data-outside-month])`).first().click();
-		await page.locator(`[data-range-calendar-day][data-value="${end}"]:not([data-outside-month])`).first().click();
+		const start = `${months[0]}-10`;
+		const end = `${months[1]}-10`;
+		expect(values).toContain(start);
+		expect(values).toContain(end);
+		await page.locator(`[data-range-calendar-day][data-value="${start}"]:visible:not([data-outside-month])`).click();
+		await page.locator(`[data-range-calendar-day][data-value="${end}"]:visible:not([data-outside-month])`).click();
 		await expect(page.getByTestId('report-date-range')).toContainText('–');
 
 		await page.getByTestId('report-date-range').click();
-		await expect(page.locator('[data-range-start]')).toHaveCount(2);
-		await expect(page.locator('[data-range-end]')).toHaveCount(2);
-		expect(await page.locator('[data-range-middle]').count()).toBeGreaterThan(0);
+		const selectedStart = page.locator(`[data-range-calendar-day][data-value="${start}"]:visible:not([data-outside-month])`);
+		const selectedEnd = page.locator(`[data-range-calendar-day][data-value="${end}"]:visible:not([data-outside-month])`);
+		await expect(selectedStart).toHaveAttribute('data-range-start', '');
+		await expect(selectedEnd).toHaveAttribute('data-range-end', '');
+		const interiorValues = values.filter((value) => value > start && value < end);
+		expect(interiorValues.length).toBeGreaterThan(20);
+		for (const value of interiorValues) {
+			await expect(
+				page.locator(`[data-range-calendar-day][data-value="${value}"]:visible:not([data-outside-month])`)
+			).toHaveAttribute('data-range-middle', '');
+		}
+		const interiorMissingMiddle = await primaryMonthDays.evaluateAll((nodes, range) => {
+			const { start: rangeStart, end: rangeEnd } = range as { start: string; end: string };
+			return nodes
+				.filter((node) => {
+					const value = (node as HTMLElement).dataset.value;
+					return Boolean(value && value > rangeStart && value < rangeEnd);
+				})
+				.filter((node) => !(node as HTMLElement).hasAttribute('data-range-middle'))
+				.map((node) => (node as HTMLElement).dataset.value)
+				.filter((value): value is string => Boolean(value));
+		}, { start, end });
+		expect(interiorMissingMiddle).toEqual([]);
 		await page.screenshot({ path: 'output/playwright/tsk846-after-range-connected.png', fullPage: false });
+	});
+
+	test('accounting Activity clears its range on a phone and preserves exact ISO request params', async ({ page, request }) => {
+		await page.setViewportSize({ width: 390, height: 640 });
+		await expect(page.evaluate(() => `${window.innerWidth}x${window.innerHeight}`)).resolves.toBe('390x640');
+		await loginWithApi(page, request);
+
+		const initialFrom = '2026-08-03';
+		const initialTo = '2026-09-17';
+		const transactionRequests: URL[] = [];
+		page.on('request', (request) => {
+			const url = new URL(request.url());
+			if (url.pathname.endsWith('/api/v1/accounting/transactions')) transactionRequests.push(url);
+		});
+
+		await page.goto(`/accounting?tab=activity&from=${initialFrom}&to=${initialTo}`, { waitUntil: 'networkidle' });
+		await expect(page.getByTestId('accounting-tab-activity')).toHaveAttribute('aria-selected', 'true');
+		await expect(page.getByTestId('transaction-date-range-filter')).toContainText('Aug 3, 2026 – Sep 17, 2026');
+		await expect.poll(() => transactionRequests.some((url) => url.searchParams.get('from') === initialFrom && url.searchParams.get('to') === initialTo)).toBe(true);
+
+		const clearRequestPromise = page.waitForRequest((request) => {
+			const url = new URL(request.url());
+			return url.pathname.endsWith('/api/v1/accounting/transactions') && !url.searchParams.has('from') && !url.searchParams.has('to');
+		});
+		await page.getByRole('button', { name: 'Clear range', exact: true }).click();
+		await clearRequestPromise;
+		await expect(page.getByTestId('transaction-date-range-filter')).toContainText('Transaction date range');
+		await expect.poll(() => {
+			const url = new URL(page.url());
+			return !url.searchParams.has('from') && !url.searchParams.has('to');
+		}).toBe(true);
+		await page.screenshot({ path: 'output/playwright/tsk846-round2-accounting-mobile-cleared.png', fullPage: false });
+
+		await page.getByTestId('transaction-date-range-filter').click();
+		const visibleDays = page.locator('[data-range-calendar-day][data-value]:visible:not([data-outside-month])');
+		await expect(visibleDays).not.toHaveCount(0);
+		const newStart = '2026-08-05';
+		const newEnd = '2026-08-12';
+		await page.locator(`[data-range-calendar-day][data-value="${newStart}"]:visible:not([data-outside-month])`).click();
+		await page.locator(`[data-range-calendar-day][data-value="${newEnd}"]:visible:not([data-outside-month])`).click();
+		await expect.poll(() => transactionRequests.some((url) => url.searchParams.get('from') === newStart && url.searchParams.get('to') === newEnd)).toBe(true);
+		await page.screenshot({ path: 'output/playwright/tsk846-round2-accounting-mobile-new-range.png', fullPage: false });
 	});
 });
