@@ -148,12 +148,15 @@ test.describe('TSK-846 calendar and range dropdowns', () => {
 		await expect(page.getByTestId('transaction-date-range-filter')).toContainText('Aug 3, 2026 – Sep 17, 2026');
 		await expect.poll(() => transactionRequests.some((url) => url.searchParams.get('from') === initialFrom && url.searchParams.get('to') === initialTo)).toBe(true);
 
-		const clearRequestPromise = page.waitForRequest((request) => {
-			const url = new URL(request.url());
-			return url.pathname.endsWith('/api/v1/accounting/transactions') && !url.searchParams.has('from') && !url.searchParams.has('to');
-		});
-		await page.getByRole('button', { name: 'Clear range', exact: true }).click();
-		await clearRequestPromise;
+		const transactionRequestCountBeforeClear = transactionRequests.length;
+		const clearRangeButton = page.getByRole('button', { name: 'Clear range', exact: true });
+		await expect(clearRangeButton).toBeVisible();
+		await clearRangeButton.click();
+		await expect.poll(() => transactionRequests.length).toBeGreaterThan(transactionRequestCountBeforeClear);
+		const firstTransactionRequestAfterClear = transactionRequests[transactionRequestCountBeforeClear];
+		expect(firstTransactionRequestAfterClear).toBeDefined();
+		expect(firstTransactionRequestAfterClear?.searchParams.has('from')).toBe(false);
+		expect(firstTransactionRequestAfterClear?.searchParams.has('to')).toBe(false);
 		await expect(page.getByTestId('transaction-date-range-filter')).toContainText('Transaction date range');
 		await expect.poll(() => {
 			const url = new URL(page.url());
