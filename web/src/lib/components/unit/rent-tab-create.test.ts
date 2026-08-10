@@ -36,7 +36,7 @@ describe('unit rent canonical tenant ledger workflows', () => {
 		assert.match(source, /AccountingDetailMode/);
 		assert.match(source, /TenantLedgerPanel \{dashboard\} \{onScan\} onopenpayment=\{openReceipt\}/);
 		assert.match(source, /PaymentDetail/);
-		assert.match(source, /unitPaymentId: id/);
+		assert.match(source, /goto\(unitUrl\(id\)/);
 		assert.doesNotMatch(source, /tenantAccounts\.(accountEntriesPage|chargesPage|depositsPage)/);
 		assert.doesNotMatch(source, /payments\.(recordReceipt|postCharge)/);
 	});
@@ -67,8 +67,9 @@ describe('unit rent canonical tenant ledger workflows', () => {
 
 	it('keeps correction actions in the canonical month ledger and out of RentTab', () => {
 		assert.match(panelSource, /data-testid="fix-charge-dialog"/);
-		assert.match(panelSource, /if \(action === 'give-credit'\)/);
-		assert.match(panelSource, /if \(action === 'fix-charge'\)/);
+		assert.match(panelSource, /buildTenantLedgerRowActionFlow/);
+		assert.match(panelSource, /flow\.kind === 'give-credit'/);
+		assert.match(panelSource, /flow\.kind === 'reverse'/);
 		assert.doesNotMatch(source, /reverseEntry/);
 	});
 

@@ -58,7 +58,7 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
         if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
                 CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
             return NotFound();
-        var page = await _ledgerReadModels.GetTenantLedgerAsync(GetPortfolioId(), tenantAccountId, query, ct);
+        var page = await _ledgerReadModels.GetTenantLedgerAsync(GetWorkspaceReadScope(), tenantAccountId, query, ct);
         return page is null ? NotFound() : Ok(page);
     }
 
@@ -72,8 +72,22 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
                 CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
             return NotFound();
         var summary = await _ledgerReadModels.GetTenantMonthSummaryAsync(
-            GetPortfolioId(), tenantAccountId, query, ct);
+            GetWorkspaceReadScope(), tenantAccountId, query, ct);
         return summary is null ? NotFound() : Ok(summary);
+    }
+
+    [HttpGet("credit-targets")]
+    [ProducesResponseType(typeof(AccountingPage<TenantCreditTargetRow>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AccountingPage<TenantCreditTargetRow>>> CreditTargets(
+        int tenantAccountId, [FromQuery] TenantCreditTargetQuery query, CancellationToken ct)
+    {
+        if (!await _db.CanReadTenantAccountAsync(GetWorkspaceReadScope(), tenantAccountId,
+                CapabilityKeys.MoneyBalancesRead, DateTime.UtcNow, ct))
+            return NotFound();
+        var page = await _ledgerReadModels.GetTenantCreditTargetsAsync(
+            GetWorkspaceReadScope(), tenantAccountId, query, ct);
+        return page is null ? NotFound() : Ok(page);
     }
 
     [HttpGet("ledger-summary")]

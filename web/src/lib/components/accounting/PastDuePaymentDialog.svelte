@@ -3,6 +3,7 @@
 	import type { TenantLedgerRow } from '$lib/api/endpoints/tenant-ledgers';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -173,7 +174,7 @@
 						{#each allocationPreview as allocation (allocation.charge.tenantLedgerEntryId)}
 							<li class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs" data-testid={`past-due-allocation-preview-row-${allocation.charge.tenantLedgerEntryId}`}>
 								<span class="min-w-0 truncate" data-testid={`past-due-allocation-preview-charge-${allocation.charge.tenantLedgerEntryId}`}>
-									{allocation.charge.description || 'Charge'} · {formatAccountingDate(allocation.charge.dueOn || allocation.charge.effectiveOn)}
+									{normalizeTenantLedgerDescription(allocation.charge.description) || 'Charge'} · {formatAccountingDate(allocation.charge.dueOn || allocation.charge.effectiveOn)}
 								</span>
 								<span class="shrink-0 font-mono tabular-nums" data-testid={`past-due-allocation-preview-amount-${allocation.charge.tenantLedgerEntryId}`}>
 									{formatAccountingCurrency(allocation.amount, allocation.charge.currency)}

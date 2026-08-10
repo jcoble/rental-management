@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { AllocationRef } from '$lib/api/endpoints/tenant-ledgers';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 
 	let {
 		allocations = [],
@@ -22,7 +23,7 @@
 			{#each visibleAllocations as allocation (allocation.allocationId)}
 				<li class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs" data-testid={`tenant-ledger-payment-allocation-${allocation.allocationId}`}>
 					<span class="min-w-0 truncate text-foreground" data-testid={`tenant-ledger-payment-allocation-label-${allocation.allocationId}`}>
-						{allocation.targetDescription || 'Charge'}
+						{normalizeTenantLedgerDescription(allocation.targetDescription) || 'Charge'}
 					</span>
 					<span class="shrink-0 font-mono tabular-nums text-muted-foreground" data-testid={`tenant-ledger-payment-allocation-fact-${allocation.allocationId}`}>
 						{formatAccountingDate(allocation.effectiveOn)} · {formatAccountingCurrency(allocation.amount, currency)}

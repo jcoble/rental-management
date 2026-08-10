@@ -155,6 +155,8 @@ export interface JournalDetailLine {
 	accountCode: string;
 	accountName: string;
 	normalBalance: NormalBalance;
+	accountType: AccountType;
+	systemKey: string | null;
 	debitAmount: number;
 	creditAmount: number;
 	memo: string | null;
@@ -182,6 +184,7 @@ export interface SourceJournalSummary {
 	postedAtUtc: string;
 	sourceType: JournalSourceType;
 	description: string;
+	currency: string;
 	totalDebits: number;
 	totalCredits: number;
 	isReversal: boolean;

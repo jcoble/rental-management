@@ -17,6 +17,7 @@
 		type JournalLineDisplayInput
 	} from '$lib/accounting/accounting-display';
 	import { ACCOUNTING_HELP } from '$lib/accounting/accounting-help';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { accountingBooks, type JournalDetailLine } from '$lib/api/endpoints/accounting-books';
 	import { getAccountingDetailMode } from './AccountingDetailMode.svelte';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
@@ -63,9 +64,14 @@
 		return {
 			accountName: line.accountName,
 			accountCode: line.accountCode,
+			accountType: line.accountType,
+			systemKey: line.systemKey,
 			debitAmount: line.debitAmount,
 			creditAmount: line.creditAmount,
-			normalBalance: line.normalBalance
+			normalBalance: line.normalBalance,
+			currency: journalQuery.data?.currency ?? 'USD',
+			effectiveOn: journalQuery.data?.effectiveOn,
+			sourceType: journalQuery.data?.sourceType
 		};
 	}
 
@@ -122,7 +128,7 @@
 						<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 							Accounting record · {formatAccountingDate(detail.effectiveOn)}
 						</p>
-						<h2 class="mt-1 text-lg font-semibold">{detail.description}</h2>
+						<h2 class="mt-1 text-lg font-semibold">{normalizeTenantLedgerDescription(detail.description)}</h2>
 						<p class="mt-1 text-sm text-muted-foreground">{formatSourceRecordLabel(detail.sourceType, detail.sourceId)}</p>
 					</div>
 					<Button variant="ghost" size="icon" aria-label="Close accounting record" onclick={close}>
@@ -147,7 +153,7 @@
 							{#each detail.lines as line (line.id)}
 								{@const input = lineInput(line)}
 								{@const entry = getJournalLineEntry(input)}
-								<div class="flex items-start justify-between gap-4 px-3 py-3 text-sm">
+								<div class="flex items-start justify-between gap-4 px-3 py-3 text-sm" data-testid={`journal-detail-line-${line.id}`}>
 									{#if advanced}
 										<div class="min-w-0">
 											<p class="font-medium">{line.accountCode} {line.accountName}</p>
