@@ -6,6 +6,7 @@ import {
 	synchronizeUnitTabState,
 	type UnitTabNavigationState,
 } from './unit-tab-navigation.ts';
+import type { UnitDestination } from './unit-tabs.ts';
 
 type NavigationContainer = {
 	url: URL;
@@ -76,6 +77,54 @@ describe('unit tab page navigation integration', () => {
 			unitPaymentId: null,
 			unitExpenseId: null,
 		});
+	});
+
+	it('canonicalizes a work-order deep link and converges its shallow-state sync', () => {
+		const url = new URL('https://rental.local/units/1?tab=money&view=work-orders&wo=3');
+		const coldState = synchronizeUnitTabState(url, undefined);
+
+		assert.deepEqual(resolveUnitPageDestination(url, undefined), {
+			tab: 'maintenance',
+			view: 'work-orders',
+		});
+		assert.deepEqual(coldState, {
+			unitPathname: '/units/1',
+			unitTab: 'maintenance',
+			unitView: 'work-orders',
+			unitViewByPath: { '/units/1': { maintenance: 'work-orders' } },
+			unitPaymentId: null,
+			unitExpenseId: null,
+		});
+		assert.equal(synchronizeUnitTabState(url, coldState), null);
+	});
+
+	it('converges unknown nested views once for every default-bearing tab and Summary', () => {
+		const cases: ReadonlyArray<{ url: string; destination: UnitDestination }> = [
+			{ url: 'https://rental.local/units/1?tab=leasing&view=unknown', destination: { tab: 'leasing', view: 'listing' } },
+			{ url: 'https://rental.local/units/1?tab=tenant-lease&view=unknown', destination: { tab: 'tenant-lease', view: 'agreements' } },
+			{ url: 'https://rental.local/units/1?tab=money&view=unknown', destination: { tab: 'money', view: 'tenant-account' } },
+			{ url: 'https://rental.local/units/1?tab=maintenance&view=unknown', destination: { tab: 'maintenance', view: 'work-orders' } },
+			{ url: 'https://rental.local/units/1?tab=documents-history&view=unknown', destination: { tab: 'documents-history', view: 'documents' } },
+			{ url: 'https://rental.local/units/1?tab=summary', destination: { tab: 'summary' } },
+		];
+
+		for (const { url: urlValue, destination } of cases) {
+			const url = new URL(urlValue);
+			const firstState = synchronizeUnitTabState(url, undefined);
+
+			assert.deepEqual(resolveUnitPageDestination(url, undefined), destination, urlValue);
+			assert.deepEqual(firstState, {
+				unitPathname: '/units/1',
+				unitTab: destination.tab,
+				unitView: destination.view ?? null,
+				unitViewByPath: {
+					'/units/1': destination.view ? { [destination.tab]: destination.view } : {},
+				},
+				unitPaymentId: null,
+				unitExpenseId: null,
+			}, urlValue);
+			assert.equal(synchronizeUnitTabState(url, firstState), null, urlValue);
+		}
 	});
 
 	it('restores Applications when the page state retains the nested view but the URL does not', () => {

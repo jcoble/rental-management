@@ -63,7 +63,7 @@ async function stubConversationDetail(page: Page, id: number, subject?: string, 
 type UnitCase = {
 	name: string;
 	path: string;
-	expectation: 'unit' | 'applications' | 'money' | 'error';
+	expectation: 'unit' | 'applications' | 'money' | 'work-orders' | 'error';
 };
 
 const UNIT_CASES: UnitCase[] = [
@@ -79,6 +79,16 @@ const UNIT_CASES: UnitCase[] = [
 		name: 'money tenant-account tab and query context',
 		path: '/units/10?tab=money&view=tenant-account&tenantAccount=11',
 		expectation: 'money'
+	},
+	{
+		name: 'unknown Money view falls back to the default',
+		path: '/units/10?tab=money&view=unknown',
+		expectation: 'money'
+	},
+	{
+		name: 'work-orders deep link with work-order context',
+		path: '/units/1?tab=money&view=work-orders&wo=3',
+		expectation: 'work-orders'
 	}
 ];
 
@@ -89,7 +99,7 @@ function isExpectedTransportNoise(message: string): boolean {
 function routeLifecycleErrors(messages: string[]): string[] {
 	const lifecycleErrors: string[] = [];
 	for (const message of messages) {
-		const hasCrashSignature = /\$set|Cannot read properties of undefined/.test(message);
+		const hasCrashSignature = /effect_update_depth_exceeded|\$set|Cannot read properties of undefined/.test(message);
 		if (hasCrashSignature) {
 			lifecycleErrors.push(message);
 			continue;
@@ -101,7 +111,8 @@ function routeLifecycleErrors(messages: string[]): string[] {
 }
 
 async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): Promise<void> {
-	await expect(page.getByTestId('unit-page'), `${unitCase.name} ${phase} shell`).toBeVisible({ timeout: 15_000 });
+	const contentTimeout = unitCase.expectation === 'work-orders' ? 30_000 : 15_000;
+	await expect(page.getByTestId('unit-page'), `${unitCase.name} ${phase} shell`).toBeVisible({ timeout: contentTimeout });
 
 	switch (unitCase.expectation) {
 		case 'unit':
@@ -113,6 +124,9 @@ async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): P
 		case 'money':
 			await expect(page.getByTestId('unit-rent-tab'), `${unitCase.name} ${phase} panel`).toBeVisible({ timeout: 15_000 });
 			break;
+		case 'work-orders':
+			await expect(page.getByTestId('unit-work-orders-section'), `${unitCase.name} ${phase} panel`).toBeVisible({ timeout: contentTimeout });
+			break;
 		case 'error':
 			await expect(page.getByTestId('unit-error'), `${unitCase.name} ${phase} error`).toBeVisible({ timeout: 15_000 });
 			break;
@@ -120,7 +134,8 @@ async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): P
 }
 
 test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => {
-	test('cold-loads and refreshes valid, encoded, unknown, tab, and money unit URLs', async ({ page }) => {
+	test('cold-loads and refreshes valid, encoded, unknown, tab, money, unknown-view, and work-order unit URLs', async ({ page }) => {
+		test.setTimeout(120_000);
 		const failures: string[] = [];
 		const consoleErrors: string[] = [];
 		const pageErrors: string[] = [];
