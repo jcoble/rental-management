@@ -27,6 +27,7 @@
 	import InspectionDetail from '$lib/components/records/InspectionDetail.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
 	import TurnoverTab from '$lib/components/unit/tabs/TurnoverTab.svelte';
+	import RecurringMaintenanceFormDialog from '$lib/components/maintenance/RecurringMaintenanceFormDialog.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
@@ -50,7 +51,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import type { UnitLeaseSummary } from '$lib/types';
-	import { ArrowLeft } from '@lucide/svelte';
+	import { ArrowLeft, Plus } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
@@ -128,6 +129,7 @@
 	let recurringSearch = $state('');
 	let recurringSort = $state('nextDueDate');
 	let recurringSkip = $state(0);
+	let showRecurringForm = $state(false);
 	const maintenancePageSize = 10;
 	const setTab = createUnitTabNavigationHandler({
 		getCurrent: () => ({
@@ -212,6 +214,19 @@
 			take: maintenancePageSize,
 		}),
 	}));
+	function openRecurringCreate() {
+		showRecurringForm = true;
+	}
+
+	function closeRecurringForm() {
+		showRecurringForm = false;
+	}
+
+	function handleRecurringSaved() {
+		showRecurringForm = false;
+		recurringSkip = 0;
+		void unitRecurringQuery.refetch();
+	}
 	const moveInAppointment = $derived(
 		dashboard?.overview.upcomingAppointments.find((appointment) =>
 			appointment.type === 'MoveIn'
@@ -588,10 +603,13 @@
 											</Select.Trigger>
 											<Select.Content>
 												<Select.Item value="nextDueDate" label="Next due">Next due</Select.Item>
-												<Select.Item value="-nextDueDate" label="Latest due">Latest due</Select.Item>
-												<Select.Item value="title" label="Title">Title</Select.Item>
-											</Select.Content>
+														<Select.Item value="-nextDueDate" label="Latest due">Latest due</Select.Item>
+														<Select.Item value="title" label="Title">Title</Select.Item>
+												</Select.Content>
 										</Select.Root>
+										<Button data-testid="unit-recurring-create-button" onclick={openRecurringCreate} class="gap-2">
+											<Plus class="h-4 w-4" /> New recurring task
+										</Button>
 									</div>
 									{#if unitRecurringQuery.isLoading}
 										<LoadingState label="Loading recurring work" testid="unit-recurring-loading" />
@@ -600,7 +618,7 @@
 											<p class="text-sm font-medium text-destructive">Recurring work could not be loaded.</p>
 											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitRecurringQuery.refetch()}>Try again</Button>
 										</div>
-									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground">No recurring work for this rental.</p>
+									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground" data-testid="unit-recurring-empty">No recurring tasks yet. Add one to have work orders created on a schedule.</p>
 									{:else}
 										<ul class="divide-y rounded-lg border">
 											{#each unitRecurringQuery.data.items as task (task.id)}
@@ -653,6 +671,18 @@
 		</div>
 	{/if}
 </div>
+
+<RecurringMaintenanceFormDialog
+	open={showRecurringForm}
+	propertyId={dashboard?.unit.propertyId ?? null}
+	propertyLabel={dashboard?.propertyName ?? ''}
+	unitId={dashboard?.unit.id ?? null}
+	unitLabel={dashboard ? `Unit ${dashboard.unit.unitNumber}` : ''}
+	lockProperty
+	lockUnit
+	onclose={closeRecurringForm}
+	onsaved={handleRecurringSaved}
+/>
 
 {#if prepareMoveInPrefill}
 	<PrepareMoveInDialog

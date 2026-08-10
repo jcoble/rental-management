@@ -6,6 +6,10 @@ const page = readFileSync(
 	new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 	'utf8',
 );
+const recurringDialog = readFileSync(
+	new URL('../maintenance/RecurringMaintenanceFormDialog.svelte', import.meta.url),
+	'utf8',
+);
 const inspections = readFileSync(new URL('../../api/endpoints/inspections.ts', import.meta.url), 'utf8');
 const recurring = readFileSync(new URL('../../api/endpoints/recurring-maintenance.ts', import.meta.url), 'utf8');
 const inspectionDetail = readFileSync(new URL('../records/InspectionDetail.svelte', import.meta.url), 'utf8');
@@ -35,5 +39,19 @@ describe('Unit Maintenance query contract', () => {
 		assert.doesNotMatch(inspectionDetail, /\.sort\(/);
 		assert.match(inspectionDetail, /data-testid="inspection-detail-facts"/);
 		assert.match(inspectionDetail, /data-testid="inspection-detail-checklist"/);
+	});
+
+	test('offers a unit-scoped create flow and refreshes the list after save', () => {
+		assert.match(page, /RecurringMaintenanceFormDialog/);
+		assert.match(page, /data-testid="unit-recurring-create-button"/);
+		assert.match(page, /propertyId=\{dashboard\?\.unit\.propertyId/);
+		assert.match(page, /unitId=\{dashboard\?\.unit\.id/);
+		assert.match(page, /lockProperty/);
+		assert.match(page, /lockUnit/);
+		assert.match(page, /unitRecurringQuery\.refetch\(\)/);
+		assert.match(page, /No recurring tasks yet\. Add one to have work orders created on a schedule\./);
+		assert.match(recurringDialog, /recurringMaintenance\.create\(data as never\)/);
+		assert.match(recurringDialog, /disabled=\{editingId != null \|\| lockProperty\}/);
+		assert.match(recurringDialog, /disabled=\{!form\.propertyId \|\| lockUnit\}/);
 	});
 });
