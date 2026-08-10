@@ -216,6 +216,21 @@ public class CsvImportServiceTests : IDisposable
         rows.RootElement[0].GetProperty("UnitNumber").GetString().Should().Be("Home");
     }
 
+    [Fact]
+    public async Task PropertyPreview_InvalidRentalStructure_ExplainsAcceptedValues()
+    {
+        const string csv =
+            "name,addressLine1,city,state,postalCode,type,rentalStructure,unitNumber\n" +
+            "House A,1 Main St,Springfield,IL,62701,singlefamily,duplex,Home\n";
+
+        var result = await _sut.ImportAsync(_scope, "Property", Csv(csv), dryRun: true);
+
+        result.Rows.Should().ContainSingle();
+        result.Rows[0].Valid.Should().BeFalse();
+        result.Rows[0].Errors.Should().Contain(
+            "Rental setup 'duplex' is invalid. Use \"SingleRental\" for one rental or \"MultiRental\" for multiple rentals.");
+    }
+
     // -------------------------------------------------------------------------
     // Financial imports: create through domain services and skip natural-key duplicates
     // -------------------------------------------------------------------------

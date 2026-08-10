@@ -324,7 +324,7 @@ public sealed class QueueOwnerStatementEmailHandler
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
             || command.DeliveryIdempotencyKey.Length > 128)
             throw new ArgumentException(
-                "Owner statement recipient, subject, message, and year are required.");
+                "Complete owner statement email details and a request key are required.");
     }
 }
 

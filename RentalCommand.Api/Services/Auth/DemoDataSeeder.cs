@@ -1659,7 +1659,7 @@ public sealed class DemoSeedCommandHandler
             command.PortfolioId,
             AuditLogOperation.Updated,
             ChangeReason: result.AlreadyPresent
-                ? "Canonical demo facts reconciled."
+                ? "Existing demo information brought up to date."
                 : "Rich demo portfolio graph seeded."));
         attempt.StageOutbox(new OutboxMessage
         {

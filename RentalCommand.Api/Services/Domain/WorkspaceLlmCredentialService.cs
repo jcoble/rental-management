@@ -332,20 +332,20 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         return normalized;
     }
 
-    private static string Required(string value, string name, int maxLength)
+    private static string Required(string? value, string name, int maxLength, string? message = null)
     {
         var normalized = value?.Trim() ?? string.Empty;
         if (normalized.Length is 0 || normalized.Length > maxLength)
         {
             throw new ArgumentException(
-                $"{name} is required and must be at most {maxLength} characters.",
+                message ?? $"{name} is required and must be at most {maxLength} characters.",
                 name);
         }
         return normalized;
     }
 
     private static string MutationIdentity(int portfolioId, string? clientOperationId) =>
-        $"{portfolioId}:{Required(clientOperationId, "Request key", 160)}";
+        $"{portfolioId}:{Required(clientOperationId, nameof(clientOperationId), 160, "A request key is required and cannot exceed 160 characters.")}";
 
     private static string ApiKeyIntentDigest(string provider, string modelId, string apiKey)
     {

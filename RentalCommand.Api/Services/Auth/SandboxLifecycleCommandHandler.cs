@@ -88,7 +88,7 @@ public sealed class SandboxLifecycleCommandHandler
                 AuditLogOperation.Updated,
                 command.ActorUserId,
                 ChangeReason: seed.AlreadyPresent
-                    ? "Canonical demo facts reconciled during Sandbox onboarding."
+                    ? "Existing demo information brought up to date during Sandbox onboarding."
                     : "Rich demo portfolio graph seeded during Sandbox onboarding."));
             portfolio.IsSandbox = true;
             portfolio.SandboxSeededAtUtc = now;

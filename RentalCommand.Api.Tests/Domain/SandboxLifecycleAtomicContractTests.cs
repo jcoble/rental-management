@@ -50,4 +50,33 @@ public sealed class SandboxLifecycleAtomicContractTests
             .Select(field => field.FieldType)
             .Should().NotContain(typeof(IAtomicUnitOfWork));
     }
+
+    [Fact]
+    public void Demo_audit_reasons_use_plain_english_copy()
+    {
+        var sandboxHandler = ReadSource(
+            "RentalCommand.Api", "Services", "Auth", "SandboxLifecycleCommandHandler.cs");
+        sandboxHandler.Should().Contain(
+            "Existing demo information brought up to date during Sandbox onboarding.");
+        sandboxHandler.Should().NotContain("Canonical demo facts reconciled during Sandbox onboarding.");
+
+        var demoSeeder = ReadSource(
+            "RentalCommand.Api", "Services", "Auth", "DemoDataSeeder.cs");
+        demoSeeder.Should().Contain("Existing demo information brought up to date.");
+        demoSeeder.Should().NotContain("Canonical demo facts reconciled.");
+    }
+
+    private static string ReadSource(params string[] path)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null
+               && !File.Exists(Path.Combine(directory.FullName, "RentalCommand.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        var root = directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not locate the Rental Command repository root.");
+        return File.ReadAllText(Path.Combine(new[] { root }.Concat(path).ToArray()));
+    }
 }

@@ -211,7 +211,7 @@ public sealed class CsvImportService : ICsvImportService
             }
             else
             {
-                errors.Add($"Rental setup '{structureRaw}' is invalid. Choose single-rental or multi-rental.");
+                errors.Add($"Rental setup '{structureRaw}' is invalid. Use \"SingleRental\" for one rental or \"MultiRental\" for multiple rentals.");
             }
             var unitNumber = NullIfEmpty(Cell("unitNumber"));
             if (unitNumber is null)

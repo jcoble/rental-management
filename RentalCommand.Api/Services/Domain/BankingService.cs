@@ -1138,7 +1138,7 @@ public class BankingService : IBankingService
                 transferBankTransactionId) == 0)
         {
             throw new DomainValidationException(
-                "Choose exactly one bank transaction to reconcile.");
+                "Choose exactly one record to match to this bank transaction.");
         }
     }
 
@@ -1196,7 +1196,7 @@ public class BankingService : IBankingService
         : loanPaymentId.HasValue ? BankReconciliationAction.MatchLoanPayment
         : ownerDistributionId.HasValue ? BankReconciliationAction.MatchOwnerDistribution
         : transferBankTransactionId.HasValue ? BankReconciliationAction.MatchTransfer
-        : throw new DomainValidationException("Choose one bank transaction to reconcile.");
+        : throw new DomainValidationException("Choose one record to match to this bank transaction.");
 
     private async Task<BankMatchSuggestionResponse?> LoadSqlRankedSuggestionAsync(
         int portfolioId,
