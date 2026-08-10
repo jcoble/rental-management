@@ -98,6 +98,9 @@ async function assertRangeMonthDropdown(
 }
 
 async function openTenantMoney(page: Page, request: Parameters<typeof findLeasedUnit>[0]): Promise<void> {
+	await page.setViewportSize({ width: 1710, height: 990 });
+	await expect.poll(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })))
+		.toEqual({ width: 1710, height: 990 });
 	const token = await apiToken(request);
 	const unit = await findLeasedUnit(request, token);
 	await loginWithApi(page, request);

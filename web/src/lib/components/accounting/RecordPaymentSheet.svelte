@@ -4,6 +4,7 @@
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -170,7 +171,7 @@
 				<span class="min-w-0 flex-1">
 					<span class="block">A specific charge</span>
 					<Select.Root type="single" bind:value={form.targetChargeEntryId} disabled={form.applyMode !== 'specific'}>
-						<Select.Trigger class="mt-2 w-full">{#if form.targetChargeEntryId}{openCharges.find((charge) => String(charge.tenantLedgerEntryId) === form.targetChargeEntryId)?.description ?? 'Selected charge'}{:else}Choose an open charge{/if}</Select.Trigger>
+						<Select.Trigger class="mt-2 w-full">{#if form.targetChargeEntryId}{normalizeTenantLedgerDescription(openCharges.find((charge) => String(charge.tenantLedgerEntryId) === form.targetChargeEntryId)?.description) || 'Selected charge'}{:else}Choose an open charge{/if}</Select.Trigger>
 						<Select.Content>
 							{#if openChargesQuery.isLoading}
 								<div class="px-3 py-2 text-sm text-muted-foreground">Loading open charges…</div>
@@ -178,8 +179,8 @@
 								<div class="px-3 py-2 text-sm text-muted-foreground">No open charges.</div>
 							{:else}
 								{#each openCharges as charge (charge.tenantLedgerEntryId)}
-									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} · ${formatAccountingCurrency(charge.openAmount, currency)}`}>
-										{charge.description} · {formatAccountingCurrency(charge.openAmount, currency)} open · {formatAccountingDate(charge.effectiveOn)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.openAmount, currency)}`}>
+										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.openAmount, currency)} open · {formatAccountingDate(charge.effectiveOn)}
 									</Select.Item>
 								{/each}
 							{/if}

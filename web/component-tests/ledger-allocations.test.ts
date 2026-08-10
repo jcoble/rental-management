@@ -15,6 +15,8 @@ const summary = {
 	paymentAmount: 600,
 	creditAmount: 0,
 	closingBalance: 600,
+	needsReview: false,
+	rows: [],
 };
 
 function paymentRow(allocations: Array<Record<string, unknown>>) {
@@ -50,6 +52,16 @@ function paymentRow(allocations: Array<Record<string, unknown>>) {
 		categoryName: null,
 		servicePeriodStartOn: null,
 		servicePeriodEndOn: null,
+		direction: 'Credit' as const,
+		ledgerKind: 'payment',
+		actionCapabilities: {
+			canViewDetail: true,
+			canGiveCredit: false,
+			canAddRelatedCharge: false,
+			canReverseCharge: false,
+			canReverseLedgerEntry: false,
+			canReviewPaymentAllocation: true
+		},
 	};
 }
 

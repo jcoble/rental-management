@@ -15,6 +15,7 @@
 	} from '$lib/components/unit/money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatResidentName } from '$lib/accounting/money-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { apiErrorMessage } from '$lib/utils/toast';
 	import AccountingImpactCard from '$lib/components/accounting/AccountingImpactCard.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -216,7 +217,7 @@
 					{/if}
 					{#if receipt.providerAttempt?.checkNumber}<div><dt class="text-xs text-muted-foreground">Check number</dt><dd class="font-medium">{receipt.providerAttempt.checkNumber}</dd></div>{/if}
 					{#if receipt.providerAttempt?.bankName}<div><dt class="text-xs text-muted-foreground">Bank</dt><dd class="font-medium">{receipt.providerAttempt.bankName}</dd></div>{/if}
-					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Description</dt><dd class="font-medium">{receipt.description}</dd></div>
+					<div class="sm:col-span-2"><dt class="text-xs text-muted-foreground">Description</dt><dd class="font-medium">{normalizeTenantLedgerDescription(receipt.description)}</dd></div>
 				</dl>
 			</DetailCard>
 

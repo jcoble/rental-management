@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { ApiError } from '$lib/api/client';
-	import { tenantLedgers, type TenantLedgerRow } from '$lib/api/endpoints/tenant-ledgers';
+	import { tenantLedgers, type TenantCreditTarget } from '$lib/api/endpoints/tenant-ledgers';
 	import { tenantMoney } from '$lib/api/endpoints/tenant-money';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { formatAccountingCurrency, formatAccountingDate } from '$lib/accounting/accounting-display';
+	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { projectedRemainingCharge } from '$lib/accounting/tenant-credit-preview';
 	import AccountPicker from './AccountPicker.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -21,16 +22,14 @@
 		open,
 		tenantAccountId,
 		currency = 'USD',
-		ledgerRows = [],
-		initialTarget = null,
+		initialTargetEntryId = null,
 		onclose,
 		onsaved
 	}: {
 		open: boolean;
 		tenantAccountId: number;
 		currency?: string;
-		ledgerRows?: TenantLedgerRow[];
-		initialTarget?: TenantLedgerRow | null;
+		initialTargetEntryId?: number | null;
 		onclose: () => void;
 		onsaved: () => void;
 	} = $props();
@@ -48,42 +47,41 @@
 	let documentName = $state('');
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
+	let targetSkip = $state(0);
+	const TARGET_PAGE_SIZE = 50;
 
 	const targetQuery = createQuery(() => ({
-		queryKey: ['tenant-ledger-credit-targets', tenantAccountId],
+		queryKey: ['tenant-ledger-credit-targets', tenantAccountId, targetSkip, initialTargetEntryId],
 		enabled: open && tenantAccountId > 0,
-		queryFn: () => tenantLedgers.list(tenantAccountId, { take: 200, sort: '-effectiveOn' })
+		queryFn: () => tenantLedgers.creditTargets(tenantAccountId, {
+			skip: targetSkip,
+			take: TARGET_PAGE_SIZE,
+			targetEntryId: targetSkip === 0 ? initialTargetEntryId ?? undefined : undefined
+		})
 	}));
-	const allRows = $derived.by(() => {
-		const rows = new Map<number, TenantLedgerRow>();
-		for (const row of ledgerRows) rows.set(row.tenantLedgerEntryId, row);
-		for (const row of targetQuery.data?.items ?? []) rows.set(row.tenantLedgerEntryId, row);
-		return [...rows.values()];
-	});
-	const eligibleCharges = $derived(
-		allRows.filter((row) => row.chargeAmount !== 0 && row.type !== 'DepositCharge' && row.type !== 'PaymentReceipt')
-	);
+	const eligibleCharges = $derived(targetQuery.data?.items ?? []);
 	const selectedTarget = $derived(
-		eligibleCharges.find((row) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
+		eligibleCharges.find((row: TenantCreditTarget) => String(row.tenantLedgerEntryId) === form.targetChargeEntryId) ?? null
 	);
 	const projectedRemainingAmount = $derived(
-		selectedTarget ? projectedRemainingCharge(selectedTarget.openAmount, form.amount) : 0
+		selectedTarget ? projectedRemainingCharge(selectedTarget.remainingTargetableAmount, form.amount) : 0
 	);
 
 	$effect(() => {
-		const nextKey = open ? String(initialTarget?.tenantLedgerEntryId ?? 'new') : '';
+		const nextKey = open ? String(initialTargetEntryId ?? 'new') : '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',
 				effectiveOn: today(),
 				reason: '',
 				applyToCharge: true,
-				targetChargeEntryId: initialTarget ? String(initialTarget.tenantLedgerEntryId) : '',
+				targetChargeEntryId: initialTargetEntryId ? String(initialTargetEntryId) : '',
 				categoryAccountId: null
 			};
 			errors = {};
 			documentName = '';
 			operationKey = null;
+			targetSkip = 0;
 			initializedKey = nextKey;
 		}
 		if (!open) initializedKey = '';
@@ -98,12 +96,27 @@
 		documentName = file?.name ?? '';
 	}
 
+	function clearTargetSelection(): void {
+		form.targetChargeEntryId = '';
+		if (errors.targetChargeEntryId) {
+			const nextErrors = { ...errors };
+			delete nextErrors.targetChargeEntryId;
+			errors = nextErrors;
+		}
+	}
+
+	function navigateTargetPage(nextSkip: number): void {
+		if (nextSkip === targetSkip || targetQuery.isFetching) return;
+		clearTargetSelection();
+		targetSkip = Math.max(0, nextSkip);
+	}
+
 	function validate(): boolean {
 		errors = {};
 		if (!(Number(form.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
 		if (!form.effectiveOn) errors.effectiveOn = 'Pick the effective date.';
 		if (!form.reason.trim()) errors.reason = 'Explain why this credit is being given.';
-		if (form.applyToCharge && !form.targetChargeEntryId) errors.targetChargeEntryId = 'Choose the original charge or turn off the checkbox.';
+		if (form.applyToCharge && !selectedTarget) errors.targetChargeEntryId = 'Choose a visible original charge or turn off the checkbox.';
 		if (!form.applyToCharge && !form.categoryAccountId) errors.category = 'Choose an income category.';
 		return Object.keys(errors).length === 0;
 	}
@@ -111,11 +124,12 @@
 	const mutation = createMutation(() => ({
 		mutationFn: () => {
 			operationKey ??= crypto.randomUUID();
+			const targetEntryId = selectedTarget?.tenantLedgerEntryId ?? null;
 			return tenantMoney.postCredit(tenantAccountId, operationKey, {
 				amount: Number(form.amount),
 				effectiveOn: form.effectiveOn,
 				description: form.reason.trim(),
-				targetChargeEntryId: form.applyToCharge ? Number(form.targetChargeEntryId) : null,
+				targetChargeEntryId: form.applyToCharge ? targetEntryId : null,
 				incomeLedgerAccountId: form.applyToCharge ? null : form.categoryAccountId,
 				allocateOldestCharges: false
 			});
@@ -126,7 +140,7 @@
 			onclose();
 		},
 		onError: (error) => {
-			if (form.applyToCharge && form.targetChargeEntryId && error instanceof ApiError && error.status === 400) {
+			if (form.applyToCharge && selectedTarget && error instanceof ApiError && error.status === 400) {
 				errors = { form: TARGETED_CREDIT_ERROR };
 				return;
 			}
@@ -177,7 +191,7 @@
 				<div class="space-y-1 text-sm font-medium">
 					<span>Original charge</span>
 					<Select.Root type="single" bind:value={form.targetChargeEntryId}>
-						<Select.Trigger class="w-full">{selectedTarget?.description ?? 'Choose an original charge'}</Select.Trigger>
+						<Select.Trigger class="w-full" data-testid="tenant-credit-target-trigger">{selectedTarget ? normalizeTenantLedgerDescription(selectedTarget.description) : 'Choose an original charge'}</Select.Trigger>
 						<Select.Content>
 							{#if targetQuery.isLoading}
 								<div class="px-3 py-2 text-sm text-muted-foreground">Loading charges…</div>
@@ -185,13 +199,44 @@
 								<div class="px-3 py-2 text-sm text-muted-foreground">No eligible charges.</div>
 							{:else}
 								{#each eligibleCharges as charge (charge.tenantLedgerEntryId)}
-									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${charge.description} · ${formatAccountingCurrency(charge.chargeAmount, currency)}`}>
-										{charge.description} · {formatAccountingCurrency(charge.chargeAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
+									<Select.Item value={String(charge.tenantLedgerEntryId)} label={`${normalizeTenantLedgerDescription(charge.description)} · ${formatAccountingCurrency(charge.remainingTargetableAmount, currency)}`}>
+										{normalizeTenantLedgerDescription(charge.description)} · {formatAccountingCurrency(charge.remainingTargetableAmount, currency)} · {formatAccountingDate(charge.effectiveOn)}
 									</Select.Item>
 								{/each}
 							{/if}
 						</Select.Content>
 					</Select.Root>
+					{#if targetQuery.data}
+						<div class="mt-1 flex items-center justify-between gap-2" data-testid="tenant-credit-page-navigation">
+							<span class="text-xs font-normal text-muted-foreground">Page {Math.floor(targetSkip / TARGET_PAGE_SIZE) + 1}</span>
+							<div class="flex items-center gap-1">
+								{#if targetQuery.data.skip > 0}
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										onclick={() => navigateTargetPage(targetQuery.data!.skip - targetQuery.data!.take)}
+										disabled={targetQuery.isFetching}
+										data-testid="tenant-credit-previous-page"
+									>
+										Previous page
+									</Button>
+								{/if}
+								{#if targetQuery.data.totalCount > targetQuery.data.skip + targetQuery.data.take}
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										onclick={() => navigateTargetPage(targetQuery.data!.skip + targetQuery.data!.take)}
+										disabled={targetQuery.isFetching}
+										data-testid="tenant-credit-next-page"
+									>
+										Next page
+									</Button>
+								{/if}
+							</div>
+						</div>
+					{/if}
 					{#if errors.targetChargeEntryId}<span class="block text-xs font-normal text-destructive">{errors.targetChargeEntryId}</span>{/if}
 				</div>
 			{:else}
@@ -203,7 +248,7 @@
 			{/if}
 		</div>
 
-		{#if selectedTarget && selectedTarget.openAmount > 0}
+		{#if selectedTarget && selectedTarget.remainingTargetableAmount > 0}
 			<section class="mt-4 rounded-lg border border-border bg-muted/20 p-3" data-testid="tenant-credit-preview">
 				<h3 class="text-sm font-semibold">Preview</h3>
 				<dl class="mt-3 grid gap-2 text-sm sm:grid-cols-3">

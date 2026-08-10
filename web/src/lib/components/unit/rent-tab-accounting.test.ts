@@ -23,12 +23,12 @@ describe('W2 unit tenant ledger composition', () => {
 	});
 
 	it('reads the three canonical server projections with the 12-month default and open-charge selector', () => {
-		assert.match(panel, /tenantLedgers\.list/);
+		assert.doesNotMatch(panel, /tenantLedgers\.list/);
 		assert.match(panel, /tenantLedgers\.monthSummary/);
 		assert.match(panel, /tenantLedgers\.ledgerSummary/);
 		assert.match(panel, /periodMonths = \$state[^\n]*12/);
 		assert.match(panel, /const PERIODS[^\n]*3, 6, 9, 12/);
-		assert.match(paymentSheet, /openOnly: true/);
+		assert.match(panel, /params\.openOnly = true/);
 		assert.match(panel, /Open charges/);
 		assert.match(panel, /Payments/);
 		assert.match(panel, /Credits & corrections/);
@@ -52,6 +52,7 @@ describe('W2 unit tenant ledger composition', () => {
 		assert.match(panel, /Posts a related charge for the amount that was missed/);
 		assert.match(panel, /Removes this charge with a linked reversal entry/);
 		assert.match(panel, /tenantMoney\.reverseCharge/);
+		assert.match(panel, /tenantMoney\.reverseLedgerEntry/);
 	});
 
 	it('keeps sheet fields and server-side correction boundaries explicit', () => {
@@ -67,8 +68,9 @@ describe('W2 unit tenant ledger composition', () => {
 		for (const label of ['Name', 'Amount', 'Category', 'Starts', 'Ends', 'Day due']) {
 			assert.match(recurringSheet, new RegExp(label));
 		}
-		assert.match(creditSheet, /DepositCharge/);
-		assert.match(creditSheet, /selectedTarget\.openAmount/);
+		assert.doesNotMatch(creditSheet, /DepositCharge/);
+		assert.match(creditSheet, /tenantLedgers\.creditTargets/);
+		assert.match(creditSheet, /remainingTargetableAmount/);
 		assert.match(creditSheet, /formatAccountingCurrency\(projectedRemainingAmount, currency\)/);
 		assert.match(
 			creditSheet,
@@ -102,7 +104,7 @@ describe('W2 unit tenant ledger composition', () => {
 	});
 
 	it('keeps ledger rows available when optional summary reads fail', () => {
-		assert.match(panel, /const coreReadError = \$derived\(ledgerQuery\.error \?\? monthSummaryQuery\.error\)/);
+		assert.match(panel, /const coreReadError = \$derived\(monthSummaryQuery\.error\)/);
 		assert.match(panel, /const summaryReadError = \$derived\(accountQuery\.error \?\? ledgerSummaryQuery\.error\)/);
 		assert.match(panel, /data-testid="tenant-ledger-summary-error"/);
 		assert.doesNotMatch(panel, /ledgerSummaryQuery\.isLoading\s*\)/);
