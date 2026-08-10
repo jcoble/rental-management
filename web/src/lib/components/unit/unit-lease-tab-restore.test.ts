@@ -24,7 +24,7 @@ describe('unit Tenant & lease canonical action surface', () => {
 		assert.match(detailSource, /<LeaseArtifactActions/);
 		assert.match(detailSource, /leaseManagements\.downloadArtifact\(/);
 		assert.match(detailSource, /URL\.createObjectURL\(blob\)/);
-		assert.match(detailSource, /window\.open\(url, '_blank'/);
+		assert.match(detailSource, /window\.open\('', '_blank'/);
 		assert.match(detailSource, /<AddendumCreateDialog/);
 		assert.match(detailSource, /<AgreementSuccessorDialog/);
 		assert.match(detailSource, /<AgreementDraftDialog/);

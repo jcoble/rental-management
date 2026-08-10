@@ -132,12 +132,15 @@
 		URL.revokeObjectURL(url);
 	}
 
-	function openBlobInNewTab(blob: Blob) {
+	function openPlaceholderTab() {
+		const opened = window.open('', '_blank', 'noopener,noreferrer');
+		if (!opened) showError('Could not open the lease document in a new tab.');
+		return opened;
+	}
+
+	function navigateTabToBlob(opened: Window, blob: Blob) {
 		const url = URL.createObjectURL(blob);
-		const opened = window.open(url, '_blank', 'noopener,noreferrer');
-		if (!opened) {
-			showError('Could not open the lease document in a new tab.');
-		}
+		opened.location.href = url;
 		// Keep the object URL alive long enough for the new tab to load the PDF.
 		window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 	}
@@ -158,15 +161,17 @@
 	}
 
 	async function viewAgreement(agreementId: number, artifactId: number) {
+		const opened = openPlaceholderTab();
+		if (!opened) return;
 		try {
-			openBlobInNewTab(
-				await leaseManagements.downloadArtifact(
-					leaseManagementId,
-					agreementId,
-					artifactId
-				)
+			const blob = await leaseManagements.downloadArtifact(
+				leaseManagementId,
+				agreementId,
+				artifactId
 			);
+			navigateTabToBlob(opened, blob);
 		} catch (error) {
+			opened.close();
 			showError(apiErrorMessage(error, 'Lease document download failed.'));
 		}
 	}
