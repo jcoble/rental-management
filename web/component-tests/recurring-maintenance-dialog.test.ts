@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import RecurringMaintenanceDialogHarness from './RecurringMaintenanceDialogHarness.svelte';
+import UnitRecurringMaintenanceViewHarness from './UnitRecurringMaintenanceViewHarness.svelte';
 import { recurringMaintenance, type RecurringMaintenanceTask } from '$lib/api/endpoints/recurring-maintenance';
 
 afterEach(() => {
@@ -38,11 +38,16 @@ const createdTask = {
 describe('unit recurring maintenance create flow', () => {
 	it('opens with property and unit context locked, submits the scoped payload, and refreshes after save', async () => {
 		const create = vi.spyOn(recurringMaintenance, 'create').mockResolvedValue(createdTask);
-		const onsaved = vi.fn();
-		const onrefreshed = vi.fn();
-		const view = render(RecurringMaintenanceDialogHarness, {
-			props: { onsaved, onrefreshed },
+		const listPage = vi.spyOn(recurringMaintenance, 'listPage').mockResolvedValue({
+			items: [],
+			totalCount: 0,
+			skip: 0,
+			take: 10,
 		});
+		const view = render(UnitRecurringMaintenanceViewHarness);
+
+		await waitFor(() => expect(listPage).toHaveBeenCalled());
+		const initialListCallCount = listPage.mock.calls.length;
 
 		await fireEvent.click(view.getByTestId('unit-recurring-create-button'));
 		expect(view.getByTestId('recurring-task-dialog-title').textContent).toContain('New Recurring Task');
@@ -66,7 +71,7 @@ describe('unit recurring maintenance create flow', () => {
 			title: 'QA-20260810 change HVAC filter',
 			nextDueDate: '2027-01-15',
 		});
-		await waitFor(() => expect(onsaved).toHaveBeenCalledWith(createdTask));
-		expect(onrefreshed).toHaveBeenCalledOnce();
+		await waitFor(() => expect(listPage.mock.calls.length).toBeGreaterThan(initialListCallCount));
+		expect(listPage.mock.calls.at(-1)?.[0]).toMatchObject({ unitId: 314 });
 	});
 });

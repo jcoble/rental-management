@@ -5,7 +5,6 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
 	import { inspections } from '$lib/api/endpoints/inspections';
-	import { recurringMaintenance } from '$lib/api/endpoints/recurring-maintenance';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import type { PrepareMoveInResponse } from '$lib/api/endpoints/lease-managements';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -27,7 +26,7 @@
 	import InspectionDetail from '$lib/components/records/InspectionDetail.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
 	import TurnoverTab from '$lib/components/unit/tabs/TurnoverTab.svelte';
-	import RecurringMaintenanceFormDialog from '$lib/components/maintenance/RecurringMaintenanceFormDialog.svelte';
+	import UnitRecurringMaintenanceView from '$lib/components/maintenance/UnitRecurringMaintenanceView.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
@@ -51,7 +50,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import type { UnitLeaseSummary } from '$lib/types';
-	import { ArrowLeft, Plus } from '@lucide/svelte';
+	import { ArrowLeft } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
@@ -126,10 +125,6 @@
 	let inspectionSearch = $state('');
 	let inspectionSort = $state('-scheduledFor');
 	let inspectionSkip = $state(0);
-	let recurringSearch = $state('');
-	let recurringSort = $state('nextDueDate');
-	let recurringSkip = $state(0);
-	let showRecurringForm = $state(false);
 	const maintenancePageSize = 10;
 	const setTab = createUnitTabNavigationHandler({
 		getCurrent: () => ({
@@ -203,30 +198,6 @@
 			take: maintenancePageSize,
 		}),
 	}));
-	const unitRecurringQuery = createQuery(() => ({
-		queryKey: ['unit-recurring-maintenance', id, recurringSearch, recurringSort, recurringSkip, maintenancePageSize],
-		enabled: !isNaN(id) && id > 0,
-		queryFn: () => recurringMaintenance.listPage({
-			unitId: id,
-			search: recurringSearch || undefined,
-			sort: recurringSort,
-			skip: recurringSkip,
-			take: maintenancePageSize,
-		}),
-	}));
-	function openRecurringCreate() {
-		showRecurringForm = true;
-	}
-
-	function closeRecurringForm() {
-		showRecurringForm = false;
-	}
-
-	function handleRecurringSaved() {
-		showRecurringForm = false;
-		recurringSkip = 0;
-		void unitRecurringQuery.refetch();
-	}
 	const moveInAppointment = $derived(
 		dashboard?.overview.upcomingAppointments.find((appointment) =>
 			appointment.type === 'MoveIn'
@@ -592,47 +563,13 @@
 								{/if}
 							</section>
 							{:else if activeView === 'recurring'}
-							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-recurring-section">
-								<div class="space-y-3">
-									<div><h2 class="text-lg font-semibold">Recurring work</h2><p class="text-sm text-muted-foreground">Maintenance that repeats on a schedule for this rental.</p></div>
-									<div class="flex flex-wrap gap-2">
-										<Input bind:value={recurringSearch} oninput={() => recurringSkip = 0} placeholder="Search recurring work" aria-label="Search Unit recurring work" class="max-w-xs" />
-										<Select.Root type="single" bind:value={recurringSort} onValueChange={() => recurringSkip = 0}>
-											<Select.Trigger class="w-full sm:w-52" aria-label="Sort Unit recurring work">
-												<Select.Value placeholder="Next due" />
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Item value="nextDueDate" label="Next due">Next due</Select.Item>
-														<Select.Item value="-nextDueDate" label="Latest due">Latest due</Select.Item>
-														<Select.Item value="title" label="Title">Title</Select.Item>
-												</Select.Content>
-										</Select.Root>
-										<Button data-testid="unit-recurring-create-button" onclick={openRecurringCreate} class="gap-2">
-											<Plus class="h-4 w-4" /> New recurring task
-										</Button>
-									</div>
-									{#if unitRecurringQuery.isLoading}
-										<LoadingState label="Loading recurring work" testid="unit-recurring-loading" />
-									{:else if unitRecurringQuery.isError}
-										<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-recurring-error">
-											<p class="text-sm font-medium text-destructive">Recurring work could not be loaded.</p>
-											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitRecurringQuery.refetch()}>Try again</Button>
-										</div>
-									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground" data-testid="unit-recurring-empty">No recurring tasks yet. Add one to have work orders created on a schedule.</p>
-									{:else}
-										<ul class="divide-y rounded-lg border">
-											{#each unitRecurringQuery.data.items as task (task.id)}
-												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={task.testId}><span class="font-medium">{task.title}</span><span class="text-muted-foreground">{task.recurrenceInterval} · {new Date(task.nextDueDate).toLocaleDateString()}</span></li>
-											{/each}
-										</ul>
-									{/if}
-									<div class="flex items-center justify-between">
-										<Button variant="outline" size="sm" disabled={recurringSkip === 0} onclick={() => recurringSkip = Math.max(0, recurringSkip - maintenancePageSize)}>Previous</Button>
-										<span class="text-xs text-muted-foreground">{unitRecurringQuery.data?.totalCount ?? 0} total</span>
-										<Button variant="outline" size="sm" disabled={!unitRecurringQuery.data || recurringSkip + maintenancePageSize >= unitRecurringQuery.data.totalCount} onclick={() => recurringSkip += maintenancePageSize}>Next</Button>
-									</div>
-								</div>
-							</section>
+							<UnitRecurringMaintenanceView
+								propertyId={dashboard.unit.propertyId}
+								propertyLabel={dashboard.propertyName}
+								unitId={dashboard.unit.id}
+								unitLabel={`Unit ${dashboard.unit.unitNumber}`}
+								emptyMessage="No recurring tasks yet. Select the New recurring task button to add work that repeats on a schedule."
+							/>
 							{:else if activeView === 'turnover'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-turnover-section"><TurnoverTab {dashboard} onScan={goScan} /></section>
 							{:else}
@@ -671,18 +608,6 @@
 		</div>
 	{/if}
 </div>
-
-<RecurringMaintenanceFormDialog
-	open={showRecurringForm}
-	propertyId={dashboard?.unit.propertyId ?? null}
-	propertyLabel={dashboard?.propertyName ?? ''}
-	unitId={dashboard?.unit.id ?? null}
-	unitLabel={dashboard ? `Unit ${dashboard.unit.unitNumber}` : ''}
-	lockProperty
-	lockUnit
-	onclose={closeRecurringForm}
-	onsaved={handleRecurringSaved}
-/>
 
 {#if prepareMoveInPrefill}
 	<PrepareMoveInDialog

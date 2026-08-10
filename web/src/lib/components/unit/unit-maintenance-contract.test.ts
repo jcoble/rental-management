@@ -10,6 +10,10 @@ const recurringDialog = readFileSync(
 	new URL('../maintenance/RecurringMaintenanceFormDialog.svelte', import.meta.url),
 	'utf8',
 );
+const recurringView = readFileSync(
+	new URL('../maintenance/UnitRecurringMaintenanceView.svelte', import.meta.url),
+	'utf8',
+);
 const inspections = readFileSync(new URL('../../api/endpoints/inspections.ts', import.meta.url), 'utf8');
 const recurring = readFileSync(new URL('../../api/endpoints/recurring-maintenance.ts', import.meta.url), 'utf8');
 const inspectionDetail = readFileSync(new URL('../records/InspectionDetail.svelte', import.meta.url), 'utf8');
@@ -24,7 +28,8 @@ describe('Unit Maintenance query contract', () => {
 	test('requests server-paged Unit recurring maintenance', () => {
 		assert.match(recurring, /\/recurring-maintenance\/page/);
 		assert.match(recurring, /unitId/);
-		assert.match(page, /recurringMaintenance\.listPage\(\{[\s\S]*unitId: id/);
+		assert.match(page, /<UnitRecurringMaintenanceView/);
+		assert.match(recurringView, /recurringMaintenance\.listPage\(\{[\s\S]*unitId/);
 	});
 
 	test('opens an inspection detail from the Unit list with a maintenance-owned record key', () => {
@@ -42,14 +47,14 @@ describe('Unit Maintenance query contract', () => {
 	});
 
 	test('offers a unit-scoped create flow and refreshes the list after save', () => {
-		assert.match(page, /RecurringMaintenanceFormDialog/);
-		assert.match(page, /data-testid="unit-recurring-create-button"/);
-		assert.match(page, /propertyId=\{dashboard\?\.unit\.propertyId/);
-		assert.match(page, /unitId=\{dashboard\?\.unit\.id/);
-		assert.match(page, /lockProperty/);
-		assert.match(page, /lockUnit/);
-		assert.match(page, /unitRecurringQuery\.refetch\(\)/);
-		assert.match(page, /No recurring tasks yet\. Add one to have work orders created on a schedule\./);
+		assert.match(page, /<UnitRecurringMaintenanceView[\s\S]*propertyId=\{dashboard\.unit\.propertyId\}/);
+		assert.match(recurringView, /data-testid="unit-recurring-create-button"/);
+		assert.match(page, /propertyId=\{dashboard\.unit\.propertyId\}/);
+		assert.match(page, /unitId=\{dashboard\.unit\.id\}/);
+		assert.match(recurringView, /lockProperty/);
+		assert.match(recurringView, /lockUnit/);
+		assert.match(recurringView, /query\.refetch\(\)/);
+		assert.match(page, /No recurring tasks yet\. Select the New recurring task button to add work that repeats on a schedule\./);
 		assert.match(recurringDialog, /recurringMaintenance\.create\(data as never\)/);
 		assert.match(recurringDialog, /disabled=\{editingId != null \|\| lockProperty\}/);
 		assert.match(recurringDialog, /disabled=\{!form\.propertyId \|\| lockUnit\}/);
