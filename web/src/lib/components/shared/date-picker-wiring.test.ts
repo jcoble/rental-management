@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
 	applyRangeDatePickerValue,
 	commitDatePickerText,
+	datePickerYearOptions,
 	datePickerLayoutForWidth,
 	datePickerSubmitDisabled
 } from './date-picker-state.ts';
@@ -36,6 +37,13 @@ describe('DatePicker behavior', () => {
 		assert.ok(compact.calendarButtonSizePx <= 32);
 		assert.equal(commitDatePickerText('08/01/2026', '').text, '08/01/2026');
 	});
+
+	it('shares a reachable year window between single and range captions', () => {
+		assert.deepEqual(datePickerYearOptions(undefined, undefined, 2026).slice(0, 2), [1900, 1901]);
+		assert.equal(datePickerYearOptions(undefined, undefined, 2026).at(-1), 2036);
+		assert.deepEqual(datePickerYearOptions(2028, 2030, 2026), [2028, 2029, 2030]);
+		assert.deepEqual(datePickerYearOptions(2040, 2030, 2026), [2030]);
+	});
 });
 
 describe('RangeDatePicker behavior', () => {
@@ -57,6 +65,16 @@ describe('RangeDatePicker behavior', () => {
 			{ start: '2026-01-01', end: '2026-12-31' }
 		);
 		assert.equal(preset.invalid, false);
+	});
+
+	it('clears both range endpoints through the normal change contract', () => {
+		const cleared = applyRangeDatePickerValue(
+			{ start: '2026-01-01', end: '2026-01-31', invalid: true },
+			{ start: '', end: '' }
+		);
+		assert.deepEqual({ start: cleared.start, end: cleared.end }, { start: '', end: '' });
+		assert.equal(cleared.invalid, false);
+		assert.equal(cleared.changed, true);
 	});
 });
 

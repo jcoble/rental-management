@@ -6,7 +6,7 @@
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -415,11 +415,11 @@
 					<div class="lg:col-span-2">
 						<SearchInput bind:value={search} placeholder="Search descriptions or journals…" testid="general-ledger-search" />
 					</div>
-					<div class="lg:col-span-2">
-						<label class="grid gap-1.5 text-sm font-medium">From<DatePicker bind:value={effectiveFrom} testid="general-ledger-from" /></label>
-					</div>
-					<div class="lg:col-span-2">
-						<label class="grid gap-1.5 text-sm font-medium">To<DatePicker bind:value={effectiveTo} min={effectiveFrom || undefined} testid="general-ledger-to" /></label>
+					<div class="lg:col-span-4">
+						<label class="grid gap-1.5 text-sm font-medium" for="general-ledger-date-range">
+							Effective date range
+							<RangeDatePicker id="general-ledger-date-range" bind:start={effectiveFrom} bind:end={effectiveTo} testid="general-ledger-date-range" placeholder="Choose effective dates" />
+						</label>
 					</div>
 					<div class="lg:col-span-2 flex justify-end">
 						<span class="text-xs text-muted-foreground">{advanced ? 'Advanced details' : 'Plain-language details'}</span>

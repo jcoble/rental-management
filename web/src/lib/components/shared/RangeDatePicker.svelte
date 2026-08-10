@@ -25,7 +25,12 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
-	import { applyRangeDatePickerValue } from './date-picker-state';
+	import {
+		applyRangeDatePickerValue,
+		commitDatePickerText,
+		datePickerYearOptions
+	} from './date-picker-state';
+	import { formatIsoToUsInput, maskDateInput, parseCompleteLooseDate } from '$lib/utils/parse-date';
 	import {
 		calendarPlaceholderForStart,
 		servicePeriodPreset,
@@ -68,8 +73,34 @@
 	} = $props();
 
 	let open = $state(false);
+	let calendarMonths = $state(2);
 	const timezone = getLocalTimeZone();
 	let calendarMonth = $state<DateValue | undefined>(toCalendarDate(calendarPlaceholderForStart(start)) ?? today(timezone));
+	let startText = $state(formatIsoToUsInput(start));
+	let endText = $state(formatIsoToUsInput(end));
+	let lastSyncedStart = $state(start);
+	let lastSyncedEnd = $state(end);
+
+	$effect(() => {
+		const media = window.matchMedia('(max-width: 639px)');
+		const updateMonths = () => {
+			calendarMonths = media.matches ? 1 : 2;
+		};
+		updateMonths();
+		media.addEventListener('change', updateMonths);
+		return () => media.removeEventListener('change', updateMonths);
+	});
+
+	$effect(() => {
+		if (start !== lastSyncedStart) {
+			lastSyncedStart = start;
+			startText = formatIsoToUsInput(start);
+		}
+		if (end !== lastSyncedEnd) {
+			lastSyncedEnd = end;
+			endText = formatIsoToUsInput(end);
+		}
+	});
 
 	function toCalendarDate(iso: string | undefined): CalendarDate | undefined {
 		if (!iso) return undefined;
@@ -93,6 +124,7 @@
 		start: toCalendarDate(start),
 		end: toCalendarDate(end)
 	});
+	const years = $derived(datePickerYearOptions());
 
 	const label = $derived.by(() => {
 		const s = toCalendarDate(start);
@@ -102,7 +134,7 @@
 		return placeholder;
 	});
 
-	const hasValue = $derived(Boolean(start));
+	const hasValue = $derived(Boolean(start || end));
 
 	function apply(nextStart: string, nextEnd: string, close = false) {
 		const next = applyRangeDatePickerValue(
@@ -110,11 +142,57 @@
 			{ start: nextStart, end: nextEnd }
 		);
 		invalid = next.invalid;
+		startText = formatIsoToUsInput(next.start);
+		endText = formatIsoToUsInput(next.end);
 		if (!next.changed) return;
 		start = next.start;
 		end = next.end;
-		onchange?.({ start: nextStart, end: nextEnd });
+		onchange?.({ start: next.start, end: next.end });
 		if (close) open = false;
+	}
+
+	function clearRange() {
+		apply('', '', true);
+	}
+
+	function commitTypedDate(field: 'start' | 'end') {
+		const typed = field === 'start' ? startText : endText;
+		const current = field === 'start' ? start : end;
+		const next = commitDatePickerText(typed, current);
+		invalid = next.invalid;
+		if (field === 'start') startText = next.text;
+		else endText = next.text;
+		if (next.value === current) return;
+		if (field === 'start') apply(next.value, end, false);
+		else apply(start, next.value, false);
+	}
+
+	function handleTypedDateInput(field: 'start' | 'end', event: Event) {
+		const input = event.target as HTMLInputElement;
+		const raw = input.value;
+		if (invalid) invalid = false;
+		if (field === 'start') startText = raw;
+		else endText = raw;
+		if (raw.trim() === '') {
+			if (field === 'start') apply('', end, false);
+			else apply(start, '', false);
+			return;
+		}
+
+		const completeIso = parseCompleteLooseDate(raw);
+		if (completeIso) {
+			if (field === 'start') startText = formatIsoToUsInput(completeIso);
+			else endText = formatIsoToUsInput(completeIso);
+			input.value = formatIsoToUsInput(completeIso);
+			if (field === 'start') apply(completeIso, end, false);
+			else apply(start, completeIso, false);
+			return;
+		}
+
+		const masked = maskDateInput(raw);
+		if (field === 'start') startText = masked;
+		else endText = masked;
+		if (masked !== raw) input.value = masked;
 	}
 
 	function handleValueChange(next: { start?: DateValue; end?: DateValue } | undefined) {
@@ -201,21 +279,40 @@
 </script>
 
 <Popover.Root bind:open>
-	<Popover.Trigger
-		{id}
-		data-testid={testid}
-		{disabled}
-		class={cn(
-			buttonVariants({ variant: 'outline' }),
-			'h-10 w-full justify-start text-left font-normal',
-			!hasValue && 'text-muted-foreground',
-			invalid && 'ring-2 ring-destructive'
-		)}
-		aria-invalid={invalid}
+	<div
+		class="flex w-full min-w-0 items-center gap-2"
+		data-testid={testid ? `${testid}-shell` : 'range-date-picker-shell'}
 	>
-		<CalendarIcon class="size-4 shrink-0 opacity-70" />
-		{label}
-	</Popover.Trigger>
+		<Popover.Trigger
+			{id}
+			data-testid={testid}
+			{disabled}
+			class={cn(
+				buttonVariants({ variant: 'outline' }),
+				'h-10 min-w-0 flex-1 justify-start text-left font-normal',
+				!hasValue && 'text-muted-foreground',
+				invalid && 'ring-2 ring-destructive'
+			)}
+			aria-invalid={invalid}
+		>
+			<CalendarIcon class="size-4 shrink-0 opacity-70" />
+			{label}
+		</Popover.Trigger>
+		{#if hasValue}
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				class="shrink-0 px-2 text-xs"
+				aria-label="Clear range"
+				data-testid={testid ? `${testid}-clear` : 'range-date-picker-clear'}
+				{disabled}
+				onclick={clearRange}
+			>
+				Clear range
+			</Button>
+		{/if}
+	</div>
 	<Popover.Content class="w-auto p-0" {align}>
 		<div class="flex flex-col sm:flex-row">
 			{#if presets}
@@ -235,13 +332,56 @@
 					{/each}
 				</div>
 			{/if}
-			<RangeCalendar
-				bind:placeholder={calendarMonth}
-				value={rangeValue}
-				onValueChange={handleValueChange}
-				numberOfMonths={2}
-				captionLayout="dropdown"
-			/>
+			<div class="flex flex-col">
+				<div class="hidden grid-cols-2 gap-2 border-b p-3 sm:grid">
+					<label class="grid gap-1 text-xs font-medium text-muted-foreground" for={id ? `${id}-start` : undefined}>
+						From
+						<input
+							id={id ? `${id}-start` : undefined}
+							data-testid={testid ? `${testid}-start-input` : undefined}
+							aria-label="Start date"
+							inputmode="numeric"
+							autocomplete="off"
+							placeholder="MM/DD/YYYY"
+							bind:value={startText}
+							oninput={(event) => handleTypedDateInput('start', event)}
+							onblur={() => commitTypedDate('start')}
+							onkeydown={(event) => event.key === 'Enter' && commitTypedDate('start')}
+							class={cn(
+								'm3-field-surface h-9 w-full min-w-0 rounded-[var(--m3-shape-medium)] px-2 text-sm text-foreground outline-none',
+								invalid && 'ring-2 ring-destructive'
+							)}
+						/>
+					</label>
+					<label class="grid gap-1 text-xs font-medium text-muted-foreground" for={id ? `${id}-end` : undefined}>
+						To
+						<input
+							id={id ? `${id}-end` : undefined}
+							data-testid={testid ? `${testid}-end-input` : undefined}
+							aria-label="End date"
+							inputmode="numeric"
+							autocomplete="off"
+							placeholder="MM/DD/YYYY"
+							bind:value={endText}
+							oninput={(event) => handleTypedDateInput('end', event)}
+							onblur={() => commitTypedDate('end')}
+							onkeydown={(event) => event.key === 'Enter' && commitTypedDate('end')}
+							class={cn(
+								'm3-field-surface h-9 w-full min-w-0 rounded-[var(--m3-shape-medium)] px-2 text-sm text-foreground outline-none',
+								invalid && 'ring-2 ring-destructive'
+							)}
+						/>
+					</label>
+				</div>
+				<RangeCalendar
+					bind:placeholder={calendarMonth}
+					value={rangeValue}
+					onValueChange={handleValueChange}
+					numberOfMonths={calendarMonths}
+					captionLayout="dropdown"
+					{years}
+				/>
+			</div>
 		</div>
 	</Popover.Content>
 </Popover.Root>

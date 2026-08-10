@@ -2,7 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -209,9 +209,11 @@
 			</div>
 
 			{#if period === 'custom'}
-				<div class="mt-4 grid gap-3 sm:grid-cols-2">
-					<label class="grid gap-1.5 text-sm font-medium">From<DatePicker bind:value={customFrom} testid="money-position-from" /></label>
-					<label class="grid gap-1.5 text-sm font-medium">To<DatePicker bind:value={customTo} min={customFrom || undefined} testid="money-position-to" /></label>
+				<div class="mt-4 max-w-md">
+					<label class="grid gap-1.5 text-sm font-medium" for="money-position-date-range">
+						Custom dates
+						<RangeDatePicker id="money-position-date-range" bind:start={customFrom} bind:end={customTo} testid="money-position-date-range" placeholder="Choose custom dates" />
+					</label>
 				</div>
 			{/if}
 

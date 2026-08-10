@@ -11,6 +11,22 @@ export interface DatePickerRangeOptions {
 	max?: string;
 }
 
+/**
+ * Keep the calendar year menu consistent across single and range pickers.
+ * Date-only controls use a deliberately wide default window so historical
+ * records (including dates of birth) remain reachable without month paging.
+ */
+export function datePickerYearOptions(
+	minYear?: number,
+	maxYear?: number,
+	currentYear = new Date().getUTCFullYear()
+): number[] {
+	const lo = minYear ?? 1900;
+	const hi = maxYear ?? currentYear + 10;
+	if (lo > hi) return [hi];
+	return Array.from({ length: hi - lo + 1 }, (_, index) => lo + index);
+}
+
 function isInRange(iso: string, { min, max }: DatePickerRangeOptions = {}): boolean {
 	if (min && iso < min) return false;
 	if (max && iso > max) return false;
