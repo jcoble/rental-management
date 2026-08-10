@@ -80,6 +80,19 @@ const VALID_VIEWS: Partial<Record<UnitTab, readonly UnitView[]>> = {
 	'documents-history': ['documents', 'history'],
 };
 
+function resolveUnitViewOwner(viewValue: string | null | undefined): UnitDestination | null {
+	const normalizedView = viewValue?.trim().toLowerCase() as UnitView | undefined;
+	if (!normalizedView) return null;
+
+	for (const [tab, views] of Object.entries(VALID_VIEWS)) {
+		if (views?.includes(normalizedView)) {
+			return { tab: tab as UnitTab, view: normalizedView };
+		}
+	}
+
+	return null;
+}
+
 export function resolveUnitDestination(
 	tabValue: string | undefined | null,
 	viewValue?: string | undefined | null,
@@ -101,7 +114,11 @@ export function resolveUnitDestination(
  */
 export function resolveUnitUrlDestination(url: URL): UnitUrlDestination {
 	const tabValue = url.searchParams.get('tab');
-	const urlDestination = resolveUnitDestination(tabValue, url.searchParams.get('view'));
+	const explicitView = url.searchParams.get('view');
+	// Deep links can retain a stale primary tab while carrying a valid nested view
+	// (for example, a work order opened from the Money surface). The nested view's
+	// owning tab is authoritative so URL and shallow state can converge.
+	const urlDestination = resolveUnitViewOwner(explicitView) ?? resolveUnitDestination(tabValue, explicitView);
 	if (url.searchParams.has('view')) {
 		return { destination: urlDestination, hasExplicitViewOrRecord: true };
 	}

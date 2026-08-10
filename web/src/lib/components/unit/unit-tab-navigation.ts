@@ -48,18 +48,12 @@ function explicitContextBelongsToTab(
 	urlResolution: ReturnType<typeof resolveUnitUrlDestination>,
 	tab: UnitTab,
 ) {
-	// A view is explicit only when it is valid for the URL's own tab. A stale
-	// view from the tab we are leaving must not block the destination's memory.
+	// URL resolution canonicalizes a valid nested view to its owning tab. Compare
+	// against that destination so a stale primary-tab parameter cannot block memory.
 	if (!urlResolution.hasExplicitViewOrRecord) return false;
 
 	const view = url.searchParams.get('view')?.trim().toLowerCase();
 	if (view) {
-		const explicitTab = url.searchParams.get('tab');
-		if (explicitTab) {
-			const destination = resolveUnitDestination(explicitTab, view);
-			return destination.tab === tab && destination.view === view;
-		}
-
 		return urlResolution.destination.tab === tab && urlResolution.destination.view === view;
 	}
 

@@ -78,6 +78,25 @@ describe('unit tab page navigation integration', () => {
 		});
 	});
 
+	it('canonicalizes a work-order deep link and converges its shallow-state sync', () => {
+		const url = new URL('https://rental.local/units/1?tab=money&view=work-orders&wo=3');
+		const coldState = synchronizeUnitTabState(url, undefined);
+
+		assert.deepEqual(resolveUnitPageDestination(url, undefined), {
+			tab: 'maintenance',
+			view: 'work-orders',
+		});
+		assert.deepEqual(coldState, {
+			unitPathname: '/units/1',
+			unitTab: 'maintenance',
+			unitView: 'work-orders',
+			unitViewByPath: { '/units/1': { maintenance: 'work-orders' } },
+			unitPaymentId: null,
+			unitExpenseId: null,
+		});
+		assert.equal(synchronizeUnitTabState(url, coldState), null);
+	});
+
 	it('restores Applications when the page state retains the nested view but the URL does not', () => {
 		const container = createContainer('https://rental.local/units/10?tab=leasing&view=applications&app=7', {
 			unitPathname: '/units/10',
