@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TenantLedgerRow, TenantMonthSummary } from '$lib/api/endpoints/tenant-ledgers';
 import type { UnitDashboard } from '$lib/types';
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	ledgerSummary: vi.fn(),
 	recurringCharges: vi.fn(),
 	deposit: vi.fn(),
+	postCredit: vi.fn(),
 	reverseCharge: vi.fn(),
 	reverseLedgerEntry: vi.fn()
 }));
@@ -53,6 +54,7 @@ vi.mock('$lib/api/endpoints/tenant-money', async () => {
 		...actual,
 		tenantMoney: {
 			...actual.tenantMoney,
+			postCredit: mocks.postCredit,
 			reverseCharge: mocks.reverseCharge,
 			reverseLedgerEntry: mocks.reverseLedgerEntry
 		}
@@ -170,6 +172,7 @@ function setupQueries(entry: TenantLedgerRow): void {
 	});
 	mocks.recurringCharges.mockResolvedValue({ items: [], totalCount: 0, skip: 0, take: 50 });
 	mocks.deposit.mockResolvedValue(null);
+	mocks.postCredit.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
 	mocks.reverseCharge.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
 	mocks.reverseLedgerEntry.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
 }
@@ -249,7 +252,7 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		}
 	});
 
-	it('preselects the requested target and renders a later eligible server page', async () => {
+	it('navigates between server pages and submits only the visibly selected target', async () => {
 		const entry = row({ tenantLedgerEntryId: 90 });
 		const laterTarget = {
 			tenantLedgerEntryId: 91,
@@ -281,15 +284,50 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		await fireEvent.click(view.getByRole('menuitem', { name: 'Give credit' }));
 		await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent)
 			.toContain(entry.description));
+		expect(view.getByTestId('tenant-credit-page-navigation').textContent).toContain('Next page');
+		await fireEvent.input(view.getByLabelText('Amount'), { target: { value: '25' } });
+		await fireEvent.input(view.getByLabelText('Reason'), { target: { value: 'Visible target test' } });
+
 		await fireEvent.click(view.getByTestId('tenant-credit-next-page'));
 		await waitFor(() => expect(mocks.creditTargets).toHaveBeenLastCalledWith(
 			20,
 			expect.objectContaining({ skip: 50, take: 50 })
 		));
-		const targetTrigger = view.getByRole('button', { name: 'Choose an original charge' });
+		const laterPageTrigger = view.getByRole('button', { name: 'Choose an original charge' });
+		await fireEvent.keyDown(laterPageTrigger, { key: 'ArrowDown' });
+		expect(laterPageTrigger.getAttribute('aria-expanded')).toBe('true');
+		await waitFor(() => expect(view.getByRole('option', { name: /Later eligible charge/ })).toBeTruthy());
+		await fireEvent.keyDown(laterPageTrigger, { key: 'Escape' });
+		expect(view.getByTestId('tenant-credit-page-navigation').textContent).toContain('Previous page');
+		expect(view.getByTestId('tenant-credit-page-navigation').textContent).not.toContain('Show more');
+		await fireEvent.click(view.getByTestId('tenant-credit-submit'));
+		expect(mocks.postCredit).not.toHaveBeenCalled();
+		expect(view.getByText('Choose a visible original charge or turn off the checkbox.')).toBeTruthy();
+
+		await fireEvent.click(view.getByTestId('tenant-credit-previous-page'));
+		await waitFor(() => expect(mocks.creditTargets).toHaveBeenLastCalledWith(
+			20,
+			expect.objectContaining({ skip: 0, take: 50, targetEntryId: 90 })
+		));
+		const targetTrigger = await waitFor(() => view.getByTestId('tenant-credit-target-trigger'));
 		await fireEvent.keyDown(targetTrigger, { key: 'ArrowDown' });
 		expect(targetTrigger.getAttribute('aria-expanded')).toBe('true');
-		await waitFor(() => expect(screen.getByText('Later eligible charge', { exact: false })).toBeTruthy());
+		const visibleTarget = await waitFor(() => view.getByRole('option', { name: /Rent for February 2027/ }));
+		expect(visibleTarget).toBeTruthy();
+		await fireEvent.keyDown(targetTrigger, { key: 'Enter' });
+		await waitFor(() => expect(view.getByTestId('tenant-credit-target-trigger').textContent)
+			.toContain('Rent for February 2027'));
+
+		await fireEvent.click(view.getByTestId('tenant-credit-submit'));
+		await waitFor(() => expect(mocks.postCredit).toHaveBeenCalledOnce());
+		const [, , body] = mocks.postCredit.mock.calls[0];
+		expect(body).toMatchObject({
+			amount: 25,
+			description: 'Visible target test',
+			targetChargeEntryId: 90,
+			incomeLedgerAccountId: null,
+			allocateOldestCharges: false
+		});
 	});
 
 	it('opens Add related charge with a normalized related-charge seed', async () => {

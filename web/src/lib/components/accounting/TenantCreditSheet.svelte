@@ -48,13 +48,14 @@
 	let initializedKey = $state('');
 	let operationKey = $state<string | null>(null);
 	let targetSkip = $state(0);
+	const TARGET_PAGE_SIZE = 50;
 
 	const targetQuery = createQuery(() => ({
 		queryKey: ['tenant-ledger-credit-targets', tenantAccountId, targetSkip, initialTargetEntryId],
 		enabled: open && tenantAccountId > 0,
 		queryFn: () => tenantLedgers.creditTargets(tenantAccountId, {
 			skip: targetSkip,
-			take: 50,
+			take: TARGET_PAGE_SIZE,
 			targetEntryId: targetSkip === 0 ? initialTargetEntryId ?? undefined : undefined
 		})
 	}));
@@ -95,12 +96,27 @@
 		documentName = file?.name ?? '';
 	}
 
+	function clearTargetSelection(): void {
+		form.targetChargeEntryId = '';
+		if (errors.targetChargeEntryId) {
+			const nextErrors = { ...errors };
+			delete nextErrors.targetChargeEntryId;
+			errors = nextErrors;
+		}
+	}
+
+	function navigateTargetPage(nextSkip: number): void {
+		if (nextSkip === targetSkip || targetQuery.isFetching) return;
+		clearTargetSelection();
+		targetSkip = Math.max(0, nextSkip);
+	}
+
 	function validate(): boolean {
 		errors = {};
 		if (!(Number(form.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
 		if (!form.effectiveOn) errors.effectiveOn = 'Pick the effective date.';
 		if (!form.reason.trim()) errors.reason = 'Explain why this credit is being given.';
-		if (form.applyToCharge && !form.targetChargeEntryId) errors.targetChargeEntryId = 'Choose the original charge or turn off the checkbox.';
+		if (form.applyToCharge && !selectedTarget) errors.targetChargeEntryId = 'Choose a visible original charge or turn off the checkbox.';
 		if (!form.applyToCharge && !form.categoryAccountId) errors.category = 'Choose an income category.';
 		return Object.keys(errors).length === 0;
 	}
@@ -108,11 +124,12 @@
 	const mutation = createMutation(() => ({
 		mutationFn: () => {
 			operationKey ??= crypto.randomUUID();
+			const targetEntryId = selectedTarget?.tenantLedgerEntryId ?? null;
 			return tenantMoney.postCredit(tenantAccountId, operationKey, {
 				amount: Number(form.amount),
 				effectiveOn: form.effectiveOn,
 				description: form.reason.trim(),
-				targetChargeEntryId: form.applyToCharge ? Number(form.targetChargeEntryId) : null,
+				targetChargeEntryId: form.applyToCharge ? targetEntryId : null,
 				incomeLedgerAccountId: form.applyToCharge ? null : form.categoryAccountId,
 				allocateOldestCharges: false
 			});
@@ -123,7 +140,7 @@
 			onclose();
 		},
 		onError: (error) => {
-			if (form.applyToCharge && form.targetChargeEntryId && error instanceof ApiError && error.status === 400) {
+			if (form.applyToCharge && selectedTarget && error instanceof ApiError && error.status === 400) {
 				errors = { form: TARGETED_CREDIT_ERROR };
 				return;
 			}
@@ -174,7 +191,7 @@
 				<div class="space-y-1 text-sm font-medium">
 					<span>Original charge</span>
 					<Select.Root type="single" bind:value={form.targetChargeEntryId}>
-						<Select.Trigger class="w-full">{selectedTarget ? normalizeTenantLedgerDescription(selectedTarget.description) : 'Choose an original charge'}</Select.Trigger>
+						<Select.Trigger class="w-full" data-testid="tenant-credit-target-trigger">{selectedTarget ? normalizeTenantLedgerDescription(selectedTarget.description) : 'Choose an original charge'}</Select.Trigger>
 						<Select.Content>
 							{#if targetQuery.isLoading}
 								<div class="px-3 py-2 text-sm text-muted-foreground">Loading charges…</div>
@@ -189,17 +206,36 @@
 							{/if}
 						</Select.Content>
 					</Select.Root>
-					{#if targetQuery.data && targetQuery.data.totalCount > targetQuery.data.skip + targetQuery.data.take}
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							class="mt-1"
-							onclick={() => targetSkip = targetQuery.data!.skip + targetQuery.data!.take}
-							data-testid="tenant-credit-next-page"
-						>
-							Show more eligible charges
-						</Button>
+					{#if targetQuery.data}
+						<div class="mt-1 flex items-center justify-between gap-2" data-testid="tenant-credit-page-navigation">
+							<span class="text-xs font-normal text-muted-foreground">Page {Math.floor(targetSkip / TARGET_PAGE_SIZE) + 1}</span>
+							<div class="flex items-center gap-1">
+								{#if targetQuery.data.skip > 0}
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										onclick={() => navigateTargetPage(targetQuery.data!.skip - targetQuery.data!.take)}
+										disabled={targetQuery.isFetching}
+										data-testid="tenant-credit-previous-page"
+									>
+										Previous page
+									</Button>
+								{/if}
+								{#if targetQuery.data.totalCount > targetQuery.data.skip + targetQuery.data.take}
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										onclick={() => navigateTargetPage(targetQuery.data!.skip + targetQuery.data!.take)}
+										disabled={targetQuery.isFetching}
+										data-testid="tenant-credit-next-page"
+									>
+										Next page
+									</Button>
+								{/if}
+							</div>
+						</div>
 					{/if}
 					{#if errors.targetChargeEntryId}<span class="block text-xs font-normal text-destructive">{errors.targetChargeEntryId}</span>{/if}
 				</div>
