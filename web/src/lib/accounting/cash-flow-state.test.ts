@@ -6,6 +6,7 @@ import {
 	buildServerCashFlowChartPoints,
 	buildCashFlowMonthlyRanges,
 	cashFlowBarPercent,
+	cashFlowBarPixels,
 	cashFlowChartScale,
 	cashFlowNetPositionPercent,
 	cashFlowPropertyDetails,
@@ -151,6 +152,43 @@ describe('cash-flow chart projection', () => {
 		assert.equal(scale, 24100);
 		assert.equal(cashFlowBarPercent(response.totalIncome, scale), 100);
 		assert.equal(cashFlowBarPercent(response.totalOperatingExpenses, scale), (7860 / 24100) * 100);
-		assert.equal(cashFlowNetPositionPercent(response.totalCashFlow, scale), 50 + (8240 / 24100) * 45);
+		assert.equal(cashFlowNetPositionPercent(response.totalCashFlow, scale), 50 + (8240 / 24100) * 50);
+	});
+
+	it('keeps monthly bar heights proportional on one shared maximum scale', () => {
+		const points = [
+			{ key: '2026-06', label: 'Jun 2026', income: 18055, operatingExpenses: 0, debtService: 0, cashFlow: 18055 },
+			{ key: '2026-07', label: 'Jul 2026', income: 11426, operatingExpenses: 0, debtService: 0, cashFlow: 11426 }
+		];
+		const scale = cashFlowChartScale(points);
+		const juneHeight = cashFlowBarPixels(points[0].income, scale, 120, 0);
+		const julyHeight = cashFlowBarPixels(points[1].income, scale, 120, 0);
+
+		assert.equal(scale, 18055);
+		assert.equal(juneHeight, 120);
+		assert.equal(julyHeight / juneHeight, 11426 / 18055);
+	});
+
+	it('clamps non-zero tiny bars to a visible height while leaving zero at zero', () => {
+		assert.equal(cashFlowBarPixels(2, 18055, 120), 2);
+		assert.equal(cashFlowBarPixels(-2, 18055, 120), 2);
+		assert.equal(cashFlowBarPixels(0, 18055, 120), 0);
+	});
+
+	it('uses the shared scale for zero and negative net marker positions', () => {
+		assert.equal(cashFlowNetPositionPercent(0, 18055), 50);
+		assert.equal(cashFlowNetPositionPercent(-18055, 18055), 0);
+		assert.equal(cashFlowNetPositionPercent(18055, 18055), 100);
+		assert.equal(cashFlowNetPositionPercent(-11426, 18055), 50 - (11426 / 18055) * 50);
+	});
+
+	it('formats server month keys for chart headings without changing their keys', () => {
+		const [point] = buildServerCashFlowChartPoints({
+			...response,
+			months: [{ month: '2026-01', income: 2, operatingExpenses: 12.34, debtService: 0, cashFlow: -10.34 }]
+		});
+
+		assert.equal(point.key, '2026-01');
+		assert.equal(point.label, 'Jan 2026');
 	});
 });
