@@ -4,7 +4,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
@@ -94,13 +94,9 @@
 			</Select.Content>
 		</Select.Root>
 		{#if mode === 'schedule'}
-			<div>
-				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="technician-schedule-from">From</label>
-				<DatePicker id="technician-schedule-from" bind:value={scheduledFrom} testid="technician-schedule-from" />
-			</div>
-			<div>
-				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="technician-schedule-through">Through</label>
-				<DatePicker id="technician-schedule-through" bind:value={scheduledTo} testid="technician-schedule-through" />
+			<div class="min-w-0 md:col-span-2">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="technician-schedule-range">Scheduled between</label>
+				<RangeDatePicker id="technician-schedule-range" bind:start={scheduledFrom} bind:end={scheduledTo} testid="technician-schedule-range" placeholder="Choose schedule range" />
 			</div>
 		{/if}
 	</section>

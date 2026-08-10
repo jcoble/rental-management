@@ -12,8 +12,9 @@
 		class: className,
 		value,
 		onchange,
+		testid,
 		...restProps
-	}: WithoutChildrenOrChild<RangeCalendarPrimitive.YearSelectProps> = $props();
+	}: WithoutChildrenOrChild<RangeCalendarPrimitive.YearSelectProps> & { testid?: string } = $props();
 </script>
 
 <span class={cn("relative flex", className)}>
@@ -24,8 +25,9 @@
 				options={yearItems.map((item) => ({ value: String(item.value), label: item.label }))}
 				disabled={calendarSelectDisabled(props)}
 				ariaLabel="Choose year"
+				testid={testid}
 				viewportPadding={{ bottom: 12 }}
-				triggerClass="h-(--cell-size) w-auto min-w-20 border-0 bg-transparent px-2 shadow-none"
+				triggerClass="h-(--cell-size) w-auto min-w-20 px-2 text-xs font-medium sm:text-sm"
 				onchange={(nextValue) => dispatchCalendarSelectChange(props, nextValue, onchange)}
 			/>
 		{/snippet}
