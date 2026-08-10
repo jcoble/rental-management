@@ -1632,6 +1632,8 @@ export interface DashboardActivity {
 	entityId: number;
 	/** Owning unit when the touched entity belongs to a unit. */
 	unitId?: number | null;
+	/** Owning lease-management record for a lease-agreement activity row. */
+	leaseManagementId?: number | null;
 	action?: string;
 	description?: string;
 	/** Human label naming the specific record this row touched (null when the type has no cheap label). */
