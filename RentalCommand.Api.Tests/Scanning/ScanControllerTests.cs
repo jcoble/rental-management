@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FluentAssertions;
@@ -438,6 +439,66 @@ public class ScanControllerTests : IAsyncLifetime
         result.Should().BeOfType<BadRequestObjectResult>();
         atomic.Calls.Should().Be(0);
         scan.VerifyNoOtherCalls();
+    }
+
+    [Theory]
+    [InlineData("lease-number-blank")]
+    [InlineData("lease-number-too-long")]
+    [InlineData("start-date-missing")]
+    [InlineData("end-date-missing")]
+    [InlineData("end-before-start")]
+    [InlineData("monthly-rent-not-positive")]
+    [InlineData("rent-due-day-out-of-range")]
+    [InlineData("property-id-not-positive")]
+    [InlineData("unit-id-not-positive")]
+    [InlineData("tenant-id-not-positive")]
+    [InlineData("security-deposit-negative")]
+    [InlineData("late-fee-negative")]
+    [InlineData("bedrooms-negative")]
+    [InlineData("bathrooms-negative")]
+    [InlineData("square-feet-negative")]
+    public void CreateManualLeaseRequest_RejectsEveryGuidedSetupInvalidClass(string invalidClass)
+    {
+        var request = new CreateManualLeaseRequest
+        {
+            PropertyId = 12,
+            UnitId = 34,
+            TenantId = 56,
+            LeaseNumber = "MANUAL-834",
+            StartDate = new DateTime(2026, 9, 1),
+            EndDate = new DateTime(2027, 8, 31),
+            MonthlyRent = 1_450m,
+            SecurityDeposit = 1_450m,
+            LateFee = 75m,
+            RentDueDay = 1,
+            UnitBedrooms = 2m,
+            UnitBathrooms = 1m,
+            UnitSquareFeet = 900,
+        };
+        switch (invalidClass)
+        {
+            case "lease-number-blank": request.LeaseNumber = "   "; break;
+            case "lease-number-too-long": request.LeaseNumber = new string('L', 101); break;
+            case "start-date-missing": request.StartDate = null; break;
+            case "end-date-missing": request.EndDate = null; break;
+            case "end-before-start": request.EndDate = new DateTime(2026, 8, 31); break;
+            case "monthly-rent-not-positive": request.MonthlyRent = 0m; break;
+            case "rent-due-day-out-of-range": request.RentDueDay = 0; break;
+            case "property-id-not-positive": request.PropertyId = 0; break;
+            case "unit-id-not-positive": request.UnitId = -1; break;
+            case "tenant-id-not-positive": request.TenantId = -1; break;
+            case "security-deposit-negative": request.SecurityDeposit = -1m; break;
+            case "late-fee-negative": request.LateFee = -1m; break;
+            case "bedrooms-negative": request.UnitBedrooms = -1m; break;
+            case "bathrooms-negative": request.UnitBathrooms = -1m; break;
+            case "square-feet-negative": request.UnitSquareFeet = -1; break;
+            default: throw new ArgumentOutOfRangeException(nameof(invalidClass), invalidClass, null);
+        }
+
+        var errors = new List<ValidationResult>();
+        Validator.TryValidateObject(request, new ValidationContext(request), errors, validateAllProperties: true)
+            .Should().BeFalse();
+        errors.Should().NotBeEmpty();
     }
 
     [Theory]

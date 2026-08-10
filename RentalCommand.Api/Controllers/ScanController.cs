@@ -1108,6 +1108,103 @@ public class ScanController : ManagementControllerBase
     }
 
     // -------------------------------------------------------------------------
+    // POST /api/v1/scans/manual-lease  — admit a Guided Setup manual lease
+    // -------------------------------------------------------------------------
+
+    [HttpPost("manual-lease")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> CreateManualLease(
+        [FromBody] CreateManualLeaseRequest? body,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (body is null || string.IsNullOrWhiteSpace(idempotencyKey)
+            || idempotencyKey.Trim().Length > 200)
+        {
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(idempotencyKey.Trim())))
+            .ToLowerInvariant();
+        var target = new ScanLeaseTargetData(
+            body.PropertyId ?? 0,
+            body.UnitId,
+            body.TenantId,
+            body.TenantName,
+            body.TenantEmail,
+            body.TenantPhone,
+            body.TenantEmergencyContact,
+            body.PropertyName,
+            body.PropertyType,
+            body.RentalStructure,
+            body.PropertyAddress,
+            body.PropertyCity,
+            body.PropertyState,
+            body.PropertyPostalCode,
+            body.UnitNumber,
+            body.UnitBedrooms,
+            body.UnitBathrooms,
+            body.UnitSquareFeet,
+            body.LeaseNumber,
+            body.StartDate,
+            body.EndDate,
+            body.MonthlyRent,
+            body.SecurityDeposit,
+            body.LateFee,
+            body.RentDueDay,
+            LeaseScanReviewDisposition.NeedsSignatures,
+            TermsSchemaVersion: body.TermsSchemaVersion,
+            TermsPayload: body.TermsPayload,
+            GracePeriodDays: body.GracePeriodDays,
+            PossessionGivenAtUtc: body.PossessionGivenAtUtc,
+            RentTrackingStartMode: body.RentTrackingStartMode,
+            RentTrackingStartOn: body.RentTrackingStartOn);
+        var command = new CreateManualLeaseCommand(
+            scope.PortfolioId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            target,
+            $"guided-setup-manual-lease:{scope.PortfolioId}:{operationDigest}");
+
+        AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
+        try
+        {
+            atomicResult = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "guided-setup.manual-lease",
+                    $"{scope.PortfolioId}:{operationDigest}"),
+                command,
+                ConfirmResultCodec,
+                ct);
+        }
+        catch (ScanConfirmationValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+
+        var result = atomicResult.Value;
+        return result.Outcome switch
+        {
+            ConfirmScanDraftOutcome.Confirmed or ConfirmScanDraftOutcome.AlreadyConfirmed =>
+                ConfirmationOk(result, atomicResult.Disposition),
+            ConfirmScanDraftOutcome.DraftNotFound => NotFound(new { error = result.Error ?? "Manual lease draft not found." }),
+            ConfirmScanDraftOutcome.DraftRejected => Conflict(new { error = result.Error ?? "Manual lease draft is rejected." }),
+            _ => BadRequest(new { error = result.Error ?? "Manual lease could not be created." }),
+        };
+    }
+
+    // -------------------------------------------------------------------------
     // POST /api/v1/scans/{id}/confirm  — atomically confirm a reviewed draft
     // -------------------------------------------------------------------------
 

@@ -56,9 +56,9 @@
 	} from '$lib/onboarding/onboarding-flow-state';
 	import { isPersonalAlertSetupComplete } from '$lib/onboarding/alert-completion';
 	import {
-		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
+	import { createLeaseSubmissionCoordinator } from '$lib/onboarding/lease-submission';
 	import { addCalendarYear } from '$lib/utils/parse-date';
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
@@ -96,6 +96,7 @@
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
+	const leaseSubmission = createLeaseSubmissionCoordinator(scan);
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const SELECTOR_PAGE_SIZE = 20;
 
@@ -1105,17 +1106,16 @@
 
 	const saveLeaseMutation = createMutation<unknown, Error, LeaseSubmitPayload>(() => ({
 		mutationFn: async ({ data, prefillDraftId }: LeaseSubmitPayload): Promise<unknown> => {
-			if (prefillDraftId != null) {
-				return scan.confirm(prefillDraftId, buildOnboardingLeaseScanOverrides(data));
-			}
-
-			throw new Error('Prepare a move-in from an approved application, or import an existing signed agreement.');
+			return leaseSubmission.submit(data, prefillDraftId);
 		},
 		onSuccess: () => {
 			createdLease = true;
 			leasePrefillDraftId = null;
+			leaseSubmission.clear();
 			showSuccess('Lease created.');
 			queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
+			queryClient.invalidateQueries({ queryKey: ['properties'] });
+			queryClient.invalidateQueries({ queryKey: ['tenants'] });
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			next();
 		},
@@ -1123,11 +1123,6 @@
 	}));
 
 	function submitLease() {
-		if (leasePrefillDraftId == null) {
-			showError('This guided step cannot create a lease without an approved application or imported agreement. Choose an approved application to continue.');
-			void goto('/applications');
-			return;
-		}
 		const leaseNumber =
 			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		const result = parseForm(leaseSchema, {
@@ -2108,7 +2103,7 @@
 							</Button>
 						{:else}
 							<Button class="gap-1" data-testid="onboarding-finish" disabled={anyPending || leaseSignatureChoiceInvalid} onclick={submitLease}>
-								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Continue to applications'}
+								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Create lease & finish'}
 								<CheckCircle2 class="h-4 w-4" />
 							</Button>
 						{/if}
