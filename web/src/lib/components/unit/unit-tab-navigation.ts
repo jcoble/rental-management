@@ -44,19 +44,14 @@ type UnitTabNavigationAdapter = {
 };
 
 function explicitContextBelongsToTab(
-	url: URL,
 	urlResolution: ReturnType<typeof resolveUnitUrlDestination>,
 	tab: UnitTab,
 ) {
-	// URL resolution canonicalizes a valid nested view to its owning tab. Compare
-	// against that destination so a stale primary-tab parameter cannot block memory.
+	// URL resolution owns the canonical destination for every explicit URL view.
+	// This includes unknown non-empty views, which intentionally fall back to the
+	// tab default; comparing the raw value here would prevent that default from
+	// being persisted and make synchronization non-convergent.
 	if (!urlResolution.hasExplicitViewOrRecord) return false;
-
-	const view = url.searchParams.get('view')?.trim().toLowerCase();
-	if (view) {
-		return urlResolution.destination.tab === tab && urlResolution.destination.view === view;
-	}
-
 	return urlResolution.destination.tab === tab;
 }
 
@@ -96,7 +91,7 @@ export function synchronizeUnitTabState(
 	if (stateBelongsToUnit && !urlResolution.hasExplicitViewOrRecord) return null;
 
 	const destination = urlResolution.destination;
-	const explicitContextBelongsToDestination = explicitContextBelongsToTab(url, urlResolution, destination.tab);
+	const explicitContextBelongsToDestination = explicitContextBelongsToTab(urlResolution, destination.tab);
 	const existingMemory = normalizedState.unitViewByPath?.[url.pathname] ?? {};
 	const stateAlreadyMatchesUrl =
 		stateBelongsToUnit
@@ -144,7 +139,6 @@ export function createUnitTabNavigationHandler({
 		const currentDestination = resolveUnitPageDestination(current.url, baseState);
 		const memoryForPath = { ...(baseState.unitViewByPath?.[current.url.pathname] ?? {}) };
 		const currentExplicitContextBelongsToCurrentTab = explicitContextBelongsToTab(
-			current.url,
 			urlResolution,
 			currentDestination.tab,
 		);
@@ -158,7 +152,6 @@ export function createUnitTabNavigationHandler({
 		const requestedDestination = resolveUnitDestination(tab, view);
 		const currentContextBelongsToRequestedTab = currentDestination.tab === requestedDestination.tab;
 		const incomingExplicitContextBelongsToRequestedTab = explicitContextBelongsToTab(
-			current.url,
 			urlResolution,
 			requestedDestination.tab,
 		);

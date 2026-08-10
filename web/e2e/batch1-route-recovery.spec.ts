@@ -81,6 +81,11 @@ const UNIT_CASES: UnitCase[] = [
 		expectation: 'money'
 	},
 	{
+		name: 'unknown Money view falls back to the default',
+		path: '/units/10?tab=money&view=unknown',
+		expectation: 'money'
+	},
+	{
 		name: 'work-orders deep link with work-order context',
 		path: '/units/1?tab=money&view=work-orders&wo=3',
 		expectation: 'work-orders'
@@ -129,7 +134,7 @@ async function assertUnitEntry(page: Page, unitCase: UnitCase, phase: string): P
 }
 
 test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => {
-	test('cold-loads and refreshes valid, encoded, unknown, tab, money, and work-order unit URLs', async ({ page }) => {
+	test('cold-loads and refreshes valid, encoded, unknown, tab, money, unknown-view, and work-order unit URLs', async ({ page }) => {
 		test.setTimeout(120_000);
 		const failures: string[] = [];
 		const consoleErrors: string[] = [];
