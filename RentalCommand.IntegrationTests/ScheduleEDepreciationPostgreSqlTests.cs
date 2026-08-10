@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -55,7 +57,8 @@ public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
     public async Task AuthorizedPropertyAndAssetDepreciation_UnionsGroupsAndSumsInPostgreSql()
     {
         Skip.IfNot(_dockerAvailable, "Docker is required for PostgreSQL Schedule E verification.");
-        await using var db = NewContext();
+        var commands = new List<string>();
+        await using var db = NewContext([new QueryRecorder(commands)]);
         var now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         db.Portfolios.Add(new Portfolio
         {
@@ -67,11 +70,13 @@ public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
             UpdatedAt = now,
         });
         var selected = Property("Selected", now, 300_000m, 60_000m, 2020);
+        var selectedSecond = Property("Selected second", now, 275_000m, 50_000m, 2021);
         var decoy = Property("Decoy", now, 550_000m, 50_000m, 2019);
-        db.Properties.AddRange(selected, decoy);
+        db.Properties.AddRange(selected, selectedSecond, decoy);
         await db.SaveChangesAsync();
         db.CapitalAssets.AddRange(
             Asset(selected.Id, "Selected roof", now, 9_900m),
+            Asset(selectedSecond.Id, "Selected HVAC", now, 5_500m),
             Asset(decoy.Id, "Decoy roof", now, 19_800m));
         await db.SaveChangesAsync();
 
@@ -82,28 +87,40 @@ public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
 
         var authorizedProperties = db.Properties
             .AsNoTracking()
-            .Where(property => property.PortfolioId == 1 && property.Id == selected.Id);
+            .Where(property => property.PortfolioId == 1 && property.Id != decoy.Id);
         var query = ScheduleEDepreciationQuery.Build(
             db, 1, 2025, authorizedProperties);
         var sql = query.ToQueryString();
 
+        commands.Clear();
         var rows = await query.ToListAsync();
 
-        rows.Should().ContainSingle();
-        rows[0].PropertyId.Should().Be(selected.Id);
-        rows[0].Amount.Should().Be(8_862.27m);
-        rows[0].TotalAmount.Should().Be(8_862.27m);
+        commands.Should().ContainSingle();
+        commands[0].Should().Contain(ScheduleEDepreciationDbFunction.Name);
+        rows.Should().HaveCount(2);
+        rows.Single(row => row.PropertyId == selected.Id).Amount.Should().Be(8_862.27m);
+        rows.Single(row => row.PropertyId == selectedSecond.Id).Amount.Should().Be(8_256.82m);
+        rows.Select(row => row.TotalAmount).Should().OnlyContain(amount => amount == 17_119.09m);
         sql.Should().Contain(ScheduleEDepreciationDbFunction.Name);
         sql.Should().Contain("UNION ALL");
         sql.Should().Contain("GROUP BY");
         sql.Should().Contain("CapitalAssets");
         sql.Should().Contain("Properties");
+        sql.Should().Contain("PortfolioId");
+        sql.Should().Contain("InServiceDate");
+        sql.Should().Contain("yearEndExclusive");
+        sql.Should().Contain("DisposedOnDate");
+        sql.Should().Contain("EXISTS");
     }
 
-    private RentalCommandDbContext NewContext() => new(
-        new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseNpgsql(_connectionString)
-            .Options);
+    private RentalCommandDbContext NewContext(IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(_connectionString);
+        if (interceptors is not null)
+            options.AddInterceptors(interceptors);
+        return new RentalCommandDbContext(options.Options);
+    }
 
     private static Property Property(
         string name,
@@ -142,4 +159,26 @@ public sealed class ScheduleEDepreciationPostgreSqlTests : IAsyncLifetime
         CreatedAt = now,
         UpdatedAt = now,
     };
+
+    private sealed class QueryRecorder(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }
