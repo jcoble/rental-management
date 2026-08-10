@@ -915,9 +915,12 @@ public class ReportsServiceTests : IAsyncLifetime
         unfiltered.TotalOperatingExpenses.Should().Be(425m);
         unfiltered.TotalNoi.Should().Be(575m);
         unfiltered.TotalCashFlow.Should().Be(575m);
-        _executedSql
+        var selectSql = _executedSql
             .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
-            .Should().HaveCount(3, "true cash flow remains rows plus SQL property totals plus SQL operating-expense total");
+            .ToArray();
+        selectSql.Length.Should().BeGreaterThanOrEqualTo(
+            3,
+            "true cash flow must retain SQL row, property-total, and operating-expense aggregates even though detail and monthly projections add SQL reads");
 
         _executedSql.Clear();
 

@@ -1,11 +1,13 @@
 using System.Data.Common;
 using FluentAssertions;
 using RentalCommand.Api.Services.Auth;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -42,6 +44,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             "Forbidden Property", "202", WorkOrderPriority.Emergency, 875m, 2_400m, 2_100m, 600m);
         var scope = SeedSelectedPropertyScope(selected.Id, RoleProfileKeys.WorkspaceAdministrator);
         await _ctx.Db.SaveChangesAsync();
+        await FreezeDatabaseBusinessClockAsync(Now);
 
         var sut = new AnalyticsService(
             _ctx.Db,
@@ -110,6 +113,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         await _ctx.Db.SaveChangesAsync();
 
         var simulatedBusinessNow = new DateTimeOffset(2027, 1, 18, 12, 0, 0, TimeSpan.Zero);
+        await FreezeDatabaseBusinessClockAsync(simulatedBusinessNow);
         var sut = new AnalyticsService(
             _ctx.Db,
             new FixedTimeProvider(simulatedBusinessNow),
@@ -122,7 +126,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         result.OccupiedUnits.Should().Be(1);
         result.MonthRentScheduled.Should().Be(0m);
         result.MonthRentCollected.Should().Be(0m);
-        result.MonthlyRecurringRent.Should().Be(1_050m);
+        result.MonthlyRecurringRent.Should().Be(0m, "the fixed-term agreement ended before the simulated business date");
         result.OpenWorkOrders.Should().ContainSingle();
         result.Trend.Should().Contain(point => point.Month == "2027-01");
         _commands.Should().ContainSingle();
@@ -347,6 +351,18 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         }
 
         return property;
+    }
+
+    private async Task FreezeDatabaseBusinessClockAsync(DateTimeOffset businessNow)
+    {
+        var clock = await _ctx.Db.SimulationClocks.SingleAsync(row => row.Id == 1);
+        clock.Mode = ClockMode.Frozen;
+        clock.SimAnchorUtc = businessNow.UtcDateTime;
+        clock.RealAnchorUtc = businessNow.UtcDateTime;
+        clock.TimeZoneId = "UTC";
+        clock.UpdatedAtRealUtc = businessNow.UtcDateTime;
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
     }
 
     private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(

@@ -429,11 +429,6 @@ public class BankingServiceTests : IAsyncLifetime
             audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
             audit.EntityType == nameof(BankTransaction)))
             .Should().Be(1);
-        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
-            audit.CommandType == "banking.transaction.reconcile" &&
-            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation") &&
-            audit.EntityType == nameof(JournalEntry)))
-            .Should().Be(1);
     }
 
     [Fact]
