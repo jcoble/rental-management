@@ -25,4 +25,16 @@ describe('dialog-aware overlay positioning', () => {
 			{ collisionBoundary: boundary, collisionPadding: { top: 4, right: 5, bottom: 6, left: 7 } }
 		);
 	});
+
+	it('allows calendar overlays to use the viewport edge while retaining dialog footer protection', () => {
+		const boundary = {} as HTMLElement;
+		assert.deepEqual(getOverlayPositioning(undefined, undefined, undefined, { viewportPadding: { bottom: 12 } }), {
+			collisionBoundary: undefined,
+			collisionPadding: { top: 12, right: 12, bottom: 12, left: 12 },
+		});
+		assert.deepEqual(getOverlayPositioning({ content: boundary, footerHeight: 72 }, undefined, undefined, { viewportPadding: { bottom: 12 } }), {
+			collisionBoundary: boundary,
+			collisionPadding: { top: 12, right: 12, bottom: 92, left: 12 },
+		});
+	});
 });

@@ -9,6 +9,14 @@ function overlap(a: Rect, b: Rect): number {
 	return width * height;
 }
 
+function centerDistance(a: Rect, b: Rect): number {
+	return Math.abs(a.x + a.width / 2 - (b.x + b.width / 2));
+}
+
+function nearestVerticalGap(a: Rect, b: Rect): number {
+	return Math.min(Math.abs(a.y - (b.y + b.height)), Math.abs(b.y - (a.y + a.height)));
+}
+
 async function visibleOverlay(page: Page): Promise<Locator> {
 	const overlay = page.locator(
 		'[data-slot="popover-content"]:visible, [data-slot="select-content"]:visible, [data-slot="dropdown-menu-content"]:visible, [data-bits-floating-content-wrapper] > [data-state="open"]:visible'
@@ -41,6 +49,52 @@ async function assertOverlayStaysInDialog(page: Page, overlay: Locator): Promise
 	expect(overlayBox.x + overlayBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
 	expect(overlayBox.y + overlayBox.height).toBeLessThanOrEqual(dialogBox.y + dialogBox.height + 1);
 	expect(overlap(overlayBox, footerBox), 'overlay must reserve the dialog footer/primary actions').toBe(0);
+}
+
+async function assertRangeMonthDropdown(
+	page: Page,
+	trigger: Locator,
+	side: 'left' | 'right'
+): Promise<void> {
+	await trigger.click();
+	const content = page.locator('[data-slot="select-content"]:visible').last();
+	await expect(content).toBeVisible();
+	await expect(content).toHaveClass(/bg-popover/);
+	await expect(content).toHaveClass(/border/);
+	await expect(content).toHaveClass(/shadow-md/);
+	await expect(content.locator('[data-slot="select-item"][aria-selected="true"] svg')).toHaveCount(1);
+
+	const triggerRect = await trigger.boundingBox();
+	const contentRect = await content.boundingBox();
+	const viewport = page.viewportSize();
+	expect(triggerRect, `${side} month trigger should have a layout rectangle`).not.toBeNull();
+	expect(contentRect, `${side} month content should have a layout rectangle`).not.toBeNull();
+	expect(viewport).not.toBeNull();
+	const triggerBox = triggerRect!;
+	const contentBox = contentRect!;
+	const viewportSize = viewport!;
+	expect(centerDistance(contentBox, triggerBox)).toBeLessThanOrEqual(12);
+	expect(nearestVerticalGap(contentBox, triggerBox)).toBeLessThanOrEqual(8);
+	expect(contentBox.x).toBeGreaterThanOrEqual(0);
+	expect(contentBox.y).toBeGreaterThanOrEqual(0);
+	expect(contentBox.x + contentBox.width).toBeLessThanOrEqual(viewportSize.width);
+	expect(contentBox.y + contentBox.height).toBeLessThanOrEqual(viewportSize.height);
+	await assertOverlayStaysInDialog(page, content);
+	console.log(
+		`TSK-845 RangeDatePicker ${side} month geometry: ${JSON.stringify({
+			trigger: triggerBox,
+			content: contentBox,
+			viewport: viewportSize,
+			dataSide: await content.getAttribute('data-side')
+		})}`
+	);
+
+	const evidenceDir = process.env.TSK845_EVIDENCE_DIR;
+	if (evidenceDir) {
+		await page.screenshot({ path: `${evidenceDir}/tsk845-range-${side}-month-1710x990.png` });
+	}
+	await page.keyboard.press('Escape');
+	await expect(content).toBeHidden();
 }
 
 async function openTenantMoney(page: Page, request: Parameters<typeof findLeasedUnit>[0]): Promise<void> {
@@ -91,6 +145,22 @@ test.describe('Batch 5 money overlay behavior', () => {
 			await page.locator('input[name="record-payment-apply"][value="specific"]').check();
 			await page.getByTestId('record-payment-allocation').locator('[data-slot="select-trigger"]').click();
 			await assertOverlayStaysInDialog(page, await visibleOverlay(page));
+			await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+		});
+
+		test('TSK-845 two-month RangeDatePicker opens both anchored month dropdowns', async ({ page, request }) => {
+			await openTenantMoney(page, request);
+
+			await page.getByRole('button', { name: 'Add charge', exact: true }).click();
+			await expect(page.getByTestId('one-time-charge-sheet')).toBeVisible();
+			await page.getByTestId('one-time-charge-service-period').click({ force: true });
+			await assertOverlayStaysInDialog(page, await visibleOverlay(page));
+
+			const monthTriggers = page.getByRole('button', { name: 'Choose month', exact: true });
+			await expect(monthTriggers).toHaveCount(2);
+			await assertRangeMonthDropdown(page, monthTriggers.nth(0), 'left');
+			await assertRangeMonthDropdown(page, monthTriggers.nth(1), 'right');
+
 			await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 		});
 	});
