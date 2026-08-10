@@ -1,5 +1,6 @@
 import {
 	buildUnitTabNavigation,
+	clearForeignUnitRecordParams,
 	resolveUnitDestination,
 	resolveUnitUrlDestination,
 	type UnitTab,
@@ -40,6 +41,7 @@ type UnitTabNavigationSnapshot = {
 type UnitTabNavigationAdapter = {
 	getCurrent: () => UnitTabNavigationSnapshot;
 	pushState: (url: string, state: UnitTabNavigationState) => void;
+	navigate?: (url: string, state: UnitTabNavigationState) => void;
 	replaceState?: (url: string, state: UnitTabNavigationState) => void;
 };
 
@@ -127,6 +129,7 @@ export function synchronizeUnitTabState(
 export function createUnitTabNavigationHandler({
 	getCurrent,
 	pushState,
+	navigate,
 	replaceState,
 }: UnitTabNavigationAdapter): (tab: string, view?: UnitView) => void {
 	return (tab: string, view?: UnitView) => {
@@ -160,6 +163,7 @@ export function createUnitTabNavigationHandler({
 		// normalized it out of the visible URL. Put it back before building a
 		// same-primary-tab destination so the contextual `view` key is not lost.
 		const currentUrl = new URL(current.url);
+		clearForeignUnitRecordParams(currentUrl, requestedDestination.tab);
 		if (
 			view === undefined
 			&& stateBelongsToUnit
@@ -186,12 +190,11 @@ export function createUnitTabNavigationHandler({
 				nextUrl.searchParams.set('view', rememberedView);
 				destination = resolveUnitDestination(requestedDestination.tab, rememberedView);
 			}
-		} else if (view !== undefined && destination.view) {
-			memoryForPath[destination.tab] = destination.view;
 		}
+		if (destination.view) memoryForPath[destination.tab] = destination.view;
 
 		const nextMemory = {
-			...(current.state.unitViewByPath ?? {}),
+			...(baseState.unitViewByPath ?? {}),
 			[current.url.pathname]: memoryForPath,
 		};
 		const nextState: UnitTabNavigationState = {
@@ -203,11 +206,17 @@ export function createUnitTabNavigationHandler({
 			unitPaymentId: null,
 			unitExpenseId: null,
 		};
-
 		if (`${nextUrl.pathname}${nextUrl.search}` === `${current.url.pathname}${current.url.search}`) {
 			if (synchronizedState && replaceState) {
 				replaceState(`${nextUrl.pathname}${nextUrl.search}`, nextState);
 			}
+			return;
+		}
+		// A URL carrying explicit nested/record context must go through SvelteKit's
+		// route navigation so page.url advances before the URL-first effect runs.
+		// Plain Unit tab changes can retain the existing shallow history behavior.
+		if (navigate && urlResolution.hasExplicitViewOrRecord) {
+			navigate(`${nextUrl.pathname}${nextUrl.search}`, nextState);
 			return;
 		}
 		pushState(`${nextUrl.pathname}${nextUrl.search}`, nextState);

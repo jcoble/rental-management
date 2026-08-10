@@ -28,9 +28,11 @@ export interface UnitDestination {
 }
 
 /**
- * Query-string context carried by Unit workflows. These names are intentionally
- * kept together because tab changes must not discard a record the landlord is
- * returning to.
+ * Query-string context carried by Unit workflows. These names stay centralized
+ * so URL resolution and the user-tab boundary apply the same ownership map.
+ * Deep-link resolution preserves this context; a user leaving a primary tab
+ * clears records owned by another tab while retaining the selected tab's own
+ * record context.
  */
 export const UNIT_CONTEXTUAL_PARAMS = [
 	'view',
@@ -62,6 +64,17 @@ const CONTEXT_OWNER_BY_PARAM: Partial<Record<(typeof UNIT_CONTEXTUAL_PARAMS)[num
 export interface UnitUrlDestination {
 	destination: UnitDestination;
 	hasExplicitViewOrRecord: boolean;
+}
+
+/**
+ * Removes record context owned by another primary tab before a user leaves the
+ * current surface. Nested-view memory is kept separately by the navigation
+ * handler, so this intentionally drops only URL record ids.
+ */
+export function clearForeignUnitRecordParams(url: URL, destinationTab: UnitTab): void {
+	for (const [param, owner] of Object.entries(CONTEXT_OWNER_BY_PARAM)) {
+		if (owner?.tab !== destinationTab) url.searchParams.delete(param);
+	}
 }
 
 const DEFAULT_VIEWS: Partial<Record<UnitTab, UnitView>> = {
