@@ -218,6 +218,86 @@ test.describe('Batch 1 route recovery at the browser lifecycle boundary', () => 
 		expect(lifecycleErrors, 'lease-management tab-click lifecycle errors').toEqual([]);
 	});
 
+	test('lets a nested Money view click win after deep-state arrival and on a fresh load', async ({ page }) => {
+		test.setTimeout(120_000);
+		const consoleErrors: string[] = [];
+		const pageErrors: string[] = [];
+		const evidenceDir = process.env.TSK848_EVIDENCE_DIR;
+		page.on('console', (message) => {
+			if (message.type() === 'error') consoleErrors.push(message.text());
+		});
+		page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
+
+		await login(page);
+		expect(await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1710, height: 990 });
+
+		await page.goto('/units/19?tab=tenant-lease&view=agreements&leaseManagement=17', { waitUntil: 'domcontentloaded' });
+		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('unit-agreement-section')).toBeVisible({ timeout: 30_000 });
+		await page.getByTestId('tab-money').click();
+		await expect(page).toHaveURL('/units/19?tab=money&view=tenant-account');
+		await expect(page.getByTestId('ledger-rent-panel')).toBeVisible({ timeout: 30_000 });
+		if (evidenceDir) await page.screenshot({ path: `${evidenceDir}/tsk848-money-rent-after-deep-arrival-1710x990.png`, fullPage: true });
+
+		await page.getByTestId('unit-money-view-operating-costs').click();
+		await expect(page).toHaveURL('/units/19?tab=money&view=operating-costs');
+		await expect(page.getByTestId('ledger-expenses-panel')).toBeVisible({ timeout: 30_000 });
+		if (evidenceDir) await page.screenshot({ path: `${evidenceDir}/tsk848-money-expenses-after-nested-click-1710x990.png`, fullPage: true });
+
+		await page.goto('/units/1?tab=money', { waitUntil: 'domcontentloaded' });
+		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('ledger-rent-panel')).toBeVisible({ timeout: 30_000 });
+		await page.getByTestId('unit-money-view-operating-costs').click();
+		await expect(page).toHaveURL('/units/1?tab=money&view=operating-costs');
+		await expect(page.getByTestId('ledger-expenses-panel')).toBeVisible({ timeout: 30_000 });
+		await page.getByTestId('unit-money-view-tenant-account').click();
+		await expect(page).toHaveURL('/units/1?tab=money&view=tenant-account');
+		await expect(page.getByTestId('ledger-rent-panel')).toBeVisible({ timeout: 30_000 });
+		if (evidenceDir) await page.screenshot({ path: `${evidenceDir}/tsk848-money-fresh-load-round-trip-1710x990.png`, fullPage: true });
+
+		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+		console.log(JSON.stringify({ consoleErrors, pageErrors, lifecycleErrors }, null, 2));
+		expect(lifecycleErrors, 'nested Money lifecycle errors').toEqual([]);
+	});
+
+	test('opens a Unit inspection row, deep-links its facts, and closes back to the list', async ({ page }) => {
+		test.setTimeout(120_000);
+		const consoleErrors: string[] = [];
+		const pageErrors: string[] = [];
+		const evidenceDir = process.env.TSK848_EVIDENCE_DIR;
+		page.on('console', (message) => {
+			if (message.type() === 'error') consoleErrors.push(message.text());
+		});
+		page.on('pageerror', (error) => pageErrors.push(error.stack ?? String(error)));
+
+		await login(page);
+		expect(await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))).toEqual({ width: 1710, height: 990 });
+		await page.goto('/units/1?tab=maintenance&view=inspections', { waitUntil: 'domcontentloaded' });
+		await expect(page.getByTestId('unit-inspections-section')).toBeVisible({ timeout: 30_000 });
+		const inspectionRow = page.locator('[data-testid^="inspection-open-"]').first();
+		await expect(inspectionRow, 'Unit inspection row').toBeVisible({ timeout: 30_000 });
+		const rowTestId = await inspectionRow.getAttribute('data-testid');
+		const inspectionId = rowTestId?.replace('inspection-open-', '');
+		expect(inspectionId, 'inspection row id').toMatch(/^\d+$/);
+
+		await inspectionRow.click();
+		await expect(page).toHaveURL(new RegExp(`/units/1\\?tab=maintenance&view=inspections&inspection=${inspectionId}$`));
+		await page.reload({ waitUntil: 'domcontentloaded' });
+		await expect(page).toHaveURL(new RegExp(`/units/1\\?tab=maintenance&view=inspections&inspection=${inspectionId}$`));
+		await expect(page.getByTestId('unit-inspection-detail-surface')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('inspection-detail-facts')).toBeVisible({ timeout: 30_000 });
+		await expect(page.getByTestId('inspection-detail-title')).toBeVisible();
+		if (evidenceDir) await page.screenshot({ path: `${evidenceDir}/tsk848-inspection-detail-1710x990.png`, fullPage: true });
+
+		await page.getByTestId('inspection-detail-close').click();
+		await expect(page).toHaveURL('/units/1?tab=maintenance&view=inspections');
+		await expect(page.getByTestId('unit-inspection-list')).toBeVisible({ timeout: 30_000 });
+
+		const lifecycleErrors = routeLifecycleErrors([...consoleErrors, ...pageErrors]);
+		console.log(JSON.stringify({ consoleErrors, pageErrors, lifecycleErrors }, null, 2));
+		expect(lifecycleErrors, 'inspection detail lifecycle errors').toEqual([]);
+	});
+
 	test('loads Leases without the route-load runtime error and keeps an offline property filter in-app', async ({ page }) => {
 		const consoleErrors: string[] = [];
 		const pageErrors: string[] = [];
