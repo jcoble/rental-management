@@ -896,184 +896,330 @@ public class ReportsService : IReportsService
 
     public async Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
         var hasPropertyFilter = query.PropertyId.HasValue || (query.PropertyIds?.Count > 0);
-        var allPropertiesReportsReadAuthority = BuildAllPropertiesAuthorityQuery(scope, CapabilityKeys.ReportsRead);
+        var authorizedPropertyIds = await authorizedProperties
+            .Select(property => property.Id)
+            .ToArrayAsync(ct);
+        var includePortfolioExpenses = !hasPropertyFilter &&
+            await BuildAllPropertiesAuthorityQuery(scope, CapabilityKeys.ReportsRead).AnyAsync(ct);
 
-        var propertyQuery = authorizedProperties;
-
-        var fromDate = DateOnly.FromDateTime(from);
-        var toDate = DateOnly.FromDateTime(to);
-        var tenantIncomeQuery =
-            from allocation in _db.TenantLedgerAllocations.AsNoTracking()
-            join receipt in _db.TenantLedgerEntries.AsNoTracking()
-                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
-                equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
-            join charge in _db.TenantLedgerEntries.AsNoTracking()
-                on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
-                equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
-            join account in _db.TenantAccounts.AsNoTracking()
-                on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
-                equals new { account.PortfolioId, account.Id }
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { account.PortfolioId, Id = account.LeaseManagementId }
-                equals new { management.PortfolioId, management.Id }
-            where allocation.PortfolioId == portfolioId
-                && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
-                && receipt.EffectiveOn >= fromDate
-                && receipt.EffectiveOn <= toDate
-                && charge.EntryType != TenantLedgerEntryType.DepositCharge
-            select new
-            {
-                PropertyId = (int?)management.PropertyId,
-                Amount = allocation.Amount,
-                EffectiveOn = receipt.EffectiveOn,
-            };
-
-        var applicationIncomeQuery = _db.ApplicationFinancialEntries
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .Where(entry =>
-                entry.PortfolioId == portfolioId &&
-                entry.EffectiveOn >= fromDate &&
-                entry.EffectiveOn <= toDate)
-            .Select(entry => new
-            {
-                entry.PropertyId,
-                Amount = entry.Direction == ApplicationFinancialDirection.Increase
-                    ? entry.Amount
-                    : -entry.Amount,
-                entry.EffectiveOn,
-            });
-
-        var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
-        var expenseProjection = FinancialReportProjections.BuildExpenseAllocationProjection(_db, portfolioId)
-            .Where(expense => expense.EffectiveAt >= from && expense.EffectiveAt <= to);
-
-        var rowQuery = propertyQuery
-            .Select(p => new
-            {
-                p.Id,
-                p.Name,
-                Income = incomeQuery
-                    .Where(income => income.PropertyId == p.Id)
-                    .Sum(income => (decimal?)income.Amount) ?? 0m,
-                OperatingExpenses = expenseProjection
-                    .Where(e =>
-                        e.PropertyId == p.Id &&
-                        !_db.Loans.Any(l =>
-                            l.PropertyId == p.Id &&
-                            l.Status == LoanStatus.Active &&
-                            ((e.Category == ScheduleECategory.Taxes && l.EscrowCoversTaxes) ||
-                             (e.Category == ScheduleECategory.Insurance && l.EscrowCoversInsurance))))
-                    .Sum(e => (decimal?)e.Amount) ?? 0m,
-                DebtService = LoanPaymentEffectiveQuery.From(_db)
-                    .Where(lp =>
-                        lp.PortfolioId == portfolioId &&
-                        lp.Status == LoanPaymentStatus.Paid &&
-                        lp.PaidDate != null &&
-                        _db.Loans.Any(loan => loan.Id == lp.LoanId && loan.PropertyId == p.Id) &&
-                        lp.PaidDate >= from && lp.PaidDate <= to)
-                    .Sum(lp => (decimal?)lp.TotalAmount) ?? 0m,
-            })
-            .Where(r => r.Income != 0m || r.OperatingExpenses != 0m || r.DebtService != 0m);
-
-        var rows = await rowQuery
-            .OrderBy(r => r.Name)
-            .Select(r => new PropertyCashFlow
-            {
-                PropertyId = r.Id,
-                PropertyName = r.Name,
-                Income = r.Income,
-                OperatingExpenses = r.OperatingExpenses,
-                Noi = r.Income - r.OperatingExpenses,
-                DebtService = r.DebtService,
-                CashFlow = r.Income - r.OperatingExpenses - r.DebtService,
-            })
-            .ToListAsync(ct);
-
-        var expenseDetails = await expenseProjection
-            .Where(e => e.PropertyId != null && propertyQuery.Any(p => p.Id == e.PropertyId.Value))
-            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
-            .Select(g => new { g.Key.PropertyId, Label = g.Key.Category.ToString(), Amount = g.Sum(e => e.Amount) })
-            .ToListAsync(ct);
-        var debtDetails = await LoanPaymentEffectiveQuery.From(_db)
-            .Where(lp => lp.PortfolioId == portfolioId && lp.Status == LoanPaymentStatus.Paid &&
-                lp.PaidDate != null && lp.PaidDate >= from && lp.PaidDate <= to)
-            .Join(_db.Loans.AsNoTracking().Where(l => propertyQuery.Any(p => p.Id == l.PropertyId)),
-                lp => lp.LoanId, loan => loan.Id,
-                (lp, loan) => new { loan.PropertyId, loan.Lender, lp.TotalAmount })
-            .GroupBy(row => new { row.PropertyId, row.Lender })
-            .Select(g => new { g.Key.PropertyId, Label = g.Key.Lender, Amount = g.Sum(row => row.TotalAmount) })
-            .ToListAsync(ct);
-        foreach (var row in rows)
+        var parameters = new NpgsqlParameter[]
         {
-            row.OperatingExpenseDetails = expenseDetails.Where(x => x.PropertyId == row.PropertyId)
-                .Select(x => new CashFlowDetailRow { Label = x.Label, Amount = x.Amount }).ToList();
-            row.DebtServiceDetails = debtDetails.Where(x => x.PropertyId == row.PropertyId)
-                .Select(x => new CashFlowDetailRow { Label = x.Label, Amount = x.Amount }).ToList();
+            new("portfolioId", NpgsqlDbType.Integer) { Value = scope.PortfolioId },
+            new("propertyIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = authorizedPropertyIds },
+            new("fromAt", NpgsqlDbType.TimestampTz) { Value = from },
+            new("toAt", NpgsqlDbType.TimestampTz) { Value = to },
+            new("fromDate", NpgsqlDbType.Date) { Value = DateOnly.FromDateTime(from) },
+            new("toDate", NpgsqlDbType.Date) { Value = DateOnly.FromDateTime(to) },
+            new("includePortfolioExpenses", NpgsqlDbType.Boolean) { Value = includePortfolioExpenses },
+        };
+        var databaseRows = await _db.Database
+            .SqlQueryRaw<TrueCashFlowDatabaseRow>(TrueCashFlowSql, parameters)
+            .ToListAsync(ct);
+        if (databaseRows.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"The true-cash-flow query returned {databaseRows.Count} summary rows instead of one.");
         }
 
-        var monthlyIncome = await incomeQuery
-            .GroupBy(x => new { x.EffectiveOn.Year, x.EffectiveOn.Month })
-            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(x => x.Amount) }).ToListAsync(ct);
-        var monthlyExpenses = await expenseProjection
-            .Where(e => e.PropertyId != null && propertyQuery.Any(p => p.Id == e.PropertyId.Value))
-            .GroupBy(e => new { e.EffectiveAt.Year, e.EffectiveAt.Month })
-            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(e => e.Amount) }).ToListAsync(ct);
-        var monthlyDebt = await LoanPaymentEffectiveQuery.From(_db)
-            .Where(lp => lp.PortfolioId == portfolioId && lp.Status == LoanPaymentStatus.Paid && lp.PaidDate != null &&
-                lp.PaidDate >= from && lp.PaidDate <= to && _db.Loans.Any(l => l.Id == lp.LoanId && propertyQuery.Any(p => p.Id == l.PropertyId)))
-            .GroupBy(lp => new { lp.PaidDate!.Value.Year, lp.PaidDate.Value.Month })
-            .Select(g => new { g.Key.Year, g.Key.Month, Amount = g.Sum(lp => lp.TotalAmount) }).ToListAsync(ct);
-        var months = Enumerable.Range(0, ((to.Year - from.Year) * 12) + to.Month - from.Month + 1)
-            .Select(offset => new DateTime(from.Year, from.Month, 1).AddMonths(offset))
-            .Select(month => {
-                var income = monthlyIncome.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
-                var expenses = monthlyExpenses.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
-                var debt = monthlyDebt.Where(x => x.Year == month.Year && x.Month == month.Month).Sum(x => x.Amount);
-                return new MonthlyCashFlow { Month = month.ToString("yyyy-MM"), Income = income, OperatingExpenses = expenses, DebtService = debt, CashFlow = income - expenses - debt };
-            }).ToList();
-
-        var propertyTotals = await rowQuery
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                TotalIncome = g.Sum(r => r.Income),
-                TotalDebtService = g.Sum(r => r.DebtService),
-            })
-            .SingleOrDefaultAsync(ct);
-        var totalOperatingExpenses = await expenseProjection
-            .Where(e =>
-                ((e.PropertyId != null && propertyQuery.Any(property => property.Id == e.PropertyId.Value)) ||
-                 (e.PropertyId == null && !hasPropertyFilter && allPropertiesReportsReadAuthority.Any())) &&
-                !_db.Loans.Any(l =>
-                    e.PropertyId != null &&
-                    l.PropertyId == e.PropertyId.Value &&
-                    l.Status == LoanStatus.Active &&
-                    ((e.Category == ScheduleECategory.Taxes && l.EscrowCoversTaxes) ||
-                     (e.Category == ScheduleECategory.Insurance && l.EscrowCoversInsurance))))
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-
-        var totalIncome = propertyTotals?.TotalIncome ?? 0m;
-        var totalDebtService = propertyTotals?.TotalDebtService ?? 0m;
-        var totalNoi = totalIncome - totalOperatingExpenses;
-
+        var databaseRow = databaseRows[0];
         return new CashFlowSummaryResponse
         {
             From = from,
             To = to,
-            Properties = rows,
-            Months = months,
-            TotalIncome = totalIncome,
-            TotalOperatingExpenses = totalOperatingExpenses,
-            TotalNoi = totalNoi,
-            TotalDebtService = totalDebtService,
-            TotalCashFlow = totalNoi - totalDebtService,
+            Properties = JsonSerializer.Deserialize<PropertyCashFlow[]>(
+                databaseRow.PropertiesJson, TrueCashFlowJsonOptions) ?? [],
+            Months = JsonSerializer.Deserialize<MonthlyCashFlow[]>(
+                databaseRow.MonthsJson, TrueCashFlowJsonOptions) ?? [],
+            TotalIncome = databaseRow.TotalIncome,
+            TotalOperatingExpenses = databaseRow.TotalOperatingExpenses,
+            TotalNoi = databaseRow.TotalIncome - databaseRow.TotalOperatingExpenses,
+            TotalDebtService = databaseRow.TotalDebtService,
+            TotalCashFlow = databaseRow.TotalIncome - databaseRow.TotalOperatingExpenses - databaseRow.TotalDebtService,
         };
     }
+
+    private static readonly JsonSerializerOptions TrueCashFlowJsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// One PostgreSQL statement owns the true-cash-flow report shape. The only client-side work is
+    /// deserializing the two JSON aggregates; all filtering, joins, detail/monthly/property/portfolio
+    /// aggregation, escrow exclusion, and latest-correction selection stay inside this SQL statement.
+    /// </summary>
+    internal const string TrueCashFlowSql = """
+        WITH authorized_properties AS MATERIALIZED (
+            SELECT property."Id" AS property_id, property."Name" AS property_name
+            FROM "Properties" property
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND property."Id" = ANY(@propertyIds)
+        ), tenant_income AS MATERIALIZED (
+            SELECT management."PropertyId" AS property_id,
+                   receipt."EffectiveOn" AS effective_on,
+                   allocation."Amount" AS amount
+            FROM "TenantLedgerAllocations" allocation
+            JOIN "TenantLedgerEntries" receipt
+              ON receipt."PortfolioId" = allocation."PortfolioId"
+             AND receipt."TenantAccountId" = allocation."TenantAccountId"
+             AND receipt."Id" = allocation."CreditEntryId"
+            JOIN "TenantLedgerEntries" charge
+              ON charge."PortfolioId" = allocation."PortfolioId"
+             AND charge."TenantAccountId" = allocation."TenantAccountId"
+             AND charge."Id" = allocation."DebitEntryId"
+            JOIN "TenantAccounts" account
+              ON account."PortfolioId" = allocation."PortfolioId"
+             AND account."Id" = allocation."TenantAccountId"
+            JOIN "LeaseManagements" management
+              ON management."PortfolioId" = account."PortfolioId"
+             AND management."Id" = account."LeaseManagementId"
+            WHERE allocation."PortfolioId" = @portfolioId
+              AND receipt."EntryType" = 'PaymentReceipt'
+              AND receipt."EffectiveOn" >= @fromDate
+              AND receipt."EffectiveOn" <= @toDate
+              AND charge."EntryType" <> 'DepositCharge'
+        ), application_income AS MATERIALIZED (
+            SELECT entry."PropertyId" AS property_id,
+                   entry."EffectiveOn" AS effective_on,
+                   CASE WHEN entry."Direction" = 'Increase'
+                        THEN entry."Amount" ELSE -entry."Amount" END AS amount
+            FROM "ApplicationFinancialEntries" entry
+            WHERE entry."PortfolioId" = @portfolioId
+              AND entry."EffectiveOn" >= @fromDate
+              AND entry."EffectiveOn" <= @toDate
+        ), income_facts AS MATERIALIZED (
+            SELECT property_id, effective_on, amount FROM tenant_income
+            UNION ALL
+            SELECT property_id, effective_on, amount FROM application_income
+        ), expense_facts AS MATERIALIZED (
+            SELECT expense."Id" AS expense_id,
+                   CASE allocation."TargetKind"
+                       WHEN 'Property' THEN allocation."PropertyId"
+                       WHEN 'Unit' THEN unit."PropertyId"
+                       ELSE expense."PropertyId"
+                   END AS property_id,
+                   expense."Category" AS category,
+                   COALESCE(expense."PaidAt", expense."IncurredAt") AS effective_at,
+                   allocation."Amount" AS amount
+            FROM "ExpenseAllocations" allocation
+            JOIN "Expenses" expense
+              ON expense."PortfolioId" = allocation."PortfolioId"
+             AND expense."Id" = allocation."ExpenseId"
+             AND expense."DeletedAt" IS NULL
+            LEFT JOIN "Units" unit
+              ON unit."PortfolioId" = allocation."PortfolioId"
+             AND unit."Id" = allocation."UnitId"
+             AND unit."DeletedAt" IS NULL
+            WHERE allocation."PortfolioId" = @portfolioId
+            UNION ALL
+            SELECT expense."Id" AS expense_id,
+                   expense."PropertyId" AS property_id,
+                   expense."Category" AS category,
+                   COALESCE(expense."PaidAt", expense."IncurredAt") AS effective_at,
+                   expense."Amount" AS amount
+            FROM "Expenses" expense
+            WHERE expense."PortfolioId" = @portfolioId
+              AND expense."DeletedAt" IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "ExpenseAllocations" allocation
+                  WHERE allocation."PortfolioId" = expense."PortfolioId"
+                    AND allocation."ExpenseId" = expense."Id")
+        ), operating_expense_facts AS MATERIALIZED (
+            SELECT fact.*
+            FROM expense_facts fact
+            WHERE fact.effective_at >= @fromAt
+              AND fact.effective_at <= @toAt
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM "Loans" loan
+                  WHERE fact.property_id IS NOT NULL
+                    AND loan."PortfolioId" = @portfolioId
+                    AND loan."PropertyId" = fact.property_id
+                    AND loan."DeletedAt" IS NULL
+                    AND loan."Status" = 0
+                    AND ((fact.category = 10 AND loan."EscrowCoversTaxes")
+                      OR (fact.category = 4 AND loan."EscrowCoversInsurance")))
+        ), effective_loan_payments AS MATERIALIZED (
+            SELECT loan."PropertyId" AS property_id,
+                   loan."Lender" AS lender,
+                   COALESCE(correction."PaidDate", payment."PaidDate") AS paid_date,
+                   COALESCE(correction."Status", payment."Status") AS status,
+                   COALESCE(correction."TotalAmount", payment."TotalAmount") AS total_amount
+            FROM "LoanPayments" payment
+            JOIN "Loans" loan
+              ON loan."Id" = payment."LoanId"
+             AND loan."PortfolioId" = payment."PortfolioId"
+             AND loan."DeletedAt" IS NULL
+            LEFT JOIN LATERAL (
+                SELECT candidate."PaidDate", candidate."Status", candidate."TotalAmount"
+                FROM "LoanPaymentCorrections" candidate
+                WHERE candidate."LoanPaymentId" = payment."Id"
+                  AND candidate."PortfolioId" = payment."PortfolioId"
+                ORDER BY candidate."Id" DESC
+                LIMIT 1
+            ) correction ON TRUE
+            WHERE payment."PortfolioId" = @portfolioId
+        ), property_income_totals AS (
+            SELECT income.property_id, SUM(income.amount) AS income
+            FROM income_facts income
+            JOIN authorized_properties property ON property.property_id = income.property_id
+            GROUP BY income.property_id
+        ), property_expense_totals AS (
+            SELECT expense.property_id, SUM(expense.amount) AS operating_expenses
+            FROM operating_expense_facts expense
+            JOIN authorized_properties property ON property.property_id = expense.property_id
+            GROUP BY expense.property_id
+        ), property_debt_totals AS (
+            SELECT payment.property_id, SUM(payment.total_amount) AS debt_service
+            FROM effective_loan_payments payment
+            JOIN authorized_properties property ON property.property_id = payment.property_id
+            WHERE payment.status = 1
+              AND payment.paid_date IS NOT NULL
+              AND payment.paid_date >= @fromAt
+              AND payment.paid_date <= @toAt
+            GROUP BY payment.property_id
+        ), property_totals AS MATERIALIZED (
+            SELECT property.property_id,
+                   property.property_name,
+                   COALESCE(income.income, 0) AS income,
+                   COALESCE(expense.operating_expenses, 0) AS operating_expenses,
+                   COALESCE(debt.debt_service, 0) AS debt_service,
+                   COALESCE(income.income, 0) - COALESCE(expense.operating_expenses, 0) AS noi,
+                   COALESCE(income.income, 0) - COALESCE(expense.operating_expenses, 0)
+                       - COALESCE(debt.debt_service, 0) AS cash_flow
+            FROM authorized_properties property
+            LEFT JOIN property_income_totals income ON income.property_id = property.property_id
+            LEFT JOIN property_expense_totals expense ON expense.property_id = property.property_id
+            LEFT JOIN property_debt_totals debt ON debt.property_id = property.property_id
+            WHERE COALESCE(income.income, 0) <> 0
+               OR COALESCE(expense.operating_expenses, 0) <> 0
+               OR COALESCE(debt.debt_service, 0) <> 0
+        ), expense_detail_totals AS (
+            SELECT expense.property_id,
+                   CASE expense.category
+                       WHEN 0 THEN 'Advertising'
+                       WHEN 1 THEN 'AutoTravel'
+                       WHEN 2 THEN 'CleaningMaintenance'
+                       WHEN 3 THEN 'Commissions'
+                       WHEN 4 THEN 'Insurance'
+                       WHEN 5 THEN 'LegalProfessional'
+                       WHEN 6 THEN 'ManagementFees'
+                       WHEN 7 THEN 'MortgageInterest'
+                       WHEN 8 THEN 'Repairs'
+                       WHEN 9 THEN 'Supplies'
+                       WHEN 10 THEN 'Taxes'
+                       WHEN 11 THEN 'Utilities'
+                       WHEN 12 THEN 'Depreciation'
+                       ELSE 'Other'
+                   END AS label,
+                   SUM(expense.amount) AS amount
+            FROM operating_expense_facts expense
+            JOIN authorized_properties property ON property.property_id = expense.property_id
+            GROUP BY expense.property_id, expense.category
+        ), expense_details AS (
+            SELECT property_id,
+                   jsonb_agg(jsonb_build_object('Label', label, 'Amount', amount)
+                             ORDER BY label) AS details
+            FROM expense_detail_totals
+            GROUP BY property_id
+        ), debt_detail_totals AS (
+            SELECT payment.property_id, payment.lender AS label, SUM(payment.total_amount) AS amount
+            FROM effective_loan_payments payment
+            JOIN authorized_properties property ON property.property_id = payment.property_id
+            WHERE payment.status = 1
+              AND payment.paid_date IS NOT NULL
+              AND payment.paid_date >= @fromAt
+              AND payment.paid_date <= @toAt
+            GROUP BY payment.property_id, payment.lender
+        ), debt_details AS (
+            SELECT property_id,
+                   jsonb_agg(jsonb_build_object('Label', label, 'Amount', amount)
+                             ORDER BY label) AS details
+            FROM debt_detail_totals
+            GROUP BY property_id
+        ), month_series AS (
+            SELECT generate_series(
+                       date_trunc('month', @fromAt),
+                       date_trunc('month', @toAt),
+                       interval '1 month') AS month_start
+        ), monthly_income_totals AS (
+            SELECT date_trunc('month', income.effective_on::timestamp) AS month_start,
+                   SUM(income.amount) AS income
+            FROM income_facts income
+            JOIN authorized_properties property ON property.property_id = income.property_id
+            GROUP BY date_trunc('month', income.effective_on::timestamp)
+        ), monthly_expense_totals AS (
+            SELECT date_trunc('month', expense.effective_at) AS month_start,
+                   SUM(expense.amount) AS operating_expenses
+            FROM operating_expense_facts expense
+            JOIN authorized_properties property ON property.property_id = expense.property_id
+            GROUP BY date_trunc('month', expense.effective_at)
+        ), monthly_debt_totals AS (
+            SELECT date_trunc('month', payment.paid_date) AS month_start,
+                   SUM(payment.total_amount) AS debt_service
+            FROM effective_loan_payments payment
+            JOIN authorized_properties property ON property.property_id = payment.property_id
+            WHERE payment.status = 1
+              AND payment.paid_date IS NOT NULL
+              AND payment.paid_date >= @fromAt
+              AND payment.paid_date <= @toAt
+            GROUP BY date_trunc('month', payment.paid_date)
+        ), monthly_rows AS (
+            SELECT month.month_start,
+                   COALESCE(income.income, 0) AS income,
+                   COALESCE(expense.operating_expenses, 0) AS operating_expenses,
+                   COALESCE(debt.debt_service, 0) AS debt_service
+            FROM month_series month
+            LEFT JOIN monthly_income_totals income ON income.month_start = month.month_start
+            LEFT JOIN monthly_expense_totals expense ON expense.month_start = month.month_start
+            LEFT JOIN monthly_debt_totals debt ON debt.month_start = month.month_start
+        ), portfolio_totals AS (
+            SELECT COALESCE(SUM(property.income), 0) AS total_income,
+                   COALESCE(SUM(property.debt_service), 0) AS total_debt_service
+            FROM property_totals property
+        ), portfolio_expense_totals AS (
+            SELECT COALESCE(SUM(expense.amount), 0) AS total_operating_expenses
+            FROM operating_expense_facts expense
+            WHERE (expense.property_id IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1 FROM authorized_properties property
+                       WHERE property.property_id = expense.property_id))
+               OR (expense.property_id IS NULL AND @includePortfolioExpenses)
+        )
+        SELECT COALESCE((
+                   SELECT jsonb_agg(jsonb_build_object(
+                              'PropertyId', property.property_id,
+                              'PropertyName', property.property_name,
+                              'Income', property.income,
+                              'OperatingExpenses', property.operating_expenses,
+                              'Noi', property.noi,
+                              'DebtService', property.debt_service,
+                              'CashFlow', property.cash_flow,
+                              'OperatingExpenseDetails', COALESCE(expense.details, '[]'::jsonb),
+                              'DebtServiceDetails', COALESCE(debt.details, '[]'::jsonb))
+                            ORDER BY property.property_name, property.property_id)
+                   FROM property_totals property
+                   LEFT JOIN expense_details expense ON expense.property_id = property.property_id
+                   LEFT JOIN debt_details debt ON debt.property_id = property.property_id
+               ), '[]'::jsonb)::text AS "PropertiesJson",
+               COALESCE((
+                   SELECT jsonb_agg(jsonb_build_object(
+                              'Month', to_char(month.month_start, 'YYYY-MM'),
+                              'Income', month.income,
+                              'OperatingExpenses', month.operating_expenses,
+                              'DebtService', month.debt_service,
+                              'CashFlow', month.income - month.operating_expenses - month.debt_service)
+                            ORDER BY month.month_start)
+                   FROM monthly_rows month
+               ), '[]'::jsonb)::text AS "MonthsJson",
+               totals.total_income AS "TotalIncome",
+               expenses.total_operating_expenses AS "TotalOperatingExpenses",
+               totals.total_debt_service AS "TotalDebtService"
+        FROM portfolio_totals totals
+        CROSS JOIN portfolio_expense_totals expenses;
+        """;
 
     // ── Year-end view: cash flow vs taxable income + rent roll (§11/§18) ────────────────────────────
 
@@ -1807,6 +1953,15 @@ public class ReportsService : IReportsService
         public decimal TotalCharged { get; set; }
         public decimal TotalCredits { get; set; }
         public decimal TotalBalance { get; set; }
+    }
+
+    private sealed class TrueCashFlowDatabaseRow
+    {
+        public string PropertiesJson { get; set; } = "[]";
+        public string MonthsJson { get; set; } = "[]";
+        public decimal TotalIncome { get; set; }
+        public decimal TotalOperatingExpenses { get; set; }
+        public decimal TotalDebtService { get; set; }
     }
 
     private sealed class GeneralLedgerQueryRow
