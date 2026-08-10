@@ -157,7 +157,7 @@
 <div class="space-y-4" data-testid="unit-lease-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">See who lives here, review the lease, and manage move-in or move-out.</p></div>
-		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href={prepareMoveInHrefForApprovedTenant('', '', dashboard.unit.id, `/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements`)} class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
+		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import signed lease</Button><Button href={prepareMoveInHrefForApprovedTenant('', '', dashboard.unit.id, `/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements`)} class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
 	</div>
 
 	{#if relationshipsQuery.isLoading}
@@ -169,7 +169,7 @@
 			<Button class="mt-3" variant="outline" size="sm" onclick={() => relationshipsQuery.refetch()}>Try again</Button>
 		</div>
 	{:else if (relationshipsQuery.data?.items.length ?? 0) === 0}
-		<DetailCard title="No tenant relationship yet" icon={FileText}><p class="text-sm text-muted-foreground">Prepare a move-in from an approved application, or scan an existing signed agreement.</p></DetailCard>
+		<DetailCard title="No tenant relationship yet" icon={FileText}><p class="text-sm text-muted-foreground">Prepare a move-in from an approved application, or scan an existing signed lease.</p></DetailCard>
 	{:else}
 		<div class="divide-y overflow-hidden rounded-2xl bg-card">
 			{#each relationshipsQuery.data?.items ?? [] as relationship}

@@ -154,7 +154,7 @@
 	const correctionComparison = $derived.by(() => {
 		if (!source || !form || draftQuery.data?.changeType !== 'Correction') return null;
 		const fields = [
-			{ label: 'Agreement number', oldValue: source.agreementNumber, newValue: form.agreementNumber },
+			{ label: 'Lease number', oldValue: source.agreementNumber, newValue: form.agreementNumber },
 			{ label: 'Term type', oldValue: source.termType, newValue: form.termType },
 			{ label: 'Term starts', oldValue: source.termStartOn, newValue: form.termStartOn },
 			{ label: 'Term ends', oldValue: source.termEndOn ?? 'Month-to-month', newValue: form.termEndOn || 'Month-to-month' },
@@ -176,11 +176,11 @@
 		const securityDepositObligation = Number(form.securityDepositObligation);
 		const lateFeeAmount = Number(form.lateFeeAmount);
 		const gracePeriodDays = Number(form.gracePeriodDays);
-		if (!form.agreementNumber.trim()) validationError = 'Agreement number is required.';
+		if (!form.agreementNumber.trim()) validationError = 'Lease number is required.';
 		else if (!form.termStartOn || !form.governingFromOn)
 			validationError = 'Term start and effective dates are required.';
 		else if (form.termType === 'FixedTerm' && !form.termEndOn)
-			validationError = 'A fixed-term agreement needs an end date.';
+			validationError = 'A fixed-term lease needs an end date.';
 		else if (form.termEndOn && form.termEndOn < form.termStartOn)
 			validationError = 'Term end cannot be before term start.';
 		else if (
@@ -244,13 +244,13 @@
 				editKey(request)
 			),
 		onSuccess: async () => {
-			showSuccess('Agreement draft saved.');
+			showSuccess('Lease draft saved.');
 			await queryClient.invalidateQueries({
 				queryKey: ['lease-managements', leaseManagementId]
 			});
 			if (draftRequestsEnabled) await draftQuery.refetch();
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Could not save the agreement draft.'))
+		onError: (error) => showError(apiErrorMessage(error, 'Could not save the lease draft.'))
 	}));
 
 	function saveDraft() {
@@ -287,13 +287,13 @@
 			);
 		},
 		onSuccess: async (result) => {
-			showSuccess('Agreement issued for signature.');
+			showSuccess('Lease sent for signature.');
 			draftRequestsEnabled = false;
 			issueConfirmationOpen = false;
 			await onissued(result);
 			await queryClient.invalidateQueries({ queryKey: ['lease-managements', leaseManagementId] });
 		},
-		onError: (error) => showError(apiErrorMessage(error, 'Could not issue the agreement.'))
+		onError: (error) => showError(apiErrorMessage(error, 'Could not send the lease for signature.'))
 	}));
 
 	function openIssueConfirmation() {
@@ -302,7 +302,7 @@
 			validationError = 'Save the current draft changes before issuing.';
 			return;
 		}
-		issueSubject = `Lease agreement ${form.agreementNumber}`;
+		issueSubject = `Lease ${form.agreementNumber}`;
 		issueConfirmationOpen = true;
 	}
 
@@ -355,7 +355,7 @@
 <Dialog.Root open onOpenChange={(open) => { if (!open && !editMutation.isPending && !issueMutation.isPending && !cancelMutation.isPending) onclose(); }}>
 	<Dialog.Content class="max-w-4xl" data-testid="agreement-draft-dialog">
 		<Dialog.Header>
-			<Dialog.Title>Edit agreement draft</Dialog.Title>
+			<Dialog.Title>Edit lease draft</Dialog.Title>
 			<Dialog.Description>
 				Reloaded from the current draft with its exact revision. Issuing freezes this version and the signer details.
 			</Dialog.Description>
@@ -365,7 +365,7 @@
 			<p class="text-sm text-muted-foreground">Loading exact draft state…</p>
 		{:else if draftQuery.isError || !draftQuery.data || !form}
 			<div class="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
-				This agreement is no longer an editable draft. Refresh the agreement history.
+				This lease is no longer an editable draft. Refresh the lease history.
 			</div>
 		{:else}
 			{@const draft = draftQuery.data}
@@ -400,7 +400,7 @@
 
 				<div class="grid gap-4 md:grid-cols-3">
 					<label class="space-y-1 md:col-span-2">
-						<span class="text-sm font-medium">Agreement number</span>
+						<span class="text-sm font-medium">Lease number</span>
 						<Input bind:value={form.agreementNumber} data-testid="agreement-draft-number" />
 					</label>
 					<label class="space-y-1">
@@ -418,7 +418,7 @@
 						</label>
 					{/if}
 					<label class="space-y-1">
-						<span class="text-sm font-medium">Governs from</span>
+						<span class="text-sm font-medium">Applies from</span>
 						<DatePicker bind:value={form.governingFromOn} testid="agreement-draft-governing-from" />
 					</label>
 				</div>
@@ -447,11 +447,11 @@
 				{#if correctionComparison}
 					<section class="space-y-3" data-testid="agreement-correction-comparison">
 						<div>
-							<h3 class="font-medium">Old agreement vs correction</h3>
+							<h3 class="font-medium">Old lease vs correction</h3>
 							<p class="text-xs text-muted-foreground">Changed fields stay visible. Unchanged copied content is collapsed.</p>
 						</div>
 						{#if correctionComparison.changed.length === 0}
-							<div class="rounded-xl border p-3 text-sm text-muted-foreground">No tracked agreement fields have changed yet.</div>
+							<div class="rounded-xl border p-3 text-sm text-muted-foreground">No tracked lease fields have changed yet.</div>
 						{:else}
 							{#each correctionComparison.changed as field (field.label)}
 								<div class="grid gap-2 rounded-xl border border-primary/40 bg-primary/5 p-3 text-sm sm:grid-cols-[10rem_1fr_1fr]" data-testid="agreement-correction-changed-field">
@@ -475,9 +475,9 @@
 				{#if validationError}<p class="text-sm text-destructive" data-testid="agreement-draft-error">{validationError}</p>{/if}
 				{#if issueConfirmationOpen}
 					<div class="space-y-3 rounded-xl border border-primary/30 bg-primary/5 p-4" data-testid="agreement-issue-confirmation">
-						<div><p class="font-medium">Issue this exact revision for signature?</p><p class="text-sm text-muted-foreground">Rental Command will prepare the PDF, then lock the lease and signer details.</p></div>
+						<div><p class="font-medium">Send this exact lease revision for signature?</p><p class="text-sm text-muted-foreground">Rental Command will prepare the PDF, then lock the lease and signer details.</p></div>
 						<label class="space-y-1"><span class="text-sm font-medium">Signature request subject</span><Input bind:value={issueSubject} /></label>
-						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (issueConfirmationOpen = false)} disabled={issueMutation.isPending}>Not yet</Button><Button onclick={issueAgreement} disabled={!issueSubject.trim() || issueMutation.isPending} class="gap-2">{#if issueMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Preparing and issuing…{:else}<FileSignature class="h-4 w-4" /> Prepare and issue{/if}</Button></div>
+						<div class="flex justify-end gap-2"><Button variant="outline" onclick={() => (issueConfirmationOpen = false)} disabled={issueMutation.isPending}>Not yet</Button><Button onclick={issueAgreement} disabled={!issueSubject.trim() || issueMutation.isPending} class="gap-2">{#if issueMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Preparing and sending…{:else}<FileSignature class="h-4 w-4" /> Prepare and send{/if}</Button></div>
 					</div>
 				{/if}
 				{#if cancelConfirmationOpen}
@@ -494,7 +494,7 @@
 			<Button variant="outline" onclick={onclose} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}>Close</Button>
 			{#if draftQuery.data && form}
 				{#if canCancel}<Button variant="destructive" class="gap-2" onclick={() => (cancelConfirmationOpen = true)} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}><Trash2 class="h-4 w-4" /> Cancel draft</Button>{/if}
-				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare and issue</Button>
+				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare and send</Button>
 				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending}>{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
 			{/if}
 		</Dialog.Footer>

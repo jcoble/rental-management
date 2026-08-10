@@ -117,13 +117,13 @@
 	function decisionConsequence(decision: LeaseRenewalAddendumDecisionType | undefined) {
 		switch (decision) {
 			case 'End':
-				return 'Stops this addendum when the new agreement begins. Its separate terms and financial effects do not carry forward.';
+				return 'Stops this addendum when the new lease begins. Its separate terms and financial effects do not carry forward.';
 			case 'IncorporateIntoBase':
-				return 'Records that these terms will be folded into the new base agreement. No replacement addendum is created.';
+				return 'Records that these terms will be folded into the new base lease. No replacement addendum is created.';
 			case 'ReissueAsAddendum':
-				return 'Creates a new editable addendum draft for the new agreement, copying this series\' terms, signers, and financial effects.';
+				return 'Creates a new editable addendum draft for the new lease, copying this series\' terms, signers, and financial effects.';
 			default:
-				return 'Choose how this addendum series should be handled in the new agreement.';
+				return 'Choose how this addendum series should be handled in the new lease.';
 		}
 	}
 
@@ -306,12 +306,12 @@
 						placeholder="Describe the error and what the replacement should correct"
 						data-testid="agreement-successor-correction-reason"
 					></textarea>
-					<span class="block text-xs text-muted-foreground">Required · saved with the agreement version history.</span>
+					<span class="block text-xs text-muted-foreground">Required · saved with the lease version history.</span>
 				</label>
 			{/if}
 
 			<label class="space-y-1">
-				<span class="text-sm font-medium">New version governs from</span>
+				<span class="text-sm font-medium">New version applies from</span>
 				<DatePicker bind:value={governingFromOn} testid="agreement-successor-governing-from" />
 				{#if isRenewal}<span class="block text-xs text-muted-foreground">For renewals, this must match the new term start.</span>{/if}
 			</label>
@@ -321,7 +321,7 @@
 					<div>
 						<h3 id="agreement-successor-template-heading" class="text-sm font-semibold">Lease template</h3>
 						<p class="mt-1 text-sm text-muted-foreground">
-							Choose the active template that turns this imported agreement into an editable successor draft.
+							Choose the active template that turns this imported lease into an editable successor draft.
 						</p>
 					</div>
 					{#if relationshipQuery.isLoading || templatesQuery.isLoading}
@@ -405,7 +405,7 @@
 								{/if}
 
 								<label class="block space-y-1.5">
-									<span class="text-sm font-medium">What should happen in the new agreement?</span>
+									<span class="text-sm font-medium">What should happen in the new lease?</span>
 									<Select.Root
 										type="single"
 										value={selectedAddendumDecisions[series.seriesPublicId] ?? ''}
