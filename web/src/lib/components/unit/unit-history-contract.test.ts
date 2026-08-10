@@ -24,7 +24,8 @@ describe('Unit destination history contract', () => {
 		assert.doesNotMatch(ledgerSource, /m3-tabs-(?:list|trigger)/);
 		assert.match(pageSource, /class=\{UNIT_SUBNAV_LIST_CLASS\}/);
 		assert.match(ledgerSource, /class=\{UNIT_SUBNAV_LIST_CLASS\}/);
-		assert.match(ledgerSource, /pushState/);
+		assert.match(ledgerSource, /onOpenTab/);
+		assert.doesNotMatch(ledgerSource, /import \{ pushState \}/);
 	});
 
 	test('uses validated views as the visible panel authority without scroll-to-section navigation', () => {

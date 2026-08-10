@@ -45,6 +45,7 @@ export const UNIT_CONTEXTUAL_PARAMS = [
 	'agreement',
 	'ledger',
 	'action',
+	'inspection',
 ] as const;
 
 type UnitContextOwner = Pick<UnitDestination, 'tab' | 'view'>;
@@ -59,6 +60,7 @@ const CONTEXT_OWNER_BY_PARAM: Partial<Record<(typeof UNIT_CONTEXTUAL_PARAMS)[num
 	agreement: { tab: 'tenant-lease', view: 'agreements' },
 	ledger: { tab: 'documents-history', view: 'history' },
 	action: { tab: 'tenant-lease', view: 'agreements' },
+	inspection: { tab: 'maintenance', view: 'inspections' },
 };
 
 export interface UnitUrlDestination {

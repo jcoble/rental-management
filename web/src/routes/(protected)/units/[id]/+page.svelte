@@ -24,6 +24,7 @@
 	import ResidentsTab from '$lib/components/unit/tabs/ResidentsTab.svelte';
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import LedgerTab from '$lib/components/unit/tabs/LedgerTab.svelte';
+	import InspectionDetail from '$lib/components/records/InspectionDetail.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
 	import TurnoverTab from '$lib/components/unit/tabs/TurnoverTab.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
@@ -46,6 +47,7 @@
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import type { UnitLeaseSummary } from '$lib/types';
 	import { ArrowLeft } from '@lucide/svelte';
@@ -90,9 +92,21 @@
 		const value = Number(rawValue);
 		return Number.isInteger(value) && value > 0 ? value : null;
 	});
+	const selectedInspectionId = $derived.by(() => {
+		const rawValue = page.url.searchParams.get('inspection');
+		if (!rawValue) return null;
+		const value = Number(rawValue);
+		return Number.isInteger(value) && value > 0 ? value : null;
+	});
 	const leaseRelationshipListHref = $derived.by(() => {
 		const params = new URLSearchParams(page.url.searchParams);
 		params.delete('leaseManagement');
+		const query = params.toString();
+		return `${page.url.pathname}${query ? `?${query}` : ''}`;
+	});
+	const inspectionListHref = $derived.by(() => {
+		const params = new URLSearchParams(page.url.searchParams);
+		params.delete('inspection');
 		const query = params.toString();
 		return `${page.url.pathname}${query ? `?${query}` : ''}`;
 	});
@@ -135,6 +149,21 @@
 
 	function currentUnitReturnTo() {
 		return `${page.url.pathname}${page.url.search}`;
+	}
+
+	function openInspection(inspectionId: number) {
+		void goto(`/units/${id}?tab=maintenance&view=inspections&inspection=${inspectionId}`, {
+			keepFocus: true,
+			noScroll: true,
+		});
+	}
+
+	function closeInspection() {
+		void goto(inspectionListHref, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true,
+		});
 	}
 
 	function closePrepareMoveIn() {
@@ -474,7 +503,7 @@
 					</div>
 					{:else if activeTab === 'money'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Money">
-						<LedgerTab {dashboard} onScan={goScan} />
+						<LedgerTab {dashboard} onScan={goScan} onOpenTab={setTab} />
 					</div>
 					{:else if activeTab === 'maintenance'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Maintenance">
@@ -491,6 +520,14 @@
 							</div>
 							{#if activeView === 'inspections'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-inspections-section">
+								{#if selectedInspectionId}
+								<div class="space-y-4" data-testid="unit-inspection-detail-surface">
+									<Button variant="outline" size="sm" class="gap-1" onclick={closeInspection} data-testid="inspection-detail-close">
+										<ArrowLeft class="h-4 w-4" /> Back to inspections
+									</Button>
+									<InspectionDetail inspectionId={selectedInspectionId} expectedUnitId={id} />
+								</div>
+								{:else}
 								<div class="space-y-3">
 									<div><h2 class="text-lg font-semibold">Inspections</h2><p class="text-sm text-muted-foreground">Scheduled and completed inspections for this rental.</p></div>
 									<div class="flex flex-wrap gap-2">
@@ -515,9 +552,19 @@
 										</div>
 									{:else if !unitInspectionsQuery.data?.items.length}<p class="text-sm text-muted-foreground">No inspections for this rental.</p>
 									{:else}
-										<ul class="divide-y rounded-lg border">
+										<ul class="divide-y rounded-lg border" data-testid="unit-inspection-list">
 											{#each unitInspectionsQuery.data.items as inspection (inspection.id)}
-												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={`inspection-${inspection.id}`}><span class="font-medium">{formatStatusLabel(inspection.type)}</span><span class="text-muted-foreground">{formatStatusLabel(inspection.status)} · {new Date(inspection.scheduledFor).toLocaleDateString()}</span></li>
+												<li data-testid={`inspection-${inspection.id}`}>
+													<button
+														type="button"
+														class="flex w-full items-center justify-between gap-3 p-3 text-left text-sm transition-colors hover:bg-muted/40"
+														onclick={() => openInspection(inspection.id)}
+														data-testid={`inspection-open-${inspection.id}`}
+													>
+														<span class="font-medium" data-testid={`inspection-type-${inspection.id}`}>{formatStatusLabel(inspection.type)}</span>
+														<span class="text-muted-foreground" data-testid={`inspection-summary-${inspection.id}`}>{formatStatusLabel(inspection.status)} · {formatDateOnly(inspection.scheduledFor)}</span>
+													</button>
+												</li>
 											{/each}
 										</ul>
 									{/if}
@@ -526,7 +573,8 @@
 										<span class="text-xs text-muted-foreground">{unitInspectionsQuery.data?.totalCount ?? 0} total</span>
 										<Button variant="outline" size="sm" disabled={!unitInspectionsQuery.data || inspectionSkip + maintenancePageSize >= unitInspectionsQuery.data.totalCount} onclick={() => inspectionSkip += maintenancePageSize}>Next</Button>
 									</div>
-								</div>
+									</div>
+								{/if}
 							</section>
 							{:else if activeView === 'recurring'}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-recurring-section">
