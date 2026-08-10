@@ -21,13 +21,13 @@ describe('staff create dialog validation clearing', () => {
 
 	it('clears work-order, inspection, and recurring task errors as corrected fields change', () => {
 		const maintenancePage = source('../../routes/(protected)/maintenance/+page.svelte');
-		const recurringPage = source('../../routes/(protected)/maintenance/recurring/+page.svelte');
+		const recurringDialog = source('../components/maintenance/RecurringMaintenanceFormDialog.svelte');
 
 		assert.match(maintenancePage, /function clearWoError\(field: string\)/);
 		assert.match(maintenancePage, /clearWoError\('title'\)/);
 		assert.match(maintenancePage, /clearInspectionError\('scheduledFor'\)/);
-		assert.match(recurringPage, /function clearRecurringError\(field: string\)/);
-		assert.match(recurringPage, /clearRecurringError\('nextDueDate'\)/);
+		assert.match(recurringDialog, /function clearRecurringError\(field: string\)/);
+		assert.match(recurringDialog, /clearRecurringError\('nextDueDate'\)/);
 	});
 
 	it('keeps vendor and expense clearing while tenant-money sheets own canonical validation', () => {
