@@ -61,7 +61,10 @@ vi.mock('$lib/api/endpoints/tenant-money', async () => {
 	};
 });
 
-afterEach(() => cleanup());
+afterEach(async () => {
+	cleanup();
+	await new Promise((resolve) => setTimeout(resolve, 100));
+});
 
 const dashboard = {
 	unit: {

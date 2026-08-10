@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -20,6 +21,9 @@ public class UnitResponse
     public int PropertyId { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
     public string? FloorPlan { get; set; }
+
+    /// <summary>Parent property type, included so unit forms can apply the correct field rules.</summary>
+    public PropertyType PropertyType { get; set; }
     public decimal Bedrooms { get; set; }
     public decimal Bathrooms { get; set; }
     public int? SquareFeet { get; set; }
@@ -122,10 +126,10 @@ public class CreateUnitRequest
     public string? FloorPlan { get; set; }
 
     [Range(0, 99)]
-    public decimal Bedrooms { get; set; }
+    public decimal? Bedrooms { get; set; }
 
     [Range(0, 99)]
-    public decimal Bathrooms { get; set; }
+    public decimal? Bathrooms { get; set; }
 
     [Range(0, 99999)]
     public int? SquareFeet { get; set; }
@@ -160,10 +164,36 @@ public class UpdateUnitRequest
     internal bool FloorPlanSpecified { get; private set; }
 
     [Range(0, 99)]
-    public decimal? Bedrooms { get; set; }
+    public decimal? Bedrooms
+    {
+        get => _bedrooms;
+        set
+        {
+            _bedrooms = value;
+            BedroomsSpecified = true;
+        }
+    }
+
+    private decimal? _bedrooms;
+
+    [JsonIgnore]
+    internal bool BedroomsSpecified { get; private set; }
 
     [Range(0, 99)]
-    public decimal? Bathrooms { get; set; }
+    public decimal? Bathrooms
+    {
+        get => _bathrooms;
+        set
+        {
+            _bathrooms = value;
+            BathroomsSpecified = true;
+        }
+    }
+
+    private decimal? _bathrooms;
+
+    [JsonIgnore]
+    internal bool BathroomsSpecified { get; private set; }
 
     [Range(0, 99999)]
     public int? SquareFeet { get; set; }

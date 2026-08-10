@@ -420,6 +420,48 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableTheory]
+    [InlineData("Storage")]
+    [InlineData("Parking")]
+    [InlineData("Commercial")]
+    public async Task GuidedSetupManualLease_AllowsMissingBedsAndBathsForNonResidentialHomes(
+        string propertyType)
+    {
+        SkipIfDockerUnavailable();
+
+        var marker = $"nr-{propertyType[..3].ToLowerInvariant()}-{Guid.NewGuid():N}";
+        var target = GuidedSetupManualTarget(marker) with
+        {
+            PropertyType = propertyType,
+            UnitBedrooms = null,
+            UnitBathrooms = null,
+        };
+        var command = new CreateManualLeaseCommand(
+            _portfolioId,
+            _actorUserId,
+            _authSessionId,
+            _accessContextId,
+            _accessRevision,
+            target,
+            $"guided-setup-manual-lease:nonres:{marker}");
+
+        var outcome = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity(
+                "guided-setup.manual-lease",
+                $"{_portfolioId}:nonres:{marker}"),
+            command,
+            Codec);
+
+        outcome.Value.Outcome.Should().Be(ConfirmScanDraftOutcome.Confirmed);
+        await using var verify = Scope();
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.LeaseManagementId);
+        var unit = await verify.Db.Units.AsNoTracking()
+            .SingleAsync(row => row.Id == relationship.UnitId);
+        unit.Bedrooms.Should().Be(0m);
+        unit.Bathrooms.Should().Be(0m);
+    }
+
+    [SkippableTheory]
     [InlineData("lease-number-blank")]
     [InlineData("lease-number-too-long")]
     [InlineData("start-date-missing")]
@@ -432,6 +474,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     [InlineData("tenant-id-not-positive")]
     [InlineData("security-deposit-negative")]
     [InlineData("late-fee-negative")]
+    [InlineData("bedrooms-missing")]
+    [InlineData("bathrooms-missing")]
     [InlineData("bedrooms-negative")]
     [InlineData("bathrooms-negative")]
     [InlineData("square-feet-negative")]
@@ -456,6 +500,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             "tenant-id-not-positive" => target with { TenantId = -1 },
             "security-deposit-negative" => target with { SecurityDeposit = -1m },
             "late-fee-negative" => target with { LateFee = -1m },
+            "bedrooms-missing" => target with { UnitBedrooms = null },
+            "bathrooms-missing" => target with { UnitBathrooms = null },
             "bedrooms-negative" => target with { UnitBedrooms = -1m },
             "bathrooms-negative" => target with { UnitBathrooms = -1m },
             "square-feet-negative" => target with { UnitSquareFeet = -1 },

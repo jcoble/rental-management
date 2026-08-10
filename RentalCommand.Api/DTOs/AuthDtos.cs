@@ -36,6 +36,9 @@ public class RegisterRequest
     [Required]
     [MaxLength(200)]
     public string DisplayName { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "You must agree to the Terms of Service and Privacy Policy.")]
+    public bool? TermsPrivacyAccepted { get; set; }
 }
 
 /// <summary>

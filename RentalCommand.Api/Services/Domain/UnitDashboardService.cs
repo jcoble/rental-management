@@ -352,6 +352,7 @@ public class UnitDashboardService : IUnitDashboardService
                 PropertyId = unit.PropertyId,
                 UnitNumber = unit.UnitNumber,
                 FloorPlan = unit.FloorPlan,
+                PropertyType = property.PropertyType,
                 Bedrooms = unit.Bedrooms,
                 Bathrooms = unit.Bathrooms,
                 SquareFeet = unit.SquareFeet,

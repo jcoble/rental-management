@@ -45,7 +45,7 @@
 	} from '$lib/components/unit/unit-tab-navigation';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
 	import type { ScanContext } from '$lib/scan/scan-context';
-	import { unitSchema, parseForm } from '$lib/schemas';
+	import { unitSchemaForPropertyType, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
@@ -336,7 +336,7 @@
 
 	function submitUnit() {
 		if (!dashboard) return;
-		const result = parseForm(unitSchema, unitForm);
+		const result = parseForm(unitSchemaForPropertyType(dashboard?.unit.propertyType), unitForm);
 		if (result.errors) {
 			unitFormErrors = result.errors;
 			return;
@@ -698,7 +698,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Edit unit</Dialog.Title>
 		</Dialog.Header>
-		<UnitFields bind:form={unitForm} errors={unitFormErrors} testidPrefix="unit-detail" />
+		<UnitFields bind:form={unitForm} errors={unitFormErrors} propertyType={dashboard?.unit.propertyType} testidPrefix="unit-detail" />
 		<Dialog.Footer class="mt-4">
 			<Button variant="outline" onclick={closeEditUnit}>Cancel</Button>
 			<Button

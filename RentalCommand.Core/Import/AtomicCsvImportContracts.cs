@@ -8,8 +8,8 @@ public sealed record AtomicUnitImportRow(
     int? PropertyId,
     string? PropertyName,
     string UnitNumber,
-    decimal Bedrooms,
-    decimal Bathrooms,
+    decimal? Bedrooms,
+    decimal? Bathrooms,
     decimal MarketRent,
     string[] Errors) : IAtomicCommandData;
 
@@ -20,8 +20,8 @@ public sealed record AtomicUnitImportRowResult(
     int? CreatedId,
     int? PropertyId,
     string UnitNumber,
-    decimal Bedrooms,
-    decimal Bathrooms,
+    decimal? Bedrooms,
+    decimal? Bathrooms,
     decimal MarketRent,
     string[] Errors);
 

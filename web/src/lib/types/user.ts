@@ -78,6 +78,7 @@ export interface RegisterRequest {
 	email: string;
 	password: string;
 	displayName: string;
+	termsPrivacyAccepted: boolean;
 }
 
 /** Matches RentalCommand.Api.DTOs.LoginResponse */

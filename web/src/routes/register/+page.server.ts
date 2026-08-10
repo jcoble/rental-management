@@ -28,11 +28,20 @@ export const actions: Actions = {
 		const email = formData.get('email')?.toString().trim();
 		const password = formData.get('password')?.toString();
 		const confirmPassword = formData.get('confirmPassword')?.toString();
+		const termsPrivacyAccepted = formData.get('termsPrivacyAccepted') === 'on';
 
 		// Client-side mirrors these but we validate server-side too.
 		if (!displayName || !email || !password || !confirmPassword) {
 			return fail(400, {
 				error: 'All fields are required.',
+				displayName,
+				email
+			});
+		}
+
+		if (!termsPrivacyAccepted) {
+			return fail(400, {
+				error: 'You must agree to the Terms of Service and Privacy Policy.',
 				displayName,
 				email
 			});
@@ -61,7 +70,7 @@ export const actions: Actions = {
 			const response = await fetch(`${SERVER_API_BASE_URL}/auth/register`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
-				body: JSON.stringify({ email, password, displayName })
+				body: JSON.stringify({ email, password, displayName, termsPrivacyAccepted })
 			});
 
 			if (!response.ok) {

@@ -174,6 +174,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 string.IsNullOrWhiteSpace(displayName) ? email : displayName,
                 password: null,
                 emailConfirmed: true,
+                termsPrivacyAccepted: false,
                 operationKey: $"google:{subjectHash}",
                 ct: ct);
             if (!bootstrap.Succeeded || bootstrap.User is null)

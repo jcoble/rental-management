@@ -50,6 +50,7 @@ public class IdentitySeeder
             _settings.AdminDisplayName,
             _settings.AdminPassword,
             emailConfirmed: true,
+            termsPrivacyAccepted: false,
             operationKey: $"seed:{_settings.AdminEmail.Trim().ToUpperInvariant()}",
             workspace: new CanonicalWorkspaceBootstrapOptions(
                 _settings.PortfolioName,

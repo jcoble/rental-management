@@ -93,6 +93,7 @@ public sealed class AtomicUnitImportPersistence : IUnitCsvImportPreviewQuery
         ), resolved AS (
             SELECT input.*,
                    property_match."ResolvedPropertyId",
+                   property_match."ResolvedPropertyType",
                    property_match."MatchCount",
                    property_match."UnauthorizedMatchCount",
                    row_number() OVER (
@@ -107,6 +108,7 @@ public sealed class AtomicUnitImportPersistence : IUnitCsvImportPreviewQuery
             FROM input
             LEFT JOIN LATERAL (
                 SELECT min(property."Id") AS "ResolvedPropertyId",
+                       min(property."PropertyType") AS "ResolvedPropertyType",
                        count(*)::integer AS "MatchCount",
                        count(*) FILTER (WHERE NOT EXISTS (
                            SELECT 1 FROM authorized_properties authorized
@@ -131,6 +133,9 @@ public sealed class AtomicUnitImportPersistence : IUnitCsvImportPreviewQuery
                        WHEN resolved."MatchCount" = 0 THEN ARRAY['Property was not found in this portfolio.']::text[]
                        WHEN resolved."MatchCount" > 1 THEN ARRAY['Property name matches more than one property; use propertyId.']::text[]
                        WHEN nullif(trim(resolved."UnitNumber"), '') IS NULL THEN ARRAY['Unit number is required.']::text[]
+                       WHEN resolved."ResolvedPropertyType" IN (0, 1, 2, 3)
+                            AND (resolved."Bedrooms" IS NULL OR resolved."Bathrooms" IS NULL)
+                           THEN ARRAY['Bedrooms and bathrooms are required for residential dwellings.']::text[]
                        ELSE ARRAY[]::text[]
                    END AS "FinalErrors",
                    resolved."AlreadyExists" OR resolved."NaturalKeyOrdinal" > 1 AS "IsDuplicate"

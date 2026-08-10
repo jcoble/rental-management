@@ -17,11 +17,16 @@ const activity = (overrides: Partial<DashboardActivity>): DashboardActivity => (
 
 describe('dashboard activity deep links', () => {
 	it('routes a lease agreement to its owning unit leasing tab', () => {
-		const href = dashboardActivityHref(activity({ type: 'LeaseAgreement', entityId: 77, unitId: 42 }));
-		assert.equal(href, '/units/42?tab=leasing');
+		const href = dashboardActivityHref(activity({
+			type: 'LeaseAgreement',
+			entityId: 77,
+			leaseManagementId: 19,
+			unitId: 42,
+		}));
+		assert.equal(href, '/units/42?tab=tenant-lease&view=agreements&leaseManagement=19');
 		assert.deepEqual(resolveDashboardActivityUnitHref(href!), {
-			destination: { tab: 'leasing', view: 'listing' },
-			hasExplicitViewOrRecord: false,
+			destination: { tab: 'tenant-lease', view: 'agreements' },
+			hasExplicitViewOrRecord: true,
 		});
 	});
 

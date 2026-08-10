@@ -81,7 +81,9 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         dashboard.Should().NotBeNull();
         var byKey = dashboard!.RecentActivity.ToDictionary(row => (row.Type, row.EntityId));
         byKey[(nameof(LeaseAgreement), additional.Agreement.Id)].Should().Match<DashboardActivity>(row =>
-            row.Label == "AGR-ACTIVITY" && row.UnitId == seeded.Unit.Id);
+            row.Label == "AGR-ACTIVITY"
+                && row.UnitId == seeded.Unit.Id
+                && row.LeaseManagementId == seeded.Relationship.Id);
         byKey[(nameof(LeaseAddendum), additional.Addendum.Id)].Should().Match<DashboardActivity>(row =>
             row.Label == "ADD-ACTIVITY" && row.UnitId == seeded.Unit.Id);
         byKey[(nameof(TenantLedgerEntry), checked((int)additional.LedgerEntry.Id))]
