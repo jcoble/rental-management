@@ -2,6 +2,7 @@
 	import {
 		cashFlowBarPixels,
 		cashFlowNetPositionPercent,
+		cashFlowStackedBarPixels,
 		type CashFlowChartPoint
 	} from '$lib/accounting/cash-flow-state';
 	import { formatAccountingCurrency } from '$lib/accounting/accounting-display';
@@ -57,6 +58,15 @@
 
 	function barHeight(value: number): number {
 		return cashFlowBarPixels(value, scale, HALF_PLOT_HEIGHT);
+	}
+
+	function stackedOutflowHeights(point: CashFlowChartPoint): readonly [number, number] {
+		return cashFlowStackedBarPixels(
+			point.operatingExpenses,
+			point.debtService,
+			scale,
+			HALF_PLOT_HEIGHT
+		);
 	}
 
 	function netPositionY(value: number): number {
@@ -182,8 +192,9 @@
 				{@const x = pointX(index)}
 				{@const width = barWidth()}
 				{@const incomeHeight = barHeight(point.income)}
-				{@const costHeight = barHeight(point.operatingExpenses)}
-				{@const loanHeight = barHeight(point.debtService)}
+				{@const outflowHeights = stackedOutflowHeights(point)}
+				{@const costHeight = outflowHeights[0]}
+				{@const loanHeight = outflowHeights[1]}
 				{@const loanY = BASELINE + costHeight}
 				{@const netY = netPositionY(point.cashFlow)}
 				{@const incomeTooltip = chartTooltip(point, 'income', point.income, x, BASELINE - incomeHeight)}

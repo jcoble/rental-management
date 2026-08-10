@@ -44,6 +44,17 @@ const stackedOutflowPoints: CashFlowChartPoint[] = [
 	}
 ];
 
+const clampedStackOutflowPoints: CashFlowChartPoint[] = [
+	{
+		key: '2026-05',
+		label: 'May 2026',
+		income: 99,
+		operatingExpenses: 100,
+		debtService: 0.01,
+		cashFlow: -1.01
+	}
+];
+
 describe('cash-flow trend chart rendering', () => {
 	it('renders one shared scale with truthful bar and marker geometry', () => {
 		const view = render(CashFlowTrendChart, {
@@ -95,6 +106,27 @@ describe('cash-flow trend chart rendering', () => {
 		expect(view.getByTestId('cash-flow-chart-axis-label-min').textContent).toBe('-$160.00');
 		expect(finalOutflowEdge).toBeLessThanOrEqual(Number(bottomAxis.getAttribute('y1')));
 		expect(finalOutflowEdge).toBeCloseTo(Number(bottomAxis.getAttribute('y1')), 8);
+		expect(finalOutflowEdge).toBeCloseTo(
+			Number(costs.getAttribute('y')) + Number(costs.getAttribute('height')) + Number(loans.getAttribute('height')),
+			8
+		);
+	});
+
+	it('fits a minimum-clamped stack to the bottom axis when the stack sets the scale', () => {
+		const scale = cashFlowChartScale(clampedStackOutflowPoints);
+		const view = render(CashFlowTrendChart, { props: { points: clampedStackOutflowPoints, scale } });
+		const costs = view.getByTestId('cash-flow-bar-costs-2026-05') as SVGRectElement;
+		const loans = view.getByTestId('cash-flow-bar-loans-2026-05') as SVGRectElement;
+		const finalOutflowEdge = Number(loans.getAttribute('y')) + Number(loans.getAttribute('height'));
+		const bottomAxis = view.getByTestId('cash-flow-chart-gridline-min');
+		const bottomAxisY = Number(bottomAxis.getAttribute('y1'));
+
+		expect(scale).toBe(100.01);
+		expect(view.getByTestId('cash-flow-chart-axis-label-min').textContent).toBe('-$100.01');
+		expect(Number(loans.dataset.scaledHeight)).toBeCloseTo((0.01 / 100.01) * 117, 8);
+		expect(Number(loans.dataset.scaledHeight)).toBeLessThan(2);
+		expect(finalOutflowEdge).toBeLessThanOrEqual(bottomAxisY);
+		expect(finalOutflowEdge).toBeCloseTo(bottomAxisY, 8);
 		expect(finalOutflowEdge).toBeCloseTo(
 			Number(costs.getAttribute('y')) + Number(costs.getAttribute('height')) + Number(loans.getAttribute('height')),
 			8

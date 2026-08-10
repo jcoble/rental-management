@@ -10,6 +10,7 @@ import {
 	cashFlowChartScale,
 	cashFlowNetPositionPercent,
 	cashFlowPropertyDetails,
+	cashFlowStackedBarPixels,
 	resolveCashFlowRange,
 	sortCashFlowProperties
 } from './cash-flow-state.ts';
@@ -182,6 +183,15 @@ describe('cash-flow chart projection', () => {
 		assert.equal(cashFlowBarPixels(2, 18055, 120), 2);
 		assert.equal(cashFlowBarPixels(-2, 18055, 120), 2);
 		assert.equal(cashFlowBarPixels(0, 18055, 120), 0);
+	});
+
+	it('fits a minimum-clamped outflow stack inside its shared plot height', () => {
+		const [operatingExpenses, debtService] = cashFlowStackedBarPixels(100, 0.01, 100.01, 117);
+
+		assert.ok(debtService < 2);
+		assert.equal(operatingExpenses + debtService, 117);
+		assert.equal(operatingExpenses, (100 / 100.01) * 117);
+		assert.equal(debtService, (0.01 / 100.01) * 117);
 	});
 
 	it('uses the shared scale for zero and negative net marker positions', () => {

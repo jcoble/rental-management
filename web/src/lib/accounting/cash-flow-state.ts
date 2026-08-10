@@ -327,6 +327,54 @@ export function cashFlowBarPixels(
 	return Math.min(plotHeight, Math.max(minimumHeight, proportionalHeight));
 }
 
+/**
+ * Project the two centered outflow segments into one bounded stack.
+ * When independent minimum footprints would overflow the shared plot, use the
+ * proportional heights instead so the stack remains truthful to the scale.
+ */
+export function cashFlowStackedBarPixels(
+	firstValue: number,
+	secondValue: number,
+	scale: number,
+	plotHeight: number,
+	minimumVisibleHeight = CASH_FLOW_MIN_BAR_HEIGHT_PX
+): readonly [number, number] {
+	if (
+		!Number.isFinite(firstValue) ||
+		!Number.isFinite(secondValue) ||
+		!Number.isFinite(scale) ||
+		scale <= 0 ||
+		!Number.isFinite(plotHeight) ||
+		plotHeight <= 0
+	) {
+		return [0, 0];
+	}
+
+	const magnitudes = [Math.abs(firstValue), Math.abs(secondValue)];
+	if (magnitudes[0] === 0 && magnitudes[1] === 0) return [0, 0];
+
+	const proportional = magnitudes.map((magnitude) =>
+		Math.min(plotHeight, (magnitude / scale) * plotHeight)
+	);
+	const proportionalTotal = proportional[0] + proportional[1];
+	if (proportionalTotal > plotHeight) {
+		const fit = plotHeight / proportionalTotal;
+		proportional[0] *= fit;
+		proportional[1] *= fit;
+	}
+
+	const minimumHeight = Math.max(0, minimumVisibleHeight);
+	const withMinimum = proportional.map((height, index) =>
+		magnitudes[index] === 0 ? 0 : Math.max(minimumHeight, height)
+	);
+	if (withMinimum[0] + withMinimum[1] <= plotHeight) {
+		return [withMinimum[0], withMinimum[1]];
+	}
+
+	// The floors cannot both fit; dropping them preserves the shared scale.
+	return [proportional[0], proportional[1]];
+}
+
 /** Return a bounded vertical position for the net-flow marker around the zero baseline. */
 export function cashFlowNetPositionPercent(value: number, scale: number): number {
 	if (!Number.isFinite(value) || !Number.isFinite(scale) || scale <= 0) return 50;
