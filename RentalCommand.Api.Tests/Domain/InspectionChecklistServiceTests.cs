@@ -1,5 +1,6 @@
 using FluentAssertions;
 using FluentAssertions.Execution;
+using System.Text;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
@@ -360,6 +361,8 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         firstSummary.Should().NotBeNull();
         var oldReportId = firstSummary!.ReportStoredFileId;
         oldReportId.Should().NotBeNull();
+        var firstWorkOrderIds = firstSummary.CreatedWorkOrderIds.ToArray();
+        firstWorkOrderIds.Should().ContainSingle();
         var oldCompletedAt = await _db.Inspections.AsNoTracking()
             .Where(inspection => inspection.Id == created.Id)
             .Select(inspection => inspection.CompletedAt)
@@ -383,15 +386,45 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
                 .Select(item => item.SpawnedWorkOrderId)
                 .ToListAsync())
                 .Should().OnlyContain(workOrderId => workOrderId == null);
+            var retiredWorkOrder = await _db.WorkOrders.AsNoTracking()
+                .SingleAsync(workOrder => workOrder.Id == firstWorkOrderIds[0]);
+            retiredWorkOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+            retiredWorkOrder.DeletedAt.Should().BeNull("cancellation keeps the work-order history row");
+            (await _db.WorkOrderStatusEvents.AsNoTracking()
+                .Where(statusEvent => statusEvent.WorkOrderId == retiredWorkOrder.Id)
+                .OrderBy(statusEvent => statusEvent.Id)
+                .Select(statusEvent => new { statusEvent.FromStatus, statusEvent.ToStatus, statusEvent.Visibility })
+                .ToListAsync())
+                .Should().Contain(eventRow =>
+                    eventRow.FromStatus == WorkOrderStatus.New
+                    && eventRow.ToStatus == WorkOrderStatus.Cancelled
+                    && eventRow.Visibility == "Public");
+            (await _db.WorkOrders.AsNoTracking()
+                .Where(workOrder => workOrder.Id == retiredWorkOrder.Id
+                    && workOrder.Status != WorkOrderStatus.Completed
+                    && workOrder.Status != WorkOrderStatus.Cancelled
+                    && workOrder.Status != WorkOrderStatus.Archived)
+                .CountAsync()).Should().Be(0);
 
             await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
-                new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "After reopen" }, NextOperationKey());
+                new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "After reopen" }, NextOperationKey());
             var (secondSummary, secondError) = await _service.CompleteAuthorizedAsync(
                 _scope, created.Id, userId: 7, operationKey: NextOperationKey());
             secondError.Should().BeNull();
             secondSummary.Should().NotBeNull();
             secondSummary!.ReportStoredFileId.Should().NotBeNull();
             secondSummary.ReportStoredFileId.Should().NotBe(oldReportId);
+            secondSummary.CreatedWorkOrderIds.Should().ContainSingle();
+            secondSummary.CreatedWorkOrderIds.Should().NotContain(firstWorkOrderIds);
+            (await (from item in _db.InspectionItems.AsNoTracking()
+                    join workOrder in _db.WorkOrders.AsNoTracking()
+                        on item.SpawnedWorkOrderId equals workOrder.Id
+                    where item.Id == items[0].Id
+                        && workOrder.DeletedAt == null
+                        && workOrder.Status != WorkOrderStatus.Completed
+                        && workOrder.Status != WorkOrderStatus.Cancelled
+                        && workOrder.Status != WorkOrderStatus.Archived
+                    select workOrder.Id).CountAsync()).Should().Be(1);
 
             var recompleted = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
             recompleted.CompletedAt.Should().NotBe(oldCompletedAt);
@@ -452,6 +485,152 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         statusEvent.CreatedAtUtc.Should().Be(businessNowUtc);
         var report = await _db.StoredFiles.AsNoTracking().SingleAsync(f => f.Id == summary.ReportStoredFileId);
         report.UploadedAt.Should().Be(businessNowUtc);
+    }
+
+    [Fact]
+    public async Task Complete_UsesDatabaseWallClockForPendingUpload_WhenBusinessTimeIsPastCleanupTtl()
+    {
+        var businessNowUtc = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(-2), DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(businessNowUtc));
+        var storage = new CleanupRaceFileStorage();
+        storage.BeforeUploadAsync = async _ =>
+        {
+            await using var cleanupScope = _services.CreateAsyncScope();
+            var claims = await cleanupScope.ServiceProvider
+                .GetRequiredService<IPendingFileUploadStore>()
+                .ClaimExpiredAsync(
+                    "inspection-business-time-cleanup",
+                    TimeSpan.FromHours(24),
+                    TimeSpan.FromMinutes(5),
+                    10);
+            storage.Claims.AddRange(claims);
+        };
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = businessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var items = created!.Items.OrderBy(item => item.SortOrder).Take(2).ToArray();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "inspection-business-time-cleanup-fence");
+
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+        summary!.ReportStoredFileId.Should().NotBeNull();
+        storage.Claims.Should().BeEmpty("a newly admitted upload must not be cleanup-eligible because business time is old");
+        storage.UploadCount.Should().Be(1);
+
+        var pending = await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf"
+                && upload.ActorScopeId == _scope.UserId);
+        pending.State.Should().Be(PendingFileUploadState.Finalized);
+        pending.CreatedAtUtc.Should().BeAfter(DateTime.UtcNow.AddHours(-1));
+        var report = await _db.StoredFiles.AsNoTracking().SingleAsync(file => file.Id == summary.ReportStoredFileId);
+        report.UploadedAt.Should().Be(businessNowUtc);
+    }
+
+    [Fact]
+    public async Task Complete_RetryAfterCleanupReturnsConflictWithoutReportSideEffects()
+    {
+        var storage = new CleanupRaceFileStorage();
+        storage.BeforeUploadAsync = async _ =>
+        {
+            await using var cleanupScope = _services.CreateAsyncScope();
+            var cleanupStore = cleanupScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>();
+            var claims = await cleanupStore.ClaimExpiredAsync(
+                "inspection-abandoned-cleanup",
+                TimeSpan.Zero,
+                TimeSpan.FromMinutes(5),
+                10);
+            storage.Claims.AddRange(claims);
+            foreach (var claim in claims)
+                await cleanupStore.MarkAbandonedAsync(claim.Id, claim.ClaimOwner, claim.ClaimToken);
+        };
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var items = created!.Items.OrderBy(item => item.SortOrder).Take(2).ToArray();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+        const string operationKey = "inspection-abandoned-retry";
+        var reportDataUpdatesBefore = await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.EndsWith(":report-file"));
+
+        var firstError = await Record.ExceptionAsync(() => _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey));
+        var pendingAfterFirst = await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf");
+        await using var retryScope = _services.CreateAsyncScope();
+        var retryDb = retryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var retryService = new InspectionService(
+            retryDb,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            retryScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            TimeProvider.System,
+            retryScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var secondError = await Record.ExceptionAsync(() => retryService.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey));
+
+        firstError.Should().BeOfType<DomainValidationException>();
+        secondError.Should().BeOfType<DomainValidationException>(
+            $"pending state after first attempt was {pendingAfterFirst.State} (claim {pendingAfterFirst.CleanupClaimToken})");
+        firstError!.Message.Should().Contain("retry with a new request key");
+        secondError!.Message.Should().Contain("retry with a new request key");
+        storage.UploadCount.Should().Be(1);
+        (await _db.StoredFiles.AsNoTracking()
+            .CountAsync(file => file.EntityType == nameof(Inspection) && file.EntityId == created.Id))
+            .Should().Be(0);
+        (await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.EndsWith(":report-file")))
+            .Should().Be(reportDataUpdatesBefore);
+        (await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf"))
+            .State.Should().Be(PendingFileUploadState.Abandoned);
     }
 
     [Fact]
@@ -1130,6 +1309,50 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _files.Remove(path);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class CleanupRaceFileStorage : IFileStorage
+    {
+        private readonly Dictionary<string, byte[]> _files = new(StringComparer.Ordinal);
+
+        public Func<string, Task>? BeforeUploadAsync { get; set; }
+        public List<PendingFileUploadCleanupClaim> Claims { get; } = [];
+        public int UploadCount { get; private set; }
+
+        public Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async Task UploadAtAsync(
+            Stream content,
+            string storagePath,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default)
+        {
+            if (BeforeUploadAsync is not null)
+                await BeforeUploadAsync(storagePath);
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, ct);
+            _files[storagePath] = buffer.ToArray();
+            UploadCount++;
+        }
+
+        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default) =>
+            _files.TryGetValue(path, out var bytes)
+                ? Task.FromResult<Stream>(new MemoryStream(bytes))
+                : throw new FileNotFoundException(path);
+
+        public Task DeleteAsync(string path, CancellationToken ct = default)
+        {
+            _files.Remove(path);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DeterministicInspectionPdfGenerator : IInspectionReportPdfGenerator
+    {
+        public byte[] Generate(InspectionReportData data) =>
+            Encoding.UTF8.GetBytes($"{data.Type}|{data.CompletedAt:O}|{data.FailCount}|{data.PassCount}");
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

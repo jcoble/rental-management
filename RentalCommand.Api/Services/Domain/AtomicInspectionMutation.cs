@@ -520,6 +520,63 @@ public sealed class AtomicInspectionMutationHandler
                     && item.InspectionId == inspection.Id
                     && item.SpawnedWorkOrderId != null)
                 .ToListAsync(ct);
+            var derivedWorkOrderIds = await db.Set<InspectionItem>()
+                .Where(item => item.PortfolioId == command.PortfolioId
+                    && item.InspectionId == inspection.Id
+                    && item.SpawnedWorkOrderId != null)
+                .Select(item => item.SpawnedWorkOrderId!.Value)
+                .Distinct()
+                .ToArrayAsync(ct);
+            var derivedWorkOrders = derivedWorkOrderIds.Length == 0
+                ? []
+                : await db.Set<WorkOrder>()
+                    .IgnoreQueryFilters()
+                    .Where(workOrder => workOrder.PortfolioId == command.PortfolioId
+                        && derivedWorkOrderIds.Contains(workOrder.Id))
+                    .ToListAsync(ct);
+            var workOrdersById = derivedWorkOrders.ToDictionary(workOrder => workOrder.Id);
+            foreach (var item in derivedItems)
+            {
+                if (!workOrdersById.TryGetValue(item.SpawnedWorkOrderId!.Value, out var workOrder))
+                {
+                    throw new DomainValidationException(
+                        "This inspection cannot be reopened because a linked work order is unavailable; retry with a new request key.",
+                        409);
+                }
+
+                if (workOrder.Status is not (WorkOrderStatus.New
+                    or WorkOrderStatus.Cancelled
+                    or WorkOrderStatus.Archived))
+                {
+                    throw new DomainValidationException(
+                        "This inspection cannot be reopened because a linked work order has progressed beyond the initial requested state; complete or cancel that work order, then retry with a new request key.",
+                        409);
+                }
+
+                if (workOrder.Status == WorkOrderStatus.New)
+                {
+                    workOrder.Status = WorkOrderStatus.Cancelled;
+                    workOrder.UpdatedAt = now;
+                    db.Add(new WorkOrderStatusEvent
+                    {
+                        PortfolioId = command.PortfolioId,
+                        WorkOrderId = workOrder.Id,
+                        FromStatus = WorkOrderStatus.New,
+                        ToStatus = WorkOrderStatus.Cancelled,
+                        Kind = "Status",
+                        Visibility = "Public",
+                        Note = "Inspection reopened; derived work order cancelled.",
+                        ChangedByUserId = command.ActorUserId,
+                        ChangedByLabel = "Inspection",
+                        CreatedAtUtc = now,
+                    });
+                    attempt.BindSemanticAudit(workOrder, Audit(command, nameof(WorkOrder), workOrder.Id,
+                        AuditLogOperation.Updated,
+                        "Inspection reopened; derived work order cancelled"));
+                    StageDataUpdate(attempt, command, nameof(WorkOrder), workOrder.Id, now,
+                        suffix: $"work-order-{workOrder.Id}");
+                }
+            }
             foreach (var item in derivedItems)
             {
                 item.SpawnedWorkOrderId = null;
@@ -687,7 +744,10 @@ public sealed class AtomicInspectionMutationHandler
                 request.FileName,
                 request.ContentType,
                 request.FileSize)],
-            ct)).Single();
+            ct)).SingleOrDefault()
+            ?? throw new DomainValidationException(
+                "This inspection report upload is no longer available; retry with a new request key.",
+                409);
         var stored = new StoredFile
         {
             PortfolioId = command.PortfolioId,
@@ -705,7 +765,7 @@ public sealed class AtomicInspectionMutationHandler
         await attempt.FlushBusinessAsync(ct);
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = stored.Id;
-        pending.UpdatedAtUtc = now;
+        pending.UpdatedAtUtc = await attempt.ReadDatabaseClockUtcAsync(ct);
         await attempt.FlushBusinessAsync(ct);
         inspection.ReportStoredFileId = stored.Id;
         inspection.UpdatedAt = now;

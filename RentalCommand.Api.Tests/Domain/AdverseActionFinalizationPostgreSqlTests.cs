@@ -1,6 +1,11 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Screening;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
@@ -25,7 +30,11 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
     private WorkspaceReadScope _scope;
     private readonly RedTestStorage _storage = new();
 
-    public AdverseActionFinalizationPostgreSqlTests(MigratedPostgreSqlFixture fixture) => _fixture = fixture;
+    public AdverseActionFinalizationPostgreSqlTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+    }
 
     public async Task InitializeAsync()
     {
@@ -229,6 +238,70 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         finalized.StoredFileId.Should().Be(storedFile.Id);
     }
 
+    [Fact]
+    public async Task GenerateAdverseAction_RetryAfterCleanupReturnsConflictWithoutArtifacts()
+    {
+        var seeded = await SeedDeclinedCaseAsync("abandoned-retry");
+        var service = new ScreeningService(
+            _db,
+            new DisabledScreeningProvider(),
+            _storage,
+            new DeterministicAdverseActionPdfGenerator(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            TimeProvider.System);
+        _storage.BeforeUploadAsync = async _ =>
+        {
+            await using var cleanupScope = _services.CreateAsyncScope();
+            var cleanupStore = cleanupScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>();
+            var claims = await cleanupStore.ClaimExpiredAsync(
+                "adverse-action-abandoned-cleanup",
+                TimeSpan.Zero,
+                TimeSpan.FromMinutes(5),
+                10);
+            _storage.Claims.AddRange(claims);
+            foreach (var claim in claims)
+                await cleanupStore.MarkAbandonedAsync(claim.Id, claim.ClaimOwner, claim.ClaimToken);
+        };
+        var request = new GenerateAdverseActionRequest
+        {
+            OperationKey = "adverse-action-abandoned-retry",
+            SendToApplicant = true,
+        };
+        var emailBefore = await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "email");
+        var dataUpdatesBefore = await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.Contains("adverse-action"));
+
+        var firstError = await Record.ExceptionAsync(() => service.GenerateAdverseActionAsync(
+            _scope, seeded.Application.Id, request));
+        var secondError = await Record.ExceptionAsync(() => service.GenerateAdverseActionAsync(
+            _scope, seeded.Application.Id, request));
+
+        firstError.Should().BeOfType<DomainValidationException>(firstError?.ToString());
+        secondError.Should().BeOfType<DomainValidationException>(secondError?.ToString());
+        firstError!.Message.Should().Contain("retry with a new request key");
+        secondError!.Message.Should().Contain("retry with a new request key");
+        _storage.UploadCount.Should().Be(1);
+        (await _db.Set<AdverseActionNotice>().AsNoTracking()
+            .CountAsync(notice => notice.ApplicationId == seeded.Application.Id))
+            .Should().Be(0);
+        (await _db.StoredFiles.AsNoTracking()
+            .CountAsync(file => file.EntityType == "Application" && file.EntityId == seeded.Application.Id))
+            .Should().Be(0);
+        (await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "email"))
+            .Should().Be(emailBefore);
+        (await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.Contains("adverse-action")))
+            .Should().Be(dataUpdatesBefore);
+        (await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "adverse-action-pdf"))
+            .State.Should().Be(PendingFileUploadState.Abandoned);
+    }
+
     private async Task<(RentalApplication Application, ApplicantScreening Screening, DateTime Now)>
         SeedDeclinedCaseAsync(string key)
     {
@@ -282,15 +355,21 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
         private readonly HashSet<string> _paths = new(StringComparer.Ordinal);
 
         public bool Contains(string path) => _paths.Contains(path);
+        public Func<string, Task>? BeforeUploadAsync { get; set; }
+        public List<PendingFileUploadCleanupClaim> Claims { get; } = [];
+        public int UploadCount { get; private set; }
 
         public Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public async Task UploadAtAsync(Stream content, string storagePath, string fileName, string contentType, CancellationToken ct = default)
         {
+            if (BeforeUploadAsync is not null)
+                await BeforeUploadAsync(storagePath);
             using var buffer = new MemoryStream();
             await content.CopyToAsync(buffer, ct);
             _paths.Add(storagePath);
+            UploadCount++;
         }
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default) =>
@@ -301,5 +380,11 @@ public sealed class AdverseActionFinalizationPostgreSqlTests : IAsyncLifetime
             _paths.Remove(path);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class DeterministicAdverseActionPdfGenerator : IAdverseActionNoticePdfGenerator
+    {
+        public byte[] Generate(AdverseActionNoticeData data) =>
+            Encoding.UTF8.GetBytes($"{data.ApplicantName}|{data.NoticeDate:O}|{data.Reason}");
     }
 }

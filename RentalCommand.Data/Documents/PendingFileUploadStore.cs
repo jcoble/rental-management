@@ -21,7 +21,8 @@ public sealed record PendingFileUploadAdmission(
     string StoragePath,
     PendingFileUploadState State,
     int? StoredFileId,
-    string RequestFingerprint);
+    string RequestFingerprint,
+    bool CleanupClaimed = false);
 
 public sealed record PendingFileUploadCleanupClaim(
     Guid Id, string ClaimOwner, Guid ClaimToken, string StoragePath);
@@ -88,11 +89,16 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         var id = Guid.NewGuid();
         var safeName = SanitizeFileName(fileName);
         var storagePath = $"pending-{id:N}-{safeName}";
-        var now = AsUtc(nowUtc);
+        // The argument remains part of the interface for callers that also stamp business-time
+        // content, but pending-upload lifecycle timestamps are operational data and must come from
+        // PostgreSQL's wall clock. A simulation timestamp can be older than the cleanup TTL.
+        _ = nowUtc;
 
         using var admissionLease = _writeScope.BeginWrite("PendingFileUploads", InternalWriteOperation.Insert);
         var rows = await _db.Database.SqlQuery<PendingFileUploadAdmissionRow>($$"""
-            WITH inserted AS (
+            WITH clock AS MATERIALIZED (
+              SELECT clock_timestamp() AS now_utc
+            ), inserted AS (
               INSERT INTO "PendingFileUploads"
                 ("Id", "PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash",
                  "RequestFingerprint", "StoragePath", "FileName", "ContentType", "SizeBytes",
@@ -100,7 +106,8 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
               VALUES
                 ({{id}}, {{portfolioId}}, {{actorScopeId}}, {{normalizedPurpose}}, {{operationHash}},
                  {{requestFingerprint}}, {{storagePath}}, {{safeName}}, {{contentType}}, {{sizeBytes}},
-                 {{(int)PendingFileUploadState.Prepared}}, {{now}}, {{now}})
+                 {{(int)PendingFileUploadState.Prepared}},
+                 (SELECT now_utc FROM clock), (SELECT now_utc FROM clock))
               ON CONFLICT ("PortfolioId", "ActorScopeId", "Purpose", "OperationKeyHash") DO NOTHING
               RETURNING "Id", "StoragePath", "State", "StoredFileId", "RequestFingerprint"
             )
@@ -108,14 +115,16 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
                    inserted."StoragePath",
                    inserted."State",
                    inserted."StoredFileId",
-                   inserted."RequestFingerprint"
+                   inserted."RequestFingerprint",
+                   NULL::uuid AS "CleanupClaimToken"
             FROM inserted
             UNION ALL
             SELECT upload."Id",
                    upload."StoragePath",
                    upload."State",
                    upload."StoredFileId",
-                   upload."RequestFingerprint"
+                   upload."RequestFingerprint",
+                   upload."CleanupClaimToken"
             FROM "PendingFileUploads" AS upload
             WHERE upload."PortfolioId" = {{portfolioId}}
               AND upload."ActorScopeId" = {{actorScopeId}}
@@ -130,7 +139,8 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
             row.StoragePath,
             (PendingFileUploadState)row.State,
             row.StoredFileId,
-            row.RequestFingerprint);
+            row.RequestFingerprint,
+            row.CleanupClaimToken.HasValue);
 
         if (!CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(admission.RequestFingerprint),
@@ -266,6 +276,7 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         public int State { get; init; }
         public int? StoredFileId { get; init; }
         public string RequestFingerprint { get; init; } = string.Empty;
+        public Guid? CleanupClaimToken { get; init; }
     }
 
     public static string ComputeOperationKeyHash(string value)
@@ -283,10 +294,4 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         return string.IsNullOrWhiteSpace(safe) ? "file" : safe;
     }
 
-    private static DateTime AsUtc(DateTime value) => value.Kind switch
-    {
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
-    };
 }

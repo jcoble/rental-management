@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Documents;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Screening;
@@ -354,14 +356,63 @@ public sealed class ScreeningService : IScreeningService
             pdfBytes.LongLength,
             value.GeneratedAtUtc,
             ct);
-        if (admission.State == PendingFileUploadState.Prepared)
+        switch (admission.State)
         {
-            await _storage.UploadAtAsync(
-                new MemoryStream(pdfBytes, writable: false),
-                admission.StoragePath,
-                value.FileName,
-                "application/pdf",
-                ct);
+            case PendingFileUploadState.Finalized:
+                if (!admission.StoredFileId.HasValue)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized adverse-action notice admission has no StoredFile id.");
+                var finalizedNotice = await _db.Set<AdverseActionNotice>().AsNoTracking()
+                    .Where(notice => notice.PortfolioId == scope.PortfolioId
+                        && notice.ApplicationId == applicationId
+                        && notice.StoredFileId == admission.StoredFileId.Value)
+                    .Select(notice => new
+                    {
+                        notice.Id,
+                        notice.ApplicationId,
+                        notice.Reason,
+                        notice.CreditReportingAgency,
+                        notice.GeneratedAtUtc,
+                        StoredFileId = notice.StoredFileId!.Value,
+                        notice.SentAtUtc,
+                    })
+                    .SingleOrDefaultAsync(ct);
+                if (finalizedNotice is null)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized adverse-action notice admission has no active notice.");
+                return new AdverseActionNoticeResponse
+                {
+                    Id = finalizedNotice.Id,
+                    ApplicationId = finalizedNotice.ApplicationId,
+                    Reason = finalizedNotice.Reason,
+                    CreditReportingAgency = finalizedNotice.CreditReportingAgency,
+                    GeneratedAtUtc = finalizedNotice.GeneratedAtUtc,
+                    StoredFileId = finalizedNotice.StoredFileId,
+                    SentAtUtc = finalizedNotice.SentAtUtc,
+                };
+
+            case PendingFileUploadState.Abandoned:
+                throw new DomainValidationException(
+                    "This adverse-action notice upload was abandoned or claimed for cleanup; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared when admission.CleanupClaimed:
+                throw new DomainValidationException(
+                    "This adverse-action notice upload is currently unavailable for finalization; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared:
+                await _storage.UploadAtAsync(
+                    new MemoryStream(pdfBytes, writable: false),
+                    admission.StoragePath,
+                    value.FileName,
+                    "application/pdf",
+                    ct);
+                break;
+
+            default:
+                throw new AtomicReceiptInvariantException(
+                    "The adverse-action notice upload admission has an unknown state.");
         }
 
         var finalized = await _atomic.ExecuteAsync(

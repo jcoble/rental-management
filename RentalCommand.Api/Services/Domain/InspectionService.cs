@@ -486,6 +486,10 @@ public class InspectionService : IInspectionService
             summary.ReportStoredFileId = await EnsureInspectionReportAsync(
                 scope, id, summary, operationKey, ct);
         }
+        catch (DomainValidationException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
@@ -764,10 +768,43 @@ public class InspectionService : IInspectionService
             pdfBytes.LongLength,
             header.CompletedAt ?? _timeProvider.GetUtcNow().UtcDateTime,
             ct);
-        if (admission.State == PendingFileUploadState.Prepared)
+        switch (admission.State)
         {
-            await using var content = new MemoryStream(pdfBytes, writable: false);
-            await _storage.UploadAtAsync(content, admission.StoragePath, fileName, "application/pdf", ct);
+            case PendingFileUploadState.Finalized:
+                if (!admission.StoredFileId.HasValue)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized inspection report admission has no StoredFile id.");
+                var finalizedReportExists = await _db.StoredFiles.AsNoTracking()
+                    .AnyAsync(file => file.Id == admission.StoredFileId.Value
+                        && file.PortfolioId == scope.PortfolioId
+                        && file.EntityType == nameof(Inspection)
+                        && file.EntityId == inspectionId
+                        && file.DeletedAt == null, ct);
+                if (!finalizedReportExists)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized inspection report admission has no active report file.");
+                return admission.StoredFileId.Value;
+
+            case PendingFileUploadState.Abandoned:
+                throw new DomainValidationException(
+                    "This inspection report upload was abandoned or claimed for cleanup; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared when admission.CleanupClaimed:
+                throw new DomainValidationException(
+                    "This inspection report upload is currently unavailable for finalization; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared:
+                await using (var content = new MemoryStream(pdfBytes, writable: false))
+                {
+                    await _storage.UploadAtAsync(content, admission.StoragePath, fileName, "application/pdf", ct);
+                }
+                break;
+
+            default:
+                throw new AtomicReceiptInvariantException(
+                    "The inspection report upload admission has an unknown state.");
         }
 
         var request = new AttachInspectionReportRequest(

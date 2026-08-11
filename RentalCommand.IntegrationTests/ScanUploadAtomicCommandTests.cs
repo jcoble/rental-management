@@ -484,7 +484,18 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
                 fileName: "orphan.pdf",
                 contentType: "application/pdf",
                 sizeBytes: 12,
-                nowUtc: DateTime.UtcNow.AddDays(-2));
+                nowUtc: DateTime.UtcNow);
+        }
+
+        await using (var ageScope = _services!.CreateAsyncScope())
+        {
+            var db = ageScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "PendingFileUploads"
+                SET "CreatedAtUtc" = clock_timestamp() - interval '2 days',
+                    "UpdatedAtUtc" = clock_timestamp() - interval '2 days'
+                WHERE "Id" = {admission.Id}
+                """);
         }
 
         PendingFileUploadCleanupClaim first;

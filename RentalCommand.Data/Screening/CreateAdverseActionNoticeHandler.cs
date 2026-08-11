@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Constants;
+using RentalCommand.Core;
 using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -241,7 +242,10 @@ public sealed class CreateAdverseActionNoticeHandler
                 command.FileName,
                 command.ContentType,
                 command.FileSize)],
-            ct)).Single();
+            ct)).SingleOrDefault()
+            ?? throw new DomainValidationException(
+                "This adverse-action notice upload is no longer available; retry with a new request key.",
+                409);
 
         var storedFile = new StoredFile
         {
