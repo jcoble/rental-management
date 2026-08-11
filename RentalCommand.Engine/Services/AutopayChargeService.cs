@@ -78,7 +78,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 && enrollment.Provider == "stripe"
                 && !db.TenantPaymentAttempts.Any(paymentAttempt =>
                     paymentAttempt.Provider == "stripe"
-                    && paymentAttempt.IdempotencyKey == "autopay:tenant-charge:" + charge.Id
+                    && paymentAttempt.ChargeLedgerEntryId == charge.Id
                     && (paymentAttempt.State == TenantPaymentAttemptState.Submitted
                         || paymentAttempt.State == TenantPaymentAttemptState.Succeeded))
             orderby charge.DueOn, charge.TenantAccountId, charge.Id
@@ -87,14 +87,18 @@ public sealed class AutopayChargeService : IAutopayChargeService
                 charge.TenantAccountId,
                 charge.Id,
                 enrollment.Id,
-                enrollment.CreatedByUserId)).Take(BatchSize);
+                enrollment.CreatedByUserId,
+                AttemptNonce: db.TenantPaymentAttempts.Count(paymentAttempt =>
+                    paymentAttempt.Provider == "stripe"
+                    && paymentAttempt.ChargeLedgerEntryId == charge.Id))).Take(BatchSize);
 
     internal sealed record AutopayChargeCandidate(
         int PortfolioId,
         int TenantAccountId,
         long ChargeLedgerEntryId,
         int EnrollmentId,
-        int ActorUserId);
+        int ActorUserId,
+        int AttemptNonce);
 
     private async Task<int> ChargeCandidatesAsync(
         IReadOnlyList<AutopayChargeCandidate> candidates, DateTime now, CancellationToken ct)
@@ -103,7 +107,8 @@ public sealed class AutopayChargeService : IAutopayChargeService
         foreach (var candidate in candidates)
         {
             ct.ThrowIfCancellationRequested();
-            var idempotencyKey = BuildIdempotencyKey(candidate.ChargeLedgerEntryId);
+            var idempotencyKey = BuildIdempotencyKey(
+                candidate.ChargeLedgerEntryId, candidate.AttemptNonce);
             var prepared = await _atomicUnitOfWork.ExecuteAsync(
                 new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
                 new PrepareProviderPaymentCreateCommand(candidate.PortfolioId,
@@ -179,6 +184,6 @@ public sealed class AutopayChargeService : IAutopayChargeService
         return charged;
     }
 
-    private static string BuildIdempotencyKey(long chargeLedgerEntryId) =>
-        $"autopay:tenant-charge:{chargeLedgerEntryId}";
+    internal static string BuildIdempotencyKey(long chargeLedgerEntryId, int attemptNonce) =>
+        $"autopay:tenant-charge:{chargeLedgerEntryId}:attempt:{attemptNonce}";
 }

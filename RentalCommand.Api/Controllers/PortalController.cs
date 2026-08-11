@@ -242,11 +242,13 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     /// </summary>
     [HttpPost("tenant-accounts/{tenantAccountId:int}/charges/{chargeLedgerEntryId:long}/checkout")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> CreatePaymentCheckout(
         int tenantAccountId, long chargeLedgerEntryId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
     {
         var tenantId = await GetTenantIdAsync(ct);
@@ -254,10 +256,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         {
             return Forbid();
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var attemptKey))
+        {
+            return BadRequest(new { error = "A payment attempt key of 1 to 128 characters is required." });
+        }
 
         var result = await _stripe.CreatePaymentCheckoutSessionAsync(
             GetPortfolioId(), tenantId.Value, tenantAccountId, chargeLedgerEntryId, GetUserId(),
-            request?.SuccessUrl, request?.CancelUrl, ct);
+            request?.SuccessUrl, request?.CancelUrl, ct, attemptKey);
 
         return result.Result switch
         {

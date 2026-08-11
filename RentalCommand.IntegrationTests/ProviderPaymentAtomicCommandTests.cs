@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -278,7 +279,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task ProviderReceipt_MissingDurableTarget_FailsBeforeAnyMutation()
+    public async Task ProviderReceipt_MissingDurableTarget_IsDeadLetteredBeforeAnyReceiptMutation()
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("missing-target");
@@ -327,8 +328,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             "stripe", "evt_missing_durable_target", "payment_intent.succeeded", "{}",
             providerObjectId, ProviderPaymentEventKind.Succeeded, 100m, "USD", null,
             DateTime.UtcNow, DateTime.UtcNow);
-        await FluentActions.Awaiting(() => ExecuteAtomicAsync(identity, command, EventCodec))
-            .Should().ThrowAsync<AtomicReceiptInvariantException>();
+        var outcome = await ExecuteAtomicAsync(identity, command, EventCodec);
+        outcome.Value.Outcome.Should().Be(RecordProviderPaymentEventOutcome.Unmatched);
 
         await using var verify = NewContext();
         var unchangedAttempt = await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == attemptId);
@@ -338,19 +339,205 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         unchangedAttempt.State.Should().Be(TenantPaymentAttemptState.Submitted);
         unchangedAttempt.ClaimOwner.Should().BeNull("target validation precedes the fenced claim write");
         unchangedAttempt.ClaimToken.Should().BeNull();
-        (await verify.ProviderInboxEvents.AnyAsync(row =>
-            row.ProviderEventId == command.ProviderEventId)).Should().BeFalse();
+        var inbox = await verify.ProviderInboxEvents.SingleAsync(row =>
+            row.ProviderEventId == command.ProviderEventId);
+        inbox.FailureKind.Should().Be(ProviderInboxFailureKind.Permanent);
+        inbox.DeadLetteredAtUtc.Should().NotBeNull();
+        inbox.LastError.Should().Contain("receipt finalization");
         (await verify.TenantLedgerEntries.AnyAsync(row =>
             row.ProviderPaymentAttemptId == attemptId)).Should().BeFalse();
         (await verify.OutboxMessages.AnyAsync(row =>
             row.IdempotencyKey == OutboxIdempotency.Create(
                 "provider-receipt", attemptId.ToString()))).Should().BeFalse();
-        (await verify.AtomicAuditLogs.AnyAsync(row =>
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
             row.CommandType == identity.CommandType
-            && row.CommandIdempotencyKey == identity.IdempotencyKey)).Should().BeFalse();
-        (await verify.AtomicCommandReceipts.AnyAsync(row =>
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ProviderReceipt_ReversedTarget_IsDeadLetteredAndWebhookWorkCommits()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("reversed-target");
+        const string providerObjectId = "pi_reversed_target";
+        long attemptId;
+        await using (var db = NewContext())
+        {
+            db.TenantLedgerEntries.Add(new TenantLedgerEntry
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                EntryType = TenantLedgerEntryType.Reversal,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = 100m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(DateTime.UtcNow),
+                PostedAtUtc = DateTime.UtcNow,
+                Description = "Reversal for provider target",
+                BusinessKey = "reversal:provider-target",
+                ReversesEntryId = scenario.ChargeId,
+                CreatedByUserId = scenario.UserId,
+            });
+            var attempt = Attempt(scenario, "provider-reversed-target", providerObjectId,
+                TenantPaymentAttemptState.Submitted);
+            db.TenantPaymentAttempts.Add(attempt);
+            await db.SaveChangesAsync();
+            attemptId = attempt.Id;
+        }
+
+        var identity = new AtomicCommandIdentity(
+            "payments.provider-event.record", "stripe:evt_reversed_target");
+        var command = new RecordVerifiedProviderPaymentEventCommand(
+            "stripe", "evt_reversed_target", "payment_intent.succeeded", "{}",
+            providerObjectId, ProviderPaymentEventKind.Succeeded, 100m, "USD", null,
+            DateTime.UtcNow, DateTime.UtcNow);
+        var outcome = await ExecuteAtomicAsync(identity, command, EventCodec);
+
+        outcome.Value.Outcome.Should().Be(RecordProviderPaymentEventOutcome.Unmatched);
+        await using var verify = NewContext();
+        var inbox = await verify.ProviderInboxEvents.SingleAsync(row =>
+            row.ProviderEventId == command.ProviderEventId);
+        inbox.FailureKind.Should().Be(ProviderInboxFailureKind.Permanent);
+        inbox.DeadLetteredAtUtc.Should().NotBeNull();
+        inbox.LastError.Should().Contain("valid target charge");
+        (await verify.AtomicAuditLogs.SingleAsync(row =>
             row.CommandType == identity.CommandType
-            && row.IdempotencyKey == identity.IdempotencyKey)).Should().BeFalse();
+            && row.CommandIdempotencyKey == identity.IdempotencyKey))
+            .ChangeReason.Should().Contain("dead-lettered");
+        (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == attemptId))
+            .State.Should().Be(TenantPaymentAttemptState.Submitted);
+        (await verify.TenantLedgerEntries.AnyAsync(row =>
+            row.ProviderPaymentAttemptId == attemptId)).Should().BeFalse();
+        (await verify.TenantLedgerAllocations.AnyAsync(row =>
+            row.BusinessKey.StartsWith($"provider-receipt:{attemptId}:allocation")))
+            .Should().BeFalse();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task PrepareReplay_RevalidatesOpenAmount_AndFreshAttemptUsesReducedAmount()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("prepare-replay-open-amount");
+        var key = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, scenario.UserId, "first-attempt");
+        var command = new PrepareProviderPaymentCreateCommand(
+            scenario.PortfolioId, scenario.AccountId, scenario.ChargeId, scenario.UserId,
+            scenario.TenantId, null, "stripe", key, "USD", DateTime.UtcNow);
+        var identity = new AtomicCommandIdentity("payments.provider-create.prepare", key);
+        var first = await ExecuteAtomicAsync(identity, command, PrepareCodec);
+        first.Value.Amount.Should().Be(100m);
+
+        await using (var db = NewContext())
+        {
+            var cheque = new TenantLedgerEntry
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                EntryType = TenantLedgerEntryType.PaymentReceipt,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = 40m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(DateTime.UtcNow),
+                PostedAtUtc = DateTime.UtcNow,
+                Description = "Cheque partial payment",
+                BusinessKey = "receipt:prepare-replay-cheque",
+                CreatedByUserId = scenario.UserId,
+            };
+            db.TenantLedgerEntries.Add(cheque);
+            await db.SaveChangesAsync();
+            db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
+            {
+                PortfolioId = scenario.PortfolioId,
+                TenantAccountId = scenario.AccountId,
+                DebitEntryId = scenario.ChargeId,
+                CreditEntryId = cheque.Id,
+                Amount = 40m,
+                AllocatedAtUtc = DateTime.UtcNow,
+                BusinessKey = "allocation:prepare-replay-cheque",
+                CreatedByUserId = scenario.UserId,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await FluentActions.Awaiting(() => ExecuteAtomicAsync(identity, command, PrepareCodec))
+            .Should().ThrowAsync<DomainValidationException>();
+
+        var freshKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, scenario.UserId, "fresh-attempt");
+        var freshCommand = command with { IdempotencyKey = freshKey };
+        var fresh = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", freshKey),
+            freshCommand, PrepareCodec);
+        fresh.Value.Amount.Should().Be(60m);
+    }
+
+    [SkippableFact]
+    public async Task Prepare_AllowsIndependentSecondActorAttempt()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("prepare-second-actor");
+        int secondActorId;
+        await using (var db = NewContext())
+        {
+            var secondUser = new ApplicationUser
+            {
+                UserName = "provider-second-actor@example.test",
+                NormalizedUserName = "PROVIDER-SECOND-ACTOR@EXAMPLE.TEST",
+                Email = "provider-second-actor@example.test",
+                NormalizedEmail = "PROVIDER-SECOND-ACTOR@EXAMPLE.TEST",
+                DisplayName = "Second provider actor",
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = DateTime.UtcNow,
+            };
+            db.Set<ApplicationUser>().Add(secondUser);
+            await db.SaveChangesAsync();
+            secondActorId = secondUser.Id;
+        }
+
+        var key = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, scenario.UserId, "same-attempt");
+        var command = new PrepareProviderPaymentCreateCommand(
+            scenario.PortfolioId, scenario.AccountId, scenario.ChargeId, scenario.UserId,
+            null, null, "stripe", key, "USD", DateTime.UtcNow);
+        var first = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", key), command, PrepareCodec);
+        first.Value.Outcome.Should().Be(PrepareProviderPaymentCreateOutcome.Prepared);
+
+        var secondKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, secondActorId, "same-attempt");
+        var second = command with { ActorUserId = secondActorId, IdempotencyKey = secondKey };
+        var secondOutcome = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", secondKey), second, PrepareCodec);
+        secondOutcome.Value.Outcome.Should().Be(PrepareProviderPaymentCreateOutcome.Prepared);
+    }
+
+    [SkippableFact]
+    public async Task Prepare_ConcurrentDuplicateTapCreatesExactlyOneAttempt()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("prepare-concurrent-duplicate");
+        var key = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, scenario.UserId, "duplicate-tap");
+        var command = new PrepareProviderPaymentCreateCommand(
+            scenario.PortfolioId, scenario.AccountId, scenario.ChargeId, scenario.UserId,
+            scenario.TenantId, null, "stripe", key, "USD", DateTime.UtcNow);
+        var identity = new AtomicCommandIdentity("payments.provider-create.prepare", key);
+
+        var outcomes = await Task.WhenAll(
+            ExecuteAtomicAsync(identity, command, PrepareCodec),
+            ExecuteAtomicAsync(identity, command, PrepareCodec));
+
+        outcomes.Select(result => result.Disposition)
+            .Should().BeEquivalentTo(
+                new[] { AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed });
+        await using var verify = NewContext();
+        (await verify.TenantPaymentAttempts.CountAsync(row =>
+            row.ChargeLedgerEntryId == scenario.ChargeId
+            && row.Provider == "stripe")).Should().Be(1);
     }
 
     [SkippableFact]
@@ -401,6 +588,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             candidate.TenantAccountId.Should().Be(scenario.AccountId);
             candidate.ChargeLedgerEntryId.Should().Be(scenario.ChargeId);
             candidate.EnrollmentId.Should().Be(scenario.EnrollmentId);
+            candidate.AttemptNonce.Should().Be(0);
         }
 
         await using (var db = NewContext())

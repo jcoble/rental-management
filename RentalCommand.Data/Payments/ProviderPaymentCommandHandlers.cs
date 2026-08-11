@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Outbox;
@@ -334,9 +335,21 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
                 now, context, ct, paymentAttempt);
 
         inbox.PortfolioId = paymentAttempt.PortfolioId;
-        var stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
-            _db, paymentAttempt, command.EventKind, command.FailureReason,
-            $"provider-event:{command.ProviderEventId}", context, ct);
+        ProviderPaymentApplyResult stateResult;
+        try
+        {
+            stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
+                _db, paymentAttempt, command.EventKind, command.FailureReason,
+                $"provider-event:{command.ProviderEventId}", context, ct);
+        }
+        catch (ProviderPaymentPermanentFailureException ex)
+        {
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Verified provider event {command.ProviderEventId} dead-lettered: {ex.Message}",
+                actorLabel: $"provider:webhook:{command.Provider}");
+            return await ProviderPaymentHandlerSupport.DeadLetterAsync(
+                inbox, ex.Message, now, context, ct, paymentAttempt);
+        }
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
         {
@@ -497,9 +510,25 @@ public sealed class ReconcileClaimedProviderPaymentEventHandler
         }
 
         inbox.PortfolioId = paymentAttempt.PortfolioId;
-        var stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
-            _db, paymentAttempt, inbox.EventKind, inbox.FailureReason,
-            $"provider-inbox:{inbox.Id}:{command.ClaimOwner}", context, ct);
+        ProviderPaymentApplyResult stateResult;
+        try
+        {
+            stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
+                _db, paymentAttempt, inbox.EventKind, inbox.FailureReason,
+                $"provider-inbox:{inbox.Id}:{command.ClaimOwner}", context, ct);
+        }
+        catch (ProviderPaymentPermanentFailureException ex)
+        {
+            ProviderPaymentHandlerSupport.DeadLetterInbox(inbox, ex.Message, now);
+            ProviderPaymentHandlerSupport.ReleaseClaim(inbox);
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Claimed provider event {inbox.ProviderEventId} dead-lettered: {ex.Message}",
+                actorLabel: $"provider:worker:{command.ClaimOwner}");
+            await context.FlushBusinessAsync(ct);
+            return new(ReconcileProviderPaymentEventOutcome.DeadLettered, inbox.Id,
+                paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId,
+                paymentAttempt.Id, paymentAttempt.State, null);
+        }
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
         {
@@ -561,6 +590,16 @@ internal enum ProviderPaymentApplyDisposition
     Applied,
     AlreadyInState,
     Conflict,
+}
+
+/// <summary>
+/// A verified provider event can be permanently unprocessable when its immutable receipt target is
+/// no longer valid. Event handlers convert this narrow failure into a durable dead letter. Claim,
+/// transition, database, and other infrastructure failures continue to throw for provider retry.
+/// </summary>
+internal sealed class ProviderPaymentPermanentFailureException : InvalidOperationException
+{
+    public ProviderPaymentPermanentFailureException(string message) : base(message) { }
 }
 
 internal sealed record ProviderPaymentApplyResult(
@@ -712,10 +751,10 @@ internal static class ProviderPaymentHandlerSupport
         CancellationToken ct)
     {
         if (paymentAttempt.AttemptType != TenantPaymentAttemptType.Charge)
-            throw new AtomicReceiptInvariantException(
+            throw new ProviderPaymentPermanentFailureException(
                 $"Provider receipt finalization does not support {paymentAttempt.AttemptType} attempts.");
         if (paymentAttempt.ChargeLedgerEntryId is not long targetChargeEntryId)
-            throw new AtomicReceiptInvariantException(
+            throw new ProviderPaymentPermanentFailureException(
                 $"Provider charge context {paymentAttempt.Id} has no durable target charge.");
 
         // Revalidate the immutable intent after taking the account lock and before adding the
@@ -737,7 +776,7 @@ internal static class ProviderPaymentHandlerSupport
                 && balance.ReversedAmount == 0m
             select new { balance.OpenAmount }).SingleOrDefaultAsync(ct);
         if (target is null)
-            throw new AtomicReceiptInvariantException(
+            throw new ProviderPaymentPermanentFailureException(
                 $"Provider charge context {paymentAttempt.Id} no longer identifies a valid target charge.");
         return (targetChargeEntryId, target.OpenAmount);
     }
@@ -755,6 +794,22 @@ internal static class ProviderPaymentHandlerSupport
             .SingleOrDefaultAsync(ct);
         if (alreadyPosted is not null)
             return (alreadyPosted.Id, alreadyPosted.PostedAtUtc);
+
+        // Recheck the target immediately before any receipt, journal, or allocation row is written.
+        // The account lock normally makes this stable; this second read also turns a concurrent
+        // direct correction into the same permanent dead-letter outcome without a partial receipt.
+        var liveTarget = await db.Set<TenantChargeBalanceProjection>().AsNoTracking()
+            .Where(row => row.PortfolioId == paymentAttempt.PortfolioId
+                && row.TenantAccountId == paymentAttempt.TenantAccountId
+                && row.TenantLedgerEntryId == target.ChargeLedgerEntryId)
+            .Select(row => new { row.OpenAmount, row.ReversedAmount })
+            .SingleOrDefaultAsync(ct);
+        if (liveTarget is null
+            || liveTarget.OpenAmount != target.OpenAmount
+            || liveTarget.ReversedAmount != 0m)
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} changed before its exact target could be settled.");
+
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(db, paymentAttempt.PortfolioId, ct);
         var receipt = new TenantLedgerEntry
         {
@@ -788,7 +843,7 @@ internal static class ProviderPaymentHandlerSupport
         var expectedAllocation = Math.Min(target.OpenAmount, receipt.Amount);
         if (allocation.AllocatedAmount != expectedAllocation
             || allocation.AllocationCount != (expectedAllocation > 0m ? 1 : 0))
-            throw new AtomicReceiptInvariantException(
+            throw new ProviderPaymentPermanentFailureException(
                 $"Provider charge context {paymentAttempt.Id} did not settle its exact target.");
         return (receipt.Id, times.WallClockUtc);
     }
@@ -857,10 +912,7 @@ internal static class ProviderPaymentHandlerSupport
     {
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(db, command.PortfolioId, ct);
         var allowed = await (
-            from balance in db.Set<TenantChargeBalanceProjection>().AsNoTracking()
-            join entry in db.Set<TenantLedgerEntry>().AsNoTracking()
-                on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
-                equals new { entry.Id, entry.PortfolioId, entry.TenantAccountId }
+            from entry in db.Set<TenantLedgerEntry>().AsNoTracking()
             join account in db.Set<TenantAccount>().AsNoTracking()
                 on new { Id = entry.TenantAccountId, entry.PortfolioId }
                 equals new { account.Id, account.PortfolioId }
@@ -882,6 +934,55 @@ internal static class ProviderPaymentHandlerSupport
         if (!allowed)
             throw new UnauthorizedAccessException(
                 "Current provider payment scope no longer authorizes this replay.");
+
+        var storedAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .Where(candidate => candidate.Provider == command.Provider
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.ChargeLedgerEntryId == command.ChargeLedgerEntryId
+                && candidate.AttemptType == TenantPaymentAttemptType.Charge
+                && candidate.IdempotencyKey == command.IdempotencyKey)
+            .Select(candidate => new
+            {
+                candidate.Amount,
+                candidate.Currency,
+                candidate.State,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (storedAttempt is null)
+            throw new AtomicReceiptInvariantException(
+                "The provider payment prepare receipt has no matching durable attempt.");
+        if (storedAttempt.State != TenantPaymentAttemptState.Prepared)
+            throw new DomainValidationException(
+                "This payment attempt has already been submitted. Start a new payment attempt.",
+                statusCode: 409);
+
+        // A prepare receipt is replayable only while the same charge still has the same open
+        // balance. This query deliberately keeps the balance predicate in PostgreSQL so a stale
+        // stored amount can never be returned after a cheque, reversal, or other correction.
+        var liveTarget = await (
+            from balance in db.Set<TenantChargeBalanceProjection>().AsNoTracking()
+            join entry in db.Set<TenantLedgerEntry>().AsNoTracking()
+                on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
+                equals new { entry.Id, entry.PortfolioId, entry.TenantAccountId }
+            join account in db.Set<TenantAccount>().AsNoTracking()
+                on new { Id = entry.TenantAccountId, entry.PortfolioId }
+                equals new { account.Id, account.PortfolioId }
+            where entry.Id == command.ChargeLedgerEntryId
+                && entry.PortfolioId == command.PortfolioId
+                && entry.TenantAccountId == command.TenantAccountId
+                && entry.Direction == TenantLedgerDirection.Debit
+                && balance.OpenAmount > 0m
+                && balance.ReversedAmount == 0m
+                && account.ClosedAtUtc == null
+            select new { balance.OpenAmount, account.Currency })
+            .SingleOrDefaultAsync(ct);
+        if (liveTarget is null
+            || !string.Equals(liveTarget.Currency, storedAttempt.Currency, StringComparison.OrdinalIgnoreCase)
+            || liveTarget.OpenAmount != storedAttempt.Amount)
+            throw new DomainValidationException(
+                "This payment amount is no longer current. Start a new payment attempt.",
+                statusCode: 409);
     }
 
     internal static async Task AuthorizeAutopaySetupReplayAsync(

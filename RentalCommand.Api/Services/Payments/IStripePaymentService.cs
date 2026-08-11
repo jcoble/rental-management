@@ -19,7 +19,8 @@ public interface IStripePaymentService
     /// <see cref="CreateIntentResult.Result"/> before using the client secret.
     /// </summary>
     Task<CreateIntentResult> CreatePaymentIntentAsync(
-        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct);
+        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct,
+        string? attemptKey = null);
 
     /// <summary>
     /// Tenant-safe hosted-Checkout path for paying one open <c>TenantLedgerEntry</c>. Verifies the
@@ -29,7 +30,7 @@ public interface IStripePaymentService
     /// </summary>
     Task<CheckoutResult> CreatePaymentCheckoutSessionAsync(
         int portfolioId, int tenantId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId,
-        string? successUrl, string? cancelUrl, CancellationToken ct);
+        string? successUrl, string? cancelUrl, CancellationToken ct, string? attemptKey = null);
 
     /// <summary>
     /// Creates a Stripe Checkout Session in <c>setup</c> mode so the tenant saves a reusable payment

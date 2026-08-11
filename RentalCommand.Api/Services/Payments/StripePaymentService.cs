@@ -69,7 +69,8 @@ public class StripePaymentService : IStripePaymentService
 
     /// <inheritdoc/>
     public async Task<CreateIntentResult> CreatePaymentIntentAsync(
-        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct)
+        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct,
+        string? attemptKey = null)
     {
         if (!_config.Enabled)
         {
@@ -84,7 +85,8 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentResult.NotEnabled();
         }
 
-        var idempotencyKey = BuildPaymentIdempotencyKey("intent", chargeLedgerEntryId);
+        var idempotencyKey = BuildPaymentIdempotencyKey(
+            "intent", chargeLedgerEntryId, actorUserId, attemptKey);
         var prepared = await _atomicUnitOfWork.ExecuteAsync(
             new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
             new PrepareProviderPaymentCreateCommand(
@@ -108,8 +110,8 @@ public class StripePaymentService : IStripePaymentService
         var requestOptions = new RequestOptions
         {
             ApiKey = _config.SecretKey,
-            // Deterministic per payment + period: a retried/double-submitted create returns the
-            // original PaymentIntent rather than minting a second one for the same rent obligation.
+            // Stable for this caller-owned attempt only. A fresh attempt nonce gets a fresh provider
+            // object when the charge balance or provider idempotency window has changed.
             IdempotencyKey = idempotencyKey,
         };
         var intentService = new PaymentIntentService();
@@ -158,7 +160,7 @@ public class StripePaymentService : IStripePaymentService
     /// <inheritdoc/>
     public async Task<CheckoutResult> CreatePaymentCheckoutSessionAsync(
         int portfolioId, int tenantId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId,
-        string? successUrl, string? cancelUrl, CancellationToken ct)
+        string? successUrl, string? cancelUrl, CancellationToken ct, string? attemptKey = null)
     {
         if (!_config.Enabled)
         {
@@ -173,7 +175,8 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutResult.NotEnabled();
         }
 
-        var idempotencyKey = BuildPaymentIdempotencyKey("checkout", chargeLedgerEntryId);
+        var idempotencyKey = BuildPaymentIdempotencyKey(
+            "checkout", chargeLedgerEntryId, actorUserId, attemptKey);
         var prepared = await _atomicUnitOfWork.ExecuteAsync(
             new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
             new PrepareProviderPaymentCreateCommand(
@@ -197,8 +200,8 @@ public class StripePaymentService : IStripePaymentService
         var requestOptions = new RequestOptions
         {
             ApiKey = _config.SecretKey,
-            // Deterministic per payment + period so a retried checkout returns the original session
-            // for the same rent obligation instead of opening (and potentially charging via) a second.
+            // Stable for this caller-owned attempt. The atomic prepare receipt keeps repeated taps
+            // on this nonce to one attempt; a new nonce is an intentional new provider attempt.
             IdempotencyKey = idempotencyKey,
         };
         var sessionService = new SessionService();
@@ -555,12 +558,23 @@ public class StripePaymentService : IStripePaymentService
     }
 
     /// <summary>
-    /// Deterministic Stripe idempotency key for a user-initiated money-moving create call, scoped by
-    /// the create kind (intent vs checkout), the payment, and its billing period. A retried or
-    /// double-submitted create for the same rent obligation reuses the original Stripe object instead
-    /// of creating a second; Stripe expires idempotency keys after 24h, so a genuinely new attempt for
-    /// the same payment later still proceeds. Falls back to the due date when a payment has no PeriodKey.
+    /// Builds the idempotency identity for one caller-owned provider attempt. The actor is part of the
+    /// server key so two authorized payers can prepare the same charge independently; the nonce is
+    /// retained across retries so two identical taps still share one atomic receipt and Stripe key.
     /// </summary>
-    private static string BuildPaymentIdempotencyKey(string kind, long chargeLedgerEntryId) =>
-        $"{kind}:tenant-charge:{chargeLedgerEntryId}";
+    internal static string BuildPaymentIdempotencyKey(
+        string kind, long chargeLedgerEntryId, int actorUserId, string? attemptKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chargeLedgerEntryId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(actorUserId);
+        var nonce = attemptKey?.Trim();
+        if (string.IsNullOrWhiteSpace(nonce) || nonce.Length > 128)
+            throw new ArgumentException("A payment attempt key of 1 to 128 characters is required.", nameof(attemptKey));
+
+        var key = $"{kind}:tenant-charge:{chargeLedgerEntryId}:actor:{actorUserId}:attempt:{nonce}";
+        if (key.Length > 200)
+            throw new ArgumentException("The payment attempt key is too long.", nameof(attemptKey));
+        return key;
+    }
 }

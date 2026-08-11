@@ -412,9 +412,14 @@ export const portal = {
 		chargeLedgerEntryId: number,
 		body: CheckoutUrls = {}
 	) =>
-		api.post<CheckoutSession>(
-			`/portal/tenant-accounts/${tenantAccountId}/charges/${chargeLedgerEntryId}/checkout`,
-			body
+		idempotentMutation(
+			`portal:checkout:${tenantAccountId}:${chargeLedgerEntryId}:${JSON.stringify(body)}`,
+			(key) =>
+				api.post<CheckoutSession>(
+					`/portal/tenant-accounts/${tenantAccountId}/charges/${chargeLedgerEntryId}/checkout`,
+					body,
+					{ headers: { 'Idempotency-Key': key } }
+				)
 		),
 	/** Current autopay enrollment for a canonical tenant account. */
 	autopayStatus: (tenantAccountId: number) =>
