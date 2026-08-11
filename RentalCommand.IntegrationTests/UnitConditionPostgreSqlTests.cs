@@ -124,14 +124,12 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         dashboard.Turnover.EstimatedCost.Should().Be(300m);
         dashboard.Turnover.ActualCost.Should().Be(130m);
         dashboard.MaintenanceTurnover.Status.Should().Be("InProgress");
-        var aggregateCommands = _commands.Where(command =>
-            command.Sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
-            && (command.Sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase)
-                || command.Sql.Contains("Expenses", StringComparison.OrdinalIgnoreCase))).ToList();
-        aggregateCommands.Should().HaveCount(2);
-        aggregateCommands.Should().OnlyContain(command =>
-            command.Sql.Contains("sum(", StringComparison.OrdinalIgnoreCase));
-        Capture("TURNOVER_AGGREGATES", aggregateCommands);
+        var aggregateCommand = _commands.Should().ContainSingle(command =>
+            command.Sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase)).Subject;
+        aggregateCommand.Sql.Should().Contain("FROM \"WorkOrders\"");
+        aggregateCommand.Sql.Should().Contain("FROM \"Expenses\"");
+        aggregateCommand.Sql.ToLowerInvariant().Should().Contain("sum(");
+        Capture("TURNOVER_AGGREGATES", [aggregateCommand]);
     }
 
     [Fact]
@@ -151,6 +149,42 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         _output.WriteLine($"UNIT_DASHBOARD_TOTAL_QUERY_COUNT={_commands.Count}");
         Capture("UNIT_DASHBOARD_SQL", _commands);
         // L11 intentionally records this total without imposing a dashboard query cap.
+    }
+
+    [Fact]
+    public async Task UnitDashboard_UsesAtMostThreeSqlStatements()
+    {
+        var property = await SeedPropertyAsync("Unit dashboard budget");
+        var unit = await SeedUnitAsync(property, "6A");
+
+        _commands.Clear();
+        var dashboard = await DashboardService().GetDashboardAsync(
+            PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        _output.WriteLine($"UNIT_DASHBOARD_QUERY_BUDGET_COUNT={_commands.Count}");
+        Capture("UNIT_DASHBOARD_QUERY_BUDGET", _commands);
+        _commands.Should().HaveCountLessThanOrEqualTo(3,
+            "Unit Command Center initial load must use no more than three PostgreSQL statements");
+    }
+
+    [Fact]
+    public async Task RootDashboard_UsesAtMostThreeSqlStatements()
+    {
+        var property = await SeedPropertyAsync("Root dashboard budget");
+        await SeedUnitAsync(property, "7A");
+        var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
+        var service = new DashboardService(_context.Db, new AuditDescriber(), TimeProvider.System);
+
+        _commands.Clear();
+        var dashboard = await service.GetDashboardAsync(scope, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        _output.WriteLine($"ROOT_DASHBOARD_QUERY_BUDGET_COUNT={_commands.Count}");
+        Capture("ROOT_DASHBOARD_QUERY_BUDGET", _commands);
+        _commands.Should().HaveCountLessThanOrEqualTo(3,
+            "Root Dashboard initial load must use no more than three PostgreSQL statements");
     }
 
     [Fact]
