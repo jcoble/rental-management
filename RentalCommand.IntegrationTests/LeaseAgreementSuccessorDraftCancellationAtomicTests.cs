@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,6 +21,7 @@ namespace RentalCommand.IntegrationTests;
 public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsyncLifetime
 {
     private const int ActorUserId = 790;
+    private const string RecoveryCommandType = "lease-agreement.issued-replacement-draft.create";
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> Codec =
         new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> RecoveryCodec =
@@ -29,6 +31,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
+    private IServiceScope? _scope;
     private bool _dockerAvailable;
     private Scenario _scenario = default!;
 
@@ -75,6 +78,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             ValidateOnBuild = true,
             ValidateScopes = true,
         });
+        _scope = _services.CreateScope();
 
         await using var db = NewContext();
         await db.Database.MigrateAsync();
@@ -83,6 +87,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 
     public async Task DisposeAsync()
     {
+        _scope?.Dispose();
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
     }
@@ -180,16 +185,129 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
     }
 
     [SkippableFact]
+    public async Task Issued_replacement_rejects_revoked_session_without_any_mutations()
+    {
+        SkipIfNoDocker();
+        await using (var revoke = NewContext())
+        {
+            var session = await revoke.AuthSessions.SingleAsync(
+                candidate => candidate.Id == _scenario.SessionId);
+            session.Status = AuthSessionStatus.Revoked;
+            session.RevokedAtUtc = DateTime.UtcNow;
+            session.RevocationReason = "Authorization race contract test.";
+            await revoke.SaveChangesAsync();
+        }
+
+        await AssertRecoveryDeniedAsync(RecoveryCommand("revoked-session"));
+    }
+
+    [SkippableFact]
+    public async Task Issued_replacement_rejects_stale_access_revision_without_any_mutations()
+    {
+        SkipIfNoDocker();
+        await using (var advance = NewContext())
+        {
+            var accessContext = await advance.WorkspaceAccessContexts.SingleAsync(
+                candidate => candidate.Id == _scenario.AccessContextId);
+            accessContext.AdvanceRevision(_scenario.AccessRevision);
+            await advance.SaveChangesAsync();
+        }
+
+        await AssertRecoveryDeniedAsync(RecoveryCommand("stale-access-revision"));
+    }
+
+    [SkippableFact]
+    public async Task Issued_replacement_rejects_wrong_portfolio_scope_without_any_mutations()
+    {
+        SkipIfNoDocker();
+        await AssertRecoveryDeniedAsync(RecoveryCommand("wrong-portfolio") with
+        {
+            PortfolioId = _scenario.PortfolioId + 1,
+        });
+    }
+
+    [SkippableFact]
+    public async Task Issued_replacement_rejects_wrong_selected_property_scope_without_any_mutations()
+    {
+        SkipIfNoDocker();
+        await using (var arrange = NewContext())
+        {
+            var relationship = await arrange.LeaseManagements.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == _scenario.LeaseManagementId + 1);
+            var decoyProperty = new Property
+            {
+                PortfolioId = _scenario.PortfolioId,
+                Name = "Out-of-scope property",
+                AddressLine1 = "200 Other Ave",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            arrange.Properties.Add(decoyProperty);
+            await arrange.SaveChangesAsync();
+
+            var assignment = await arrange.MembershipRoleAssignments
+                .SingleAsync(candidate => candidate.WorkspaceMembership!.AccessContextId
+                    == _scenario.AccessContextId);
+            assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+            arrange.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignmentId = assignment.Id,
+                PropertyId = decoyProperty.Id,
+                PortfolioId = _scenario.PortfolioId,
+            });
+            await arrange.SaveChangesAsync();
+
+            relationship.PropertyId.Should().NotBe(decoyProperty.Id);
+        }
+
+        await AssertRecoveryDeniedAsync(RecoveryCommand("wrong-selected-property"));
+    }
+
+    [SkippableFact]
+    public async Task Issued_replacement_rejects_missing_management_and_agreement_prepare_capabilities_without_any_mutations()
+    {
+        SkipIfNoDocker();
+        await using (var arrange = NewContext())
+        {
+            var assignment = await arrange.MembershipRoleAssignments
+                .SingleAsync(candidate => candidate.WorkspaceMembership!.AccessContextId
+                    == _scenario.AccessContextId);
+            assignment.RoleProfileId = AccessCatalog.Roles.Single(
+                role => role.Key == RoleProfileKeys.OwnerPortal).Id;
+            await arrange.SaveChangesAsync();
+        }
+
+        await AssertRecoveryDeniedAsync(RecoveryCommand("missing-management-capabilities"));
+    }
+
+    [SkippableFact]
     public async Task Voided_issued_replacement_is_atomic_replayable_and_preserves_history()
     {
         SkipIfNoDocker();
         var leaseManagementId = _scenario.LeaseManagementId + 1;
+        int predecessorId;
+        SourceHistorySnapshot sourceHistory;
+        int tenantAccountId;
         await using (var arrange = NewContext())
         {
             var issued = await arrange.LeaseAgreements.SingleAsync(
                 agreement => agreement.Id == _scenario.IssuedAgreementId);
             var predecessor = await arrange.LeaseAgreements.SingleAsync(
                 agreement => agreement.Id == issued.ReplacesAgreementId);
+            predecessorId = predecessor.Id;
+            var issuedArtifact = await arrange.LegalDocumentArtifacts.AsNoTracking()
+                .SingleAsync(artifact => artifact.Id == issued.IssuedArtifactId);
+            sourceHistory = new SourceHistorySnapshot(
+                issued.IssuedArtifactId!.Value,
+                issuedArtifact.ContentSha256,
+                issuedArtifact.LegalIssuanceFingerprint);
+            tenantAccountId = await arrange.LeaseManagements.AsNoTracking()
+                .Where(management => management.Id == leaseManagementId)
+                .Select(management => management.TenantAccount!.Id)
+                .SingleAsync();
             var predecessorArtifactId = await AddArtifactAsync(
                 arrange, _scenario.PortfolioId, predecessor.Id, 30_003, DateTime.UtcNow);
             predecessor.IssuedArtifactId = predecessorArtifactId;
@@ -218,7 +336,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             _scenario.AccessRevision,
             "issued-replacement:atomic-replay");
         var identity = new AtomicCommandIdentity(
-            "lease-agreement.issued-replacement-draft.create",
+            RecoveryCommandType,
             command.DeliveryIdempotencyKey);
 
         var first = await Atomic.ExecuteAsync(identity, command, RecoveryCodec);
@@ -230,17 +348,13 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         first.Value.Outcome.Should().Be(LeaseAgreementDraftMutationOutcome.Applied);
         first.Value.SourceAgreementId.Should().Be(_scenario.IssuedAgreementId);
 
-        int predecessorId;
-        await using (var inspect = NewContext())
-        {
-            predecessorId = (await inspect.LeaseAgreements.AsNoTracking()
-                .SingleAsync(agreement => agreement.Id == first.Value.LeaseAgreementId))
-                .ReplacesAgreementId!.Value;
-        }
+        await AssertSoleGoverningAgreementAsync(leaseManagementId, predecessorId);
         var issuance = await IssueAgreementAsync(
             leaseManagementId,
             first.Value.LeaseAgreementId,
             "issued-replacement:correction-issue");
+
+        await AssertSoleGoverningAgreementAsync(leaseManagementId, predecessorId);
 
         var execution = await ExecuteAgreementTransitionAsync(
             leaseManagementId,
@@ -252,6 +366,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 
         await using var assert = NewContext();
         var source = await assert.LeaseAgreements.AsNoTracking()
+            .Include(agreement => agreement.IssuedArtifact)
             .SingleAsync(agreement => agreement.Id == _scenario.IssuedAgreementId);
         var replacement = await assert.LeaseAgreements.AsNoTracking()
             .Include(agreement => agreement.Signers)
@@ -260,6 +375,11 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         source.VoidedAtUtc.Should().NotBeNull();
         source.VoidReasonCode.Should().Be("ISSUED_AGREEMENT_REPLACED");
         source.VoidNote.Should().Be("Incorrect resident legal name.");
+        source.IssuedArtifactId.Should().Be(sourceHistory.IssuedArtifactId);
+        source.IssuedArtifact.Should().NotBeNull();
+        source.IssuedArtifact!.ContentSha256.Should().Be(sourceHistory.ContentSha256);
+        source.IssuedArtifact.LegalIssuanceFingerprint.Should()
+            .Be(sourceHistory.LegalIssuanceFingerprint);
         replacement.LeaseManagementId.Should().Be(leaseManagementId);
         replacement.VersionNumber.Should().Be(3);
         replacement.ChangeType.Should().Be(source.ChangeType);
@@ -275,16 +395,38 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 		var persistedPredecessor = await assert.LeaseAgreements.AsNoTracking()
 			.SingleAsync(agreement => agreement.Id == predecessorId);
 		persistedPredecessor.SupersededByAgreementId.Should().Be(replacement.Id);
+        var persistedManagement = await assert.LeaseManagements.AsNoTracking()
+            .Include(management => management.TenantAccount)
+            .SingleAsync(management => management.Id == leaseManagementId);
+        persistedManagement.TenantAccount.Should().NotBeNull();
+        persistedManagement.TenantAccount!.Id.Should().Be(tenantAccountId);
         (await assert.LeaseAgreementStatusProjections.CountAsync(status =>
             status.PortfolioId == _scenario.PortfolioId
             && status.LeaseManagementId == leaseManagementId
             && status.IsGoverning)).Should().Be(1);
+        await AssertSoleGoverningAgreementAsync(leaseManagementId, replacement.Id);
         (await assert.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == identity.CommandType
             && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
         (await assert.AtomicAuditLogs.CountAsync(log =>
-            log.EntityType == nameof(LeaseAgreement)
+            log.CommandType == identity.CommandType
+            && log.CommandIdempotencyKey == identity.IdempotencyKey
+            && log.EntityType == nameof(LeaseAgreement)
             && log.EntityId == replacement.Id)).Should().BeGreaterThan(0);
+
+        var recoveryOutbox = await assert.OutboxMessages.AsNoTracking()
+            .Where(message => message.IdempotencyKey == identity.IdempotencyKey)
+            .ToListAsync();
+        recoveryOutbox.Should().ContainSingle();
+        using var recoveryPayload = JsonDocument.Parse(recoveryOutbox[0].Payload);
+        recoveryPayload.RootElement.GetProperty("entityId").GetInt32()
+            .Should().Be(replacement.Id);
+        var recoveryData = recoveryPayload.RootElement.GetProperty("data");
+        recoveryData.GetProperty("mutation").GetString()
+            .Should().Be("issued-agreement-replaced-with-draft");
+        recoveryData.GetProperty("LeaseManagementId").GetInt32()
+            .Should().Be(leaseManagementId);
+        recoveryOutbox[0].IdempotencyKey.Should().Be(identity.IdempotencyKey);
     }
 
     [SkippableFact]
@@ -496,6 +638,83 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         outcome.Value.Outcome.Should().Be(CancelLeaseAgreementSuccessorDraftOutcome.IssuedOrExecuted);
     }
 
+    private async Task AssertRecoveryDeniedAsync(ReplaceIssuedAgreementWithDraftCommand command)
+    {
+        var identity = new AtomicCommandIdentity(RecoveryCommandType, command.DeliveryIdempotencyKey);
+        int agreementCountBefore;
+        int signerCountBefore;
+        LeaseAgreement sourceBefore;
+        await using (var before = NewContext())
+        {
+            sourceBefore = await before.LeaseAgreements.AsNoTracking()
+                .SingleAsync(agreement => agreement.Id == _scenario.IssuedAgreementId);
+            agreementCountBefore = await before.LeaseAgreements.CountAsync(
+                agreement => agreement.LeaseManagementId == command.LeaseManagementId);
+            signerCountBefore = await before.LeaseAgreementSigners.CountAsync(signer =>
+                signer.LeaseAgreement!.LeaseManagementId == command.LeaseManagementId);
+        }
+
+        Func<Task> act = async () => await Atomic.ExecuteAsync(
+            identity,
+            command,
+            RecoveryCodec);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        await using var assert = NewContext();
+        var sourceAfter = await assert.LeaseAgreements.AsNoTracking()
+            .SingleAsync(agreement => agreement.Id == _scenario.IssuedAgreementId);
+        sourceAfter.VoidedAtUtc.Should().Be(sourceBefore.VoidedAtUtc);
+        sourceAfter.VoidReasonCode.Should().Be(sourceBefore.VoidReasonCode);
+        sourceAfter.VoidNote.Should().Be(sourceBefore.VoidNote);
+        (await assert.LeaseAgreements.CountAsync(
+            agreement => agreement.LeaseManagementId == command.LeaseManagementId))
+            .Should().Be(agreementCountBefore);
+        (await assert.LeaseAgreements.CountAsync(agreement =>
+            agreement.LeaseManagementId == command.LeaseManagementId
+            && agreement.ReissuesAgreementId == command.SourceAgreementId)).Should().Be(0);
+        (await assert.LeaseAgreementSigners.CountAsync(signer =>
+            signer.LeaseAgreement!.LeaseManagementId == command.LeaseManagementId))
+            .Should().Be(signerCountBefore);
+        (await assert.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType
+            && receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await assert.AtomicAuditLogs.CountAsync(log =>
+            log.CommandType == identity.CommandType
+            && log.CommandIdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+        (await assert.OutboxMessages.CountAsync(message =>
+            message.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+    }
+
+    private async Task AssertSoleGoverningAgreementAsync(
+        int leaseManagementId,
+        int expectedAgreementId)
+    {
+        await using var db = NewContext();
+        var governingAgreementIds = await db.LeaseAgreementStatusProjections.AsNoTracking()
+            .Where(status => status.PortfolioId == _scenario.PortfolioId
+                && status.LeaseManagementId == leaseManagementId
+                && status.IsGoverning)
+            .OrderBy(status => status.AgreementId)
+            .Select(status => status.AgreementId)
+            .ToListAsync();
+        governingAgreementIds.Should().Equal(new[] { expectedAgreementId });
+    }
+
+    private ReplaceIssuedAgreementWithDraftCommand RecoveryCommand(
+        string key,
+        int? portfolioId = null,
+        long? accessRevision = null) => new(
+        portfolioId ?? _scenario.PortfolioId,
+        _scenario.LeaseManagementId + 1,
+        _scenario.IssuedAgreementId,
+        "The issued copy must be replaced.",
+        "Correct the resident legal name before reissuing.",
+        ActorUserId,
+        _scenario.SessionId,
+        _scenario.AccessContextId,
+        accessRevision ?? _scenario.AccessRevision,
+        $"issued-replacement:authorization:{key}");
+
     private CancelLeaseAgreementSuccessorDraftCommand Command(string key, string reason) => new(
         _scenario.PortfolioId,
         _scenario.LeaseManagementId,
@@ -507,7 +726,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         _scenario.AccessRevision,
         $"successor-cancel:{key}");
 
-    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicUnitOfWork Atomic => _scope!.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
 
     private RentalCommandDbContext NewContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -754,6 +973,20 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         db.AddRange(relationships);
         await db.SaveChangesAsync();
 
+        db.TenantAccounts.Add(new TenantAccount
+        {
+            Id = 40_001,
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolio.Id,
+            LeaseManagementId = relationships[1].Id,
+            AccountNumber = "AR-CANCEL-1001",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        });
+        await db.SaveChangesAsync();
+
         var sourceIds = new[] { 20_000, 20_010, 20_020 };
         var successorIds = new[] { 20_001, 20_011, 20_021 };
         for (var index = 0; index < relationships.Length; index++)
@@ -963,6 +1196,11 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         public string? ActorLabel => null;
         public string? IpAddress => "127.0.0.1";
     }
+
+    private sealed record SourceHistorySnapshot(
+        int IssuedArtifactId,
+        string ContentSha256,
+        string? LegalIssuanceFingerprint);
 
     private sealed record Scenario(
         int PortfolioId,
