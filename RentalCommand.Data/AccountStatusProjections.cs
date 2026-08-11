@@ -296,7 +296,7 @@ internal static class TenantChargeBalanceViewSql
           JOIN effective_portfolio_time AS effective_time
             ON effective_time."PortfolioId" = allocation."PortfolioId"
           WHERE credit."Direction" = 'Credit'
-            AND credit."EffectiveOn" <= effective_time."BusinessDate"
+            AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         charge_rows AS (
@@ -415,7 +415,7 @@ internal static class TenantAccountBalanceViewSql
           JOIN effective_portfolio_time AS effective_time
             ON effective_time."PortfolioId" = allocation."PortfolioId"
           WHERE credit."Direction" = 'Credit'
-            AND credit."EffectiveOn" <= effective_time."BusinessDate"
+            AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         account_allocations AS (
@@ -430,7 +430,7 @@ internal static class TenantAccountBalanceViewSql
           JOIN effective_portfolio_time AS effective_time
             ON effective_time."PortfolioId" = allocation."PortfolioId"
           WHERE credit."Direction" = 'Credit'
-            AND credit."EffectiveOn" <= effective_time."BusinessDate"
+            AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId"
         ),
         account_entry_totals AS (

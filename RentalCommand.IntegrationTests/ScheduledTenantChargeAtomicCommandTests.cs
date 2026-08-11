@@ -10,11 +10,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Outbox;
+using RentalCommand.Core.Payments;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
@@ -38,6 +40,8 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
         new("scheduled-tenant-charges.rent.apply.v1");
     private static readonly AtomicJsonResultCodec<ApplyScheduledLateFeeChargeBatchResult> LateFeeCodec =
         new("scheduled-tenant-charges.late-fee.apply.v1");
+    private static readonly AtomicJsonResultCodec<TenantChargeMutationResult> ChargeCodec =
+        new("tenant-account.charge.mutation.v1");
     private static readonly DateTime FrozenNow =
         new(2026, 7, 15, 12, 0, 0, DateTimeKind.Utc);
 
@@ -77,6 +81,14 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             ApplyScheduledLateFeeChargeBatchCommand,
             ApplyScheduledLateFeeChargeBatchResult,
             ApplyScheduledLateFeeChargeBatchHandler>();
+        services.AddAtomicCommandHandler<
+            ReverseTenantChargeCommand,
+            TenantChargeMutationResult,
+            ReverseTenantChargeHandler>();
+        services.AddAtomicCommandHandler<
+            PostTenantChargeCommand,
+            TenantChargeMutationResult,
+            PostTenantChargeHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -1201,6 +1213,143 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task AllocatedFutureDatedReversal_UsesReversalEffectiveBoundaryAcrossLedgerAndLateFees()
+    {
+        SkipIfNoDocker();
+        var todayUtc = new DateTime(2027, 4, 10, 12, 0, 0, DateTimeKind.Utc);
+        var today = DateOnly.FromDateTime(todayUtc);
+        var reversalDate = new DateOnly(2027, 4, 15);
+        var scenario = await SeedScenarioAsync(
+            "h6-future-allocated-reversal",
+            todayUtc,
+            new DateOnly(2027, 4, 1),
+            new DateOnly(2027, 4, 1),
+            new DateOnly(2027, 12, 31),
+            rentDueDay: 1,
+            baseRentAmount: 100m);
+        var sourceStoredFileId = await GetIssuedStoredFileIdAsync(
+            scenario, "h6-future-allocated-reversal");
+        var authSessionId = await SeedChargeAuthorizationAsync(scenario);
+        var postedCharge = await ExecuteAtomicAsync(
+            Identity("tenant-account.charge.post", "h6-future-allocated-reversal-charge"),
+            new PostTenantChargeCommand(
+                scenario.PortfolioId,
+                scenario.AccountId,
+                100m,
+                new DateOnly(2027, 4, 1),
+                new DateOnly(2027, 4, 1),
+                "April rent charge",
+                sourceStoredFileId,
+                scenario.UserId,
+                authSessionId,
+                scenario.AccessContextId,
+                scenario.AccessRevision,
+                CapabilityKeys.MoneyChargesManage,
+                "h6-future-allocated-reversal-charge",
+                "tenant-charge:h6-future-allocated-reversal-charge"),
+            ChargeCodec);
+        postedCharge.Value.Applied.Should().BeTrue();
+        var chargeId = postedCharge.Value.LedgerEntryId;
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            100m,
+            today,
+            "receipt:h6-future-allocated-reversal",
+            todayUtc);
+        await SeedLedgerAllocationAsync(scenario, chargeId, receiptId, 100m, todayUtc);
+
+        var reversalCommand = new ReverseTenantChargeCommand(
+            scenario.PortfolioId,
+            scenario.AccountId,
+            chargeId,
+            reversalDate,
+            "Future-dated correction of the allocated charge",
+            sourceStoredFileId,
+            scenario.UserId,
+            authSessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            CapabilityKeys.MoneyChargesManage,
+            "h6-future-allocated-reversal",
+            "tenant-charge-reversal:h6-future-allocated-reversal");
+        var reversal = await ExecuteAtomicAsync(
+            Identity("tenant-account.charge.reverse", "h6-future-allocated-reversal"),
+            reversalCommand,
+            ChargeCodec);
+        reversal.Value.Applied.Should().BeTrue();
+
+        await using (var persisted = NewContext())
+        {
+            var allocations = await persisted.TenantLedgerAllocations
+                .Where(row => row.DebitEntryId == chargeId)
+                .OrderBy(row => row.Id)
+                .ToListAsync();
+            allocations.Should().HaveCount(2);
+            allocations[0].ReversesAllocationId.Should().BeNull();
+            allocations[0].EffectiveOn.Should().BeNull();
+            allocations[1].ReversesAllocationId.Should().Be(allocations[0].Id);
+            allocations[1].EffectiveOn.Should().Be(reversalDate);
+        }
+
+        await FreezeAtAsync(todayUtc);
+        await using (var beforeReversal = NewContext())
+        {
+            var charge = await beforeReversal.TenantChargeBalanceProjections.SingleAsync(row =>
+                row.TenantLedgerEntryId == chargeId);
+            charge.OpenAmount.Should().Be(0m);
+            charge.IsPastDue.Should().BeFalse();
+
+            var account = await beforeReversal.TenantAccountBalanceProjections.SingleAsync(row =>
+                row.TenantAccountId == scenario.AccountId);
+            account.TotalCredits.Should().Be(100m);
+            account.UnappliedCredit.Should().Be(0m);
+            account.PastDueAmount.Should().Be(0m);
+            account.ReceivableBalance.Should().Be(0m);
+            (await beforeReversal.Database.SqlQuery<long>($"""
+                SELECT count(*)::bigint AS "Value"
+                FROM "vw_tenant_charge_balances" AS balance
+                WHERE balance."PortfolioId" = {scenario.PortfolioId}
+                  AND balance."TenantAccountId" = {scenario.AccountId}
+                  AND balance."IsPastDue"
+                  AND balance."OpenAmount" > 0
+                """).SingleAsync()).Should().Be(0,
+                "a paid charge must not be delinquent before the future reversal boundary");
+            (await QueryAsOfAgedReceivableTotalAsync(
+                beforeReversal,
+                scenario.PortfolioId,
+                today)).Should().Be(0m);
+        }
+
+        var lateFeeBeforeReversal = await ExecuteAtomicAsync(
+            Identity("scheduled-tenant-charges.late-fee.apply", "h6-future-allocated-reversal-before"),
+            new ApplyScheduledLateFeeChargeBatchCommand(
+                Guid.NewGuid(), todayUtc, 200, "[{\"State\":\"OH\",\"MaxFlat\":500}]"),
+            LateFeeCodec);
+        lateFeeBeforeReversal.Value.LateFeeChargeCount.Should().Be(0,
+            "late-fee eligibility must use the paid pre-boundary charge state");
+
+        await FreezeAtAsync(new DateTime(2027, 4, 15, 12, 0, 0, DateTimeKind.Utc));
+        await using (var onReversalDate = NewContext())
+        {
+            var charge = await onReversalDate.TenantChargeBalanceProjections.SingleAsync(row =>
+                row.TenantLedgerEntryId == chargeId);
+            charge.OpenAmount.Should().Be(0m);
+            charge.IsPastDue.Should().BeFalse();
+
+            var account = await onReversalDate.TenantAccountBalanceProjections.SingleAsync(row =>
+                row.TenantAccountId == scenario.AccountId);
+            account.TotalCredits.Should().Be(100m);
+            account.UnappliedCredit.Should().Be(100m);
+            account.PastDueAmount.Should().Be(0m);
+            account.ReceivableBalance.Should().Be(-100m);
+            (await QueryAsOfAgedReceivableTotalAsync(
+                onReversalDate,
+                scenario.PortfolioId,
+                reversalDate)).Should().Be(0m);
+        }
+    }
+
+    [SkippableFact]
     public async Task TenantAccountBalance_MatchesAsOfAgedReceivablesAndMovesCreditsWithAllocations()
     {
         SkipIfNoDocker();
@@ -1292,6 +1441,70 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             "reversal.\"EffectiveOn\" <= ");
         reappliedAccountView.Should().Contain(
             "credit.\"EffectiveOn\" <= ");
+    }
+
+    [SkippableFact]
+    public async Task TenantLedgerAllocationEffectiveOnMigration_UpDownUpBackfillsAndRestoresViews()
+    {
+        SkipIfNoDocker();
+        var todayUtc = new DateTime(2027, 5, 10, 12, 0, 0, DateTimeKind.Utc);
+        var receiptDate = new DateOnly(2027, 5, 10);
+        var scenario = await SeedScenarioAsync(
+            "h6-effective-on-migration",
+            todayUtc,
+            new DateOnly(2027, 5, 1),
+            new DateOnly(2027, 5, 1),
+            new DateOnly(2027, 12, 31),
+            rentDueDay: 1,
+            baseRentAmount: 100m);
+        var chargeId = await SeedExistingRentChargeAsync(
+            scenario,
+            100m,
+            new DateOnly(2027, 5, 1),
+            "rent:h6-effective-on-migration:2027-05",
+            new DateTime(2027, 5, 1, 12, 0, 0, DateTimeKind.Utc));
+        var receiptId = await SeedAdvanceReceiptAsync(
+            scenario,
+            100m,
+            receiptDate,
+            "receipt:h6-effective-on-migration",
+            todayUtc);
+        await SeedLedgerAllocationAsync(scenario, chargeId, receiptId, 100m, todayUtc);
+
+        await using var db = NewContext();
+        await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Drop);
+        await db.Database.ExecuteSqlRawAsync(TenantAccountBalanceViewSql.Drop);
+        await db.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE \"TenantLedgerAllocations\" DROP COLUMN \"EffectiveOn\";");
+
+        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Up");
+        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeTrue();
+        (await db.Database.SqlQuery<DateOnly>($"""
+            SELECT allocation."EffectiveOn" AS "Value"
+            FROM "TenantLedgerAllocations" AS allocation
+            WHERE allocation."PortfolioId" = {scenario.PortfolioId}
+              AND allocation."DebitEntryId" = {chargeId}
+            """).SingleAsync()).Should().Be(receiptDate);
+        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_charge_balances"))
+            .Should().Contain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
+        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_account_balances"))
+            .Should().Contain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
+
+        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Down");
+        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeFalse();
+        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_charge_balances"))
+            .Should().NotContain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
+        (await ReadTenantLedgerViewDefinitionAsync(db, "vw_tenant_account_balances"))
+            .Should().NotContain("COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= ");
+
+        await ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(db, "Up");
+        (await HasTenantLedgerAllocationEffectiveOnColumnAsync(db)).Should().BeTrue();
+        (await db.Database.SqlQuery<DateOnly>($"""
+            SELECT allocation."EffectiveOn" AS "Value"
+            FROM "TenantLedgerAllocations" AS allocation
+            WHERE allocation."PortfolioId" = {scenario.PortfolioId}
+              AND allocation."DebitEntryId" = {chargeId}
+            """).SingleAsync()).Should().Be(receiptDate);
     }
 
     [SkippableFact]
@@ -1634,6 +1847,72 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             null);
     }
 
+    private async Task<int> GetIssuedStoredFileIdAsync(Scenario scenario, string suffix)
+    {
+        await using var db = NewContext();
+        return await db.StoredFiles
+            .Where(row => row.PortfolioId == scenario.PortfolioId
+                && row.FileName == $"issued-{suffix}.pdf")
+            .Select(row => row.Id)
+            .SingleAsync();
+    }
+
+    private async Task<Guid> SeedChargeAuthorizationAsync(Scenario scenario)
+    {
+        await using var db = NewContext();
+        var now = DateTime.UtcNow;
+        var propertyId = await db.LeaseManagements
+            .Where(row => row.Id == scenario.LeaseManagementId
+                && row.PortfolioId == scenario.PortfolioId)
+            .Select(row => row.PropertyId)
+            .SingleAsync();
+        var membership = new WorkspaceMembership
+        {
+            AccessContextId = scenario.AccessContextId,
+            PortfolioId = scenario.PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-5),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        db.WorkspaceMemberships.Add(membership);
+        await db.SaveChangesAsync();
+
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = membership.Id,
+            PortfolioId = scenario.PortfolioId,
+            RoleProfileId = 2,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-5),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        db.MembershipRoleAssignments.Add(assignment);
+        await db.SaveChangesAsync();
+        db.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignmentId = assignment.Id,
+            PropertyId = propertyId,
+            PortfolioId = scenario.PortfolioId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = scenario.UserId,
+            ActiveAccessContextId = scenario.AccessContextId,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(8),
+        };
+        db.AuthSessions.Add(session);
+        await db.SaveChangesAsync();
+        return session.Id;
+    }
+
     private async Task AddTenantAccessAsync(
         Scenario scenario,
         string suffix,
@@ -1969,7 +2248,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             WHERE allocation."PortfolioId" = {scenario.PortfolioId}
               AND allocation."TenantAccountId" = {scenario.AccountId}
               AND credit."Direction" = 'Credit'
-              AND credit."EffectiveOn" <= {asOfDate}
+              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= {asOfDate}
             """).SingleAsync();
 
         account.TotalCredits.Should().Be(expectedCredits);
@@ -2008,7 +2287,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
              AND credit."Id" = allocation."CreditEntryId"
             WHERE allocation."PortfolioId" = {portfolioId}
               AND credit."Direction" = 'Credit'
-              AND credit."EffectiveOn" <= {asOfDate}
+              AND COALESCE(allocation."EffectiveOn", credit."EffectiveOn") <= {asOfDate}
             GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         as_of_charge_balances AS MATERIALIZED (
@@ -2054,6 +2333,52 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             await db.Database.ExecuteSqlRawAsync(((SqlOperation)operation).Sql);
         }
     }
+
+    private static async Task ExecuteTenantLedgerAllocationEffectiveOnMigrationAsync(
+        RentalCommandDbContext db,
+        string methodName)
+    {
+        var migration = new RentalCommand.Data.Migrations.AddTenantLedgerAllocationEffectiveOn();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RentalCommand.Data.Migrations.AddTenantLedgerAllocationEffectiveOn)
+            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        foreach (var operation in builder.Operations)
+        {
+            switch (operation)
+            {
+                case SqlOperation sql:
+                    await db.Database.ExecuteSqlRawAsync(sql.Sql);
+                    break;
+                case AddColumnOperation addColumn:
+                    await db.Database.ExecuteSqlRawAsync($"""
+                        ALTER TABLE "{addColumn.Table}"
+                        ADD COLUMN "{addColumn.Name}" {addColumn.ColumnType}
+                        {(addColumn.IsNullable ? "NULL" : "NOT NULL")};
+                        """);
+                    break;
+                case DropColumnOperation dropColumn:
+                    await db.Database.ExecuteSqlRawAsync($"""
+                        ALTER TABLE "{dropColumn.Table}"
+                        DROP COLUMN "{dropColumn.Name}";
+                        """);
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Unexpected operation {operation.GetType().Name} in effective-on migration.");
+            }
+        }
+    }
+
+    private static async Task<bool> HasTenantLedgerAllocationEffectiveOnColumnAsync(
+        RentalCommandDbContext db) => await db.Database.SqlQuery<int>($"""
+        SELECT count(*)::integer AS "Value"
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'TenantLedgerAllocations'
+          AND column_name = 'EffectiveOn'
+        """).SingleAsync() == 1;
 
     private static Task<string> ReadTenantLedgerViewDefinitionAsync(
         RentalCommandDbContext db,

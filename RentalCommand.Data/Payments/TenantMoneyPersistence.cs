@@ -1413,6 +1413,7 @@ internal static class TenantMoneyPersistence
         int portfolioId,
         int tenantAccountId,
         long ledgerEntryId,
+        DateOnly effectiveOn,
         string businessKeyPrefix,
         int createdByUserId,
         DateTime allocatedAtUtc,
@@ -1429,10 +1430,11 @@ internal static class TenantMoneyPersistence
             WITH inserted AS (
                 INSERT INTO "TenantLedgerAllocations" (
                     "PortfolioId", "TenantAccountId", "DebitEntryId", "CreditEntryId",
-                    "Amount", "AllocatedAtUtc", "BusinessKey", "ReversesAllocationId",
+                    "Amount", "AllocatedAtUtc", "EffectiveOn", "BusinessKey", "ReversesAllocationId",
                     "CreatedByUserId")
                 SELECT source."PortfolioId", source."TenantAccountId", source."DebitEntryId",
                        source."CreditEntryId", -source."Amount", {allocatedAtUtc},
+                       {effectiveOn},
                        {businessKeyPrefix} || ':' || source."Id"::text, source."Id",
                        {createdByUserId}
                 FROM "TenantLedgerAllocations" AS source

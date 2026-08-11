@@ -13,10 +13,14 @@ public partial class MakeTenantLedgerViewsEffectiveAsOfBusinessDate : Migration
     {
         migrationBuilder.Sql(
             "CREATE OR REPLACE VIEW \"vw_tenant_charge_balances\" WITH (security_invoker = true) AS\n"
-            + TenantChargeBalanceViewSql.Definition);
+            + TenantChargeBalanceViewSql.Definition.Replace(
+                "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\")",
+                "credit.\"EffectiveOn\""));
         migrationBuilder.Sql(
             "CREATE OR REPLACE VIEW \"vw_tenant_account_balances\" WITH (security_invoker = true) AS\n"
-            + TenantAccountBalanceViewSql.Definition);
+            + TenantAccountBalanceViewSql.Definition.Replace(
+                "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\")",
+                "credit.\"EffectiveOn\""));
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)

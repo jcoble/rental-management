@@ -327,7 +327,9 @@ public class ReportsServiceTests : IAsyncLifetime
         sql.Should().Contain("@asOfDate", "the requested snapshot date must be parameterized");
         sql.Should().Contain("TenantLedgerEntries", "rent-roll balances must use the ledger inside the authorized statement");
         sql.Should().Contain("TenantLedgerAllocations", "rent-roll allocations must be netted inside the authorized statement");
-        sql.Should().Contain("credit.\"EffectiveOn\" <= @asOfDate", "credit allocations must be bounded by the requested snapshot");
+        sql.Should().Contain(
+            "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= @asOfDate",
+            "allocations must be bounded by their own effective date or linked credit snapshot");
     }
 
     [Fact]
@@ -468,7 +470,8 @@ public class ReportsServiceTests : IAsyncLifetime
             .Should().Be(1, "historical rent-roll rows and totals must remain one SQL statement");
         var historicalRentRollSql = string.Join("\n---\n", _executedSql);
         historicalRentRollSql.Should().Contain("reversal.\"EffectiveOn\" <= @asOfDate");
-        historicalRentRollSql.Should().Contain("credit.\"EffectiveOn\" <= @asOfDate");
+        historicalRentRollSql.Should().Contain(
+            "COALESCE(allocation.\"EffectiveOn\", credit.\"EffectiveOn\") <= @asOfDate");
         historicalRentRollSql.Should().Contain("entry.\"EffectiveOn\" <= @asOfDate");
 
         _executedSql.Clear();

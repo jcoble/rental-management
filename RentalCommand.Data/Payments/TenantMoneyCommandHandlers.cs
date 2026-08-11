@@ -697,6 +697,7 @@ public sealed class ReverseTenantChargeHandler
         var reversedAllocations = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
             command.PortfolioId, command.TenantAccountId, target.EntryId,
+            command.EffectiveOn,
             $"{command.BusinessKey}:allocation", command.ActorUserId, times.WallClockUtc, ct);
         TenantMoneyCommandSupport.StageMutation(
             context, command, times.WallClockUtc, nameof(TenantLedgerEntry), reversal.Id,
@@ -1013,6 +1014,7 @@ public sealed class ReverseTenantLedgerEntryHandler
         var reversedAllocations = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
             command.PortfolioId, command.TenantAccountId, target.EntryId,
+            command.EffectiveOn,
             $"{command.BusinessKey}:allocation", command.ActorUserId,
             times.WallClockUtc, ct);
         TenantMoneyCommandSupport.StageMutation(
@@ -1200,6 +1202,7 @@ public sealed class RefundTenantPaymentHandler
         var compensation = await TenantMoneyPersistence.ReverseEntryAllocationsAsync(_db,
             context,
             command.PortfolioId, command.TenantAccountId, target.EntryId,
+            command.EffectiveOn,
             $"{command.BusinessKey}:allocation", command.ActorUserId,
             times.WallClockUtc, ct);
         TenantMoneyCommandSupport.StageMutation(
@@ -1981,6 +1984,7 @@ public sealed class ReverseSecurityDepositEntryHandler
                 context,
                 command.PortfolioId, command.TenantAccountId,
                 target.TenantLedgerEntryId!.Value,
+                command.EffectiveOn,
                 $"{command.BusinessKey}:allocation", command.ActorUserId,
                 times.WallClockUtc, ct);
         }
