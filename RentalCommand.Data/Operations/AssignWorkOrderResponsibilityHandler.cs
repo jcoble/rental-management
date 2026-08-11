@@ -30,9 +30,13 @@ public sealed class AssignWorkOrderResponsibilityHandler
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync(
-            "WorkspaceAccessContext", command.ActorAccessContextId, ct);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
+        var initiallyAffectedContextIds = await ResolveAffectedContextIdsAsync(command, ct);
+        var contextLockIds = initiallyAffectedContextIds
+            .Append(command.ActorAccessContextId)
+            .Select(id => (int?)id)
+            .ToArray();
+        await WorkOrderProgressionLock.AcquireWorkspaceAccessContextsAsync(context, ct, contextLockIds);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         var workOrder = await AuthorizeActorAndLoadWorkOrderAsync(
@@ -41,32 +45,7 @@ public sealed class AssignWorkOrderResponsibilityHandler
             throw new DomainValidationException(
                 "Cancelled or archived work orders cannot receive a new responsibility.", 409);
 
-        var target = await _db.Set<MembershipRoleAssignment>()
-            .AsNoTracking()
-            .Where(assignment =>
-                assignment.Id == command.MembershipRoleAssignmentId &&
-                assignment.WorkspaceMembershipId == command.WorkspaceMembershipId &&
-                assignment.PortfolioId == command.PortfolioId &&
-                assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                assignment.SuspendedAtUtc == null &&
-                assignment.RevokedAtUtc == null &&
-                assignment.EffectiveFromUtc <= businessNowUtc &&
-                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > businessNowUtc) &&
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
-                assignment.RoleProfile!.Key == RoleProfileKeys.MaintenanceTechnician &&
-                assignment.RoleProfile.Capabilities.Any(capability =>
-                    capability.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkRead &&
-                    capability.CapabilityDefinition.AuthorizationTargetKind ==
-                        CapabilityAuthorizationTargetKind.WorkOrder) &&
-                assignment.WorkspaceMembership!.Status == WorkspaceMembershipStatus.Active &&
-                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.RevokedAtUtc == null &&
-                assignment.WorkspaceMembership.EffectiveFromUtc <= businessNowUtc &&
-                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-                 assignment.WorkspaceMembership.EffectiveToUtc > businessNowUtc) &&
-                assignment.WorkspaceMembership.AccessContext!.Status == WorkspaceAccessContextStatus.Active &&
-                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null)
+        var target = await TargetAssignments(command, businessNowUtc)
             .Select(assignment => new
             {
                 AccessContextId = assignment.WorkspaceMembership!.AccessContextId,
@@ -114,9 +93,8 @@ public sealed class AssignWorkOrderResponsibilityHandler
             .ToArray();
         if (!affectedContextIds.SequenceEqual(expectations.Select(item => item.AccessContextId)))
             throw new DomainValidationException("Expected access revisions must exactly cover affected assignees.");
-
-        foreach (var contextId in affectedContextIds.Where(id => id != command.ActorAccessContextId))
-            await context.AcquireLockAsync("WorkspaceAccessContext", contextId, ct);
+        if (!initiallyAffectedContextIds.SequenceEqual(affectedContextIds))
+            throw new DomainValidationException("Affected responsibilities changed; refresh before retrying.");
 
         var contexts = await _db.Set<WorkspaceAccessContext>()
             .Where(accessContext => affectedContextIds.Contains(accessContext.Id) &&
@@ -202,8 +180,70 @@ public sealed class AssignWorkOrderResponsibilityHandler
             businessNowUtc,
             contexts
                 .Select(context => new WorkspaceAccessRevisionExpectation(context.Id, context.AccessRevision))
-                .ToArray());
+            .ToArray());
     }
+
+    private async Task<int[]> ResolveAffectedContextIdsAsync(
+        AssignWorkOrderResponsibilityCommand command,
+        CancellationToken ct)
+    {
+        var targetContextId = await TargetAssignments(command, command.BusinessNowUtc)
+            .Select(assignment => (int?)assignment.WorkspaceMembership!.AccessContextId)
+            .SingleOrDefaultAsync(ct)
+            ?? throw new DomainValidationException(
+                "The selected member does not have this exact effective Maintenance Technician assignment.");
+
+        var currentResponsibilities = _db.Set<WorkOrderResponsibility>()
+            .AsNoTracking()
+            .Where(responsibility =>
+                responsibility.WorkOrderId == command.WorkOrderId &&
+                responsibility.PortfolioId == command.PortfolioId &&
+                responsibility.EffectiveToUtc == null);
+        var closingContextIds = await currentResponsibilities
+            .Where(responsibility =>
+                responsibility.WorkspaceMembershipId == command.WorkspaceMembershipId ||
+                (command.Kind == WorkOrderResponsibilityKind.Primary &&
+                 responsibility.Kind == WorkOrderResponsibilityKind.Primary))
+            .Select(responsibility => responsibility.WorkspaceMembership!.AccessContextId)
+            .Distinct()
+            .ToArrayAsync(ct);
+
+        return closingContextIds
+            .Append(targetContextId)
+            .Distinct()
+            .OrderBy(contextId => contextId)
+            .ToArray();
+    }
+
+    private IQueryable<MembershipRoleAssignment> TargetAssignments(
+        AssignWorkOrderResponsibilityCommand command,
+        DateTime businessNowUtc) =>
+        _db.Set<MembershipRoleAssignment>()
+            .AsNoTracking()
+            .Where(assignment =>
+                assignment.Id == command.MembershipRoleAssignmentId &&
+                assignment.WorkspaceMembershipId == command.WorkspaceMembershipId &&
+                assignment.PortfolioId == command.PortfolioId &&
+                assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                assignment.SuspendedAtUtc == null &&
+                assignment.RevokedAtUtc == null &&
+                assignment.EffectiveFromUtc <= businessNowUtc &&
+                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > businessNowUtc) &&
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
+                assignment.RoleProfile!.Key == RoleProfileKeys.MaintenanceTechnician &&
+                assignment.RoleProfile.Capabilities.Any(capability =>
+                    capability.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkRead &&
+                    capability.CapabilityDefinition.AuthorizationTargetKind ==
+                        CapabilityAuthorizationTargetKind.WorkOrder) &&
+                assignment.WorkspaceMembership!.Status == WorkspaceMembershipStatus.Active &&
+                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.RevokedAtUtc == null &&
+                assignment.WorkspaceMembership.EffectiveFromUtc <= businessNowUtc &&
+                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+                 assignment.WorkspaceMembership.EffectiveToUtc > businessNowUtc) &&
+                assignment.WorkspaceMembership.AccessContext!.Status == WorkspaceAccessContextStatus.Active &&
+                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null);
 
     public async Task AuthorizeReplayAsync(
         AssignWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)

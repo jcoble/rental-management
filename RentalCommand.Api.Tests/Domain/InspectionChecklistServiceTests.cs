@@ -662,6 +662,109 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reopen_CannotLeaveReactivatedAppointmentOnDetachedWorkOrderAfterStaleRelink()
+    {
+        var scenario = await SeedStaleAppointmentScenarioAsync();
+        var appointmentGate = new StaleAppointmentLinkGate();
+        await using var updaterServices = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
+            _ctx.ConnectionString,
+            TimeProvider.System,
+            [appointmentGate]);
+        await using var relinkServices = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
+            _ctx.ConnectionString,
+            TimeProvider.System);
+        using var updaterScope = updaterServices.CreateScope();
+        using var relinkScope = relinkServices.CreateScope();
+        var updaterDb = updaterScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var relinkDb = relinkScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var updaterService = new AppointmentService(
+            updaterDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            updaterScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var relinkService = new AppointmentService(
+            relinkDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            relinkScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+
+        appointmentGate.Arm();
+        _reopenProgressionGate.Arm();
+        var updaterTask = Task.Run(() => updaterService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.AppointmentId,
+            new UpdateAppointmentRequest { Status = AppointmentStatus.Scheduled },
+            NextOperationKey()));
+        try
+        {
+            await appointmentGate.CurrentLinkReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException("Appointment link gate was not reached.");
+        }
+
+        var relinkTask = Task.Run(() => relinkService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.AppointmentId,
+            new UpdateAppointmentRequest { WorkOrderId = scenario.Progression.WorkOrderId },
+            NextOperationKey()));
+        // The unfixed path can commit the relink while the updater is paused. The fixed path holds
+        // the appointment lock first, so the relink waits until the updater and reopen settle.
+        var relinkCommittedBeforeReopen =
+            await Task.WhenAny(relinkTask, Task.Delay(TimeSpan.FromSeconds(2))) == relinkTask;
+
+        var reopenTask = Task.Run(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            scenario.Progression.InspectionId,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+        await _reopenProgressionGate.ProgressionReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+        if (relinkCommittedBeforeReopen)
+        {
+            appointmentGate.Release();
+            try
+            {
+                await updaterTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                _reopenProgressionGate.Release();
+                throw new InvalidOperationException("Updater did not finish after releasing the appointment gate.");
+            }
+            _reopenProgressionGate.Release();
+        }
+        else
+        {
+            _reopenProgressionGate.Release();
+            appointmentGate.Release();
+        }
+        await Task.WhenAll(updaterTask, relinkTask, reopenTask)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        reopenTask.Result.Should().NotBeNull();
+        reopenTask.Result!.Status.Should().Be(InspectionStatus.Scheduled);
+        _db.ChangeTracker.Clear();
+        var workOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == scenario.Progression.WorkOrderId);
+        workOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(row => row.Id == scenario.Progression.InspectionItemId)
+            .Select(row => row.SpawnedWorkOrderId)
+            .SingleAsync()).Should().BeNull();
+
+        var appointment = await _db.Appointments.AsNoTracking()
+            .Where(row => row.Id == scenario.AppointmentId)
+            .Select(row => new { row.WorkOrderId, row.Status })
+            .SingleAsync();
+        (appointment.WorkOrderId == scenario.Progression.WorkOrderId &&
+            appointment.Status != AppointmentStatus.Cancelled)
+            .Should().BeFalse(
+                "a cancelled appointment must not be reactivated on the work order that reopen detached");
+    }
+
+    [Fact]
     public async Task Complete_UsesBusinessClockForCompletionWorkOrdersAndReport()
     {
         var businessNowUtc = DateTime.SpecifyKind(
@@ -1620,6 +1723,60 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             accessContext.AccessRevision);
     }
 
+    private async Task<StaleAppointmentScenario> SeedStaleAppointmentScenarioAsync()
+    {
+        var progression = await SeedProgressionScenarioAsync();
+        var sourceWorkOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = progression.PropertyId,
+            UnitId = progression.UnitId,
+            TenantId = progression.TenantId,
+            LeaseManagementId = progression.LeaseManagementId,
+            Title = "Stale-link source work order",
+            Description = "Stale-link source fixture",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = DateTime.UtcNow.AddMinutes(-10),
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-10),
+        };
+        sourceWorkOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = PortfolioId,
+            FromStatus = null,
+            ToStatus = WorkOrderStatus.New,
+            Kind = "Status",
+            Visibility = "Public",
+            ChangedByLabel = "Stale-link fixture",
+            CreatedAtUtc = sourceWorkOrder.RequestedAt,
+        });
+        _db.WorkOrders.Add(sourceWorkOrder);
+        await _db.SaveChangesAsync();
+
+        var scheduledStart = DateTime.UtcNow.AddHours(1);
+        var appointment = new Appointment
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = progression.PropertyId,
+            UnitId = progression.UnitId,
+            LeaseManagementId = progression.LeaseManagementId,
+            TenantId = progression.TenantId,
+            WorkOrderId = sourceWorkOrder.Id,
+            Title = "Stale-link appointment",
+            Type = AppointmentType.MaintenanceVisit,
+            Status = AppointmentStatus.Cancelled,
+            ScheduledStart = scheduledStart,
+            ScheduledEnd = scheduledStart.AddHours(1),
+            CreatedAt = sourceWorkOrder.RequestedAt,
+            UpdatedAt = sourceWorkOrder.RequestedAt,
+        };
+        _db.Appointments.Add(appointment);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        return new(progression, sourceWorkOrder.Id, appointment.Id);
+    }
+
     private void SeedInspection(Property property, DateTime scheduledFor, string outcome)
     {
         _db.Inspections.Add(new Inspection
@@ -1663,6 +1820,11 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         int TenantAccessContextId,
         long TenantAccessRevision);
 
+    private sealed record StaleAppointmentScenario(
+        ProgressionScenario Progression,
+        int SourceWorkOrderId,
+        int AppointmentId);
+
     private sealed class ReopenProgressionGate : DbCommandInterceptor
     {
         private readonly TaskCompletionSource _progressionReadReached =
@@ -1692,6 +1854,60 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
             return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
         }
+    }
+
+    private sealed class StaleAppointmentLinkGate : DbCommandInterceptor
+    {
+        private TaskCompletionSource _currentLinkReadReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        public Task CurrentLinkReadReached => Volatile.Read(ref _currentLinkReadReached).Task;
+
+        public void Arm()
+        {
+            Interlocked.Exchange(ref _currentLinkReadReached,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            Interlocked.Exchange(ref _armed, 1);
+        }
+
+        public void Release() => _release.TrySetResult();
+
+        public override DbDataReader ReaderExecuted(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result)
+        {
+            if (ShouldPause(command))
+            {
+                _currentLinkReadReached.TrySetResult();
+                _release.Task.GetAwaiter().GetResult();
+            }
+
+            return base.ReaderExecuted(command, eventData, result);
+        }
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (ShouldPause(command))
+            {
+                _currentLinkReadReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private bool ShouldPause(DbCommand command) =>
+            Volatile.Read(ref _armed) == 1 &&
+            command.CommandText.Contains("a.\"WorkOrderId\"", StringComparison.Ordinal) &&
+            command.CommandText.Contains("@command_AppointmentId", StringComparison.Ordinal);
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider

@@ -85,6 +85,8 @@ public sealed class AtomicMoneyMutationHandler
 
         if (command.Domain == AtomicMoneyDomain.Expense)
         {
+            if (command.Operation != AtomicMoneyOperation.Create)
+                await context.AcquireLockAsync("Expense", command.EntityId, ct);
             if (command.Operation == AtomicMoneyOperation.Create)
             {
                 requestedWorkOrderId = Read<CreateExpenseRequest>(command).WorkOrderId;
@@ -102,6 +104,7 @@ public sealed class AtomicMoneyMutationHandler
         else if (command.Domain == AtomicMoneyDomain.CapitalAsset &&
                  command.Operation == AtomicMoneyOperation.CapitalizeExpense)
         {
+            await context.AcquireLockAsync("Expense", command.EntityId, ct);
             currentWorkOrderId = await _db.Set<Expense>().IgnoreQueryFilters()
                 .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
                 .Select(row => row.WorkOrderId)
@@ -110,12 +113,14 @@ public sealed class AtomicMoneyMutationHandler
         else if (command.Domain == AtomicMoneyDomain.CapitalAsset &&
                  command.Operation == AtomicMoneyOperation.Delete)
         {
+            await context.AcquireLockAsync("CapitalAsset", command.EntityId, ct);
             var sourceExpenseId = await _db.Set<CapitalAsset>().IgnoreQueryFilters()
                 .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
                 .Select(row => row.SourceExpenseId)
                 .SingleOrDefaultAsync(ct);
             if (sourceExpenseId.HasValue)
             {
+                await context.AcquireLockAsync("Expense", sourceExpenseId.Value, ct);
                 currentWorkOrderId = await _db.Set<Expense>().IgnoreQueryFilters()
                     .Where(row => row.Id == sourceExpenseId.Value && row.PortfolioId == command.PortfolioId)
                     .Select(row => row.WorkOrderId)

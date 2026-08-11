@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
 using System.Data.Common;
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -394,6 +397,95 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             "access-context revision metadata remains on the database/security clock");
     }
 
+    [Fact]
+    public async Task ResponsibilityMutations_ReversedActorAndAffectedContextsCompleteWithoutDeadlock()
+    {
+        var scenario = await SeedReversedResponsibilityScenarioAsync();
+        var firstProbe = new ResponsibilityLockProbe(
+            scenario.WorkOrderId,
+            scenario.FirstActorAccessContextId,
+            pauseAfterWorkOrder: true);
+        var secondProbe = new ResponsibilityLockProbe(
+            scenario.WorkOrderId,
+            scenario.SecondActorAccessContextId,
+            pauseAfterWorkOrder: false);
+        await using var firstServices = BuildResponsibilityServices(
+            new FixedTimeProvider(BusinessNowUtc), firstProbe);
+        await using var secondServices = BuildResponsibilityServices(
+            new FixedTimeProvider(BusinessNowUtc), secondProbe);
+        using var firstScope = firstServices.CreateScope();
+        using var secondScope = secondServices.CreateScope();
+
+        var firstCommand = new AssignWorkOrderResponsibilityCommand(
+            scenario.PortfolioId,
+            scenario.FirstActorUserId,
+            scenario.FirstActorSessionId,
+            scenario.FirstActorAccessContextId,
+            scenario.FirstActorAccessRevision,
+            scenario.WorkOrderId,
+            scenario.SecondTargetMembershipId,
+            scenario.SecondTargetRoleAssignmentId,
+            WorkOrderResponsibilityKind.Supporting,
+            null,
+            [new WorkspaceAccessRevisionExpectation(
+                scenario.SecondActorAccessContextId,
+                scenario.SecondActorAccessRevision)],
+            "First reversed-context assignment.",
+            BusinessNowUtc,
+            "reversed-context-first");
+        var secondCommand = new AssignWorkOrderResponsibilityCommand(
+            scenario.PortfolioId,
+            scenario.SecondActorUserId,
+            scenario.SecondActorSessionId,
+            scenario.SecondActorAccessContextId,
+            scenario.SecondActorAccessRevision + 1,
+            scenario.WorkOrderId,
+            scenario.FirstTargetMembershipId,
+            scenario.FirstTargetRoleAssignmentId,
+            WorkOrderResponsibilityKind.Supporting,
+            null,
+            [new WorkspaceAccessRevisionExpectation(
+                scenario.FirstActorAccessContextId,
+                scenario.FirstActorAccessRevision)],
+            "Second reversed-context assignment.",
+            BusinessNowUtc,
+            "reversed-context-second");
+
+        var firstTask = Task.Run(() => firstScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
+            new AtomicCommandIdentity(
+                "work-order-responsibility.assign",
+                "reversed-context-first"),
+            firstCommand,
+            AssignCodec));
+        try
+        {
+            await firstProbe.WorkOrderLockReached.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException("First responsibility work-order lock was not reached.");
+        }
+
+        var secondTask = Task.Run(() => secondScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
+            new AtomicCommandIdentity(
+                "work-order-responsibility.assign",
+                "reversed-context-second"),
+            secondCommand,
+            AssignCodec));
+        // With the unfixed order, the second command owns the reversed actor context while it waits
+        // on the work order. The fixed order makes it wait for the first command's lowest context.
+        _ = await Task.WhenAny(secondProbe.ActorContextLockReached, Task.Delay(TimeSpan.FromSeconds(2)));
+
+        firstProbe.ReleaseWorkOrder();
+        await Task.WhenAll(firstTask, secondTask).WaitAsync(TimeSpan.FromSeconds(15));
+
+        firstTask.Result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        secondTask.Result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        (await _context.Db.WorkOrderResponsibilities.AsNoTracking()
+            .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId &&
+                row.EffectiveToUtc == null)).Should().Be(2);
+    }
+
     private async Task AssertDeniedAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
         TCommand command,
@@ -523,6 +615,91 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             technicianContext.AccessRevision,
             technicianMembership.Id,
             technicianAssignment.Id,
+            workOrder.Id);
+    }
+
+    private async Task<ReversedResponsibilityScenario> SeedReversedResponsibilityScenarioAsync()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = $"Reversed responsibility property {Guid.NewGuid():N}",
+            AddressLine1 = "20 Responsibility Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = "Reversed",
+            LastName = "Context Tenant",
+            Email = $"reversed-context-{Guid.NewGuid():N}@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var firstUser = User("reversed-first");
+        var secondUser = User("reversed-second");
+        _context.Db.AddRange(property, tenant, firstUser, secondUser);
+        await _context.Db.SaveChangesAsync();
+
+        var firstContext = AccessContext(firstUser.Id, now);
+        var firstMembership = Membership(firstContext, now, WorkspaceExperience.Management);
+        var firstAdminAssignment = Assignment(
+            firstMembership,
+            RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties,
+            now);
+        var firstTargetAssignment = Assignment(
+            firstMembership,
+            RoleProfileKeys.MaintenanceTechnician,
+            MembershipRoleAssignmentScopeKind.AssignedWorkOrders,
+            now);
+        var firstSession = Session(firstUser.Id, firstContext, now);
+
+        var secondContext = AccessContext(secondUser.Id, now);
+        var secondMembership = Membership(secondContext, now, WorkspaceExperience.Management);
+        var secondAdminAssignment = Assignment(
+            secondMembership,
+            RoleProfileKeys.WorkspaceAdministrator,
+            MembershipRoleAssignmentScopeKind.AllProperties,
+            now);
+        var secondTargetAssignment = Assignment(
+            secondMembership,
+            RoleProfileKeys.MaintenanceTechnician,
+            MembershipRoleAssignmentScopeKind.AssignedWorkOrders,
+            now);
+        var secondSession = Session(secondUser.Id, secondContext, now);
+        _context.Db.AddRange(
+            firstAdminAssignment,
+            firstTargetAssignment,
+            firstSession,
+            secondAdminAssignment,
+            secondTargetAssignment,
+            secondSession);
+        await _context.Db.SaveChangesAsync();
+
+        var workOrder = WorkOrder(property.Id, tenant.Id, "Reversed responsibility repair", now);
+        _context.Db.WorkOrders.Add(workOrder);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+        return new(
+            1,
+            firstUser.Id,
+            firstSession.Id,
+            firstContext.Id,
+            firstContext.AccessRevision,
+            firstMembership.Id,
+            firstTargetAssignment.Id,
+            secondUser.Id,
+            secondSession.Id,
+            secondContext.Id,
+            secondContext.AccessRevision,
+            secondMembership.Id,
+            secondTargetAssignment.Id,
             workOrder.Id);
     }
 
@@ -766,9 +943,96 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         int TechnicianRoleAssignmentId,
         int WorkOrderId);
 
+    private sealed record ReversedResponsibilityScenario(
+        int PortfolioId,
+        int FirstActorUserId,
+        Guid FirstActorSessionId,
+        int FirstActorAccessContextId,
+        long FirstActorAccessRevision,
+        int FirstTargetMembershipId,
+        int FirstTargetRoleAssignmentId,
+        int SecondActorUserId,
+        Guid SecondActorSessionId,
+        int SecondActorAccessContextId,
+        long SecondActorAccessRevision,
+        int SecondTargetMembershipId,
+        int SecondTargetRoleAssignmentId,
+        int WorkOrderId);
+
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(utcNow);
+    }
+
+    private sealed class ResponsibilityLockProbe(
+        int workOrderId,
+        int actorAccessContextId,
+        bool pauseAfterWorkOrder) : DbCommandInterceptor
+    {
+        private const int NamespaceKey = 0x52434D44;
+        private readonly TaskCompletionSource _workOrderLockReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _actorContextLockReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseWorkOrder =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WorkOrderLockReached => _workOrderLockReached.Task;
+        public Task ActorContextLockReached => _actorContextLockReached.Task;
+        public void ReleaseWorkOrder() => _releaseWorkOrder.TrySetResult();
+
+        public override async ValueTask<int> NonQueryExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            int result,
+            CancellationToken cancellationToken = default)
+        {
+            await ObserveAsync(command, cancellationToken);
+
+            return await base.NonQueryExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            await ObserveAsync(command, cancellationToken);
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private async Task ObserveAsync(DbCommand command, CancellationToken cancellationToken)
+        {
+            if (Matches(command, "WorkspaceAccessContext", actorAccessContextId))
+                _actorContextLockReached.TrySetResult();
+
+            if (Matches(command, "WorkOrder", workOrderId))
+            {
+                _workOrderLockReached.TrySetResult();
+                if (pauseAfterWorkOrder)
+                    await _releaseWorkOrder.Task.WaitAsync(cancellationToken);
+            }
+        }
+
+        private static bool Matches(DbCommand command, string lockNamespace, int aggregateId)
+        {
+            if (!command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal))
+                return false;
+
+            var values = command.Parameters.Cast<DbParameter>()
+                .Select(parameter => Convert.ToInt64(parameter.Value))
+                .ToArray();
+            return values.Length == 2 &&
+                values[0] == StableNamespaceKey(lockNamespace) &&
+                values[1] == aggregateId;
+        }
+
+        private static int StableNamespaceKey(string lockNamespace)
+        {
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(lockNamespace));
+            return NamespaceKey ^ BinaryPrimitives.ReadInt32BigEndian(digest);
+        }
     }
 
     private sealed class ThrowOnOutboxInsertInterceptor : DbCommandInterceptor

@@ -186,6 +186,8 @@ public sealed class UpdateWorkOrderHandler
         UpdateWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
+        await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
+            _db, command.PortfolioId, command.WorkOrderId, context, ct);
         await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
@@ -331,6 +333,31 @@ public sealed class UpdateWorkOrderHandler
 
 internal static class WorkOrderAppointmentSync
 {
+    internal static async Task AcquireLinkedAppointmentLocksAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        int workOrderId,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        var initialAppointmentIds = await db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId && item.WorkOrderId == workOrderId)
+            .OrderBy(item => item.Id)
+            .Select(item => item.Id)
+            .ToArrayAsync(ct);
+        await WorkOrderProgressionLock.AcquireAppointmentsAsync(
+            context, ct, initialAppointmentIds.Select(id => (int?)id).ToArray());
+        var currentAppointmentIds = await db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.PortfolioId == portfolioId && item.WorkOrderId == workOrderId)
+            .OrderBy(item => item.Id)
+            .Select(item => item.Id)
+            .ToArrayAsync(ct);
+        if (!initialAppointmentIds.SequenceEqual(currentAppointmentIds))
+            throw new DomainValidationException("The linked appointment changed; refresh and retry.", 409);
+    }
+
     internal static async Task<WorkOrderAppointmentSyncResult?> SyncLinkedMaintenanceAppointmentAsync(
         RentalCommandDbContext db,
         WorkOrder workOrder,
@@ -865,6 +892,8 @@ public sealed class CancelTenantWorkOrderHandler
         CancelTenantWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         WorkOperationValidation.Validate(command);
+        await WorkOrderAppointmentSync.AcquireLinkedAppointmentLocksAsync(
+            _db, command.PortfolioId, command.WorkOrderId, context, ct);
         await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var entity = await TenantWorkOrderAuthorization.AuthorizedWorkOrders(

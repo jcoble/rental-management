@@ -101,6 +101,7 @@ public sealed class UpdateAppointmentHandler
         UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
         var currentWorkOrderId = await _db.Set<Appointment>()
             .AsNoTracking()
             .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
@@ -186,6 +187,7 @@ public sealed class UpdateAppointmentHandler
     public async Task AuthorizeReplayAsync(UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
         var currentWorkOrderId = await _db.Set<Appointment>()
             .AsNoTracking()
             .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
@@ -248,6 +250,7 @@ public sealed class DeleteAppointmentHandler
         IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
         var currentWorkOrderId = await _db.Set<Appointment>()
             .AsNoTracking()
             .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
@@ -277,6 +280,7 @@ public sealed class DeleteAppointmentHandler
     public async Task AuthorizeReplayAsync(DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
         var currentWorkOrderId = await _db.Set<Appointment>()
             .AsNoTracking()
             .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
