@@ -34,6 +34,12 @@ namespace RentalCommand.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Remove every fence-aware trigger/function before dropping the columns they reference.
+            // The pre-fence contract is then reinstalled, including the exact nine-argument
+            // transition function used by the prior schema version.
+            foreach (var statement in TenantAccountPostgreSqlContract.DropStatements)
+                migrationBuilder.Sql(statement);
+
             migrationBuilder.DropColumn(
                 name: "ProviderFenceAcquiredAtUtc",
                 table: "TenantPaymentAttempts");
@@ -41,6 +47,9 @@ namespace RentalCommand.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "ProviderFenceToken",
                 table: "TenantPaymentAttempts");
+
+            foreach (var statement in TenantAccountPostgreSqlContract.PreFenceCreateStatements)
+                migrationBuilder.Sql(statement);
         }
     }
 }

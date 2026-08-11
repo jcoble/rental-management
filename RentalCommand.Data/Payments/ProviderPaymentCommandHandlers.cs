@@ -475,11 +475,35 @@ public sealed class AbandonProviderPaymentAttemptHandler
             return new(AbandonProviderPaymentAttemptOutcome.AlreadyTerminal, attempt.PortfolioId,
                 attempt.TenantAccountId, attempt.Id, attempt.State);
         if (attempt.State == TenantPaymentAttemptState.Submitted)
+        {
+            if (!command.ProviderConfirmed
+                || command.ConfirmedState is not (TenantPaymentAttemptState.Canceled
+                    or TenantPaymentAttemptState.Failed))
+                return new(AbandonProviderPaymentAttemptOutcome.ReconciliationRequired, attempt.PortfolioId,
+                    attempt.TenantAccountId, attempt.Id, attempt.State);
+
+            if (!string.IsNullOrWhiteSpace(attempt.ProviderObjectId)
+                && !string.IsNullOrWhiteSpace(command.ProviderPaymentId)
+                && !string.Equals(attempt.ProviderObjectId, command.ProviderPaymentId,
+                    StringComparison.Ordinal))
+                throw new AtomicReceiptInvariantException(
+                    $"Tenant payment context {attempt.Id} is already bound to another provider object.");
+        }
+
+        if (attempt.State == TenantPaymentAttemptState.Prepared
+            && !string.IsNullOrWhiteSpace(attempt.ProviderObjectId)
+            && !command.ProviderConfirmed)
             return new(AbandonProviderPaymentAttemptOutcome.ReconciliationRequired, attempt.PortfolioId,
                 attempt.TenantAccountId, attempt.Id, attempt.State);
 
+        var terminalState = command.ProviderConfirmed && command.ConfirmedState is
+            (TenantPaymentAttemptState.Canceled or TenantPaymentAttemptState.Failed)
+            ? command.ConfirmedState.Value
+            : TenantPaymentAttemptState.Canceled;
+        var providerObjectId = command.ProviderPaymentId ?? attempt.ProviderObjectId;
+
         var result = await ProviderPaymentHandlerSupport.ApplyStateAsync(
-            _db, attempt, TenantPaymentAttemptState.Canceled, null, "ABANDONED",
+            _db, attempt, terminalState, providerObjectId, "ABANDONED",
             command.Reason, null, "provider-attempt-abandon", context, ct,
             attempt.ProviderFenceToken);
         if (result.Disposition == ProviderPaymentApplyDisposition.Conflict)
@@ -499,6 +523,56 @@ public sealed class AbandonProviderPaymentAttemptHandler
         ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
             command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
             command.Provider, command.IdempotencyKey, _db, ct);
+}
+
+public sealed class InspectProviderPaymentAttemptHandler
+    : IAtomicCommandHandler<InspectProviderPaymentAttemptCommand, InspectProviderPaymentAttemptResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public InspectProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<InspectProviderPaymentAttemptResult> HandleAsync(
+        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(
+            _db, command.PortfolioId, ct);
+        var attempt = await (
+            from candidate in _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            join account in _db.Set<TenantAccount>().AsNoTracking()
+                on new { Id = candidate.TenantAccountId, candidate.PortfolioId }
+                equals new { account.Id, account.PortfolioId }
+            where candidate.Id == command.PaymentAttemptId
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.Provider == command.Provider
+                && account.ClosedAtUtc == null
+                && _db.Set<LeaseManagementParty>().Any(party =>
+                    party.LeaseManagementId == account.LeaseManagementId
+                    && party.PortfolioId == command.PortfolioId
+                    && party.TenantId == command.TenantId
+                    && party.EffectiveFrom <= times.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= times.BusinessDate)
+                    && party.Role != LeaseManagementPartyRole.Occupant)
+            select candidate).SingleOrDefaultAsync(ct);
+
+        if (attempt is null)
+            return new(false, command.PortfolioId, command.TenantAccountId,
+                command.PaymentAttemptId, TenantPaymentAttemptType.Charge,
+                TenantPaymentAttemptState.Unknown, 0m, string.Empty, command.Provider,
+                string.Empty, null, null, null);
+
+        return new(true, attempt.PortfolioId, attempt.TenantAccountId, attempt.Id,
+            attempt.AttemptType, attempt.State, attempt.Amount, attempt.Currency,
+            attempt.Provider, attempt.IdempotencyKey, attempt.ProviderObjectId,
+            attempt.ProviderFenceToken, attempt.PreparedAtUtc);
+    }
+
+    public Task AuthorizeReplayAsync(
+        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, idempotencyKey: null, _db, ct);
 }
 
 public sealed class RecordVerifiedProviderPaymentEventHandler
@@ -544,6 +618,16 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Provider == command.Provider
                 && candidate.ProviderObjectId == command.ProviderPaymentId, ct);
+        if (paymentAttempt is null && command.EnrollmentPaymentAttemptId is long metadataAttemptId)
+        {
+            paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+                .SingleOrDefaultAsync(candidate => candidate.Id == metadataAttemptId
+                    && candidate.Provider == command.Provider
+                    && (command.EnrollmentPortfolioId == null
+                        || candidate.PortfolioId == command.EnrollmentPortfolioId)
+                    && (command.EnrollmentTenantAccountId == null
+                        || candidate.TenantAccountId == command.EnrollmentTenantAccountId), ct);
+        }
         if (paymentAttempt is null)
         {
             inbox.FailureKind = ProviderInboxFailureKind.Unmatched;
@@ -1346,7 +1430,7 @@ internal static class ProviderPaymentHandlerSupport
         int tenantAccountId,
         int portfolioId,
         string provider,
-        string idempotencyKey,
+        string? idempotencyKey,
         RentalCommandDbContext db,
         CancellationToken ct)
     {
@@ -1355,7 +1439,7 @@ internal static class ProviderPaymentHandlerSupport
                 && candidate.TenantAccountId == tenantAccountId
                 && candidate.PortfolioId == portfolioId
                 && candidate.Provider == provider
-                && candidate.IdempotencyKey == idempotencyKey, ct);
+                && (idempotencyKey == null || candidate.IdempotencyKey == idempotencyKey), ct);
         if (!admitted)
             throw new UnauthorizedAccessException(
                 "The durable provider context no longer admits this replay.");

@@ -32,6 +32,7 @@ public class StripePaymentService : IStripePaymentService
     private readonly ILogger<StripePaymentService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomicUnitOfWork;
+    private readonly IInteractivePaymentProviderClient _interactiveProvider;
 
     private static readonly AtomicJsonResultCodec<PrepareProviderPaymentCreateResult> PrepareCodec =
         new("prepare-provider-payment-create-result.v1");
@@ -43,6 +44,10 @@ public class StripePaymentService : IStripePaymentService
         new("submit-provider-payment-create-result.v1");
     private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
         new("fail-provider-payment-create-result.v1");
+    private static readonly AtomicJsonResultCodec<AbandonProviderPaymentAttemptResult> AbandonCodec =
+        new("abandon-provider-payment-attempt-result.v1");
+    private static readonly AtomicJsonResultCodec<InspectProviderPaymentAttemptResult> InspectCodec =
+        new("inspect-provider-payment-attempt-result.v1");
     private static readonly AtomicJsonResultCodec<RecordVerifiedProviderPaymentEventResult> ProviderEventCodec =
         new("record-verified-provider-payment-event-result.v1");
 
@@ -51,13 +56,15 @@ public class StripePaymentService : IStripePaymentService
         ISandboxGuard sandbox,
         ILogger<StripePaymentService> logger,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork atomicUnitOfWork)
+        IAtomicUnitOfWork atomicUnitOfWork,
+        IInteractivePaymentProviderClient? interactiveProvider = null)
     {
         _config = config.Value;
         _sandbox = sandbox;
         _logger = logger;
         _timeProvider = timeProvider;
         _atomicUnitOfWork = atomicUnitOfWork;
+        _interactiveProvider = interactiveProvider ?? new StripeInteractivePaymentProviderClient(config);
     }
 
     /// <inheritdoc/>
@@ -111,6 +118,11 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentResult.NotFound();
         }
 
+        var reconciledPrepared = await ReconcilePreparedAttemptBeforeSubmitAsync(
+            prepared.Value, portfolioId, tenantAccountId, ct);
+        if (reconciledPrepared is not null)
+            return CreateIntentStatus(reconciledPrepared);
+
         var submitted = await SubmitProviderAttemptAsync(prepared.Value, portfolioId, tenantAccountId, ct);
         var submitResult = submitted.Value;
         if (submitResult.Outcome != SubmitProviderPaymentCreateOutcome.Submitted)
@@ -120,55 +132,38 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentStatus(submitResult);
         }
 
-        var requestOptions = new RequestOptions
+        InteractiveProviderObject intent;
+        try
         {
-            ApiKey = _config.SecretKey,
-            // Stable for this caller-owned attempt only. A fresh attempt nonce gets a fresh provider
-            // object when the charge balance or provider idempotency window has changed.
-            IdempotencyKey = idempotencyKey,
-        };
-        var intentService = new PaymentIntentService();
-        var intent = await intentService.CreateAsync(new PaymentIntentCreateOptions
+            intent = await _interactiveProvider.CreatePaymentIntentAsync(
+                new InteractiveProviderCreateRequest(
+                    submitResult.PaymentAttemptId, submitResult.Provider,
+                    submitResult.IdempotencyKey, portfolioId, tenantAccountId,
+                    chargeLedgerEntryId, submitResult.Amount, submitResult.Currency, IsSetup: false), ct);
+        }
+        catch (InteractiveProviderException ex) when (ex.IsDefinitive)
         {
-            Amount = (long)(submitResult.Amount * 100),
-            Currency = "usd",
-            Metadata = new Dictionary<string, string>
-            {
-                [MetadataTenantAccountId] = tenantAccountId.ToString(),
-                [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
-                [MetadataPaymentAttemptId] = submitResult.PaymentAttemptId.ToString(),
-                ["portfolioId"] = portfolioId.ToString()
-            },
-            AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
-            {
-                Enabled = true
-            }
-        }, requestOptions, ct);
+            await FailInteractiveAttemptAsync(submitResult, ex, ct);
+            return CreateIntentResult.Failed(submitResult.PaymentAttemptId);
+        }
 
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(
-                portfolioId,
-                tenantAccountId,
-                submitResult.PaymentAttemptId,
-                Provider: "stripe",
-                IdempotencyKey: idempotencyKey,
-                ProviderPaymentId: intent.Id,
-                State: TenantPaymentAttemptState.Submitted,
-                FailureReason: null,
-                RecordedAtUtc: _timeProvider.UtcNow(),
-                ProviderFenceToken: submitResult.ProviderFenceToken),
-            FinalizeCodec,
-            ct);
+        var intentState = MapProviderState(intent.Status);
+        await FinalizeInteractiveAttemptAsync(submitResult, intent, intentState, ct);
 
         _logger.LogInformation(
             "Created Stripe PaymentIntent {IntentId} for tenant account {TenantAccountId} charge {ChargeId} (portfolio {PortfolioId})",
-            intent.Id, tenantAccountId, chargeLedgerEntryId, portfolioId);
+            intent.ProviderPaymentId, tenantAccountId, chargeLedgerEntryId, portfolioId);
 
-        return CreateIntentResult.Ok(
-            intent.ClientSecret!,
-            _config.PublishableKey,
-            prepared.Value.PaymentAttemptId);
+        return intentState == TenantPaymentAttemptState.Succeeded
+            ? CreateIntentResult.Succeeded(submitResult.PaymentAttemptId, ProviderObjectId(intent))
+            : intentState == TenantPaymentAttemptState.Canceled
+                ? CreateIntentResult.Canceled(submitResult.PaymentAttemptId)
+                : intentState == TenantPaymentAttemptState.Failed
+                    ? CreateIntentResult.Failed(submitResult.PaymentAttemptId)
+                    : CreateIntentResult.Ok(
+                        intent.ClientSecret!,
+                        _config.PublishableKey,
+                        submitResult.PaymentAttemptId);
     }
 
     /// <inheritdoc/>
@@ -211,6 +206,11 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutResult.NotFound();
         }
 
+        var reconciledPrepared = await ReconcilePreparedAttemptBeforeSubmitAsync(
+            prepared.Value, portfolioId, tenantAccountId, ct);
+        if (reconciledPrepared is not null)
+            return CheckoutStatus(reconciledPrepared);
+
         var submitted = await SubmitProviderAttemptAsync(prepared.Value, portfolioId, tenantAccountId, ct);
         var submitResult = submitted.Value;
         if (submitResult.Outcome != SubmitProviderPaymentCreateOutcome.Submitted)
@@ -220,78 +220,40 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutStatus(submitResult);
         }
 
-        var requestOptions = new RequestOptions
+        var resolvedSuccessUrl = ResolveSuccessUrl(successUrl, submitResult.PaymentAttemptId,
+            chargeLedgerEntryId);
+        var resolvedCancelUrl = ResolveCancelUrl(cancelUrl, submitResult.PaymentAttemptId,
+            chargeLedgerEntryId);
+        InteractiveProviderObject session;
+        try
         {
-            ApiKey = _config.SecretKey,
-            // Stable for this caller-owned attempt. The atomic prepare receipt keeps repeated taps
-            // on this nonce to one attempt; a new nonce is an intentional new provider attempt.
-            IdempotencyKey = idempotencyKey,
-        };
-        var sessionService = new SessionService();
-        var session = await sessionService.CreateAsync(new SessionCreateOptions
+            session = await _interactiveProvider.CreateCheckoutSessionAsync(
+                new InteractiveProviderCreateRequest(
+                    submitResult.PaymentAttemptId, submitResult.Provider,
+                    submitResult.IdempotencyKey, portfolioId, tenantAccountId,
+                    chargeLedgerEntryId, submitResult.Amount, submitResult.Currency, IsSetup: false),
+                resolvedSuccessUrl, resolvedCancelUrl, ct);
+        }
+        catch (InteractiveProviderException ex) when (ex.IsDefinitive)
         {
-            Mode = "payment",
-            // Dynamic payment methods are configured in Stripe's Dashboard for this account.
-            Expand = new List<string> { "payment_intent" },
-            LineItems = new List<SessionLineItemOptions>
-            {
-                new()
-                {
-                    Quantity = 1,
-                    PriceData = new SessionLineItemPriceDataOptions
-                    {
-                        Currency = "usd",
-                        UnitAmount = (long)(submitResult.Amount * 100),
-                        ProductData = new SessionLineItemPriceDataProductDataOptions
-                        {
-                            Name = "Tenant account payment",
-                        },
-                    },
-                },
-            },
-            // Carried back on checkout.session.completed so we can resolve + mark the Payment Paid.
-            Metadata = new Dictionary<string, string>
-            {
-                [MetadataTenantAccountId] = tenantAccountId.ToString(),
-                [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
-                [MetadataPaymentAttemptId] = submitResult.PaymentAttemptId.ToString(),
-                [MetadataPortfolioId] = portfolioId.ToString(),
-            },
-            PaymentIntentData = new SessionPaymentIntentDataOptions
-            {
-                Metadata = new Dictionary<string, string>
-                {
-                    [MetadataTenantAccountId] = tenantAccountId.ToString(),
-                    [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
-                    [MetadataPaymentAttemptId] = submitResult.PaymentAttemptId.ToString(),
-                    [MetadataPortfolioId] = portfolioId.ToString(),
-                },
-            },
-            SuccessUrl = ResolveSuccessUrl(successUrl),
-            CancelUrl = ResolveCancelUrl(cancelUrl),
-        }, requestOptions, ct);
+            await FailInteractiveAttemptAsync(submitResult, ex, ct);
+            return CheckoutResult.Failed(submitResult.PaymentAttemptId);
+        }
 
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(
-                portfolioId,
-                tenantAccountId,
-                submitResult.PaymentAttemptId,
-                Provider: "stripe",
-                IdempotencyKey: idempotencyKey,
-                ProviderPaymentId: ResolveCheckoutPaymentObjectId(session),
-                State: TenantPaymentAttemptState.Submitted,
-                FailureReason: null,
-                RecordedAtUtc: _timeProvider.UtcNow(),
-                ProviderFenceToken: submitResult.ProviderFenceToken),
-            FinalizeCodec,
-            ct);
+        var sessionState = MapProviderState(session.Status);
+        await FinalizeInteractiveAttemptAsync(submitResult, session, sessionState, ct);
 
         _logger.LogInformation(
             "Created Stripe Checkout session {SessionId} for tenant account {TenantAccountId} charge {ChargeId} (portfolio {PortfolioId}, tenant {TenantId})",
-            session.Id, tenantAccountId, chargeLedgerEntryId, portfolioId, tenantId);
+            session.CheckoutSessionId ?? session.ProviderPaymentId, tenantAccountId, chargeLedgerEntryId, portfolioId, tenantId);
 
-        return CheckoutResult.Ok(session.Url!, submitResult.PaymentAttemptId);
+        return sessionState == TenantPaymentAttemptState.Succeeded
+            ? CheckoutResult.Succeeded(submitResult.PaymentAttemptId, ProviderObjectId(session))
+            : sessionState == TenantPaymentAttemptState.Canceled
+                ? CheckoutResult.Canceled(submitResult.PaymentAttemptId)
+                : sessionState == TenantPaymentAttemptState.Failed
+                    ? CheckoutResult.Failed(submitResult.PaymentAttemptId)
+                    : CheckoutResult.Ok(session.CheckoutUrl!, submitResult.PaymentAttemptId);
     }
 
     /// <inheritdoc/>
@@ -327,6 +289,11 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutResult.NotFound();
         }
 
+        var reconciledPrepared = await ReconcilePreparedSetupAttemptBeforeSubmitAsync(
+            prepared.Value, portfolioId, tenantAccountId, ct);
+        if (reconciledPrepared is not null)
+            return CheckoutStatus(reconciledPrepared);
+
         var submitted = await SubmitProviderAttemptAsync(
             prepared.Value, portfolioId, tenantAccountId, ct);
         var submitResult = submitted.Value;
@@ -337,54 +304,41 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutStatus(submitResult);
         }
 
-        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey, IdempotencyKey = idempotencyKey };
-        var sessionService = new SessionService();
-        var session = await sessionService.CreateAsync(new SessionCreateOptions
+        var resolvedSuccessUrl = ResolveSuccessUrl(successUrl, submitResult.PaymentAttemptId, null);
+        var resolvedCancelUrl = ResolveCancelUrl(cancelUrl, submitResult.PaymentAttemptId, null);
+        InteractiveProviderObject session;
+        try
         {
-            Mode = "setup",
-            // Dynamic payment methods are configured in Stripe's Dashboard for this account.
-            // Carried back on checkout.session.completed so we know which lease/tenant enrolled.
-            SetupIntentData = new SessionSetupIntentDataOptions
-            {
-                Metadata = new Dictionary<string, string>
-                {
-                    [MetadataAutopay] = "1",
-                    [MetadataTenantAccountId] = tenantAccountId.ToString(),
-                    [MetadataAuthorizingPartyId] = prepared.Value.AuthorizingPartyId.ToString(),
-                    [MetadataActorUserId] = actorUserId.ToString(),
-                    [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
-                    [MetadataTenantId] = tenantId.ToString(),
-                    [MetadataPortfolioId] = portfolioId.ToString(),
-                },
-            },
-            Metadata = new Dictionary<string, string>
-            {
-                [MetadataAutopay] = "1",
-                [MetadataTenantAccountId] = tenantAccountId.ToString(),
-                [MetadataAuthorizingPartyId] = prepared.Value.AuthorizingPartyId.ToString(),
-                [MetadataActorUserId] = actorUserId.ToString(),
-                [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
-                [MetadataTenantId] = tenantId.ToString(),
-                [MetadataPortfolioId] = portfolioId.ToString(),
-            },
-            SuccessUrl = ResolveSuccessUrl(successUrl),
-            CancelUrl = ResolveCancelUrl(cancelUrl),
-        }, requestOptions, ct);
+            session = await _interactiveProvider.CreateSetupCheckoutSessionAsync(
+                new InteractiveProviderCreateRequest(
+                    submitResult.PaymentAttemptId, submitResult.Provider,
+                    submitResult.IdempotencyKey, portfolioId, tenantAccountId,
+                    null, 0m, submitResult.Currency, IsSetup: true,
+                    TenantId: tenantId,
+                    AuthorizingPartyId: prepared.Value.AuthorizingPartyId,
+                    ActorUserId: actorUserId),
+                resolvedSuccessUrl, resolvedCancelUrl, ct);
+        }
+        catch (InteractiveProviderException ex) when (ex.IsDefinitive)
+        {
+            await FailInteractiveAttemptAsync(submitResult, ex, ct);
+            return CheckoutResult.Failed(submitResult.PaymentAttemptId);
+        }
 
-        await _atomicUnitOfWork.ExecuteAsync(
-            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
-            new FinalizeProviderPaymentCreateCommand(portfolioId, tenantAccountId,
-                submitResult.PaymentAttemptId, "stripe", idempotencyKey, session.Id,
-                TenantPaymentAttemptState.Submitted, null, _timeProvider.UtcNow(),
-                submitResult.ProviderFenceToken),
-            FinalizeCodec,
-            ct);
+        var setupState = MapProviderState(session.Status);
+        await FinalizeInteractiveAttemptAsync(submitResult, session, setupState, ct);
 
         _logger.LogInformation(
             "Created Stripe autopay setup session {SessionId} for tenant account {TenantAccountId} (portfolio {PortfolioId}, tenant {TenantId})",
-            session.Id, tenantAccountId, portfolioId, tenantId);
+            session.CheckoutSessionId ?? session.ProviderPaymentId, tenantAccountId, portfolioId, tenantId);
 
-        return CheckoutResult.Ok(session.Url!);
+        return setupState == TenantPaymentAttemptState.Succeeded
+            ? CheckoutResult.Succeeded(submitResult.PaymentAttemptId, ProviderObjectId(session))
+            : setupState == TenantPaymentAttemptState.Canceled
+                ? CheckoutResult.Canceled(submitResult.PaymentAttemptId)
+                : setupState == TenantPaymentAttemptState.Failed
+                    ? CheckoutResult.Failed(submitResult.PaymentAttemptId)
+                    : CheckoutResult.Ok(session.CheckoutUrl!, submitResult.PaymentAttemptId);
     }
 
     /// <inheritdoc/>
@@ -440,15 +394,28 @@ public class StripePaymentService : IStripePaymentService
                 intent.Amount / 100m,
                 intent.Currency,
                 intent.LastPaymentError?.Message,
-                receivedAtUtc,
-                receivedAtUtc);
+                    receivedAtUtc,
+                    receivedAtUtc,
+                    EnrollmentPaymentAttemptId: intent.Metadata.TryGetValue(
+                    MetadataPaymentAttemptId, out var intentPaymentAttemptRaw)
+                    && long.TryParse(intentPaymentAttemptRaw, out var intentPaymentAttemptId)
+                    ? intentPaymentAttemptId
+                    : null);
         }
 
-        if (ev.Data.Object is Session session && ev.Type == "checkout.session.completed")
+        if (ev.Data.Object is Session session
+            && ev.Type is "checkout.session.completed" or "checkout.session.expired")
         {
             var metadata = session.Metadata ?? new Dictionary<string, string>();
             var isSetup = session.Mode == "setup" ||
                 (metadata.TryGetValue(MetadataAutopay, out var autopay) && autopay == "1");
+            metadata.TryGetValue(MetadataPaymentAttemptId, out var paymentAttemptRaw);
+            _ = long.TryParse(paymentAttemptRaw, out var paymentAttemptId);
+            var eventKind = ev.Type == "checkout.session.expired"
+                ? ProviderPaymentEventKind.Canceled
+                : string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase)
+                    ? ProviderPaymentEventKind.Succeeded
+                    : ProviderPaymentEventKind.Pending;
             if (!isSetup)
             {
                 return new RecordVerifiedProviderPaymentEventCommand(
@@ -462,15 +429,14 @@ public class StripePaymentService : IStripePaymentService
                         session.PaymentStatus,
                         session.Mode,
                     }),
-                    ResolveCheckoutPaymentObjectId(session),
-                    string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase)
-                        ? ProviderPaymentEventKind.Succeeded
-                        : ProviderPaymentEventKind.Pending,
+                    string.IsNullOrWhiteSpace(session.PaymentIntentId) ? session.Id : session.PaymentIntentId,
+                    eventKind,
                     session.AmountTotal is long amount ? amount / 100m : null,
                     session.Currency,
                     null,
                     receivedAtUtc,
-                    receivedAtUtc);
+                    receivedAtUtc,
+                    EnrollmentPaymentAttemptId: paymentAttemptId > 0 ? paymentAttemptId : null);
             }
 
             metadata.TryGetValue(MetadataTenantAccountId, out var accountRaw);
@@ -482,20 +448,19 @@ public class StripePaymentService : IStripePaymentService
             _ = int.TryParse(accountRaw, out var tenantAccountId);
             _ = int.TryParse(partyRaw, out var authorizingPartyId);
             _ = int.TryParse(actorRaw, out var actorUserId);
-            _ = long.TryParse(attemptRaw, out var paymentAttemptId);
+            _ = long.TryParse(attemptRaw, out var setupPaymentAttemptId);
             _ = int.TryParse(tenantRaw, out var tenantId);
             _ = int.TryParse(portfolioRaw, out var portfolioId);
 
             string? customerId = session.CustomerId;
             string? paymentMethodId = null;
-            if (!string.IsNullOrWhiteSpace(session.SetupIntentId))
+            if (ev.Type == "checkout.session.completed"
+                && !string.IsNullOrWhiteSpace(session.SetupIntentId))
             {
-                var setupIntent = await new SetupIntentService().GetAsync(
-                    session.SetupIntentId,
-                    requestOptions: new RequestOptions { ApiKey = _config.SecretKey },
-                    cancellationToken: ct);
-                paymentMethodId = setupIntent.PaymentMethodId;
-                customerId ??= setupIntent.CustomerId;
+                var setupFacts = await _interactiveProvider.GetSetupPaymentMethodAsync(
+                    session.SetupIntentId, ct);
+                paymentMethodId = setupFacts.PaymentMethodId;
+                customerId ??= setupFacts.CustomerId;
             }
 
             return new RecordVerifiedProviderPaymentEventCommand(
@@ -511,11 +476,13 @@ public class StripePaymentService : IStripePaymentService
                     tenantAccountId,
                     authorizingPartyId,
                     actorUserId,
-                    paymentAttemptId,
+                    setupPaymentAttemptId,
                     tenantId,
                 }),
                 session.Id,
-                ProviderPaymentEventKind.SetupCompleted,
+                ev.Type == "checkout.session.expired"
+                    ? ProviderPaymentEventKind.Canceled
+                    : ProviderPaymentEventKind.SetupCompleted,
                 null,
                 null,
                 null,
@@ -525,7 +492,7 @@ public class StripePaymentService : IStripePaymentService
                 tenantAccountId > 0 ? tenantAccountId : null,
                 authorizingPartyId > 0 ? authorizingPartyId : null,
                 actorUserId > 0 ? actorUserId : null,
-                paymentAttemptId > 0 ? paymentAttemptId : null,
+                setupPaymentAttemptId > 0 ? setupPaymentAttemptId : null,
                 customerId,
                 paymentMethodId);
         }
@@ -553,6 +520,8 @@ public class StripePaymentService : IStripePaymentService
     private static CreateIntentResult CreateIntentStatus(SubmitProviderPaymentCreateResult result) =>
         result.State switch
         {
+            TenantPaymentAttemptState.Succeeded => CreateIntentResult.Succeeded(
+                result.PaymentAttemptId, result.ProviderPaymentId),
             TenantPaymentAttemptState.Canceled => CreateIntentResult.Canceled(result.PaymentAttemptId),
             TenantPaymentAttemptState.Failed => CreateIntentResult.Failed(result.PaymentAttemptId),
             _ => CreateIntentResult.Pending(result.PaymentAttemptId,
@@ -562,11 +531,83 @@ public class StripePaymentService : IStripePaymentService
     private static CheckoutResult CheckoutStatus(SubmitProviderPaymentCreateResult result) =>
         result.State switch
         {
+            TenantPaymentAttemptState.Succeeded => CheckoutResult.Succeeded(
+                result.PaymentAttemptId, result.ProviderPaymentId),
             TenantPaymentAttemptState.Canceled => CheckoutResult.Canceled(result.PaymentAttemptId),
             TenantPaymentAttemptState.Failed => CheckoutResult.Failed(result.PaymentAttemptId),
             _ => CheckoutResult.Pending(result.PaymentAttemptId,
                 result.State.ToString(), result.ProviderPaymentId),
         };
+
+    private async Task<SubmitProviderPaymentCreateResult?> ReconcilePreparedAttemptBeforeSubmitAsync(
+        PrepareProviderPaymentCreateResult prepared, int portfolioId, int tenantAccountId,
+        CancellationToken ct)
+    {
+        if (prepared.State != TenantPaymentAttemptState.Prepared)
+            return prepared.State == TenantPaymentAttemptState.Succeeded
+                || prepared.State == TenantPaymentAttemptState.Canceled
+                || prepared.State == TenantPaymentAttemptState.Failed
+                ? ToSubmitResult(prepared)
+                : null;
+
+        var provider = await _interactiveProvider.ReconcileAsync(ToInteractiveAttempt(prepared), ct);
+        if (provider is null)
+            return ToSubmitResult(prepared); // Unknown lookup result is not permission to create a second object.
+        if (provider.ConfirmedNoProviderObject)
+            return null; // The only path that may continue to Submit/create.
+
+        var state = MapProviderState(provider.Status);
+        // Re-play the durable submit command before every provider-object finalization. The
+        // prepare receipt may be an old cached result without the fence token that the first
+        // submit committed; replaying submit recovers the exact current token and prevents a
+        // response-lost retry from producing a different finalize payload.
+        var submission = await SubmitProviderAttemptAsync(prepared, portfolioId, tenantAccountId, ct);
+        var submit = submission.Value;
+        if (submit.State is TenantPaymentAttemptState.Succeeded
+            or TenantPaymentAttemptState.Canceled
+            or TenantPaymentAttemptState.Failed)
+            return submit;
+        await FinalizeInteractiveAttemptAsync(submit, provider, state, ct);
+        return submit with
+        {
+            Outcome = OutcomeForState(state),
+            State = state,
+            ProviderPaymentId = ProviderObjectId(provider),
+        };
+    }
+
+    private async Task<SubmitProviderPaymentCreateResult?> ReconcilePreparedSetupAttemptBeforeSubmitAsync(
+        PrepareProviderAutopaySetupResult prepared, int portfolioId, int tenantAccountId,
+        CancellationToken ct)
+    {
+        if (prepared.State != TenantPaymentAttemptState.Prepared)
+            return prepared.State == TenantPaymentAttemptState.Succeeded
+                || prepared.State == TenantPaymentAttemptState.Canceled
+                || prepared.State == TenantPaymentAttemptState.Failed
+                ? ToSubmitResult(prepared)
+                : null;
+
+        var provider = await _interactiveProvider.ReconcileAsync(ToInteractiveAttempt(prepared), ct);
+        if (provider is null)
+            return ToSubmitResult(prepared);
+        if (provider.ConfirmedNoProviderObject)
+            return null;
+
+        var state = MapProviderState(provider.Status);
+        var submission = await SubmitProviderAttemptAsync(prepared, portfolioId, tenantAccountId, ct);
+        var submit = submission.Value;
+        if (submit.State is TenantPaymentAttemptState.Succeeded
+            or TenantPaymentAttemptState.Canceled
+            or TenantPaymentAttemptState.Failed)
+            return submit;
+        await FinalizeInteractiveAttemptAsync(submit, provider, state, ct);
+        return submit with
+        {
+            Outcome = OutcomeForState(state),
+            State = state,
+            ProviderPaymentId = ProviderObjectId(provider),
+        };
+    }
 
     private async Task<SubmitProviderPaymentCreateResult> ReconcileInteractiveAttemptAsync(
         SubmitProviderPaymentCreateResult attempt, CancellationToken ct)
@@ -574,32 +615,21 @@ public class StripePaymentService : IStripePaymentService
         if (attempt.State != TenantPaymentAttemptState.Submitted)
             return attempt;
 
-        var matches = await new PaymentIntentService().SearchAsync(
-            new PaymentIntentSearchOptions
-            {
-                Query = $"metadata['paymentAttemptId']:'{attempt.PaymentAttemptId}'",
-                Limit = 10,
-            }, new RequestOptions { ApiKey = _config.SecretKey }, ct);
-        var provider = matches.Data.FirstOrDefault();
-        if (provider is not null)
+        var provider = await _interactiveProvider.ReconcileAsync(ToInteractiveAttempt(attempt), ct);
+        if (provider is not null && !provider.ConfirmedNoProviderObject)
         {
-            var state = provider.Status switch
+            var state = MapProviderState(provider.Status);
+            await FinalizeInteractiveAttemptAsync(attempt, provider, state, ct);
+            return attempt with
             {
-                "succeeded" => TenantPaymentAttemptState.Succeeded,
-                "canceled" => TenantPaymentAttemptState.Canceled,
-                _ => TenantPaymentAttemptState.Submitted,
+                Outcome = OutcomeForState(state),
+                State = state,
+                ProviderPaymentId = ProviderObjectId(provider),
             };
-            await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.finalize", attempt.IdempotencyKey),
-                new FinalizeProviderPaymentCreateCommand(
-                    attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
-                    attempt.Provider, attempt.IdempotencyKey, provider.Id, state, null,
-                    _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-                FinalizeCodec, ct);
-            return attempt with { State = state, ProviderPaymentId = provider.Id };
         }
 
-        if (attempt.PreparedAtUtc is DateTime preparedAt
+        if (provider?.ConfirmedNoProviderObject == true
+            && attempt.PreparedAtUtc is DateTime preparedAt
             && preparedAt <= _timeProvider.UtcNow().AddHours(-24))
         {
             await _atomicUnitOfWork.ExecuteAsync(
@@ -610,7 +640,11 @@ public class StripePaymentService : IStripePaymentService
                     "Provider reconciliation found no accepted payment after 24 hours.",
                     _timeProvider.UtcNow(), attempt.ProviderFenceToken),
                 FailCodec, ct);
-            return attempt with { State = TenantPaymentAttemptState.Failed };
+            return attempt with
+            {
+                Outcome = SubmitProviderPaymentCreateOutcome.Failed,
+                State = TenantPaymentAttemptState.Failed,
+            };
         }
 
         return attempt;
@@ -622,40 +656,21 @@ public class StripePaymentService : IStripePaymentService
         if (attempt.State != TenantPaymentAttemptState.Submitted)
             return attempt;
 
-        // Stripe does not expose SetupIntent search in this SDK. Checkout sessions retain the
-        // same attempt metadata, so reconcile through the session list and then fetch the exact
-        // SetupIntent before advancing the durable attempt.
-        var sessions = await new SessionService().ListAsync(
-            new SessionListOptions { Limit = 100 },
-            new RequestOptions { ApiKey = _config.SecretKey }, ct);
-        var session = sessions.Data.FirstOrDefault(candidate =>
-            candidate.Metadata.TryGetValue(MetadataPaymentAttemptId, out var value)
-            && value == attempt.PaymentAttemptId.ToString()
-            && !string.IsNullOrWhiteSpace(candidate.SetupIntentId));
-        var provider = session is null
-            ? null
-            : await new SetupIntentService().GetAsync(
-                session.SetupIntentId!, null,
-                new RequestOptions { ApiKey = _config.SecretKey }, ct);
-        if (provider is not null)
+        var provider = await _interactiveProvider.ReconcileAsync(ToInteractiveAttempt(attempt), ct);
+        if (provider is not null && !provider.ConfirmedNoProviderObject)
         {
-            var state = provider.Status switch
+            var state = MapProviderState(provider.Status);
+            await FinalizeInteractiveAttemptAsync(attempt, provider, state, ct);
+            return attempt with
             {
-                "succeeded" => TenantPaymentAttemptState.Succeeded,
-                "canceled" => TenantPaymentAttemptState.Canceled,
-                _ => TenantPaymentAttemptState.Submitted,
+                Outcome = OutcomeForState(state),
+                State = state,
+                ProviderPaymentId = ProviderObjectId(provider),
             };
-            await _atomicUnitOfWork.ExecuteAsync(
-                new AtomicCommandIdentity("payments.provider-create.finalize", attempt.IdempotencyKey),
-                new FinalizeProviderPaymentCreateCommand(
-                    attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
-                    attempt.Provider, attempt.IdempotencyKey, provider.Id, state, null,
-                    _timeProvider.UtcNow(), attempt.ProviderFenceToken),
-                FinalizeCodec, ct);
-            return attempt with { State = state, ProviderPaymentId = provider.Id };
         }
 
-        if (attempt.PreparedAtUtc is DateTime preparedAt
+        if (provider?.ConfirmedNoProviderObject == true
+            && attempt.PreparedAtUtc is DateTime preparedAt
             && preparedAt <= _timeProvider.UtcNow().AddHours(-24))
         {
             await _atomicUnitOfWork.ExecuteAsync(
@@ -666,11 +681,219 @@ public class StripePaymentService : IStripePaymentService
                     "Provider reconciliation found no accepted setup after 24 hours.",
                     _timeProvider.UtcNow(), attempt.ProviderFenceToken),
                 FailCodec, ct);
-            return attempt with { State = TenantPaymentAttemptState.Failed };
+            return attempt with
+            {
+                Outcome = SubmitProviderPaymentCreateOutcome.Failed,
+                State = TenantPaymentAttemptState.Failed,
+            };
         }
 
         return attempt;
     }
+
+    /// <inheritdoc/>
+    public async Task<CheckoutResult> CancelPaymentAttemptAsync(
+        int portfolioId, int tenantId, int tenantAccountId, long paymentAttemptId,
+        string reason, CancellationToken ct)
+    {
+        if (!_config.Enabled)
+            return CheckoutResult.NotEnabled();
+
+        var inspected = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-attempt.inspect", paymentAttemptId.ToString()),
+            new InspectProviderPaymentAttemptCommand(
+                portfolioId, tenantId, tenantAccountId, paymentAttemptId, "stripe"),
+            InspectCodec, ct);
+        var attempt = inspected.Value;
+        if (!attempt.Found)
+            return CheckoutResult.NotFound();
+
+        var submit = ToSubmitResult(attempt);
+        if (attempt.State == TenantPaymentAttemptState.Succeeded)
+            return CheckoutResult.Succeeded(paymentAttemptId, attempt.ProviderPaymentId);
+        if (attempt.State == TenantPaymentAttemptState.Canceled)
+            return CheckoutResult.Canceled(paymentAttemptId);
+        if (attempt.State == TenantPaymentAttemptState.Failed)
+            return CheckoutResult.Failed(paymentAttemptId);
+
+        var provider = await _interactiveProvider.ReconcileAsync(ToInteractiveAttempt(attempt), ct);
+        if (provider is null)
+            return CheckoutResult.Pending(paymentAttemptId, attempt.State.ToString(), attempt.ProviderPaymentId);
+
+        if (!provider.ConfirmedNoProviderObject
+            && MapProviderState(provider.Status) == TenantPaymentAttemptState.Succeeded)
+        {
+            var state = TenantPaymentAttemptState.Succeeded;
+            await FinalizeInteractiveAttemptAsync(submit, provider, state, ct);
+            return CheckoutResult.Succeeded(paymentAttemptId, ProviderObjectId(provider));
+        }
+
+        if (!provider.ConfirmedNoProviderObject
+            && MapProviderState(provider.Status) is TenantPaymentAttemptState.Canceled
+                or TenantPaymentAttemptState.Failed)
+            return await AbandonConfirmedAttemptAsync(attempt, provider,
+                MapProviderState(provider.Status), reason, ct);
+
+        if (!provider.ConfirmedNoProviderObject)
+        {
+            provider = await _interactiveProvider.CancelOrExpireAsync(
+                ToInteractiveAttempt(attempt), ct);
+            if (provider is null)
+                return CheckoutResult.Pending(paymentAttemptId, attempt.State.ToString(), attempt.ProviderPaymentId);
+            if (!provider.ConfirmedNoProviderObject
+                && MapProviderState(provider.Status) == TenantPaymentAttemptState.Succeeded)
+            {
+                await FinalizeInteractiveAttemptAsync(submit, provider,
+                    TenantPaymentAttemptState.Succeeded, ct);
+                return CheckoutResult.Succeeded(paymentAttemptId, ProviderObjectId(provider));
+            }
+            if (!provider.ConfirmedNoProviderObject
+                && MapProviderState(provider.Status) is not (TenantPaymentAttemptState.Canceled
+                    or TenantPaymentAttemptState.Failed))
+                return CheckoutResult.Pending(paymentAttemptId, attempt.State.ToString(),
+                    attempt.ProviderPaymentId);
+        }
+
+        var terminal = provider.ConfirmedNoProviderObject
+            ? TenantPaymentAttemptState.Canceled
+            : MapProviderState(provider.Status);
+        return await AbandonConfirmedAttemptAsync(attempt, provider, terminal, reason, ct);
+    }
+
+    private async Task<CheckoutResult> AbandonConfirmedAttemptAsync(
+        InspectProviderPaymentAttemptResult attempt, InteractiveProviderObject provider,
+        TenantPaymentAttemptState state, string reason, CancellationToken ct)
+    {
+        if (state is not (TenantPaymentAttemptState.Canceled or TenantPaymentAttemptState.Failed))
+            return CheckoutResult.Pending(attempt.PaymentAttemptId, attempt.State.ToString(),
+                attempt.ProviderPaymentId);
+        var abandoned = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-attempt.abandon", attempt.IdempotencyKey),
+            new AbandonProviderPaymentAttemptCommand(
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
+                attempt.Provider, attempt.IdempotencyKey,
+                string.IsNullOrWhiteSpace(reason) ? "Tenant canceled hosted payment." : reason,
+                _timeProvider.UtcNow(), ProviderConfirmed: true,
+                ConfirmedState: state,
+                ProviderPaymentId: ProviderObjectId(provider)),
+            AbandonCodec, ct);
+        return abandoned.Value.State switch
+        {
+            TenantPaymentAttemptState.Canceled => CheckoutResult.Canceled(attempt.PaymentAttemptId),
+            TenantPaymentAttemptState.Failed => CheckoutResult.Failed(attempt.PaymentAttemptId),
+            TenantPaymentAttemptState.Succeeded => CheckoutResult.Succeeded(
+                attempt.PaymentAttemptId, attempt.ProviderPaymentId),
+            _ => CheckoutResult.Pending(attempt.PaymentAttemptId, abandoned.Value.State.ToString(),
+                attempt.ProviderPaymentId),
+        };
+    }
+
+    private async Task FinalizeInteractiveAttemptAsync(
+        SubmitProviderPaymentCreateResult attempt, InteractiveProviderObject provider,
+        TenantPaymentAttemptState state, CancellationToken ct)
+    {
+        var providerObjectId = ProviderObjectId(provider);
+        if (string.IsNullOrWhiteSpace(providerObjectId))
+            throw new InvalidOperationException(
+                $"Provider reconciliation for payment attempt {attempt.PaymentAttemptId} did not return an object identity.");
+        await _atomicUnitOfWork.ExecuteAsync(
+            // The durable attempt key identifies the provider object, while the command type
+            // identifies the state transition. A response-lost Submitted finalize may be
+            // followed by a Succeeded reconciliation; those are two legitimate atomic commands,
+            // not an idempotency conflict for one command payload.
+            new AtomicCommandIdentity($"payments.provider-create.finalize:{state}", attempt.IdempotencyKey),
+            new FinalizeProviderPaymentCreateCommand(
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
+                attempt.Provider, attempt.IdempotencyKey, providerObjectId, state, null,
+                _timeProvider.UtcNow(), attempt.ProviderFenceToken),
+            FinalizeCodec, ct);
+    }
+
+    private async Task FailInteractiveAttemptAsync(
+        SubmitProviderPaymentCreateResult attempt, InteractiveProviderException exception,
+        CancellationToken ct) =>
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.fail", attempt.IdempotencyKey),
+            new FailProviderPaymentCreateCommand(
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.PaymentAttemptId,
+                attempt.Provider, attempt.IdempotencyKey, exception.FailureCode,
+                exception.Message, _timeProvider.UtcNow(), attempt.ProviderFenceToken),
+            FailCodec, ct);
+
+    private static string ProviderObjectId(InteractiveProviderObject provider) =>
+        provider.ProviderPaymentId
+        ?? provider.PaymentIntentId
+        ?? provider.CheckoutSessionId
+        ?? string.Empty;
+
+    private static TenantPaymentAttemptState MapProviderState(string? status) =>
+        status?.Trim().ToLowerInvariant() switch
+        {
+            "succeeded" or "paid" or "complete" => TenantPaymentAttemptState.Succeeded,
+            "canceled" or "cancelled" or "expired" => TenantPaymentAttemptState.Canceled,
+            "failed" or "payment_failed" or "setup_failed" => TenantPaymentAttemptState.Failed,
+            _ => TenantPaymentAttemptState.Submitted,
+        };
+
+    private static SubmitProviderPaymentCreateOutcome OutcomeForState(TenantPaymentAttemptState state) =>
+        state switch
+        {
+            TenantPaymentAttemptState.Succeeded => SubmitProviderPaymentCreateOutcome.Succeeded,
+            TenantPaymentAttemptState.Canceled => SubmitProviderPaymentCreateOutcome.Canceled,
+            TenantPaymentAttemptState.Failed => SubmitProviderPaymentCreateOutcome.Failed,
+            _ => SubmitProviderPaymentCreateOutcome.AlreadySubmitted,
+        };
+
+    private static SubmitProviderPaymentCreateResult ToSubmitResult(
+        PrepareProviderPaymentCreateResult prepared) => new(
+            prepared.State == TenantPaymentAttemptState.Prepared
+                ? SubmitProviderPaymentCreateOutcome.Submitted
+                : OutcomeForState(prepared.State),
+            prepared.PortfolioId, prepared.TenantAccountId, prepared.PaymentAttemptId,
+            prepared.State, prepared.Amount, prepared.Currency, prepared.Provider,
+            prepared.IdempotencyKey, prepared.ProviderFenceToken, prepared.ProviderPaymentId,
+            prepared.PreparedAtUtc);
+
+    private static SubmitProviderPaymentCreateResult ToSubmitResult(
+        PrepareProviderAutopaySetupResult prepared) => new(
+            prepared.State == TenantPaymentAttemptState.Prepared
+                ? SubmitProviderPaymentCreateOutcome.Submitted
+                : OutcomeForState(prepared.State),
+            prepared.PortfolioId, prepared.TenantAccountId, prepared.PaymentAttemptId,
+            prepared.State, 0m, "USD", prepared.Provider, prepared.IdempotencyKey,
+            prepared.ProviderFenceToken, prepared.ProviderPaymentId, null);
+
+    private static SubmitProviderPaymentCreateResult ToSubmitResult(
+        InspectProviderPaymentAttemptResult attempt) => new(
+            OutcomeForState(attempt.State), attempt.PortfolioId, attempt.TenantAccountId,
+            attempt.PaymentAttemptId, attempt.State, attempt.Amount, attempt.Currency,
+            attempt.Provider, attempt.IdempotencyKey, attempt.ProviderFenceToken,
+            attempt.ProviderPaymentId, attempt.PreparedAtUtc);
+
+    private static InteractiveProviderAttempt ToInteractiveAttempt(
+        PrepareProviderPaymentCreateResult attempt) => new(
+            attempt.PaymentAttemptId, attempt.Provider, attempt.IdempotencyKey,
+            TenantPaymentAttemptType.Charge, attempt.ProviderPaymentId,
+            attempt.PortfolioId, attempt.TenantAccountId, attempt.Amount, attempt.Currency);
+
+    private static InteractiveProviderAttempt ToInteractiveAttempt(
+        PrepareProviderAutopaySetupResult attempt) => new(
+            attempt.PaymentAttemptId, attempt.Provider, attempt.IdempotencyKey,
+            TenantPaymentAttemptType.Verification, attempt.ProviderPaymentId,
+            attempt.PortfolioId, attempt.TenantAccountId, 0m, "USD");
+
+    private static InteractiveProviderAttempt ToInteractiveAttempt(
+        SubmitProviderPaymentCreateResult attempt) => new(
+            attempt.PaymentAttemptId, attempt.Provider, attempt.IdempotencyKey,
+            attempt.Amount == 0m ? TenantPaymentAttemptType.Verification : TenantPaymentAttemptType.Charge,
+            attempt.ProviderPaymentId, attempt.PortfolioId, attempt.TenantAccountId,
+            attempt.Amount, attempt.Currency);
+
+    private static InteractiveProviderAttempt ToInteractiveAttempt(
+        InspectProviderPaymentAttemptResult attempt) => new(
+            attempt.PaymentAttemptId, attempt.Provider, attempt.IdempotencyKey,
+            attempt.AttemptType, attempt.ProviderPaymentId, attempt.PortfolioId,
+            attempt.TenantAccountId, attempt.Amount, attempt.Currency);
 
     private Task<AtomicCommandOutcome<SubmitProviderPaymentCreateResult>> SubmitProviderAttemptAsync(
         PrepareProviderPaymentCreateResult prepared, int portfolioId, int tenantAccountId,
@@ -699,16 +922,35 @@ public class StripePaymentService : IStripePaymentService
     /// return-URL allowlist (so a client can't turn Checkout into an open redirect to a phishing
     /// site); otherwise the trusted configured value, else a built-in.
     /// </summary>
-    private string ResolveSuccessUrl(string? requested) =>
-        IsAllowedReturnUrl(requested) ? requested!
-        : !string.IsNullOrWhiteSpace(_config.CheckoutSuccessUrl) ? _config.CheckoutSuccessUrl!
-        : DefaultSuccessUrl;
+    private string ResolveSuccessUrl(string? requested, long paymentAttemptId, long? chargeLedgerEntryId) =>
+        AppendAttemptIdentity(
+            IsAllowedReturnUrl(requested) ? requested!
+            : !string.IsNullOrWhiteSpace(_config.CheckoutSuccessUrl) ? _config.CheckoutSuccessUrl!
+            : DefaultSuccessUrl,
+            paymentAttemptId, chargeLedgerEntryId);
 
     /// <summary>Resolves the cancel URL with the same allowlist guard as the success URL.</summary>
-    private string ResolveCancelUrl(string? requested) =>
-        IsAllowedReturnUrl(requested) ? requested!
-        : !string.IsNullOrWhiteSpace(_config.CheckoutCancelUrl) ? _config.CheckoutCancelUrl!
-        : DefaultCancelUrl;
+    private string ResolveCancelUrl(string? requested, long paymentAttemptId, long? chargeLedgerEntryId) =>
+        AppendAttemptIdentity(
+            IsAllowedReturnUrl(requested) ? requested!
+            : !string.IsNullOrWhiteSpace(_config.CheckoutCancelUrl) ? _config.CheckoutCancelUrl!
+            : DefaultCancelUrl,
+            paymentAttemptId, chargeLedgerEntryId);
+
+    private static string AppendAttemptIdentity(
+        string url, long paymentAttemptId, long? chargeLedgerEntryId)
+    {
+        var fragmentIndex = url.IndexOf('#');
+        var beforeFragment = fragmentIndex >= 0 ? url[..fragmentIndex] : url;
+        var fragment = fragmentIndex >= 0 ? url[fragmentIndex..] : string.Empty;
+        var separator = beforeFragment.Contains('?')
+            ? beforeFragment.EndsWith('?') || beforeFragment.EndsWith('&') ? string.Empty : "&"
+            : "?";
+        var identity = $"paymentAttemptId={Uri.EscapeDataString(paymentAttemptId.ToString())}";
+        if (chargeLedgerEntryId is long entryId)
+            identity += $"&chargeLedgerEntryId={Uri.EscapeDataString(entryId.ToString())}";
+        return $"{beforeFragment}{separator}{identity}{fragment}";
+    }
 
     /// <summary>
     /// A client-supplied return URL is trusted only if it is an absolute URL whose host is

@@ -54,6 +54,34 @@ internal static class TenantAccountPostgreSqlContract
         CreatePaymentAttemptIntentTriggers,
     ];
 
+    /// <summary>
+    /// Exact contract that existed immediately before the durable provider-fence migration.
+    /// Down uses this after removing the fence-aware objects and columns; keeping it explicit
+    /// prevents a rollback from leaving a function/trigger that references dropped columns.
+    /// </summary>
+    internal static IReadOnlyList<string> PreFenceCreateStatements { get; } =
+    [
+        CreateAppendOnlyGuard,
+        CreateTenantAccountCurrencyGuard,
+        TenantAccountCloseValidatorStatement(allowPlannedCancellation: true),
+        CreateConditionPeriodGuard,
+        CreatePaymentAttemptWriteGuard,
+        CreatePaymentAttemptIntentGuard,
+        CreatePaymentAttemptClaimFunction,
+        CreatePaymentAttemptExactClaimFunction,
+        CreatePaymentAttemptTransitionFunctionBeforeFence,
+        CreatePaymentAttemptValidator,
+        CreateOpenAccountWriteGuardBeforeFence,
+        CreateLedgerEntryValidator,
+        CreatePaymentAttemptSuccessValidator,
+        CreateLedgerAllocationValidator,
+        CreateAutopayValidator,
+        CreateSecurityDepositAccountValidator,
+        CreateSecurityDepositEntryValidator,
+        CreateTriggersBeforeFence,
+        CreatePaymentAttemptIntentTriggers,
+    ];
+
     internal static string TenantAccountCloseValidatorStatement(bool allowPlannedCancellation)
     {
         if (allowPlannedCancellation)
@@ -596,6 +624,149 @@ internal static class TenantAccountPostgreSqlContract
         END;
         $function$;
         """;
+
+    private const string CreatePaymentAttemptTransitionFunctionBeforeFence = """
+        CREATE OR REPLACE FUNCTION rc_transition_tenant_payment_attempt(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_claim_token uuid,
+          p_new_state varchar(30),
+          p_provider_object_id varchar(200) DEFAULT NULL,
+          p_failure_code varchar(100) DEFAULT NULL,
+          p_failure_reason varchar(2000) DEFAULT NULL,
+          p_next_attempt_at_utc timestamp with time zone DEFAULT NULL)
+        RETURNS boolean
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          prior_state varchar(30);
+          prior_provider_object_id varchar(200);
+          now_utc timestamp with time zone := clock_timestamp();
+          changed_count integer;
+        BEGIN
+          IF p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown') THEN
+            RAISE EXCEPTION 'Unsupported TenantPaymentAttempt transition state %', p_new_state
+              USING ERRCODE = '22023';
+          END IF;
+
+          SELECT attempt."State", attempt."ProviderObjectId"
+            INTO prior_state, prior_provider_object_id
+          FROM "TenantPaymentAttempts" AS attempt
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."ClaimToken" = p_claim_token
+            AND attempt."ClaimExpiresAtUtc" > now_utc
+          FOR UPDATE;
+
+          IF prior_state IS NULL THEN
+            RETURN false;
+          END IF;
+
+          IF prior_provider_object_id IS NOT NULL
+             AND p_provider_object_id IS NOT NULL
+             AND prior_provider_object_id IS DISTINCT FROM p_provider_object_id THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % is already bound to provider object %',
+              p_id, prior_provider_object_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          IF prior_state = 'Succeeded'
+             OR prior_state = 'Canceled'
+             OR (prior_state = 'Failed' AND p_new_state = 'Submitted')
+             OR (prior_state = 'Prepared' AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown'))
+             OR (prior_state IN ('Submitted','Failed','Unknown')
+                 AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown')) THEN
+            RAISE EXCEPTION 'Invalid TenantPaymentAttempt transition from % to %', prior_state, p_new_state
+              USING ERRCODE = '23514';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "State" = p_new_state,
+              "ProviderObjectId" = COALESCE(attempt."ProviderObjectId", p_provider_object_id),
+              "SubmittedAtUtc" = CASE
+                WHEN p_new_state IN ('Submitted','Succeeded')
+                  THEN COALESCE(attempt."SubmittedAtUtc", now_utc)
+                ELSE attempt."SubmittedAtUtc"
+              END,
+              "SettledAtUtc" = CASE WHEN p_new_state = 'Succeeded' THEN now_utc ELSE NULL END,
+              "FailureCode" = CASE WHEN p_new_state = 'Succeeded' THEN NULL ELSE p_failure_code END,
+              "FailureReason" = CASE WHEN p_new_state = 'Succeeded' THEN NULL ELSE p_failure_reason END,
+              "NextAttemptAtUtc" = CASE
+                WHEN p_new_state IN ('Failed','Unknown') THEN p_next_attempt_at_utc
+                ELSE NULL
+              END,
+              "ClaimOwner" = NULL,
+              "ClaimToken" = NULL,
+              "ClaimExpiresAtUtc" = NULL,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."ClaimToken" = p_claim_token
+            AND attempt."ClaimExpiresAtUtc" > now_utc;
+
+          GET DIAGNOSTICS changed_count = ROW_COUNT;
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN changed_count = 1;
+        END;
+        $function$;
+        """;
+
+    private const string CreateOpenAccountWriteGuardBeforeFence = """
+        CREATE OR REPLACE FUNCTION rc_guard_open_tenant_account_money_write()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          account_id integer;
+          account_closed_at timestamp with time zone;
+        BEGIN
+          IF TG_TABLE_NAME = 'TenantLedgerEntries' THEN
+            account_id := NEW."TenantAccountId";
+          ELSE
+            SELECT deposit_account."TenantAccountId"
+              INTO account_id
+            FROM "SecurityDepositAccounts" AS deposit_account
+            WHERE deposit_account."PortfolioId" = NEW."PortfolioId"
+              AND deposit_account."Id" = NEW."SecurityDepositAccountId";
+          END IF;
+
+          IF account_id IS NULL THEN
+            RETURN NEW;
+          END IF;
+
+          PERFORM pg_advisory_xact_lock(73001, account_id);
+
+          SELECT account."ClosedAtUtc"
+            INTO account_closed_at
+          FROM "TenantAccounts" AS account
+          WHERE account."PortfolioId" = NEW."PortfolioId"
+            AND account."Id" = account_id;
+
+          IF account_closed_at IS NOT NULL THEN
+            RAISE EXCEPTION 'TenantAccount % is closed; new money rows are not permitted', account_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          RETURN NEW;
+        END;
+        $function$;
+        """;
+
+    private static string CreateTriggersBeforeFence =>
+        CreateTriggers.Replace(
+"""
+        CREATE TRIGGER trg_tenant_ledger_allocation_open_account
+        BEFORE INSERT ON "TenantLedgerAllocations"
+        FOR EACH ROW EXECUTE FUNCTION rc_guard_open_tenant_account_money_write();
+
+""",
+            string.Empty,
+            StringComparison.Ordinal);
 
     private const string CreateProviderPaymentFenceAssertion = """
         CREATE OR REPLACE FUNCTION rc_assert_provider_payment_fence(

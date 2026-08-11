@@ -42,6 +42,14 @@ public interface IStripePaymentService
         string? successUrl, string? cancelUrl, CancellationToken ct);
 
     /// <summary>
+    /// Reconciles and, when the provider confirms cancellation/expiry or no provider object, releases
+    /// one interactive payment attempt. A provider-confirmed success is finalized instead of canceled.
+    /// </summary>
+    Task<CheckoutResult> CancelPaymentAttemptAsync(
+        int portfolioId, int tenantId, int tenantAccountId, long paymentAttemptId,
+        string reason, CancellationToken ct);
+
+    /// <summary>
     /// Verifies the Stripe webhook signature and processes the event. Idempotent — duplicate
     /// deliveries are detected and skipped. Throws <see cref="Stripe.StripeException"/> on bad
     /// signature (caller should return 400).
@@ -52,7 +60,7 @@ public interface IStripePaymentService
 /// <summary>Result returned by the hosted-Checkout creation methods.</summary>
 public class CheckoutResult
 {
-    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed }
+    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed, AlreadyPaid }
 
     public Outcome Result { get; init; }
     public string? CheckoutUrl { get; init; }
@@ -79,12 +87,17 @@ public class CheckoutResult
     {
         Result = Outcome.AttemptFailed, PaymentAttemptId = attemptId, AttemptState = "Failed",
     };
+    public static CheckoutResult Succeeded(long attemptId, string? providerPaymentId = null) => new()
+    {
+        Result = Outcome.AlreadyPaid, PaymentAttemptId = attemptId, AttemptState = "Succeeded",
+        ProviderPaymentId = providerPaymentId,
+    };
 }
 
 /// <summary>Result returned by <see cref="IStripePaymentService.CreatePaymentIntentAsync"/>.</summary>
 public class CreateIntentResult
 {
-    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed }
+    public enum Outcome { Ok, NotEnabled, NotFound, AttemptPending, AttemptCanceled, AttemptFailed, AlreadyPaid }
 
     public Outcome Result { get; init; }
     public string? ClientSecret { get; init; }
@@ -110,5 +123,10 @@ public class CreateIntentResult
     public static CreateIntentResult Failed(long attemptId) => new()
     {
         Result = Outcome.AttemptFailed, PaymentAttemptId = attemptId, AttemptState = "Failed",
+    };
+    public static CreateIntentResult Succeeded(long attemptId, string? providerPaymentId = null) => new()
+    {
+        Result = Outcome.AlreadyPaid, PaymentAttemptId = attemptId, AttemptState = "Succeeded",
+        ProviderPaymentId = providerPaymentId,
     };
 }

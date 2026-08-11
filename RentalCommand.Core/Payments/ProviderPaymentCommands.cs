@@ -137,7 +137,10 @@ public sealed record AbandonProviderPaymentAttemptCommand(
     string Provider,
     string IdempotencyKey,
     string Reason,
-    [property: AtomicFingerprintIgnore] DateTime AbandonedAtUtc) : IAtomicCommandData;
+    [property: AtomicFingerprintIgnore] DateTime AbandonedAtUtc,
+    bool ProviderConfirmed = false,
+    TenantPaymentAttemptState? ConfirmedState = null,
+    string? ProviderPaymentId = null) : IAtomicCommandData;
 
 public enum AbandonProviderPaymentAttemptOutcome { Applied, AlreadyTerminal, NotFound, ReconciliationRequired }
 
@@ -147,6 +150,29 @@ public sealed record AbandonProviderPaymentAttemptResult(
     int TenantAccountId,
     long PaymentAttemptId,
     TenantPaymentAttemptState State);
+
+/// <summary>Reads one durable interactive attempt before a tenant cancel/reconciliation command.</summary>
+public sealed record InspectProviderPaymentAttemptCommand(
+    int PortfolioId,
+    int TenantId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    string Provider) : IAtomicCommandData;
+
+public sealed record InspectProviderPaymentAttemptResult(
+    bool Found,
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    TenantPaymentAttemptType AttemptType,
+    TenantPaymentAttemptState State,
+    decimal Amount,
+    string Currency,
+    string Provider,
+    string IdempotencyKey,
+    string? ProviderPaymentId,
+    Guid? ProviderFenceToken,
+    DateTime? PreparedAtUtc);
 
 public enum ProviderPaymentEventKind
 {

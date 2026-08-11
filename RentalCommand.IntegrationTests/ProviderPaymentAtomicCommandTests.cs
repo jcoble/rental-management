@@ -1,8 +1,11 @@
 using System.Data.Common;
 using System.Collections.Concurrent;
+using System.Reflection;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -72,6 +75,11 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddLogging();
+        services.AddSingleton<ISandboxGuard, NeverSandboxGuard>();
+        services.AddSingleton<DeterministicInteractiveProviderClient>();
+        services.AddSingleton<IInteractivePaymentProviderClient>(provider =>
+            provider.GetRequiredService<DeterministicInteractiveProviderClient>());
         services.AddSingleton<ProviderPaymentFailureInterceptor>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel();
@@ -107,6 +115,14 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             FailProviderPaymentCreateCommand,
             FailProviderPaymentCreateResult,
             FailProviderPaymentCreateHandler>();
+        services.AddAtomicCommandHandler<
+            AbandonProviderPaymentAttemptCommand,
+            AbandonProviderPaymentAttemptResult,
+            AbandonProviderPaymentAttemptHandler>();
+        services.AddAtomicCommandHandler<
+            InspectProviderPaymentAttemptCommand,
+            InspectProviderPaymentAttemptResult,
+            InspectProviderPaymentAttemptHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -139,6 +155,80 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     {
         if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
+    }
+
+    [SkippableFact]
+    public async Task DurableProviderPaymentFenceMigration_UpDownUpRestoresPriorTransitionOnPostgreSql()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("fence-migration-rollback");
+        await using var db = NewContext();
+
+        // Start from the pre-migration contract: no fence columns, no fence-aware objects, and
+        // the prior nine-argument transition/guard set.
+        foreach (var statement in TenantAccountPostgreSqlContract.DropStatements)
+            await db.Database.ExecuteSqlRawAsync(statement);
+        await db.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE \"TenantPaymentAttempts\" DROP COLUMN \"ProviderFenceAcquiredAtUtc\", DROP COLUMN \"ProviderFenceToken\";");
+        foreach (var statement in TenantAccountPostgreSqlContract.PreFenceCreateStatements)
+            await db.Database.ExecuteSqlRawAsync(statement);
+
+        await ExecuteDurableFenceMigrationAsync(db, "Up");
+        (await HasDatabaseFunctionAsync(db,
+            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
+            .Should().BeTrue();
+        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeTrue();
+
+        await ExecuteDurableFenceMigrationAsync(db, "Down");
+        var priorTransitionSignatures = await db.Database.SqlQuery<string>($"""
+            SELECT p.oid::regprocedure::text AS "Value"
+            FROM pg_proc AS p
+            JOIN pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'rc_transition_tenant_payment_attempt'
+            """).ToListAsync();
+        (await HasDatabaseFunctionAsync(db,
+            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone)"))
+            .Should().BeTrue($"installed transition signatures: {string.Join(", ", priorTransitionSignatures)}");
+        (await HasDatabaseFunctionAsync(db,
+            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
+            .Should().BeFalse();
+        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeFalse();
+
+        // The prior application contract still works after Down: claim and perform one
+        // nine-argument Submitted transition before the migration is applied again.
+        var attemptId = await db.Database.SqlQuery<long>($"""
+            SELECT nextval(pg_get_serial_sequence('"TenantPaymentAttempts"', 'Id')) AS "Value"
+            """).SingleAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($$"""
+            INSERT INTO "TenantPaymentAttempts"
+                ("Id", "PortfolioId", "TenantAccountId", "ChargeLedgerEntryId", "Provider",
+                 "IdempotencyKey", "AttemptType", "State", "Amount", "Currency",
+                 "PreparedAtUtc", "UpdatedAtUtc", "CreatedByUserId")
+            VALUES ({{attemptId}}, {{scenario.PortfolioId}}, {{scenario.AccountId}}, {{scenario.ChargeId}}, 'stripe',
+                    'migration:prior-version', 'Charge', 'Prepared', 100, 'USD',
+                    clock_timestamp(), clock_timestamp(), {{scenario.UserId}})
+            """);
+        var claimToken = await db.Database.SqlQuery<Guid>($$"""
+            SELECT rc_claim_tenant_payment_attempt(
+                {{attemptId}}, {{scenario.AccountId}}, {{scenario.PortfolioId}},
+                'migration-prior-version') AS "Value"
+            """).SingleAsync();
+        var transitioned = await db.Database.SqlQuery<bool>($$"""
+            SELECT rc_transition_tenant_payment_attempt(
+                {{attemptId}}, {{scenario.AccountId}}, {{scenario.PortfolioId}}, {{claimToken}},
+                'Submitted', 'pi_prior_version', NULL, NULL, NULL) AS "Value"
+            """).SingleAsync();
+        transitioned.Should().BeTrue();
+        var priorState = await db.Database.SqlQuery<string>($$"""
+            SELECT "State" AS "Value" FROM "TenantPaymentAttempts" WHERE "Id" = {{attemptId}}
+            """).SingleAsync();
+        priorState.Should().Be("Submitted");
+
+        await ExecuteDurableFenceMigrationAsync(db, "Up");
+        (await HasDatabaseFunctionAsync(db,
+            "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
+            .Should().BeTrue();
+        (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeTrue();
     }
 
     [SkippableFact]
@@ -866,45 +956,204 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("checkout-provider-seam");
-        var key = StripePaymentService.BuildPaymentIdempotencyKey(
-            "checkout", scenario.ChargeId, scenario.UserId, "provider-seam");
-        var command = new PrepareProviderPaymentCreateCommand(
-            scenario.PortfolioId, scenario.AccountId, scenario.ChargeId, scenario.UserId,
-            scenario.TenantId, null, "stripe", key, "USD", DateTime.UtcNow);
-        var identity = new AtomicCommandIdentity("payments.provider-create.prepare", key);
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
 
-        // These are the two concurrent Checkout requests: the atomic prepare/submit boundary
-        // returns the same durable attempt, after which each request reaches the provider seam.
-        var prepared = await Task.WhenAll(
-            ExecuteAtomicAsync(identity, command, PrepareCodec),
-            ExecuteAtomicAsync(identity, command, PrepareCodec));
-        prepared.Select(result => result.Value.PaymentAttemptId).Distinct().Should().ContainSingle();
-        var attemptId = prepared[0].Value.PaymentAttemptId;
-        var submits = await Task.WhenAll(
-            ExecuteAtomicAsync(
-                new AtomicCommandIdentity("payments.provider-create.submit", key),
-                new SubmitProviderPaymentCreateCommand(
-                    scenario.PortfolioId, scenario.AccountId, attemptId,
-                    "stripe", key, DateTime.UtcNow), SubmitCodec),
-            ExecuteAtomicAsync(
-                new AtomicCommandIdentity("payments.provider-create.submit", key),
-                new SubmitProviderPaymentCreateCommand(
-                    scenario.PortfolioId, scenario.AccountId, attemptId,
-                    "stripe", key, DateTime.UtcNow), SubmitCodec));
-        submits.Select(result => result.Value.PaymentAttemptId).Distinct().Should().ContainSingle();
-        submits.Select(result => result.Value.Outcome)
-            .All(outcome => outcome == SubmitProviderPaymentCreateOutcome.Submitted
-                || outcome == SubmitProviderPaymentCreateOutcome.AlreadySubmitted)
-            .Should().BeTrue();
+        // Drive the real service: each call owns a scoped atomic unit of work, while the
+        // deterministic provider is the only injected seam at the remote boundary.
+        var results = await Task.WhenAll(
+            CreateCheckoutViaServiceAsync(scenario, "provider-seam"),
+            CreateCheckoutViaServiceAsync(scenario, "provider-seam"));
+        results.Select(result => result.Result)
+            .Should().OnlyContain(outcome =>
+                outcome == CheckoutResult.Outcome.Ok
+                || outcome == CheckoutResult.Outcome.AttemptPending);
+        results.Should().Contain(result => result.Result == CheckoutResult.Outcome.Ok,
+            "at least one concurrent caller must receive the created checkout session");
+        results.Select(result => result.PaymentAttemptId).Distinct().Should().ContainSingle();
+        var attemptId = results[0].PaymentAttemptId!.Value;
 
         await using var db = NewContext();
         var attempt = await db.TenantPaymentAttempts.SingleAsync(row => row.Id == attemptId);
-        var provider = new FakeAutopayProviderClient();
-        await Task.WhenAll(
-            provider.CreateAsync(attempt, "cus_checkout_seam", "pm_checkout_seam", CancellationToken.None),
-            provider.CreateAsync(attempt, "cus_checkout_seam", "pm_checkout_seam", CancellationToken.None));
-        provider.CreateCount.Should().Be(1,
-            "the deterministic provider seam must deduplicate concurrent creates by the durable key");
+        attempt.State.Should().Be(TenantPaymentAttemptState.Submitted);
+        attempt.IdempotencyKey.Should().Be(
+            StripePaymentService.BuildPaymentIdempotencyKey(
+                "checkout", scenario.ChargeId, scenario.UserId, "provider-seam"));
+        provider.CheckoutCreateCount.Should().Be(1,
+            "the real service must call the deterministic interactive provider once for one durable key");
+    }
+
+    [SkippableFact]
+    public async Task Checkout_OldPreparedAcceptedObjectReconcilesWithoutSecondProviderCreate()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("checkout-old-prepared");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        var oldKey = $"checkout:tenant-charge:{scenario.ChargeId}";
+        var prepared = await ExecuteAtomicAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", oldKey),
+            new PrepareProviderPaymentCreateCommand(
+                scenario.PortfolioId, scenario.AccountId, scenario.ChargeId, scenario.UserId,
+                scenario.TenantId, null, "stripe", oldKey, "USD", DateTime.UtcNow), PrepareCodec);
+        prepared.Value.Outcome.Should().Be(PrepareProviderPaymentCreateOutcome.Prepared);
+        provider.SetReconciled(prepared.Value.PaymentAttemptId,
+            new InteractiveProviderObject("pi_old_accepted", "succeeded", oldKey,
+                CheckoutUrl: "https://checkout.test/old", PaymentIntentId: "pi_old_accepted"));
+
+        var result = await CreateCheckoutViaServiceAsync(scenario, "post-deploy-new-key");
+
+        result.Result.Should().Be(CheckoutResult.Outcome.AlreadyPaid);
+        result.PaymentAttemptId.Should().Be(prepared.Value.PaymentAttemptId);
+        provider.CheckoutCreateCount.Should().Be(0,
+            "a durable old-format Prepared attempt must reconcile its accepted object before create");
+        await using var verify = NewContext();
+        (await verify.TenantPaymentAttempts.CountAsync(row =>
+            row.ChargeLedgerEntryId == scenario.ChargeId && row.Provider == "stripe")).Should().Be(1);
+        (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == prepared.Value.PaymentAttemptId))
+            .State.Should().Be(TenantPaymentAttemptState.Succeeded);
+
+        var retry = await CreateCheckoutViaServiceAsync(scenario, "post-deploy-new-key");
+        retry.Result.Should().Be(CheckoutResult.Outcome.AlreadyPaid,
+            "a reconciled Succeeded attempt is terminal success, not a retained 409");
+        retry.PaymentAttemptId.Should().Be(prepared.Value.PaymentAttemptId);
+        provider.CheckoutCreateCount.Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Checkout_ExpiredAmbiguousAttemptReleasesFenceAfterTwentyFourHours()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("checkout-expired-recovery");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        var operationKey = "checkout-expired-recovery";
+        var idempotencyKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", scenario.ChargeId, scenario.UserId, operationKey);
+        long attemptId;
+        await using (var db = NewContext())
+        {
+            var attempt = Attempt(scenario, idempotencyKey, null,
+                TenantPaymentAttemptState.Submitted);
+            attempt.PreparedAtUtc = DateTime.UtcNow.AddHours(-25);
+            attempt.SubmittedAtUtc = attempt.PreparedAtUtc;
+            attempt.UpdatedAtUtc = attempt.PreparedAtUtc;
+            db.TenantPaymentAttempts.Add(attempt);
+            await db.SaveChangesAsync();
+            attemptId = attempt.Id;
+        }
+
+        var recovered = await CreateCheckoutViaServiceAsync(scenario, operationKey);
+        recovered.Result.Should().Be(CheckoutResult.Outcome.AttemptFailed);
+        recovered.PaymentAttemptId.Should().Be(attemptId);
+        provider.CheckoutCreateCount.Should().Be(0,
+            "a confirmed no-provider result after 24 hours must fail the old attempt without creating");
+
+        await using var verify = NewContext();
+        var expired = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == attemptId);
+        expired.State.Should().Be(TenantPaymentAttemptState.Failed);
+        expired.ProviderFenceToken.Should().BeNull();
+
+        var next = await CreateCheckoutViaServiceAsync(scenario, "checkout-expired-recovery-next");
+        next.Result.Should().Be(CheckoutResult.Outcome.Ok);
+        provider.CheckoutCreateCount.Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task Checkout_CancelConfirmationReleasesFenceForNextReceiptAttempt()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("checkout-cancel-release");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        var first = await CreateCheckoutViaServiceAsync(scenario, "cancel-release-first");
+        first.Result.Should().Be(CheckoutResult.Outcome.Ok);
+        await using var firstDb = NewContext();
+        var durableProviderId = (await firstDb.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == first.PaymentAttemptId!.Value)).ProviderObjectId;
+        durableProviderId.Should().NotBeNullOrWhiteSpace();
+        provider.SetCanceled(first.PaymentAttemptId!.Value,
+            new InteractiveProviderObject(durableProviderId!, "canceled",
+                StripePaymentService.BuildPaymentIdempotencyKey(
+                    "checkout", scenario.ChargeId, scenario.UserId, "cancel-release-first"),
+                PaymentIntentId: durableProviderId));
+
+        var canceled = await CancelCheckoutViaServiceAsync(scenario, first.PaymentAttemptId.Value);
+
+        canceled.Result.Should().Be(CheckoutResult.Outcome.AttemptCanceled);
+        await using var verify = NewContext();
+        var canceledAttempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == first.PaymentAttemptId.Value);
+        canceledAttempt.State.Should().Be(TenantPaymentAttemptState.Canceled);
+        canceledAttempt.ProviderFenceToken.Should().BeNull();
+
+        var second = await CreateCheckoutViaServiceAsync(scenario, "cancel-release-second");
+        second.Result.Should().Be(CheckoutResult.Outcome.Ok,
+            "a confirmed cancel must release the charge-level fence for the next receipt");
+        second.PaymentAttemptId.Should().NotBe(first.PaymentAttemptId);
+        provider.CheckoutCreateCount.Should().Be(2);
+    }
+
+    [SkippableFact]
+    public async Task Checkout_AmbiguousCreateIsReconciledWithoutASecondProviderCreate()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("checkout-ambiguous-create");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        provider.ThrowAfterCheckoutAccept = true;
+
+        await FluentActions.Awaiting(() => CreateCheckoutViaServiceAsync(
+                scenario, "checkout-ambiguous-create"))
+            .Should().ThrowAsync<InteractiveProviderException>();
+        provider.CheckoutCreateCount.Should().Be(1);
+
+        provider.ThrowAfterCheckoutAccept = false;
+        var recovered = await CreateCheckoutViaServiceAsync(
+            scenario, "checkout-ambiguous-create");
+        recovered.Result.Should().Be(CheckoutResult.Outcome.AttemptPending,
+            "an accepted but still-open Checkout remains fenced until the provider reaches a terminal state");
+        provider.CheckoutCreateCount.Should().Be(1,
+            "the retry must reconcile the accepted object under the durable key");
+
+        await using var verify = NewContext();
+        var attempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == recovered.PaymentAttemptId!.Value);
+        attempt.State.Should().Be(TenantPaymentAttemptState.Submitted);
+        attempt.ProviderObjectId.Should().Be(
+            $"pi_checkout_deterministic_{recovered.PaymentAttemptId}");
+    }
+
+    [SkippableFact]
+    public async Task Checkout_FinalizeCommittedBeforeResponseLossRetriesAsAlreadyPaid()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("checkout-finalize-http-lost");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        provider.CheckoutStatusAfterCreate = "succeeded";
+
+        await FluentActions.Awaiting(() => CreateCheckoutViaServiceAsync(
+                scenario, "checkout-finalize-http-lost", throwAfterFinalize: true))
+            .Should().ThrowAsync<FinalizeResponseLostException>();
+
+        provider.CheckoutCreateCount.Should().Be(1);
+        var retry = await CreateCheckoutViaServiceAsync(scenario, "checkout-finalize-http-lost");
+        retry.Result.Should().Be(CheckoutResult.Outcome.AlreadyPaid,
+            "a committed Succeeded receipt is terminal success even when the first HTTP response was lost");
+        retry.PaymentAttemptId.Should().NotBeNull();
+        provider.CheckoutCreateCount.Should().Be(1,
+            "retrying a committed finalize must not create another provider object");
+
+        await using var verify = NewContext();
+        var attempt = await verify.TenantPaymentAttempts.SingleAsync(row =>
+            row.Id == retry.PaymentAttemptId!.Value);
+        attempt.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+        attempt.ProviderFenceToken.Should().BeNull();
+        (await verify.TenantLedgerEntries.CountAsync(row =>
+            row.ProviderPaymentAttemptId == attempt.Id
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -1588,6 +1837,54 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             claim.Id, claim.ClaimOwner, claim.ClaimToken, DateTime.UtcNow),
         ReconcileCodec);
 
+    private static async Task ExecuteDurableFenceMigrationAsync(
+        RentalCommandDbContext db, string methodName)
+    {
+        var migration = new RentalCommand.Data.Migrations.DurableProviderPaymentFence();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(RentalCommand.Data.Migrations.DurableProviderPaymentFence)
+            .GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        foreach (var operation in builder.Operations)
+        {
+            switch (operation)
+            {
+                case SqlOperation sql:
+                    await db.Database.ExecuteSqlRawAsync(sql.Sql);
+                    break;
+                case AddColumnOperation add:
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"ALTER TABLE \"{add.Table}\" ADD COLUMN \"{add.Name}\" {add.ColumnType} " +
+                        (add.IsNullable ? "NULL" : "NOT NULL"));
+                    break;
+                case DropColumnOperation drop:
+                    await db.Database.ExecuteSqlRawAsync(
+                        $"ALTER TABLE \"{drop.Table}\" DROP COLUMN \"{drop.Name}\";");
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Unexpected durable-fence migration operation {operation.GetType().Name}.");
+            }
+        }
+    }
+
+    private static Task<bool> HasDatabaseFunctionAsync(
+        RentalCommandDbContext db, string signature) =>
+        db.Database.SqlQuery<bool>($"""
+            SELECT to_regprocedure({signature}) IS NOT NULL AS "Value"
+            """).SingleAsync();
+
+    private static Task<bool> HasDatabaseColumnAsync(
+        RentalCommandDbContext db, string columnName) =>
+        db.Database.SqlQuery<bool>($"""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'TenantPaymentAttempts'
+                  AND column_name = {columnName}) AS "Value"
+            """).SingleAsync();
+
     private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAsync<TCommand, TResult>(
         AtomicCommandIdentity identity,
         TCommand command,
@@ -1600,6 +1897,45 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         return await scope.ServiceProvider
             .GetRequiredService<IAtomicUnitOfWork>()
             .ExecuteAsync(identity, command, codec, ct);
+    }
+
+    private async Task<CheckoutResult> CreateCheckoutViaServiceAsync(
+        Scenario scenario, string attemptKey, bool throwAfterFinalize = false)
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        IAtomicUnitOfWork atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        if (throwAfterFinalize)
+            atomic = new ThrowAfterFinalizeAtomicUnitOfWork(atomic);
+        var service = new StripePaymentService(
+            Options.Create(new StripeConfig
+            {
+                SecretKey = "sk_test_deterministic",
+                PublishableKey = "pk_test_deterministic",
+            }),
+            scope.ServiceProvider.GetRequiredService<ISandboxGuard>(),
+            NullLogger<StripePaymentService>.Instance,
+            TimeProvider.System,
+            atomic,
+            scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>());
+        return await service.CreatePaymentCheckoutSessionAsync(
+            scenario.PortfolioId, scenario.TenantId, scenario.AccountId, scenario.ChargeId,
+            scenario.UserId, null, null, CancellationToken.None, attemptKey);
+    }
+
+    private async Task<CheckoutResult> CancelCheckoutViaServiceAsync(
+        Scenario scenario, long paymentAttemptId)
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var service = new StripePaymentService(
+            Options.Create(new StripeConfig { SecretKey = "sk_test_deterministic" }),
+            scope.ServiceProvider.GetRequiredService<ISandboxGuard>(),
+            NullLogger<StripePaymentService>.Instance,
+            TimeProvider.System,
+            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>());
+        return await service.CancelPaymentAttemptAsync(
+            scenario.PortfolioId, scenario.TenantId, scenario.AccountId, paymentAttemptId,
+            "deterministic checkout cancel", CancellationToken.None);
     }
 
     private ProviderPaymentFailureInterceptor Failure =>
@@ -1634,6 +1970,161 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         BusinessKey = $"charge:{suffix}",
         CreatedByUserId = scenario.UserId,
     };
+
+    private sealed class NeverSandboxGuard : ISandboxGuard
+    {
+        public Task<bool> IsSandboxAsync(int? portfolioId, CancellationToken ct = default) =>
+            Task.FromResult(false);
+    }
+
+    private sealed class ThrowAfterFinalizeAtomicUnitOfWork(IAtomicUnitOfWork inner)
+        : IAtomicUnitOfWork
+    {
+        private int _thrown;
+
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity, TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var outcome = await inner.ExecuteAsync(identity, command, resultCodec, ct);
+            if (identity.CommandType.StartsWith("payments.provider-create.finalize:", StringComparison.Ordinal)
+                && Interlocked.Exchange(ref _thrown, 1) == 0)
+                throw new FinalizeResponseLostException();
+            return outcome;
+        }
+    }
+
+    private sealed class FinalizeResponseLostException()
+        : Exception("The finalize response was lost after the atomic commit.");
+
+    private sealed class DeterministicInteractiveProviderClient : IInteractivePaymentProviderClient
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<string, InteractiveProviderObject> _createdByKey = [];
+        private readonly Dictionary<long, InteractiveProviderObject> _reconciledByAttempt = [];
+        private readonly Dictionary<long, InteractiveProviderObject> _canceledByAttempt = [];
+        private int _checkoutCreateCount;
+        private int _paymentIntentCreateCount;
+        private int _reconcileCount;
+        private int _cancelCount;
+
+        public int CheckoutCreateCount => Volatile.Read(ref _checkoutCreateCount);
+        public int PaymentIntentCreateCount => Volatile.Read(ref _paymentIntentCreateCount);
+        public int ReconcileCount => Volatile.Read(ref _reconcileCount);
+        public int CancelCount => Volatile.Read(ref _cancelCount);
+        public bool ThrowAfterCheckoutAccept { get; set; }
+        public string CheckoutStatusAfterCreate { get; set; } = "open";
+
+        public void Reset()
+        {
+            lock (_gate)
+            {
+                _createdByKey.Clear();
+                _reconciledByAttempt.Clear();
+                _canceledByAttempt.Clear();
+            }
+            Interlocked.Exchange(ref _checkoutCreateCount, 0);
+            Interlocked.Exchange(ref _paymentIntentCreateCount, 0);
+            Interlocked.Exchange(ref _reconcileCount, 0);
+            Interlocked.Exchange(ref _cancelCount, 0);
+            ThrowAfterCheckoutAccept = false;
+            CheckoutStatusAfterCreate = "open";
+        }
+
+        public void SetReconciled(long attemptId, InteractiveProviderObject provider)
+        {
+            lock (_gate) _reconciledByAttempt[attemptId] = provider;
+        }
+
+        public void SetCanceled(long attemptId, InteractiveProviderObject provider)
+        {
+            lock (_gate) _canceledByAttempt[attemptId] = provider;
+        }
+
+        public Task<InteractiveProviderObject> CreatePaymentIntentAsync(
+            InteractiveProviderCreateRequest request, CancellationToken ct)
+        {
+            lock (_gate)
+            {
+                if (_createdByKey.TryGetValue(request.IdempotencyKey, out var existing))
+                    return Task.FromResult(existing);
+                var created = new InteractiveProviderObject(
+                    $"pi_deterministic_{request.PaymentAttemptId}", "requires_payment_method",
+                    request.IdempotencyKey, ClientSecret: $"secret_{request.PaymentAttemptId}",
+                    PaymentIntentId: $"pi_deterministic_{request.PaymentAttemptId}");
+                _createdByKey[request.IdempotencyKey] = created;
+                Interlocked.Increment(ref _paymentIntentCreateCount);
+                return Task.FromResult(created);
+            }
+        }
+
+        public Task<InteractiveProviderObject> CreateCheckoutSessionAsync(
+            InteractiveProviderCreateRequest request, string successUrl, string cancelUrl,
+            CancellationToken ct)
+        {
+            lock (_gate)
+            {
+                if (_createdByKey.TryGetValue(request.IdempotencyKey, out var existing))
+                    return Task.FromResult(existing);
+                var created = new InteractiveProviderObject(
+                    $"pi_checkout_deterministic_{request.PaymentAttemptId}", CheckoutStatusAfterCreate,
+                    request.IdempotencyKey,
+                    CheckoutUrl: $"https://checkout.test/session/{request.PaymentAttemptId}",
+                    PaymentIntentId: $"pi_checkout_deterministic_{request.PaymentAttemptId}",
+                    CheckoutSessionId: $"cs_deterministic_{request.PaymentAttemptId}");
+                _createdByKey[request.IdempotencyKey] = created;
+                Interlocked.Increment(ref _checkoutCreateCount);
+                if (ThrowAfterCheckoutAccept)
+                    throw new InteractiveProviderException(
+                        "The provider accepted Checkout before the response was lost.");
+                return Task.FromResult(created);
+            }
+        }
+
+        public Task<InteractiveProviderObject> CreateSetupCheckoutSessionAsync(
+            InteractiveProviderCreateRequest request, string successUrl, string cancelUrl,
+            CancellationToken ct) =>
+            Task.FromResult(new InteractiveProviderObject(
+                $"cs_setup_deterministic_{request.PaymentAttemptId}", "open",
+                request.IdempotencyKey,
+                CheckoutUrl: $"https://checkout.test/setup/{request.PaymentAttemptId}",
+                CheckoutSessionId: $"cs_setup_deterministic_{request.PaymentAttemptId}"));
+
+        public Task<InteractiveProviderObject?> ReconcileAsync(
+            InteractiveProviderAttempt attempt, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _reconcileCount);
+            lock (_gate)
+            {
+                if (_reconciledByAttempt.TryGetValue(attempt.PaymentAttemptId, out var explicitProvider))
+                    return Task.FromResult<InteractiveProviderObject?>(explicitProvider);
+                if (_createdByKey.TryGetValue(attempt.IdempotencyKey, out var created))
+                    return Task.FromResult<InteractiveProviderObject?>(created);
+                return Task.FromResult<InteractiveProviderObject?>(new InteractiveProviderObject(
+                    string.Empty, "none", attempt.IdempotencyKey, ConfirmedNoProviderObject: true));
+            }
+        }
+
+        public Task<InteractiveProviderObject?> CancelOrExpireAsync(
+            InteractiveProviderAttempt attempt, CancellationToken ct)
+        {
+            Interlocked.Increment(ref _cancelCount);
+            lock (_gate)
+            {
+                if (_canceledByAttempt.TryGetValue(attempt.PaymentAttemptId, out var explicitProvider))
+                    return Task.FromResult<InteractiveProviderObject?>(explicitProvider);
+                return Task.FromResult<InteractiveProviderObject?>(new InteractiveProviderObject(
+                    string.Empty, "canceled", attempt.IdempotencyKey,
+                    ConfirmedNoProviderObject: true));
+            }
+        }
+
+        public Task<(string? CustomerId, string? PaymentMethodId)> GetSetupPaymentMethodAsync(
+            string setupIntentId, CancellationToken ct) =>
+            Task.FromResult<(string?, string?)>((null, null));
+    }
 
     private sealed class FakeAutopayProviderClient : IAutopayProviderClient
     {

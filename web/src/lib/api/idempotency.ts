@@ -28,7 +28,7 @@ function isTerminalProviderAttemptResponse(error: unknown): boolean {
 		return false;
 	}
 	const state = (candidate.extensions as Record<string, unknown>).attemptState;
-	return state === 'Canceled' || state === 'Failed';
+	return state === 'Canceled' || state === 'Failed' || state === 'Succeeded';
 }
 
 /** Explicit UI cancellation may abandon a pending operation and its retry key. */

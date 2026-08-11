@@ -38,9 +38,12 @@ export interface CheckoutUrls {
 	cancelUrl?: string;
 }
 
-/** Hosted Checkout response — redirect the browser straight to `checkoutUrl`. */
+/** Hosted Checkout response — includes the durable attempt identity for cancel/replay. */
 export interface CheckoutSession {
 	checkoutUrl: string;
+	paymentAttemptId?: number | null;
+	attemptState?: string | null;
+	alreadyPaid?: boolean;
 }
 
 /** Autopay enrollment state for one canonical tenant account. */
@@ -418,6 +421,16 @@ export const portal = {
 				api.post<CheckoutSession>(
 					`/portal/tenant-accounts/${tenantAccountId}/charges/${chargeLedgerEntryId}/checkout`,
 					body,
+					{ headers: { 'Idempotency-Key': key } }
+				)
+		),
+	cancelPaymentAttempt: (tenantAccountId: number, paymentAttemptId: number) =>
+		idempotentMutation(
+			`portal:checkout-cancel:${tenantAccountId}:${paymentAttemptId}`,
+			(key) =>
+				api.post<CheckoutSession>(
+					`/portal/tenant-accounts/${tenantAccountId}/payment-attempts/${paymentAttemptId}/cancel`,
+					{},
 					{ headers: { 'Idempotency-Key': key } }
 				)
 		),

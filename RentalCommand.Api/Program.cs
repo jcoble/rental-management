@@ -415,6 +415,7 @@ builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMe
 
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
+builder.Services.AddScoped<IInteractivePaymentProviderClient, StripeInteractivePaymentProviderClient>();
 
 // A concrete screening vendor is installed as a provider-neutral adapter. Until one is selected,
 // integrated screening is honestly unavailable while external Zillow/other workflows remain usable.

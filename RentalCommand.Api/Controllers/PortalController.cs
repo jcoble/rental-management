@@ -293,7 +293,67 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                     paymentAttemptId = result.PaymentAttemptId,
                     attemptState = result.AttemptState,
                 }),
-            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                CheckoutUrl = result.CheckoutUrl!,
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
+        };
+    }
+
+    /// <summary>
+    /// Releases one hosted Checkout reservation after the provider confirms that it was canceled
+    /// or expired. A provider-confirmed success is returned as already paid and remains fenced.
+    /// </summary>
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/payment-attempts/{paymentAttemptId:long}/cancel")]
+    [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CancelPaymentAttempt(
+        int tenantAccountId, long paymentAttemptId, CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null)
+            return Forbid();
+
+        var result = await _stripe.CancelPaymentAttemptAsync(
+            GetPortfolioId(), tenantId.Value, tenantAccountId, paymentAttemptId,
+            "Tenant canceled or expired hosted Checkout.", ct);
+        return result.Result switch
+        {
+            CheckoutResult.Outcome.NotEnabled =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { error = "Online payments are not enabled." }),
+            CheckoutResult.Outcome.NotFound =>
+                NotFound(new { error = "Payment attempt not found" }),
+            CheckoutResult.Outcome.AttemptPending =>
+                Conflict(new
+                {
+                    error = "The provider has not confirmed cancellation yet.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
         };
     }
 
@@ -362,7 +422,18 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                     attemptState = result.AttemptState,
                     providerPaymentId = result.ProviderPaymentId,
                 }),
-            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                CheckoutUrl = result.CheckoutUrl!,
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
         };
     }
 
