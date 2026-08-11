@@ -169,6 +169,9 @@ application where practical.
 
 ## Protected preview and verification rules
 
+Note (2026-08-11): this machine is retired. Use the local Docker stack
+(`scripts/local/preview-stack-local.sh`, http://127.0.0.1:15667) and run heavy builds/tests locally.
+
 - The protected preview is user-owned persistent state. Replace application containers to update it;
   do not reset or delete PostgreSQL volumes/data.
 - Azure verification runner: `azureuser@100.126.201.65` using
