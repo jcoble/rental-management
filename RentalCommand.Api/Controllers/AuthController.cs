@@ -74,6 +74,7 @@ public class AuthController : ControllerBase
     /// </summary>
     private const string ClientTypeHeader = "X-Client-Type";
     private const string MobileClientType = "mobile";
+    private static readonly TimeSpan LogoutRevocationServerTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// True when the caller identifies itself as the mobile client via <see cref="ClientTypeHeader"/>.
@@ -458,6 +459,11 @@ public class AuthController : ControllerBase
     {
         if (TryGetActiveAccessContext(out var active))
         {
+            // The browser's 1.5-second wait is only a presentation timeout. Once this
+            // request has reached the API, let the accepted revocation finish under a
+            // server-owned bound; RequestAborted would roll back the atomic transaction
+            // after the web route clears the cookies.
+            using var revocationTimeout = new CancellationTokenSource(LogoutRevocationServerTimeout);
             await _atomicCredentials.RevokeSessionAsync(
                 new RevokeAuthSessionCommand(
                     active.SessionId,
@@ -467,7 +473,7 @@ public class AuthController : ControllerBase
                     _securityClock.UtcNow(),
                     "User signed out"),
                 Guid.NewGuid(),
-                HttpContext.RequestAborted);
+                revocationTimeout.Token);
         }
 
         ClearRefreshTokenCookies();

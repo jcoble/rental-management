@@ -423,7 +423,7 @@ public sealed class RotateSessionRefreshCredentialHandler
                 ct);
         if (!reuseOrRejectedPathStillOwned)
         {
-            throw new UnauthorizedAccessException("The original refresh rotation ownership is unavailable.");
+            throw new RefreshTokenRotationOwnershipException();
         }
     }
 

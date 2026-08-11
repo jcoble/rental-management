@@ -1,9 +1,13 @@
+using System.Collections.Concurrent;
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,17 +25,23 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
 {
+    private static readonly string SigningKey = Convert.ToBase64String(
+        Enumerable.Range(1, RefreshCredentialTokenFactory.MinimumSigningKeyBytes)
+            .Select(value => (byte)value)
+            .ToArray());
     private static readonly AtomicJsonResultCodec<SessionRefreshMutationResult> Codec =
         new("session-refresh-mutation-result.v1");
 
     private readonly DateTime _now = new(2026, 7, 10, 18, 0, 0, DateTimeKind.Utc);
     private readonly Guid _sessionId = Guid.NewGuid();
+    private int _userId;
     private int _accessContextId;
     private int _membershipId;
     private int _assignmentId;
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private ReuseFailureInterceptor? _failureInterceptor;
+    private SqlCaptureInterceptor? _sqlCapture;
     private string _connectionString = string.Empty;
     private bool _dockerAvailable;
 
@@ -62,6 +72,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         }
 
         _failureInterceptor = new ReuseFailureInterceptor();
+        _sqlCapture = new SqlCaptureInterceptor();
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<ICurrentActor, RefreshTestActor>();
@@ -74,11 +85,28 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             RotateSessionRefreshCredentialCommand,
             SessionRefreshMutationResult,
             RotateSessionRefreshCredentialHandler>();
+        services.AddAtomicCommandHandler<
+            RevokeAuthSessionCommand,
+            RevokeAuthSessionResult,
+            RevokeAuthSessionHandler>();
+        services.AddSingleton(new RefreshCredentialTokenFactory(SigningKey));
+        services.AddSingleton<IAuthSecurityClock>(new FixedAuthSecurityClock(_now));
+        services.Configure<AtomicAuthSessionCredentialOptions>(options =>
+        {
+            options.SigningKey = SigningKey;
+            options.CredentialLifetimeDays = 7;
+            options.FamilyAbsoluteLifetimeDays = 30;
+            options.SessionLifetimeDays = 30;
+        });
+        services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
         services.AddSingleton(_failureInterceptor);
+        services.AddSingleton(_sqlCapture);
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
                 .UseAtomicPersistenceKernel(provider)
-                .AddInterceptors(provider.GetRequiredService<ReuseFailureInterceptor>()));
+                .AddInterceptors(
+                    provider.GetRequiredService<ReuseFailureInterceptor>(),
+                    provider.GetRequiredService<SqlCaptureInterceptor>()));
         _services = services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
@@ -117,6 +145,168 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == credentialId)).Should().Be(1);
         (await db.AtomicAuditLogs.CountAsync(item => item.ChangeReason == "Refresh credential family issued"))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ApiCredentialService_RefreshReplayReturnsReuseAndRevokesTheWholeFamily()
+    {
+        SkipIfNoDocker();
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var credentialId = Guid.NewGuid();
+        var bearer = tokens.CreateBearer(credentialId);
+        var familyId = Guid.NewGuid();
+        await ExecuteAtomicAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, tokens.HashBearer(bearer)),
+            Codec);
+
+        await using var scope = _services!.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAtomicAuthSessionCredentialService>();
+        var first = await service.RotateAsync(new AtomicAuthSessionRotationRequest(Guid.NewGuid(), bearer));
+        var replay = await service.RotateAsync(new AtomicAuthSessionRotationRequest(Guid.NewGuid(), bearer));
+
+        first.Status.Should().Be(SessionRefreshMutationStatus.Rotated);
+        replay.Status.Should().Be(SessionRefreshMutationStatus.ReuseDetected);
+        replay.ReplacementBearer.Should().BeNull();
+
+        await using var db = NewPlainContext();
+        (await db.AuthSessions.SingleAsync(item => item.Id == _sessionId)).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        (await db.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == familyId))
+            .RevokedAtUtc.Should().NotBeNull();
+        (await db.AtomicAuditLogs.CountAsync(item =>
+            item.ChangeReason == "Refresh credential reuse detected"))
+            .Should().Be(1);
+        (await service.RotateAsync(new AtomicAuthSessionRotationRequest(
+            Guid.NewGuid(),
+            first.ReplacementBearer!))).Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+    }
+
+    [SkippableFact]
+    public async Task ApiCredentialService_LogoutRevokesTheSessionAndRejectsItsRefreshCredential()
+    {
+        SkipIfNoDocker();
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var credentialId = Guid.NewGuid();
+        var bearer = tokens.CreateBearer(credentialId);
+        var familyId = Guid.NewGuid();
+        await ExecuteAtomicAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, tokens.HashBearer(bearer)),
+            Codec);
+
+        await using var scope = _services!.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAtomicAuthSessionCredentialService>();
+        var logout = await service.RevokeSessionAsync(
+            new RevokeAuthSessionCommand(
+                _sessionId,
+                _userId,
+                _accessContextId,
+                1,
+                _now.AddMinutes(2),
+                "User signed out"),
+            Guid.NewGuid());
+
+        logout.Revoked.Should().BeTrue();
+        (await service.RotateAsync(new AtomicAuthSessionRotationRequest(
+            Guid.NewGuid(),
+            bearer))).Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+
+        await using var db = NewPlainContext();
+        (await db.AuthSessions.SingleAsync(item => item.Id == _sessionId)).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        (await db.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == familyId))
+            .RevokedAtUtc.Should().NotBeNull();
+    }
+
+    [SkippableFact]
+    public async Task ApiCredentialService_LogoutWithLargeRotationHistoryUsesSetBasedSql()
+    {
+        SkipIfNoDocker();
+        const int historyLength = 4000;
+        var familyId = Guid.NewGuid();
+        var credentialIds = Enumerable.Range(0, historyLength)
+            .Select(_ => Guid.NewGuid())
+            .ToArray();
+        var family = new AuthSessionRefreshTokenFamily
+        {
+            Id = familyId,
+            AuthSessionId = _sessionId,
+            CreatedAtUtc = _now,
+            AbsoluteExpiresAtUtc = _now.AddDays(30),
+        };
+        var credentials = credentialIds.Select((credentialId, index) =>
+            new AuthSessionRefreshCredential
+            {
+                Id = credentialId,
+                RefreshTokenFamilyId = familyId,
+                TokenHash = Hash($"history-{index}"),
+                IssuedAtUtc = _now.AddSeconds(index),
+                ExpiresAtUtc = _now.AddDays(7),
+                ConsumedAtUtc = index == historyLength - 1
+                    ? null
+                    : _now.AddSeconds(index).AddMilliseconds(500),
+                ConsumedByOperationId = index == historyLength - 1
+                    ? null
+                    : Guid.NewGuid(),
+                ReplacedByCredentialId = index == historyLength - 1
+                    ? null
+                    : credentialIds[index + 1],
+            })
+            .ToArray();
+
+        await using (var seed = NewPlainContext())
+        {
+            seed.AuthSessionRefreshTokenFamilies.Add(family);
+            seed.AuthSessionRefreshCredentials.AddRange(credentials);
+            await seed.SaveChangesAsync();
+        }
+
+        _sqlCapture!.Clear();
+        await using var scope = _services!.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAtomicAuthSessionCredentialService>();
+        using var serverTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var logout = await service.RevokeSessionAsync(
+            new RevokeAuthSessionCommand(
+                _sessionId,
+                _userId,
+                _accessContextId,
+                1,
+                _now.AddMinutes(2),
+                "User signed out"),
+            Guid.NewGuid(),
+            serverTimeout.Token);
+
+        logout.Revoked.Should().BeTrue();
+        serverTimeout.IsCancellationRequested.Should().BeFalse();
+
+        var commands = _sqlCapture.Snapshot();
+        var updates = commands
+            .Where(command => command.TrimStart().StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        updates.Should().Contain(command =>
+            command.Contains("\"AuthSessions\"", StringComparison.Ordinal) &&
+            command.Contains("\"Id\"", StringComparison.Ordinal) &&
+            command.Contains("\"UserId\"", StringComparison.Ordinal));
+        updates.Should().Contain(command =>
+            command.Contains("\"AuthSessionRefreshTokenFamilies\"", StringComparison.Ordinal) &&
+            command.Contains("\"AuthSessionId\"", StringComparison.Ordinal));
+        updates.Should().Contain(command =>
+            command.Contains("\"AuthSessionRefreshCredentials\"", StringComparison.Ordinal) &&
+            command.Contains("\"AuthSessionId\"", StringComparison.Ordinal));
+        commands.Should().NotContain(command =>
+            command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("\"AuthSessionRefreshTokenFamilies\"", StringComparison.Ordinal) &&
+            command.Contains("\"AuthSessionRefreshCredentials\"", StringComparison.Ordinal));
+
+        await using var verify = NewPlainContext();
+        (await verify.AuthSessions.SingleAsync(item => item.Id == _sessionId))
+            .Status.Should().Be(AuthSessionStatus.Revoked);
+        (await verify.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == familyId))
+            .RevokedAtUtc.Should().Be(_now.AddMinutes(2));
+        (await verify.AuthSessionRefreshCredentials.CountAsync(item =>
+            item.RefreshTokenFamilyId == familyId && item.RevokedAtUtc != null))
+            .Should().Be(historyLength);
     }
 
     [SkippableFact]
@@ -393,6 +583,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(user, portfolio);
         await db.SaveChangesAsync();
+        _userId = user.Id;
         var context = new WorkspaceAccessContext
         {
             UserId = user.Id,
@@ -516,6 +707,15 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         public string? IpAddress => "127.0.0.1";
     }
 
+    private sealed class FixedAuthSecurityClock : IAuthSecurityClock
+    {
+        private readonly DateTime _utcNow;
+
+        public FixedAuthSecurityClock(DateTime utcNow) => _utcNow = utcNow;
+
+        public DateTime UtcNow() => _utcNow;
+    }
+
     private sealed class ReuseFailureInterceptor : SaveChangesInterceptor
     {
         public bool FailNextReuse { get; set; }
@@ -534,6 +734,58 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             }
 
             return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
+    private sealed class SqlCaptureInterceptor : DbCommandInterceptor
+    {
+        private readonly ConcurrentQueue<string> _commands = new();
+
+        public void Clear()
+        {
+            while (_commands.TryDequeue(out _))
+            {
+            }
+        }
+
+        public string[] Snapshot() => _commands.ToArray();
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result)
+        {
+            _commands.Enqueue(command.CommandText);
+            return base.NonQueryExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            _commands.Enqueue(command.CommandText);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            _commands.Enqueue(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            _commands.Enqueue(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 
