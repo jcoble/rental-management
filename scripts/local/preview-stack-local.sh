@@ -38,6 +38,8 @@ nuget_cache_dir="${RENTAL_COMMAND_NUGET_CACHE_DIR:-${HOME}/.nuget/packages}"
 api_image="rc-api:local"
 engine_image="rc-engine:local"
 web_image="rc-web:local"
+lifecycle_lock_dir="$stack_root/.lifecycle.lock"
+lifecycle_lock_pid_file="$lifecycle_lock_dir/pid"
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -53,12 +55,12 @@ require_prerequisites() {
   require_command openssl
   require_command lsof
   docker info >/dev/null
-  docker compose version >/dev/null
+  TAILSCALE_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose version >/dev/null
   docker buildx version >/dev/null
 }
 
 compose() {
-  docker compose \
+  TAILSCALE_IP="$loopback_ip" PREVIEW_WEB_PORT="$preview_port" docker compose \
     --project-name "$project_name" \
     --project-directory "$repo_root/deploy" \
     --env-file "$env_file" \
@@ -148,13 +150,48 @@ image_is_ready() {
   [[ "$platform" == "amd64/linux" ]]
 }
 
+build_state_value() {
+  local key="$1"
+  [[ -f "$build_sha_file" ]] || return 0
+  sed -n "s/^${key}=//p" "$build_sha_file" | tail -n 1
+}
+
 images_need_build() {
-  local current_sha="$1"
-  if [[ ! -f "$build_sha_file" || "$(cat "$build_sha_file")" != "$current_sha" ]]; then
-    return 0
-  fi
-  image_is_ready "$api_image" && image_is_ready "$engine_image" && image_is_ready "$web_image" || return 0
+  local current_sha="$1" image_spec image_key image recorded_id current_id
+  [[ "$(build_state_value status)" == "complete" ]] || return 0
+  [[ "$(build_state_value commit_sha)" == "$current_sha" ]] || return 0
+
+  for image_spec in "api|$api_image" "engine|$engine_image" "web|$web_image"; do
+    image_key="${image_spec%%|*}"
+    image="${image_spec#*|}"
+    recorded_id="$(build_state_value "${image_key}_image_id")"
+    current_id="$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null || true)"
+    [[ -n "$recorded_id" && "$current_id" == "$recorded_id" ]] || return 0
+    image_is_ready "$image" || return 0
+  done
   return 1
+}
+
+record_build_state() {
+  local current_sha="$1" status="$2" tmp_file image_spec image_key image image_id
+  tmp_file="${build_sha_file}.tmp.$$"
+  {
+    printf 'commit_sha=%s\n' "$current_sha"
+    printf 'status=%s\n' "$status"
+    for image_spec in "api|$api_image" "engine|$engine_image" "web|$web_image"; do
+      image_key="${image_spec%%|*}"
+      image="${image_spec#*|}"
+      image_id="$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null || true)"
+      if [[ "$status" == "complete" && -z "$image_id" ]]; then
+        printf 'Cannot record complete build state; image is missing: %s\n' "$image" >&2
+        rm -f -- "$tmp_file"
+        return 1
+      fi
+      printf '%s_image_id=%s\n' "$image_key" "$image_id"
+    done
+  } > "$tmp_file"
+  chmod 600 "$tmp_file"
+  mv -f -- "$tmp_file" "$build_sha_file"
 }
 
 record_image_metric() {
@@ -169,6 +206,7 @@ build_images() {
   build_dir="$(mktemp -d "$state_dir/build.XXXXXX")"
   trap 'rc=$?; rm -rf -- "$build_dir"; exit "$rc"' ERR
   current_sha="$(git -C "$repo_root" rev-parse HEAD)"
+  record_build_state "$current_sha" building
 
   printf 'Build source: git archive HEAD (%s)\n' "$current_sha"
   git -C "$repo_root" archive --format=tar HEAD | tar -xf - -C "$build_dir"
@@ -206,6 +244,7 @@ build_images() {
     "$build_dir/publish/api"
   elapsed=$((SECONDS - started_at))
   record_image_metric "$api_image" "$elapsed"
+  record_build_state "$current_sha" building
 
   started_at="$SECONDS"
   printf 'COMMAND: docker buildx build --platform %s --load -f Dockerfile.engine -t %s publish/engine\n' "$build_platform" "$engine_image"
@@ -215,6 +254,7 @@ build_images() {
     "$build_dir/publish/engine"
   elapsed=$((SECONDS - started_at))
   record_image_metric "$engine_image" "$elapsed"
+  record_build_state "$current_sha" building
 
   started_at="$SECONDS"
   printf 'COMMAND: docker buildx build --platform %s --load -f Dockerfile.web --build-arg VITE_API_URL=/api/v1 -t %s .\n' "$build_platform" "$web_image"
@@ -226,10 +266,40 @@ build_images() {
   elapsed=$((SECONDS - started_at))
   record_image_metric "$web_image" "$elapsed"
 
-  printf '%s\n' "$current_sha" > "$build_sha_file"
+  record_build_state "$current_sha" complete
   chmod 600 "$build_sha_file" "$build_metrics_file"
   trap - ERR
   rm -rf -- "$build_dir"
+}
+
+release_lifecycle_lock() {
+  local owner_pid=""
+  [[ -f "$lifecycle_lock_pid_file" ]] || return 0
+  owner_pid="$(cat "$lifecycle_lock_pid_file" 2>/dev/null || true)"
+  if [[ "$owner_pid" == "$$" ]]; then
+    rm -f -- "$lifecycle_lock_pid_file"
+    rmdir "$lifecycle_lock_dir" 2>/dev/null || true
+  fi
+}
+
+acquire_lifecycle_lock() {
+  local owner_pid=""
+  if mkdir "$lifecycle_lock_dir" 2>/dev/null; then
+    printf '%s\n' "$$" > "$lifecycle_lock_pid_file"
+    trap release_lifecycle_lock EXIT
+    return 0
+  fi
+
+  owner_pid="$(cat "$lifecycle_lock_pid_file" 2>/dev/null || true)"
+  if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+    printf 'Preview lifecycle lock is held by PID %s; this %s action will not run concurrently.\n' "$owner_pid" "$action" >&2
+    printf 'If that PID is no longer running and this lock is stale, clear it with: rm -rf -- %s\n' "$lifecycle_lock_dir" >&2
+  elif [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
+    printf 'Stale preview lifecycle lock from PID %s. After confirming no lifecycle action is running, clear it with: rm -rf -- %s\n' "$owner_pid" "$lifecycle_lock_dir" >&2
+  else
+    printf 'Stale preview lifecycle lock has no recorded PID. After confirming no lifecycle action is running, clear it with: rm -rf -- %s\n' "$lifecycle_lock_dir" >&2
+  fi
+  exit 1
 }
 
 check_port_available() {
@@ -249,16 +319,18 @@ check_port_available() {
 
 verify_loopback_binding() {
   local gateway_container bindings
-  gateway_container="$(compose ps -q gateway)"
-  [[ -n "$gateway_container" ]] || {
-    printf 'Gateway container was not created.\n' >&2
-    exit 1
-  }
-  bindings="$(docker inspect "$gateway_container" --format '{{json .HostConfig.PortBindings}}')"
-  [[ "$bindings" == *"\"HostIp\":\"${loopback_ip}\""* && "$bindings" == *"\"HostPort\":\"${preview_port}\""* ]] || {
+  gateway_container="$(compose ps -q gateway 2>/dev/null || true)"
+  if [[ -z "$gateway_container" ]]; then
+    printf 'Gateway container was not created; tearing down this preview project.\n' >&2
+    compose down --remove-orphans || printf 'Preview project teardown failed after loopback safety check.\n' >&2
+    return 1
+  fi
+  bindings="$(docker inspect "$gateway_container" --format '{{json .HostConfig.PortBindings}}' 2>/dev/null || true)"
+  if [[ "$bindings" != *"\"HostIp\":\"${loopback_ip}\""* || "$bindings" != *"\"HostPort\":\"${preview_port}\""* ]]; then
     printf 'Gateway binding is not loopback-only: %s\n' "$bindings" >&2
-    exit 1
-  }
+    compose down --remove-orphans || printf 'Preview project teardown failed after loopback safety check.\n' >&2
+    return 1
+  fi
   printf 'Gateway binding verified: %s:%s -> container 8080\n' "$loopback_ip" "$preview_port"
 }
 
@@ -295,6 +367,10 @@ start_stack() {
   printf 'Open %s/login\n' "$web_origin"
 }
 
+if [[ "$action" == "start" || "$action" == "rebuild" || "$action" == "stop" ]]; then
+  acquire_lifecycle_lock
+fi
+
 case "$action" in
   start)
     require_prerequisites
@@ -302,7 +378,7 @@ case "$action" in
     write_compose_env
     current_sha="$(git -C "$repo_root" rev-parse HEAD)"
     if images_need_build "$current_sha"; then
-      printf 'Images are absent or were not built from current HEAD; building serially.\n'
+      printf 'Images are absent, stale, or were not built from current HEAD; building serially.\n'
       build_images
       start_stack "$current_sha" 1
     else
