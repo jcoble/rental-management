@@ -11,6 +11,7 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Screening;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -18,6 +19,7 @@ using RentalCommand.Data.Auth;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Data.Screening;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -238,10 +240,26 @@ internal static class AtomicDomainTestKernel
     internal static ServiceProvider CreateForInspectionsPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);
+        services.AddPendingFileUploadStore();
         services.AddAtomicCommandHandler<
             AtomicInspectionMutationCommand,
             AtomicInspectionMutationResult,
             AtomicInspectionMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForScreeningPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddPendingFileUploadStore();
+        services.AddAtomicCommandHandler<
+            PrepareAdverseActionNoticeCommand,
+            PrepareAdverseActionNoticeResult,
+            PrepareAdverseActionNoticeHandler>();
+        services.AddAtomicCommandHandler<
+            CreateAdverseActionNoticeCommand,
+            CreateAdverseActionNoticeResult,
+            CreateAdverseActionNoticeHandler>();
         return services.BuildServiceProvider();
     }
 

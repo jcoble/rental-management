@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FluentAssertions.Execution;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -57,6 +59,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -332,6 +335,71 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReopenThenRecomplete_ClearsCompletionArtifactsAndGeneratesFreshReport()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+
+        var items = created!.Items.OrderBy(i => i.SortOrder).ToList();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Before reopen" }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+        var (firstSummary, firstError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        firstError.Should().BeNull();
+        firstSummary.Should().NotBeNull();
+        var oldReportId = firstSummary!.ReportStoredFileId;
+        oldReportId.Should().NotBeNull();
+        var oldCompletedAt = await _db.Inspections.AsNoTracking()
+            .Where(inspection => inspection.Id == created.Id)
+            .Select(inspection => inspection.CompletedAt)
+            .SingleAsync();
+
+        var reopened = await _service.UpdateAuthorizedAsync(_scope, created.Id,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled }, NextOperationKey());
+        reopened.Should().NotBeNull();
+
+        using (new AssertionScope())
+        {
+            var reopenedRow = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+            reopenedRow.Status.Should().Be(InspectionStatus.Scheduled);
+            reopenedRow.CompletedAt.Should().BeNull();
+            reopenedRow.ReportStoredFileId.Should().BeNull();
+            (await _db.StoredFiles.IgnoreQueryFilters().AsNoTracking()
+                .SingleAsync(file => file.Id == oldReportId!.Value))
+                .DeletedAt.Should().NotBeNull();
+            (await _db.InspectionItems.AsNoTracking()
+                .Where(item => item.InspectionId == created.Id)
+                .Select(item => item.SpawnedWorkOrderId)
+                .ToListAsync())
+                .Should().OnlyContain(workOrderId => workOrderId == null);
+
+            await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+                new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "After reopen" }, NextOperationKey());
+            var (secondSummary, secondError) = await _service.CompleteAuthorizedAsync(
+                _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+            secondError.Should().BeNull();
+            secondSummary.Should().NotBeNull();
+            secondSummary!.ReportStoredFileId.Should().NotBeNull();
+            secondSummary.ReportStoredFileId.Should().NotBe(oldReportId);
+
+            var recompleted = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+            recompleted.CompletedAt.Should().NotBe(oldCompletedAt);
+            recompleted.ReportStoredFileId.Should().Be(secondSummary.ReportStoredFileId);
+        }
+    }
+
+    [Fact]
     public async Task Complete_UsesBusinessClockForCompletionWorkOrdersAndReport()
     {
         var businessNowUtc = DateTime.SpecifyKind(
@@ -344,6 +412,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             logger,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -398,6 +467,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -441,6 +511,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -547,6 +618,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -614,6 +686,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -672,6 +745,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());

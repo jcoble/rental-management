@@ -268,7 +268,7 @@ public sealed class PendingFileUploadStore : IPendingFileUploadStore
         public string RequestFingerprint { get; init; } = string.Empty;
     }
 
-    internal static string ComputeOperationKeyHash(string value)
+    public static string ComputeOperationKeyHash(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         return Convert.ToHexString(

@@ -1,12 +1,12 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Constants;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Screening;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Data.Screening;
 
@@ -39,7 +39,9 @@ public sealed class PrepareAdverseActionNoticeHandler
                 application.Id,
                 application.FirstName,
                 application.LastName,
+                application.Status,
                 application.DecisionReason,
+                application.ReviewedAtUtc,
                 PortfolioName = application.Portfolio != null ? application.Portfolio.Name : null,
                 ManagementCompanyName = application.Portfolio != null
                     ? application.Portfolio.ManagementCompanyName : null,
@@ -55,25 +57,37 @@ public sealed class PrepareAdverseActionNoticeHandler
                     .OrderByDescending(screening => screening.CompletedAtUtc)
                     .Select(screening => new
                     {
+                        screening.Id,
+                        screening.Status,
                         screening.Decision,
                         screening.ConsumerReportUsedForDecision,
                         screening.CreditReportingAgencyName,
                         screening.CreditReportingAgencyAddress,
                         screening.CreditReportingAgencyPhone,
                         screening.DecisionReason,
+                        screening.DecisionRecordedByUserId,
+                        screening.DecisionRecordedAtUtc,
                     })
                     .FirstOrDefault(),
             })
             .SingleOrDefaultAsync(ct);
         if (prepared is null)
             throw ScreeningCommandSupport.Denied();
+        if (prepared.Status != ApplicationStatus.Declined)
+        {
+            throw new ArgumentException(
+                "The application must be declined before an adverse-action notice can be prepared.");
+        }
         if (prepared.Screening is not
             {
+                Id: > 0,
+                Status: ApplicantScreeningStatus.Completed,
                 Decision: ScreeningDecision.Decline,
                 ConsumerReportUsedForDecision: true,
                 CreditReportingAgencyName: not null,
                 CreditReportingAgencyAddress: not null,
                 CreditReportingAgencyPhone: not null,
+                DecisionRecordedAtUtc: not null,
             })
         {
             throw new ArgumentException(
@@ -87,10 +101,7 @@ public sealed class PrepareAdverseActionNoticeHandler
                 : string.IsNullOrWhiteSpace(prepared.Screening.DecisionReason)
                     ? "Information contained in a consumer report obtained from the consumer reporting agency named below."
                     : prepared.Screening.DecisionReason;
-        var digest = Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes(command.OperationKey))).ToLowerInvariant();
         var fileName = $"adverse-action-application-{command.ApplicationId}.pdf";
-        var storageKey = $"adverse-action-{command.PortfolioId}-{command.ApplicationId}-{digest}.pdf";
         var craBlock = $"{prepared.Screening.CreditReportingAgencyName}, "
             + $"{prepared.Screening.CreditReportingAgencyAddress}, "
             + prepared.Screening.CreditReportingAgencyPhone;
@@ -98,6 +109,7 @@ public sealed class PrepareAdverseActionNoticeHandler
         return new PrepareAdverseActionNoticeResult(
             ScreeningMutationOutcome.Applied,
             prepared.Id,
+            prepared.Screening.Id,
             prepared.ManagementCompanyName,
             prepared.PortfolioName,
             $"{prepared.FirstName} {prepared.LastName}".Trim(),
@@ -112,7 +124,23 @@ public sealed class PrepareAdverseActionNoticeHandler
             prepared.Screening.CreditReportingAgencyPhone,
             craBlock,
             fileName,
-            storageKey,
+            prepared.Screening.DecisionRecordedAtUtc,
+            ScreeningCommandSupport.ComputeAdverseActionDecisionFingerprint(
+                new ScreeningCommandSupport.AdverseActionDecisionSnapshot(
+                    prepared.Id,
+                    prepared.Screening.Id,
+                    prepared.Status,
+                    prepared.DecisionReason,
+                    prepared.ReviewedAtUtc,
+                    prepared.Screening.Status,
+                    prepared.Screening.Decision,
+                    prepared.Screening.DecisionReason,
+                    prepared.Screening.DecisionRecordedByUserId,
+                    prepared.Screening.DecisionRecordedAtUtc,
+                    prepared.Screening.ConsumerReportUsedForDecision,
+                    prepared.Screening.CreditReportingAgencyName,
+                    prepared.Screening.CreditReportingAgencyAddress,
+                    prepared.Screening.CreditReportingAgencyPhone)),
             command.SendToApplicant,
             now);
     }
@@ -142,36 +170,91 @@ public sealed class CreateAdverseActionNoticeHandler
             command.ExpectedAccessRevision);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Reason);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.CreditReportingAgency);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.DecisionFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Purpose);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.OperationKeyHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.RequestFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.StoragePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.StorageKey);
-        if (command.FileSize <= 0)
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ContentType);
+        if (command.ScreeningId <= 0 || command.PendingUploadId == Guid.Empty
+            || command.DecisionRecordedAtUtc == default || command.FileSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(command.FileSize));
 
         await ScreeningCommandSupport.LockStaffApplicationAsync(context, command.PortfolioId,
             command.ApplicationId, command.AuthSessionId, command.AccessContextId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
         context.UseDatabaseWallClockForAudit(now);
-        var applicant = await ScreeningCommandSupport.AuthorizedApplications(
+        var application = await ScreeningCommandSupport.AuthorizedApplications(
                 command.PortfolioId, command.ApplicationId, command.ActorUserId,
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
                 _db, now, tracking: false)
-            .Select(application => new { application.Email })
             .SingleOrDefaultAsync(ct);
-        if (applicant is null)
+        if (application is null)
             throw ScreeningCommandSupport.Denied();
+
+        var screening = await _db.Set<ApplicantScreening>()
+            .SingleOrDefaultAsync(candidate => candidate.Id == command.ScreeningId
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.ApplicationId == command.ApplicationId, ct);
+        if (screening is null
+            || application.Status != ApplicationStatus.Declined
+            || screening.Status != ApplicantScreeningStatus.Completed
+            || screening.Decision != ScreeningDecision.Decline
+            || !screening.ConsumerReportUsedForDecision
+            || !ScreeningCommandSupport.HasCompleteCraContact(screening)
+            || screening.DecisionRecordedAtUtc != command.DecisionRecordedAtUtc
+            || !ScreeningCommandSupport.FingerprintsMatch(
+                command.DecisionFingerprint,
+                ScreeningCommandSupport.ComputeAdverseActionDecisionFingerprint(
+                    new ScreeningCommandSupport.AdverseActionDecisionSnapshot(
+                        application.Id,
+                        screening.Id,
+                        application.Status,
+                        application.DecisionReason,
+                        application.ReviewedAtUtc,
+                        screening.Status,
+                        screening.Decision,
+                        screening.DecisionReason,
+                        screening.DecisionRecordedByUserId,
+                        screening.DecisionRecordedAtUtc,
+                        screening.ConsumerReportUsedForDecision,
+                        screening.CreditReportingAgencyName,
+                        screening.CreditReportingAgencyAddress,
+                        screening.CreditReportingAgencyPhone))))
+        {
+            throw new InvalidOperationException(
+                "The screening decision changed after this notice was prepared. Generate a new adverse-action notice.");
+        }
+
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(
+            _db,
+            context,
+            command.PortfolioId,
+            command.ActorUserId,
+            [new AtomicPendingFileUploadExpectation(
+                command.PendingUploadId,
+                command.Purpose,
+                command.OperationKeyHash,
+                command.RequestFingerprint,
+                command.StoragePath,
+                command.FileName,
+                command.ContentType,
+                command.FileSize)],
+            ct)).Single();
 
         var storedFile = new StoredFile
         {
             PortfolioId = command.PortfolioId,
             FileName = command.FileName,
-            FilePath = command.StorageKey,
-            ContentType = "application/pdf",
+            FilePath = command.StoragePath,
+            ContentType = command.ContentType,
             FileSize = command.FileSize,
             EntityType = "Application",
             EntityId = command.ApplicationId,
             UploadedAt = command.GeneratedAtUtc,
         };
-        var sentAtUtc = command.SendToApplicant && !string.IsNullOrWhiteSpace(applicant.Email)
+        var sentAtUtc = command.SendToApplicant && !string.IsNullOrWhiteSpace(application.Email)
             ? command.GeneratedAtUtc
             : (DateTime?)null;
         var notice = new AdverseActionNotice
@@ -191,6 +274,10 @@ public sealed class CreateAdverseActionNoticeHandler
             command.PortfolioId, command.ActorUserId, nameof(StoredFile), 0,
             AuditLogOperation.Created, "Adverse-action PDF stored."));
         await context.FlushBusinessAsync(ct);
+        pending.State = PendingFileUploadState.Finalized;
+        pending.StoredFileId = storedFile.Id;
+        pending.UpdatedAtUtc = now;
+        await context.FlushBusinessAsync(ct);
         context.StageSemanticEvent(ScreeningCommandSupport.Audit(
             command.PortfolioId, command.ActorUserId, nameof(AdverseActionNotice), notice.Id,
             AuditLogOperation.Created, "FCRA adverse-action notice generated."), now);
@@ -209,7 +296,7 @@ public sealed class CreateAdverseActionNoticeHandler
                     attachmentStoredFileId = storedFile.Id,
                     attachmentFileName = storedFile.FileName,
                     attachmentContentType = storedFile.ContentType,
-                    to = applicant.Email,
+                    to = application.Email,
                     subject = "Notice regarding your rental application",
                     body = "Please find attached a notice regarding the decision on your rental application, "
                         + "including your rights under the Fair Credit Reporting Act (FCRA).",

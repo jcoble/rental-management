@@ -3,12 +3,14 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Documents;
 using RentalCommand.Data.Inspections;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -42,8 +44,12 @@ public sealed record AtomicInspectionMutationResult(
     string? Error = null);
 
 public sealed record AttachInspectionReportRequest(
-    string FileName,
+    Guid PendingUploadId,
+    string Purpose,
+    string OperationKeyHash,
+    string RequestFingerprint,
     string StoragePath,
+    string FileName,
     string ContentType,
     long FileSize);
 
@@ -460,6 +466,7 @@ public sealed class AtomicInspectionMutationHandler
             throw new ArgumentOutOfRangeException(nameof(command.Operation));
 
         var requestUpdate = Read<UpdateInspectionRequest>(command);
+        var wasCompleted = inspection.Status == InspectionStatus.Completed;
         if (requestUpdate.Status is InspectionStatus.Completed && inspection.Status != InspectionStatus.Completed)
             throw new DomainValidationException(
                 "Use the Complete action to finish an inspection so its checklist is verified, failed items become work orders, and the report is generated.");
@@ -498,6 +505,56 @@ public sealed class AtomicInspectionMutationHandler
         if (requestUpdate.Outcome is not null) inspection.Outcome = requestUpdate.Outcome;
         if (requestUpdate.Notes is not null) inspection.Notes = requestUpdate.Notes;
         if (requestUpdate.Inspector is not null) inspection.Inspector = requestUpdate.Inspector;
+
+        var reopening = wasCompleted
+            && requestUpdate.Status.HasValue
+            && requestUpdate.Status.Value != InspectionStatus.Completed;
+        if (reopening)
+        {
+            var previousReportId = inspection.ReportStoredFileId;
+            inspection.CompletedAt = null;
+            inspection.ReportStoredFileId = null;
+
+            var derivedItems = await db.Set<InspectionItem>()
+                .Where(item => item.PortfolioId == command.PortfolioId
+                    && item.InspectionId == inspection.Id
+                    && item.SpawnedWorkOrderId != null)
+                .ToListAsync(ct);
+            foreach (var item in derivedItems)
+            {
+                item.SpawnedWorkOrderId = null;
+                attempt.BindSemanticAudit(item, Audit(command, nameof(InspectionItem), item.Id,
+                    AuditLogOperation.Updated, "Inspection reopened; derived work-order link cleared"));
+            }
+
+            if (previousReportId.HasValue)
+            {
+                var previousReport = await db.Set<StoredFile>()
+                    .SingleOrDefaultAsync(file => file.Id == previousReportId.Value
+                        && file.PortfolioId == command.PortfolioId
+                        && file.EntityType == nameof(Inspection), ct);
+                if (previousReport is not null && previousReport.DeletedAt is null)
+                {
+                    previousReport.DeletedAt = now;
+                    attempt.BindSemanticAudit(previousReport, Audit(command, nameof(StoredFile),
+                        previousReport.Id, AuditLogOperation.Deleted,
+                        "Inspection reopened; prior report retired"));
+                    attempt.StageOutbox(new OutboxMessage
+                    {
+                        PortfolioId = command.PortfolioId,
+                        MessageType = "blob-delete",
+                        Payload = JsonSerializer.Serialize(new
+                        {
+                            storedFileId = previousReport.Id,
+                            storagePath = previousReport.FilePath,
+                        }),
+                        IdempotencyKey = $"inspection-report-retire:{inspection.Id}:{previousReport.Id}",
+                        CreatedAtUtc = now,
+                        NextAttemptAtUtc = now,
+                    });
+                }
+            }
+        }
         inspection.UpdatedAt = now;
         attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
             AuditLogOperation.Updated, "Inspection updated"));
@@ -604,13 +661,33 @@ public sealed class AtomicInspectionMutationHandler
         if (inspection.Status != InspectionStatus.Completed)
             return Rejected(command.EntityId, "Complete the inspection before attaching its report.");
         if (inspection.ReportStoredFileId.HasValue)
-            return Applied(inspection.ReportStoredFileId.Value,
-                JsonSerializer.Serialize(inspection.ReportStoredFileId.Value));
+            return Rejected(command.EntityId,
+                "This inspection already has a finalized report. Start a new inspection revision for another report.");
 
         var request = Read<AttachInspectionReportRequest>(command);
-        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.StoragePath)
+        if (request.PendingUploadId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.Purpose)
+            || string.IsNullOrWhiteSpace(request.OperationKeyHash)
+            || string.IsNullOrWhiteSpace(request.RequestFingerprint)
+            || string.IsNullOrWhiteSpace(request.FileName)
+            || string.IsNullOrWhiteSpace(request.StoragePath)
             || string.IsNullOrWhiteSpace(request.ContentType) || request.FileSize <= 0)
             throw new ArgumentException("Inspection report file metadata is incomplete.");
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(
+            db,
+            attempt,
+            command.PortfolioId,
+            command.ActorUserId,
+            [new AtomicPendingFileUploadExpectation(
+                request.PendingUploadId,
+                request.Purpose,
+                request.OperationKeyHash,
+                request.RequestFingerprint,
+                request.StoragePath,
+                request.FileName,
+                request.ContentType,
+                request.FileSize)],
+            ct)).Single();
         var stored = new StoredFile
         {
             PortfolioId = command.PortfolioId,
@@ -625,6 +702,10 @@ public sealed class AtomicInspectionMutationHandler
         db.Add(stored);
         attempt.BindSemanticAudit(stored, Audit(command, nameof(StoredFile), 0,
             AuditLogOperation.Created, "Inspection report stored"));
+        await attempt.FlushBusinessAsync(ct);
+        pending.State = PendingFileUploadState.Finalized;
+        pending.StoredFileId = stored.Id;
+        pending.UpdatedAtUtc = now;
         await attempt.FlushBusinessAsync(ct);
         inspection.ReportStoredFileId = stored.Id;
         inspection.UpdatedAt = now;

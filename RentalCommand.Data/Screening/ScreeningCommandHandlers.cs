@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
@@ -484,6 +486,35 @@ public sealed class ApplyScreeningProviderDeliveryHandler
 
 internal static class ScreeningCommandSupport
 {
+    internal sealed record AdverseActionDecisionSnapshot(
+        int ApplicationId,
+        int ScreeningId,
+        ApplicationStatus ApplicationStatus,
+        string? ApplicationDecisionReason,
+        DateTime? ApplicationReviewedAtUtc,
+        ApplicantScreeningStatus ScreeningStatus,
+        ScreeningDecision? Decision,
+        string? DecisionReason,
+        int? DecisionRecordedByUserId,
+        DateTime? DecisionRecordedAtUtc,
+        bool ConsumerReportUsedForDecision,
+        string? CreditReportingAgencyName,
+        string? CreditReportingAgencyAddress,
+        string? CreditReportingAgencyPhone);
+
+    internal static string ComputeAdverseActionDecisionFingerprint(
+        AdverseActionDecisionSnapshot snapshot)
+    {
+        var canonical = JsonSerializer.Serialize(snapshot);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
+    internal static bool FingerprintsMatch(string expected, string actual) =>
+        !string.IsNullOrWhiteSpace(expected)
+        && CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(actual));
+
     internal static void ValidateActor(
         int portfolioId, int applicationId, int actorUserId, Guid authSessionId,
         int accessContextId, long expectedAccessRevision)

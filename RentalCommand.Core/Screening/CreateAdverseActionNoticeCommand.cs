@@ -10,22 +10,30 @@ namespace RentalCommand.Core.Screening;
 public sealed record CreateAdverseActionNoticeCommand(
     int PortfolioId,
     int ApplicationId,
+    int ScreeningId,
+    DateTime DecisionRecordedAtUtc,
+    string DecisionFingerprint,
     int ActorUserId,
     [property: AtomicFingerprintIgnore] Guid AuthSessionId,
     [property: AtomicFingerprintIgnore] int AccessContextId,
     [property: AtomicFingerprintIgnore] long ExpectedAccessRevision,
     string Reason,
     string CreditReportingAgency,
+    Guid PendingUploadId,
+    string Purpose,
+    string OperationKeyHash,
+    string RequestFingerprint,
+    string StoragePath,
     string FileName,
-    string StorageKey,
+    string ContentType,
     long FileSize,
     bool SendToApplicant,
     [property: AtomicFingerprintIgnore] string DeliveryIdempotencyKey,
     [property: AtomicFingerprintIgnore] DateTime GeneratedAtUtc) : IAtomicCommandData;
 
 /// <summary>
-/// Receipt-backed preflight that freezes the authorized legal/PDF inputs and deterministic storage
-/// key before PDF generation or blob storage crosses an external boundary.
+/// Receipt-backed preflight that freezes the authorized legal/PDF inputs and exact screening
+/// decision identity before PDF generation or blob storage crosses an external boundary.
 /// </summary>
 public sealed record PrepareAdverseActionNoticeCommand(
     int PortfolioId,
@@ -41,6 +49,7 @@ public sealed record PrepareAdverseActionNoticeCommand(
 public sealed record PrepareAdverseActionNoticeResult(
     ScreeningMutationOutcome Outcome,
     int ApplicationId,
+    int ScreeningId,
     string? ManagementCompanyName,
     string? PortfolioName,
     string? ApplicantName,
@@ -55,7 +64,8 @@ public sealed record PrepareAdverseActionNoticeResult(
     string? CreditReportingAgencyPhone,
     string? CreditReportingAgencyBlock,
     string? FileName,
-    string? StorageKey,
+    DateTime? DecisionRecordedAtUtc,
+    string? DecisionFingerprint,
     bool SendToApplicant,
     DateTime GeneratedAtUtc);
 
