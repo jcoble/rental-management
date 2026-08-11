@@ -275,6 +275,45 @@ public class AccountingServiceTests : IAsyncLifetime
             "the exact target charge open amount must be projected by the same SQL row query");
         selects[1].Should().Contain("ORDER BY", "oldest-payment selection and row ordering should be SQL-side");
         selects[1].Should().Contain("LIMIT", "the row page must be bounded in SQL before materialization");
+        selects.Should().OnlyContain(sql =>
+            sql.Contains("authorized_properties AS MATERIALIZED", StringComparison.Ordinal),
+            "past-due summary and page queries must join one materialized authorization set");
+    }
+
+    [Fact]
+    public async Task GetPastDueAndSnapshot_ExcludeLeaseOutsideSelectedPropertyScope()
+    {
+        var now = DateTime.UtcNow;
+        var (selectedProperty, selectedLease) = SeedPropertyAndLease(now);
+        var (excludedProperty, excludedLease) = SeedPropertyAndLease(now);
+        SeedPayment(selectedLease, 700m, dueDate: now.AddDays(-2), paidInFull: false);
+        SeedPayment(excludedLease, 900m, dueDate: now.AddDays(-2), paidInFull: false);
+        _db.SaveChanges();
+
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            selectedProperty.Id,
+            nameof(GetPastDueAndSnapshot_ExcludeLeaseOutsideSelectedPropertyScope));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _commands.Clear();
+
+        var pastDue = await _sut.GetPastDueAsync(selectedScope, new PastDueQuery(), CancellationToken.None);
+        var snapshot = await _sut.GetSnapshotAsync(selectedScope, CancellationToken.None);
+
+        pastDue.Items.Should().ContainSingle(item => item.LeaseManagementId == selectedLease.LeaseManagementId);
+        pastDue.Items.Should().NotContain(item => item.LeaseManagementId == excludedLease.LeaseManagementId);
+        pastDue.TotalPastDueAmount.Should().Be(700m);
+        snapshot.PastDueCount.Should().Be(1);
+        snapshot.PastDueAmount.Should().Be(700m);
+        _commands
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("authorized_properties AS MATERIALIZED", StringComparison.Ordinal),
+                "past-due and snapshot SQL must preserve the selected-property authorization boundary");
+        _commands
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("public.rc_api_effective_capability_scopes(", StringComparison.Ordinal),
+                "each accounting statement must resolve authorization through the shared scope relation");
+        excludedProperty.Id.Should().NotBe(selectedProperty.Id);
     }
 
     [Fact]

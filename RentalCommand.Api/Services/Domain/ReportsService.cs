@@ -2579,18 +2579,28 @@ public class ReportsService : IReportsService
         public decimal ClosingBalance { get; set; }
     }
 
+    private sealed class OwnerDistributionSummarySqlRow
+    {
+        public int OwnerId { get; set; }
+        public string OwnerName { get; set; } = string.Empty;
+        public decimal NetToOwner { get; set; }
+        public decimal TotalDistributed { get; set; }
+    }
+
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────
 
     public async Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
-        var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
+        var authorizedPropertyIds = BuildAuthorizedPropertyIdQuery(scope, query, CapabilityKeys.ReportsRead);
         var skip = query.NormalizedSkip;
         var take = query.NormalizedTake;
 
-        var rowsQuery = FinancialReportProjections.BuildSecurityDepositRegisterProjection(_db, portfolioId)
-            .Where(row => authorizedProperties.Any(property =>
-                property.Id == row.PropertyId));
+        var rowsQuery =
+            from row in FinancialReportProjections.BuildSecurityDepositRegisterProjection(_db, portfolioId)
+            join propertyId in authorizedPropertyIds
+                on row.PropertyId equals propertyId
+            select row;
         var orderedRows = ApplySecurityDepositSort(rowsQuery, query);
         var totalCount = await rowsQuery.CountAsync(ct);
 
@@ -2754,101 +2764,8 @@ public class ReportsService : IReportsService
 
     public async Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
-        var authorizedProperties = BuildAuthorizedPropertyQuery(
-            scope, new ReportRangeQuery(), CapabilityKeys.MoneyOwnerReportsRead);
-        var startOn = new DateOnly(year, 1, 1);
-        var endOn = startOn.AddYears(1);
-        var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var activeOwnershipAt = _timeProvider.GetUtcNow().UtcDateTime;
-
-        var propertyNetRows =
-            from ownership in _db.PropertyOwnerships.AsNoTracking()
-            join property in authorizedProperties on ownership.PropertyId equals property.Id
-            where ownership.PortfolioId == portfolioId
-                && ownership.EffectiveFromUtc < end
-                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)
-            select new
-            {
-                OwnerId = ownership.OwnerEntityId,
-                OwnerName = ownership.OwnerEntity!.Name,
-                PropertyId = property.Id,
-                RentalIncome = (
-                    from allocation in _db.TenantLedgerAllocations.AsNoTracking()
-                    join credit in _db.TenantLedgerEntries.AsNoTracking()
-                        on new { allocation.PortfolioId, Id = allocation.CreditEntryId }
-                        equals new { credit.PortfolioId, credit.Id }
-                    join debit in _db.TenantLedgerEntries.AsNoTracking()
-                        on new { allocation.PortfolioId, Id = allocation.DebitEntryId }
-                        equals new { debit.PortfolioId, debit.Id }
-                    join account in _db.TenantAccounts.AsNoTracking()
-                        on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
-                        equals new { account.PortfolioId, account.Id }
-                    join management in _db.LeaseManagements.AsNoTracking()
-                        on new { account.PortfolioId, Id = account.LeaseManagementId }
-                        equals new { management.PortfolioId, management.Id }
-                    where allocation.PortfolioId == portfolioId
-                        && management.PropertyId == property.Id
-                        && credit.EntryType == TenantLedgerEntryType.PaymentReceipt
-                        && credit.EffectiveOn >= startOn
-                        && credit.EffectiveOn < endOn
-                        && credit.PostedAtUtc >= ownership.EffectiveFromUtc
-                        && (ownership.EffectiveToUtc == null
-                            || credit.PostedAtUtc < ownership.EffectiveToUtc)
-                        && debit.EntryType == TenantLedgerEntryType.RentCharge
-                    select (decimal?)(allocation.Amount * ownership.OwnershipSharePercent / 100m)).Sum() ?? 0m,
-                Expenses = _db.Expenses
-                    .Where(expense =>
-                        expense.PortfolioId == portfolioId &&
-                        expense.PropertyId == property.Id &&
-                        expense.Status == ExpenseStatus.Paid &&
-                        (expense.PaidAt ?? expense.IncurredAt) >= start &&
-                        (expense.PaidAt ?? expense.IncurredAt) < end &&
-                        (expense.PaidAt ?? expense.IncurredAt) >= ownership.EffectiveFromUtc &&
-                        (ownership.EffectiveToUtc == null
-                            || (expense.PaidAt ?? expense.IncurredAt) < ownership.EffectiveToUtc))
-                    .Sum(expense =>
-                        (decimal?)(expense.Amount * ownership.OwnershipSharePercent / 100m)) ?? 0m,
-                ManagementFeePercent = property.ManagementFeePercent ?? 0m,
-            };
-
-        var summaries = propertyNetRows
-            .GroupBy(property => new { property.OwnerId, property.OwnerName })
-            .Select(group => new
-            {
-                group.Key.OwnerId,
-                group.Key.OwnerName,
-                NetToOwner = group.Sum(property =>
-                    property.RentalIncome -
-                    property.Expenses -
-                    (property.RentalIncome * property.ManagementFeePercent / 100m)),
-                TotalDistributed = _db.OwnerDistributions
-                    .Where(distribution =>
-                        distribution.PortfolioId == portfolioId &&
-                        distribution.OwnerEntityId == group.Key.OwnerId &&
-                        distribution.Status == OwnerDistributionStatus.Approved &&
-                        distribution.Date >= start &&
-                        distribution.Date < end &&
-                        (distribution.PropertyId != null
-                            ? authorizedProperties.Any(property =>
-                                property.Id == distribution.PropertyId.Value)
-                            : _db.PropertyOwnerships.AsNoTracking().Any(ownership =>
-                                  ownership.PortfolioId == portfolioId &&
-                                  ownership.OwnerEntityId == group.Key.OwnerId &&
-                                  ownership.Property!.DeletedAt == null &&
-                                  ownership.EffectiveFromUtc <= activeOwnershipAt &&
-                                  (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > activeOwnershipAt) &&
-                                  authorizedProperties.Any(property => property.Id == ownership.PropertyId))
-                              && !_db.PropertyOwnerships.AsNoTracking().Any(ownership =>
-                                  ownership.PortfolioId == portfolioId &&
-                                  ownership.OwnerEntityId == group.Key.OwnerId &&
-                                  ownership.Property!.DeletedAt == null &&
-                                  ownership.EffectiveFromUtc <= activeOwnershipAt &&
-                                  (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > activeOwnershipAt) &&
-                                  !authorizedProperties.Any(property => property.Id == ownership.PropertyId))))
-                    .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
-            });
+        var summaries = BuildOwnerDistributionSummaryQuery(scope, year, activeOwnershipAt);
 
         var rowsWithTotals = await summaries
             .OrderBy(summary => summary.OwnerName)
@@ -2859,13 +2776,19 @@ public class ReportsService : IReportsService
                 NetToOwner = summary.NetToOwner,
                 TotalDistributed = summary.TotalDistributed,
                 Undistributed = summary.NetToOwner - summary.TotalDistributed,
-                PortfolioTotalNetToOwners = summaries.Sum(total => total.NetToOwner),
-                PortfolioTotalDistributed = summaries.Sum(total => total.TotalDistributed),
             })
             .ToListAsync(ct);
 
-        var totalNetToOwners = rowsWithTotals.FirstOrDefault()?.PortfolioTotalNetToOwners ?? 0m;
-        var totalDistributed = rowsWithTotals.FirstOrDefault()?.PortfolioTotalDistributed ?? 0m;
+        var totals = await summaries
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                TotalNetToOwners = group.Sum(summary => summary.NetToOwner),
+                TotalDistributed = group.Sum(summary => summary.TotalDistributed),
+            })
+            .FirstOrDefaultAsync(ct);
+        var totalNetToOwners = totals?.TotalNetToOwners ?? 0m;
+        var totalDistributed = totals?.TotalDistributed ?? 0m;
         var rows = rowsWithTotals
             .Select(row => new OwnerDistributionRow
             {
@@ -2977,6 +2900,190 @@ public class ReportsService : IReportsService
         return requested.Length == 0
             ? properties
             : properties.Where(property => requested.Contains(property.Id));
+    }
+
+    private IQueryable<int> BuildAuthorizedPropertyIdQuery(
+        WorkspaceReadScope scope,
+        ReportRangeQuery query,
+        string capabilityKey)
+    {
+        var requested = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is { } propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
+        var propertyIds = _db.AuthorizedPropertyIds(scope, [capabilityKey]);
+        return requested.Length == 0
+            ? propertyIds
+            : propertyIds.Where(propertyId => requested.Contains(propertyId));
+    }
+
+    private IQueryable<OwnerDistributionSummarySqlRow> BuildOwnerDistributionSummaryQuery(
+        WorkspaceReadScope scope,
+        int year,
+        DateTime activeOwnershipAt)
+    {
+        var startOn = new DateOnly(year, 1, 1);
+        var endOn = startOn.AddYears(1);
+        var start = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var end = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var capabilityKeys = new[] { CapabilityKeys.MoneyOwnerReportsRead };
+        var targetKind = CapabilityAuthorizationTargetKind.Property.ToString();
+        return _db.Database.SqlQuery<OwnerDistributionSummarySqlRow>($"""
+            WITH effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    {scope.PortfolioId},
+                    {scope.SessionId},
+                    {scope.UserId},
+                    {scope.AccessContextId},
+                    {scope.AccessRevision},
+                    {capabilityKeys},
+                    {targetKind}) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT DISTINCT property."Id" AS "PropertyId"
+                FROM "Properties" AS property
+                CROSS JOIN effective_scopes AS effective_scope
+                WHERE property."PortfolioId" = {scope.PortfolioId}
+                  AND property."DeletedAt" IS NULL
+                  AND (effective_scope."ScopeKind" = 'AllProperties'
+                       OR (effective_scope."ScopeKind" = 'SelectedProperties'
+                           AND effective_scope."PropertyId" = property."Id"))
+            ),
+            active_owner_properties AS MATERIALIZED (
+                SELECT active_owner_property."OwnerEntityId",
+                       active_owner_property."PropertyId"
+                FROM public.rc_api_owner_distribution_active_properties(
+                    {scope.PortfolioId},
+                    {activeOwnershipAt}) AS active_owner_property
+            ),
+            fully_authorized_owners AS MATERIALIZED (
+                SELECT active."OwnerEntityId"
+                FROM active_owner_properties AS active
+                LEFT JOIN authorized_properties AS authorized
+                    ON authorized."PropertyId" = active."PropertyId"
+                GROUP BY active."OwnerEntityId"
+                HAVING COUNT(*) FILTER (WHERE authorized."PropertyId" IS NOT NULL) > 0
+                   AND COUNT(*) FILTER (WHERE authorized."PropertyId" IS NULL) = 0
+            ),
+            bounded_distributions AS MATERIALIZED (
+                SELECT distribution."Id",
+                       distribution."OwnerEntityId",
+                       distribution."PropertyId",
+                       distribution."Amount"
+                FROM "OwnerDistributions" AS distribution
+                WHERE distribution."PortfolioId" = {scope.PortfolioId}
+                  AND distribution."DeletedAt" IS NULL
+                  AND distribution."Status" = {(int)OwnerDistributionStatus.Approved}
+                  AND (distribution."PortfolioId", distribution."Status", distribution."Date")
+                      >= ({scope.PortfolioId}, {(int)OwnerDistributionStatus.Approved}, {start})
+                  AND (distribution."PortfolioId", distribution."Status", distribution."Date")
+                      < ({scope.PortfolioId}, {(int)OwnerDistributionStatus.Approved}, {end})
+            ),
+            authorized_distributions AS MATERIALIZED (
+                SELECT distribution."Id", distribution."OwnerEntityId", distribution."Amount"
+                FROM bounded_distributions AS distribution
+                LEFT JOIN authorized_properties AS authorized
+                    ON authorized."PropertyId" = distribution."PropertyId"
+                LEFT JOIN fully_authorized_owners AS owner_scope
+                    ON owner_scope."OwnerEntityId" = distribution."OwnerEntityId"
+                WHERE ((distribution."PropertyId" IS NOT NULL
+                        AND authorized."PropertyId" IS NOT NULL)
+                       OR (distribution."PropertyId" IS NULL
+                           AND owner_scope."OwnerEntityId" IS NOT NULL))
+            ),
+            distribution_totals AS (
+                SELECT authorized_distribution."OwnerEntityId" AS "OwnerId",
+                       SUM(authorized_distribution."Amount") AS "TotalDistributed"
+                FROM authorized_distributions AS authorized_distribution
+                GROUP BY authorized_distribution."OwnerEntityId"
+            ),
+            property_net_rows AS (
+                SELECT ownership."OwnerEntityId" AS "OwnerId",
+                       owner_entity."Name" AS "OwnerName",
+                       property."Id" AS "PropertyId",
+                       COALESCE((
+                           SELECT SUM(
+                               allocation."Amount"
+                               * ownership."OwnershipSharePercent"
+                               / 100.0)
+                           FROM "TenantLedgerAllocations" AS allocation
+                           INNER JOIN "TenantLedgerEntries" AS credit
+                               ON credit."PortfolioId" = allocation."PortfolioId"
+                              AND credit."Id" = allocation."CreditEntryId"
+                           INNER JOIN "TenantLedgerEntries" AS debit
+                               ON debit."PortfolioId" = allocation."PortfolioId"
+                              AND debit."Id" = allocation."DebitEntryId"
+                           INNER JOIN "TenantAccounts" AS account
+                               ON account."PortfolioId" = allocation."PortfolioId"
+                              AND account."Id" = allocation."TenantAccountId"
+                           INNER JOIN "LeaseManagements" AS management
+                               ON management."PortfolioId" = account."PortfolioId"
+                              AND management."Id" = account."LeaseManagementId"
+                           WHERE allocation."PortfolioId" = {scope.PortfolioId}
+                             AND management."PropertyId" = property."Id"
+                             AND credit."EntryType" = {TenantLedgerEntryType.PaymentReceipt.ToString()}
+                             AND credit."EffectiveOn" >= {startOn}
+                             AND credit."EffectiveOn" < {endOn}
+                             AND credit."PostedAtUtc" >= ownership."EffectiveFromUtc"
+                             AND (ownership."EffectiveToUtc" IS NULL
+                                  OR credit."PostedAtUtc" < ownership."EffectiveToUtc")
+                             AND debit."EntryType" = {TenantLedgerEntryType.RentCharge.ToString()}
+                       ), 0.0) AS "RentalIncome",
+                       COALESCE((
+                           SELECT SUM(
+                               expense."Amount"
+                               * ownership."OwnershipSharePercent"
+                               / 100.0)
+                           FROM "Expenses" AS expense
+                           WHERE expense."PortfolioId" = {scope.PortfolioId}
+                             AND expense."PropertyId" = property."Id"
+                             AND expense."Status" = {(int)ExpenseStatus.Paid}
+                             AND COALESCE(expense."PaidAt", expense."IncurredAt") >= {start}
+                             AND COALESCE(expense."PaidAt", expense."IncurredAt") < {end}
+                             AND COALESCE(expense."PaidAt", expense."IncurredAt") >= ownership."EffectiveFromUtc"
+                             AND (ownership."EffectiveToUtc" IS NULL
+                                  OR COALESCE(expense."PaidAt", expense."IncurredAt") < ownership."EffectiveToUtc")
+                             AND expense."DeletedAt" IS NULL
+                       ), 0.0) AS "Expenses",
+                       COALESCE(property."ManagementFeePercent", 0.0) AS "ManagementFeePercent"
+                FROM "PropertyOwnerships" AS ownership
+                INNER JOIN authorized_properties AS authorized
+                    ON authorized."PropertyId" = ownership."PropertyId"
+                INNER JOIN "Portfolios" AS portfolio
+                    ON portfolio."Id" = ownership."PortfolioId"
+                   AND portfolio."DeletedAt" IS NULL
+                INNER JOIN "Properties" AS property
+                    ON property."PortfolioId" = ownership."PortfolioId"
+                   AND property."Id" = ownership."PropertyId"
+                INNER JOIN "OwnerEntities" AS owner_entity
+                    ON owner_entity."PortfolioId" = ownership."PortfolioId"
+                   AND owner_entity."Id" = ownership."OwnerEntityId"
+                   AND owner_entity."DeletedAt" IS NULL
+                WHERE ownership."PortfolioId" = {scope.PortfolioId}
+                  AND ownership."EffectiveFromUtc" < {end}
+                  AND (ownership."EffectiveToUtc" IS NULL
+                       OR ownership."EffectiveToUtc" > {start})
+            ),
+            property_summaries AS (
+                SELECT property_net."OwnerId",
+                       property_net."OwnerName",
+                       SUM(
+                           property_net."RentalIncome"
+                           - property_net."Expenses"
+                           - (property_net."RentalIncome"
+                              * property_net."ManagementFeePercent" / 100.0)) AS "NetToOwner"
+                FROM property_net_rows AS property_net
+                GROUP BY property_net."OwnerId", property_net."OwnerName"
+            )
+            SELECT property_summary."OwnerId",
+                   property_summary."OwnerName",
+                   property_summary."NetToOwner",
+                   COALESCE(distribution_total."TotalDistributed", 0.0) AS "TotalDistributed"
+            FROM property_summaries AS property_summary
+            LEFT JOIN distribution_totals AS distribution_total
+                ON distribution_total."OwnerId" = property_summary."OwnerId"
+            """);
     }
 
     private IQueryable<int> BuildAllPropertiesAuthorityQuery(

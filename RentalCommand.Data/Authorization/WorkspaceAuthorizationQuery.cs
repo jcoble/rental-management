@@ -6,12 +6,52 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Data.Authorization;
 
 /// <summary>
-/// Reusable authorization query primitive for property records. The correlated EXISTS remains part
-/// of the caller's IQueryable so authorization runs before projection, count, sort, and paging; no
-/// allowed-ID collection is ever materialized.
+/// Reusable authorization query primitives for property records. Authorization stays in the
+/// translated database query; hot reads can join the materialized relational set without ever
+/// materializing an allowed-ID collection in application memory.
 /// </summary>
 public static class WorkspaceAuthorizationQuery
 {
+    /// <summary>
+    /// Produces the caller's effective property ids as a composable, materialized PostgreSQL set.
+    /// Hot report/accounting queries join this relation directly instead of embedding the effective
+    /// capability function in a correlated <c>Any</c>/<c>EXISTS</c> for every output row. The result is
+    /// never materialized by the application; EF composes the CTE into the statement that consumes it.
+    /// </summary>
+    public static IQueryable<int> AuthorizedPropertyIds(
+        this RentalCommandDbContext db,
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilityKeys)
+    {
+        var keys = RequireCapabilityKeys(capabilityKeys);
+        var targetKind = CapabilityAuthorizationTargetKind.Property.ToString();
+        return db.Database.SqlQuery<int>($"""
+            WITH effective_scopes AS MATERIALIZED (
+                SELECT effective_scope."ScopeKind", effective_scope."PropertyId"
+                FROM public.rc_api_effective_capability_scopes(
+                    {scope.PortfolioId},
+                    {scope.SessionId},
+                    {scope.UserId},
+                    {scope.AccessContextId},
+                    {scope.AccessRevision},
+                    {keys},
+                    {targetKind}) AS effective_scope
+            ),
+            authorized_properties AS MATERIALIZED (
+                SELECT DISTINCT property."Id" AS "PropertyId"
+                FROM "Properties" AS property
+                CROSS JOIN effective_scopes AS effective_scope
+                WHERE property."PortfolioId" = {scope.PortfolioId}
+                  AND property."DeletedAt" IS NULL
+                  AND (effective_scope."ScopeKind" = 'AllProperties'
+                       OR (effective_scope."ScopeKind" = 'SelectedProperties'
+                           AND effective_scope."PropertyId" = property."Id"))
+            )
+            SELECT authorized_properties."PropertyId" AS "Value"
+            FROM authorized_properties
+            """);
+    }
+
     private static string[] RequireCapabilityKeys(IReadOnlyCollection<string> capabilityKeys)
     {
         ArgumentNullException.ThrowIfNull(capabilityKeys);

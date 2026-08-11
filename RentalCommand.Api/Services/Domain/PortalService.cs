@@ -730,15 +730,37 @@ public class PortalService : IPortalService
         };
 
     internal IQueryable<TenantAccount> BuildAuthorizedTenantAccountQuery(PortalTenantReadScope scope) =>
-        _db.TenantAccounts.AsNoTracking().Where(account =>
-            account.PortfolioId == scope.PortfolioId
-            && _db.EffectiveTenantAccess.AsNoTracking().Any(access =>
-                access.PortfolioId == scope.PortfolioId
-                && access.UserId == scope.UserId
-                && access.AccessContextId == scope.AccessContextId
-                && access.AccessRevision == scope.AccessRevision
-                && access.TenantAccountId == account.Id
-                && access.LeaseManagementId == account.LeaseManagementId));
+        from account in _db.TenantAccounts.AsNoTracking()
+        join authorized in BuildAuthorizedTenantAccountSet(scope)
+            on new { account.PortfolioId, TenantAccountId = account.Id, account.LeaseManagementId }
+            equals new { authorized.PortfolioId, authorized.TenantAccountId, authorized.LeaseManagementId }
+        select account;
+
+    /// <summary>
+    /// Materializes the tenant portal's effective account relationship once inside the SQL statement.
+    /// The account page and all of its count/detail variants join this set directly, so the stacked
+    /// effective-tenant-access view is not re-evaluated as a correlated EXISTS for every account row.
+    /// </summary>
+    private IQueryable<PortalTenantAccountAuthorizationRow> BuildAuthorizedTenantAccountSet(
+        PortalTenantReadScope scope) =>
+        _db.Database.SqlQuery<PortalTenantAccountAuthorizationRow>($"""
+            WITH authorized_tenant_accounts AS MATERIALIZED (
+                SELECT DISTINCT
+                    access."PortfolioId" AS "PortfolioId",
+                    access."TenantAccountId" AS "TenantAccountId",
+                    access."LeaseManagementId" AS "LeaseManagementId"
+                FROM "vw_effective_tenant_access" AS access
+                WHERE access."PortfolioId" = {scope.PortfolioId}
+                  AND access."UserId" = {scope.UserId}
+                  AND access."AccessContextId" = {scope.AccessContextId}
+                  AND access."AccessRevision" = {scope.AccessRevision}
+                  AND access."TenantAccountId" IS NOT NULL
+            )
+            SELECT authorized_tenant_accounts."PortfolioId" AS "PortfolioId",
+                   authorized_tenant_accounts."TenantAccountId" AS "TenantAccountId",
+                   authorized_tenant_accounts."LeaseManagementId" AS "LeaseManagementId"
+            FROM authorized_tenant_accounts
+            """);
 
     private IQueryable<PortalTenantAccountIdentity> BuildTenantAccountIdentityQuery(
         PortalTenantReadScope scope,
@@ -867,6 +889,13 @@ public class PortalService : IPortalService
     {
         public int TenantAccountId { get; init; }
         public int LeaseManagementId { get; init; }
+    }
+
+    private sealed class PortalTenantAccountAuthorizationRow
+    {
+        public int PortfolioId { get; set; }
+        public int TenantAccountId { get; set; }
+        public int LeaseManagementId { get; set; }
     }
 
     private sealed class PortalTenantAccountHistorySqlRow

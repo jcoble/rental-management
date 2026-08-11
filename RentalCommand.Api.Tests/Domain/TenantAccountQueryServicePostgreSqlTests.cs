@@ -170,6 +170,126 @@ public sealed class TenantAccountQueryServicePostgreSqlTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task ListAccountsPage_SelectedPropertyScopeExcludesOtherCurrentPropertyFromRowsAndCount()
+    {
+        var now = new DateTime(2027, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var selectedProperty = await _context.Db.Properties
+            .SingleAsync(property => property.Id == _ledger.PropertyId);
+        var excludedProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Excluded account property",
+            AddressLine1 = "2 Scope Lane",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var excludedUnit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = excludedProperty,
+            UnitNumber = "OUT-1",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var excludedManagement = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            Property = excludedProperty,
+            Unit = excludedUnit,
+            RelationshipNumber = "LM-ACCOUNT-SCOPE-EXCLUDED",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = _scope.UserId,
+            RowVersion = Guid.NewGuid(),
+        };
+        var excludedAccount = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagement = excludedManagement,
+            AccountNumber = "TA-ACCOUNT-SCOPE-EXCLUDED",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = _scope.UserId,
+        };
+        _context.Db.AddRange(excludedProperty, excludedUnit, excludedManagement, excludedAccount);
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        var selectedScope = _context.Db.SeedPropertyManagerScope(
+            PortfolioId,
+            selectedProperty.Id,
+            nameof(ListAccountsPage_SelectedPropertyScopeExcludesOtherCurrentPropertyFromRowsAndCount));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _commands.Reset();
+
+        var page = await new TenantAccountQueryService(_context.Db, TimeProvider.System)
+            .ListAccountsPageAsync(selectedScope, new TenantAccountListQuery { Take = 20 });
+
+        page.TotalCount.Should().Be(1,
+            "the migrated PostgreSQL count must stay inside the selected-property authorization boundary");
+        page.Items.Should().ContainSingle(item => item.TenantAccountId == _ledger.TenantAccountId);
+        page.Items.Should().NotContain(item => item.TenantAccountId == excludedAccount.Id);
+        _commands.Sql.Should().HaveCount(2, "the account page executes one count and one page statement");
+        _commands.Sql.Should().OnlyContain(sql =>
+            sql.Contains("rc_api_authorized_tenant_accounts", StringComparison.Ordinal),
+            "both account statements must execute the migrated security-definer authorization function");
+    }
+
+    [Fact]
+    public async Task AuthorizedTenantAccountsFunction_FailsClosedForBadCoordinatesAndHasExpectedAcl()
+    {
+        var missingSessionRows = await _context.Db.Database.SqlQuery<int>($"""
+            SELECT COUNT(*)::integer AS "Value"
+            FROM public.rc_api_authorized_tenant_accounts(
+              {_scope.PortfolioId},
+              NULL::uuid,
+              {_scope.UserId},
+              {_scope.AccessContextId},
+              {_scope.AccessRevision},
+              {new[] { CapabilityKeys.MoneyBalancesRead }})
+            """).SingleAsync();
+        var mismatchedSessionRows = await _context.Db.Database.SqlQuery<int>($"""
+            SELECT COUNT(*)::integer AS "Value"
+            FROM public.rc_api_authorized_tenant_accounts(
+              {_scope.PortfolioId},
+              {Guid.NewGuid()},
+              {_scope.UserId},
+              {_scope.AccessContextId},
+              {_scope.AccessRevision},
+              {new[] { CapabilityKeys.MoneyBalancesRead }})
+            """).SingleAsync();
+
+        missingSessionRows.Should().Be(0);
+        mismatchedSessionRows.Should().Be(0);
+
+        var metadata = await _context.Db.Database.SqlQuery<string>($"""
+            SELECT concat_ws('|',
+                owner.rolname,
+                procedure.prosecdef::text,
+                has_function_privilege('rentalcommand_api', procedure.oid, 'EXECUTE')::text,
+                has_function_privilege('rentalcommand_engine', procedure.oid, 'EXECUTE')::text,
+                COALESCE((
+                    SELECT bool_or(acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')
+                    FROM aclexplode(procedure.proacl) AS acl), false)::text,
+                pg_get_functiondef(procedure.oid)) AS "Value"
+            FROM pg_proc AS procedure
+            JOIN pg_roles AS owner ON owner.oid = procedure.proowner
+            WHERE procedure.oid =
+                'rc_api_authorized_tenant_accounts(integer,uuid,integer,integer,bigint,text[])'::regprocedure
+            """).SingleAsync();
+
+        metadata.Should().StartWith("rentalcommand_rls_authority|true|true|true|false|");
+        metadata.Should().Contain("SECURITY DEFINER");
+        metadata.Should().Contain("SET search_path TO 'pg_catalog', 'public'");
+    }
+
     private async Task<SeededLedger> SeedLedgerAsync()
     {
         var seededAt = new DateTime(2026, 12, 15, 12, 0, 0, DateTimeKind.Utc);
