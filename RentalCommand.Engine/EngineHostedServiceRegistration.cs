@@ -40,6 +40,9 @@ internal static class EngineHostedServiceRegistration
             services.AddHostedService<NoticeDraftWorker>();
             services.AddHostedService<NativeEsignReconciliationWorker>();
             services.AddHostedService<ProviderInboxReconciliationWorker>();
+            // Interactive payment attempts have a durable owner even when the browser and
+            // provider webhook both disappear. The default production cadence is one minute.
+            services.AddHostedService<InteractivePaymentReconciliationWorker>();
             services.AddHostedService<PendingFileUploadCleanupWorker>();
             services.AddHostedService<AccountingPullWorker>();
             services.AddHostedService<AccountingTokenRefreshWorker>();

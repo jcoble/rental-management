@@ -325,6 +325,9 @@ public class PortalCheckoutRequest
 public class CheckoutSessionResponse
 {
     public string CheckoutUrl { get; set; } = string.Empty;
+    public long? PaymentAttemptId { get; set; }
+    public string? AttemptState { get; set; }
+    public bool AlreadyPaid { get; set; }
 }
 
 /// <summary>Request to enroll the tenant's own canonical account in autopay.</summary>

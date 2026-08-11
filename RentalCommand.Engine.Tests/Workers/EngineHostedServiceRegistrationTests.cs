@@ -1,7 +1,9 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using RentalCommand.Engine;
+using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 
 namespace RentalCommand.Engine.Tests.Workers;
@@ -40,5 +42,46 @@ public sealed class EngineHostedServiceRegistrationTests
             commandBridgeOnly: true);
 
         act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Production_RegistersInteractivePaymentReconcilerWithExplicitOneMinuteCadence()
+    {
+        var services = new ServiceCollection();
+
+        services.AddEngineHostedServices(simulationEnabled: false, commandBridgeOnly: false);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService)
+            && descriptor.ImplementationType == typeof(InteractivePaymentReconciliationWorker));
+        new InteractivePaymentReconciliationOptions().PollInterval
+            .Should().Be(InteractivePaymentReconciliationOptions.ProductionCadence)
+            .And.Be(TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    public void InteractivePaymentReconciliationOptions_RejectsNonPositiveStartupValues()
+    {
+        var validator = new InteractivePaymentReconciliationOptionsValidator();
+        var invalidOptions = new Action<InteractivePaymentReconciliationOptions>[]
+        {
+            options => options.PollInterval = TimeSpan.Zero,
+            options => options.RetryDelay = TimeSpan.FromTicks(-1),
+            options => options.Expiration = TimeSpan.Zero,
+            options => options.BatchSize = 0,
+            options => options.StepTimeout = TimeSpan.FromTicks(-1),
+        };
+
+        foreach (var makeInvalid in invalidOptions)
+        {
+            var options = new InteractivePaymentReconciliationOptions();
+            makeInvalid(options);
+
+            validator.Validate(Options.DefaultName, options).Failed.Should().BeTrue();
+        }
+
+        validator.Validate(
+                Options.DefaultName, new InteractivePaymentReconciliationOptions())
+            .Should().Be(ValidateOptionsResult.Success);
     }
 }

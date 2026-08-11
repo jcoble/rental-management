@@ -242,11 +242,13 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     /// </summary>
     [HttpPost("tenant-accounts/{tenantAccountId:int}/charges/{chargeLedgerEntryId:long}/checkout")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> CreatePaymentCheckout(
         int tenantAccountId, long chargeLedgerEntryId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
     {
         var tenantId = await GetTenantIdAsync(ct);
@@ -254,10 +256,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         {
             return Forbid();
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var attemptKey))
+        {
+            return BadRequest(new { error = "A payment attempt key of 1 to 128 characters is required." });
+        }
 
         var result = await _stripe.CreatePaymentCheckoutSessionAsync(
             GetPortfolioId(), tenantId.Value, tenantAccountId, chargeLedgerEntryId, GetUserId(),
-            request?.SuccessUrl, request?.CancelUrl, ct);
+            request?.SuccessUrl, request?.CancelUrl, ct, attemptKey);
 
         return result.Result switch
         {
@@ -265,7 +271,89 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
                 NotFound(new { error = "Tenant account charge not found" }),
-            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+            CheckoutResult.Outcome.AttemptPending =>
+                Conflict(new
+                {
+                    error = "This payment is still being reconciled. Resume it after the provider status is confirmed.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
+            CheckoutResult.Outcome.AttemptCanceled =>
+                Conflict(new
+                {
+                    error = "This payment reservation was canceled by another account movement. Start a new payment attempt.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                }),
+            CheckoutResult.Outcome.AttemptFailed =>
+                Conflict(new
+                {
+                    error = "This payment attempt failed before provider acceptance. Start a new payment attempt.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                CheckoutUrl = result.CheckoutUrl!,
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
+        };
+    }
+
+    /// <summary>
+    /// Releases one hosted Checkout reservation after the provider confirms that it was canceled
+    /// or expired. A provider-confirmed success is returned as already paid and remains fenced.
+    /// </summary>
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/payment-attempts/{paymentAttemptId:long}/cancel")]
+    [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CancelPaymentAttempt(
+        int tenantAccountId, long paymentAttemptId, CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null)
+            return Forbid();
+
+        var result = await _stripe.CancelPaymentAttemptAsync(
+            GetPortfolioId(), tenantId.Value, tenantAccountId, paymentAttemptId,
+            "Tenant canceled or expired hosted Checkout.", ct);
+        return result.Result switch
+        {
+            CheckoutResult.Outcome.NotEnabled =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    new { error = "Online payments are not enabled." }),
+            CheckoutResult.Outcome.NotFound =>
+                NotFound(new { error = "Payment attempt not found" }),
+            CheckoutResult.Outcome.AttemptPending =>
+                Conflict(new
+                {
+                    error = "The provider has not confirmed cancellation yet.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
         };
     }
 
@@ -325,7 +413,27 @@ public class PortalController : AuthenticatedPortfolioControllerBase
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
                 NotFound(new { error = "Tenant account not found" }),
-            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+            CheckoutResult.Outcome.AttemptPending or CheckoutResult.Outcome.AttemptCanceled
+                or CheckoutResult.Outcome.AttemptFailed =>
+                Conflict(new
+                {
+                    error = "This payment setup is still being reconciled or has ended. Resume only after provider status is confirmed.",
+                    paymentAttemptId = result.PaymentAttemptId,
+                    attemptState = result.AttemptState,
+                    providerPaymentId = result.ProviderPaymentId,
+                }),
+            CheckoutResult.Outcome.AlreadyPaid => Ok(new CheckoutSessionResponse
+            {
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+                AlreadyPaid = true,
+            }),
+            _ => Ok(new CheckoutSessionResponse
+            {
+                CheckoutUrl = result.CheckoutUrl!,
+                PaymentAttemptId = result.PaymentAttemptId,
+                AttemptState = result.AttemptState,
+            }),
         };
     }
 

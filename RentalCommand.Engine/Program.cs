@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
@@ -221,7 +222,16 @@ builder.Services.AddScoped<
 builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceService>();
 // Online-payments autopay charging (gated: no-op unless Stripe is configured).
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
+builder.Services.AddOptions<InteractivePaymentReconciliationOptions>()
+    .Bind(builder.Configuration.GetSection(InteractivePaymentReconciliationOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<InteractivePaymentReconciliationOptions>,
+    InteractivePaymentReconciliationOptionsValidator>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Payments.IInteractivePaymentProviderClient,
+    RentalCommand.Api.Services.Payments.StripeInteractivePaymentProviderClient>();
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
+builder.Services.AddScoped<IAutopayProviderClient, StripeAutopayProviderClient>();
+builder.Services.AddScoped<InteractivePaymentReconciliationService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
 builder.Services.AddScoped<ITenantNoticeDraftSetStore, TenantNoticeDraftSetStore>();

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Outbox;
@@ -22,6 +23,25 @@ public sealed class PrepareProviderPaymentCreateHandler
             command.ActorUserId, command.Provider, command.IdempotencyKey, command.Currency);
         await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
+
+        // Deploy compatibility: pre-fence clients used checkout:tenant-charge:{id} (or the
+        // equivalent PaymentIntent key). Reuse that durable attempt before requiring a currently
+        // open balance, so old Prepared/Submitted/Succeeded receipts remain recoverable after
+        // deployment. The actor condition prevents one authorized payer from adopting another's
+        // old-format receipt.
+        var existing = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .Where(candidate => candidate.Provider == command.Provider
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.ChargeLedgerEntryId == command.ChargeLedgerEntryId
+                && candidate.AttemptType == TenantPaymentAttemptType.Charge
+                && (candidate.IdempotencyKey == command.IdempotencyKey
+                    || (candidate.CreatedByUserId == command.ActorUserId
+                        && (candidate.IdempotencyKey == $"checkout:tenant-charge:{command.ChargeLedgerEntryId}"
+                            || candidate.IdempotencyKey == $"intent:tenant-charge:{command.ChargeLedgerEntryId}"))))
+            .OrderByDescending(candidate => candidate.IdempotencyKey == command.IdempotencyKey)
+            .ThenByDescending(candidate => candidate.Id)
+            .FirstOrDefaultAsync(ct);
 
         var target = await (
             from balance in _db.Set<TenantChargeBalanceProjection>().AsNoTracking()
@@ -68,12 +88,27 @@ public sealed class PrepareProviderPaymentCreateHandler
                     .FirstOrDefault(),
             }).SingleOrDefaultAsync(ct);
 
-        if (target is null)
+        if (target is null && existing is null)
             return new(PrepareProviderPaymentCreateOutcome.NotFound, command.PortfolioId,
                 command.TenantAccountId, command.ChargeLedgerEntryId, 0, 0, command.Currency,
                 command.Provider, command.IdempotencyKey, null, null);
+        if (target is null)
+        {
+            await ProviderPaymentHandlerSupport.AuthorizePaymentPrepareReplayAsync(command, _db, ct);
+            return new(PrepareProviderPaymentCreateOutcome.Prepared, command.PortfolioId,
+                command.TenantAccountId, command.ChargeLedgerEntryId, existing!.Id,
+                existing.Amount, existing.Currency, existing.Provider, existing.IdempotencyKey,
+                null, null, existing.State, existing.ProviderFenceToken,
+                existing.ProviderObjectId, existing.PreparedAtUtc);
+        }
         if (!string.Equals(target.Currency, command.Currency, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Provider currency must match the tenant account currency.");
+        if (existing is not null)
+            return new(PrepareProviderPaymentCreateOutcome.Prepared, command.PortfolioId,
+                command.TenantAccountId, command.ChargeLedgerEntryId, existing.Id,
+                existing.Amount, existing.Currency, existing.Provider, existing.IdempotencyKey,
+                target.ProviderCustomerId, target.ProviderPaymentMethodId, existing.State,
+                existing.ProviderFenceToken, existing.ProviderObjectId, existing.PreparedAtUtc);
 
         var paymentAttempt = new TenantPaymentAttempt
         {
@@ -99,7 +134,9 @@ public sealed class PrepareProviderPaymentCreateHandler
         return new(PrepareProviderPaymentCreateOutcome.Prepared, command.PortfolioId,
             command.TenantAccountId, command.ChargeLedgerEntryId, paymentAttempt.Id,
             paymentAttempt.Amount, paymentAttempt.Currency, paymentAttempt.Provider,
-            paymentAttempt.IdempotencyKey, target.ProviderCustomerId, target.ProviderPaymentMethodId);
+            paymentAttempt.IdempotencyKey, target.ProviderCustomerId, target.ProviderPaymentMethodId,
+            paymentAttempt.State, paymentAttempt.ProviderFenceToken,
+            paymentAttempt.ProviderObjectId, paymentAttempt.PreparedAtUtc);
     }
 
     public Task AuthorizeReplayAsync(
@@ -149,6 +186,22 @@ public sealed class PrepareProviderAutopaySetupHandler
         if (!string.Equals(target.Currency, command.Currency, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Provider currency must match the tenant account currency.");
 
+        var existing = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .Where(candidate => candidate.Provider == command.Provider
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.AttemptType == TenantPaymentAttemptType.Verification
+                && (candidate.IdempotencyKey == command.IdempotencyKey
+                    || (candidate.CreatedByUserId == command.ActorUserId
+                        && candidate.IdempotencyKey == $"autopay-setup:{command.IdempotencyKey}")))
+            .OrderByDescending(candidate => candidate.Id)
+            .FirstOrDefaultAsync(ct);
+        if (existing is not null)
+            return new(PrepareProviderAutopaySetupOutcome.Prepared, command.PortfolioId,
+                command.TenantAccountId, target.AuthorizingPartyId, command.ActorUserId,
+                existing.Id, existing.Provider, existing.IdempotencyKey, existing.State,
+                existing.ProviderFenceToken, existing.ProviderObjectId);
+
         var verification = new TenantPaymentAttempt
         {
             PortfolioId = command.PortfolioId,
@@ -170,12 +223,211 @@ public sealed class PrepareProviderAutopaySetupHandler
             context, verification, "Provider autopay setup prepared", userId: command.ActorUserId);
         return new(PrepareProviderAutopaySetupOutcome.Prepared, command.PortfolioId,
             command.TenantAccountId, target.AuthorizingPartyId, command.ActorUserId,
-            verification.Id, command.Provider, command.IdempotencyKey);
+            verification.Id, command.Provider, command.IdempotencyKey, verification.State,
+            verification.ProviderFenceToken, verification.ProviderObjectId);
     }
 
     public Task AuthorizeReplayAsync(
         PrepareProviderAutopaySetupCommand command, IAtomicCommandContext context, CancellationToken ct) =>
         ProviderPaymentHandlerSupport.AuthorizeAutopaySetupReplayAsync(command, _db, ct);
+}
+
+/// <summary>
+/// Converts the prepared charge reservation into a durable Submitted fence immediately before
+/// the provider request. A money command can cancel Prepared while this command is waiting; in
+/// that case the caller receives a terminal state and must not call the provider.
+/// </summary>
+public sealed class SubmitProviderPaymentCreateHandler
+    : IAtomicCommandHandler<SubmitProviderPaymentCreateCommand, SubmitProviderPaymentCreateResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public SubmitProviderPaymentCreateHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<SubmitProviderPaymentCreateResult> HandleAsync(
+        SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
+        var currentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleOrDefaultAsync(row => row.Id == command.PaymentAttemptId
+                && row.TenantAccountId == command.TenantAccountId
+                && row.PortfolioId == command.PortfolioId
+                && row.Provider == command.Provider
+                && row.IdempotencyKey == command.IdempotencyKey, ct);
+        var cancelPrepared = false;
+        var competingSubmitted = false;
+        var cancelReason = "Another provider attempt already owns this charge reservation.";
+        if (currentAttempt?.State == TenantPaymentAttemptState.Prepared
+            && currentAttempt.ChargeLedgerEntryId is long chargeLedgerEntryId)
+        {
+            competingSubmitted = await _db.Set<TenantPaymentAttempt>().AsNoTracking().AnyAsync(row =>
+                row.Id != currentAttempt.Id
+                && row.PortfolioId == command.PortfolioId
+                && row.TenantAccountId == command.TenantAccountId
+                && row.ChargeLedgerEntryId == chargeLedgerEntryId
+                && row.AttemptType == TenantPaymentAttemptType.Charge
+                && row.State == TenantPaymentAttemptState.Submitted, ct);
+            var currentBalance = await _db.Set<TenantChargeBalanceProjection>().AsNoTracking()
+                .Where(row => row.PortfolioId == command.PortfolioId
+                    && row.TenantAccountId == command.TenantAccountId
+                    && row.TenantLedgerEntryId == chargeLedgerEntryId)
+                .Select(row => new { row.OpenAmount, row.ReversedAmount })
+                .SingleOrDefaultAsync(ct);
+            cancelPrepared = competingSubmitted
+                || currentBalance is null
+                || currentBalance.ReversedAmount != 0m
+                || currentBalance.OpenAmount != currentAttempt.Amount;
+            if (!competingSubmitted)
+                cancelReason = "The charge balance changed before the provider reservation could be submitted.";
+        }
+        if (cancelPrepared && currentAttempt is not null)
+        {
+            // The account lock makes this decision race-free. Do not leave a second Prepared
+            // attempt eligible for a later sweep: one charge has one active provider fence.
+            var canceled = await ProviderPaymentHandlerSupport.ApplyStateAsync(
+                _db, currentAttempt, TenantPaymentAttemptState.Canceled, null,
+                competingSubmitted ? "CHARGE_ALREADY_RESERVED" : "CHARGE_BALANCE_CHANGED",
+                cancelReason, null,
+                "provider-create-submit", context, ct);
+            if (canceled.Disposition == ProviderPaymentApplyDisposition.Conflict)
+                throw new AtomicReceiptInvariantException(canceled.ConflictReason!);
+            ProviderPaymentHandlerSupport.StageAudit(context, canceled.Attempt,
+                "Provider payment attempt canceled because another attempt owns the charge reservation",
+                actorLabel: "provider:create-submit");
+            return new(SubmitProviderPaymentCreateOutcome.Canceled,
+                canceled.Attempt.PortfolioId, canceled.Attempt.TenantAccountId,
+                canceled.Attempt.Id, canceled.Attempt.State, canceled.Attempt.Amount,
+                canceled.Attempt.Currency, canceled.Attempt.Provider,
+                canceled.Attempt.IdempotencyKey, canceled.Attempt.ProviderFenceToken,
+                canceled.Attempt.ProviderObjectId, canceled.Attempt.PreparedAtUtc);
+        }
+        var submission = await AtomicProviderPaymentPersistence.SubmitAsync(
+            _db, context, command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, command.IdempotencyKey, command.SubmittedAtUtc, ct);
+        if (submission is null)
+            return new(SubmitProviderPaymentCreateOutcome.NotFound, command.PortfolioId,
+                command.TenantAccountId, command.PaymentAttemptId, TenantPaymentAttemptState.Unknown,
+                0m, string.Empty, command.Provider, command.IdempotencyKey, null);
+
+        var outcome = submission.State switch
+        {
+            TenantPaymentAttemptState.Submitted =>
+                submission.WasNewSubmission
+                    ? SubmitProviderPaymentCreateOutcome.Submitted
+                    : SubmitProviderPaymentCreateOutcome.AlreadySubmitted,
+            TenantPaymentAttemptState.Succeeded => SubmitProviderPaymentCreateOutcome.Succeeded,
+            TenantPaymentAttemptState.Failed => SubmitProviderPaymentCreateOutcome.Failed,
+            TenantPaymentAttemptState.Canceled => SubmitProviderPaymentCreateOutcome.Canceled,
+            _ => SubmitProviderPaymentCreateOutcome.NotFound,
+        };
+        var attempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleAsync(row => row.Id == command.PaymentAttemptId, ct);
+        ProviderPaymentHandlerSupport.StageAudit(context, attempt,
+            outcome is SubmitProviderPaymentCreateOutcome.Submitted
+                ? "Provider payment reservation submitted with durable fence"
+                : $"Provider payment submit resumed as {attempt.State}",
+            actorLabel: "provider:create-submit");
+        return new(outcome, attempt.PortfolioId, attempt.TenantAccountId, attempt.Id,
+            attempt.State, attempt.Amount, attempt.Currency, attempt.Provider,
+            attempt.IdempotencyKey, attempt.ProviderFenceToken, attempt.ProviderObjectId,
+            attempt.PreparedAtUtc);
+    }
+
+    public Task AuthorizeReplayAsync(
+        SubmitProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, command.IdempotencyKey, _db, ct);
+}
+
+/// <summary>
+/// Compare-and-set retry scheduling for the Engine reconciliation worker. The provider call is
+/// always outside this command transaction; this command only persists the next durable slot and
+/// retains the Submitted fence until a later provider-confirmed terminal transition.
+/// </summary>
+public sealed class ScheduleProviderPaymentReconciliationHandler
+    : IAtomicCommandHandler<ScheduleProviderPaymentReconciliationCommand,
+        ScheduleProviderPaymentReconciliationResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public ScheduleProviderPaymentReconciliationHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<ScheduleProviderPaymentReconciliationResult> HandleAsync(
+        ScheduleProviderPaymentReconciliationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.NextAttemptAtUtc <= command.ScheduledAtUtc)
+            throw new ArgumentException("Next reconciliation must be later than the scheduling time.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.IdempotencyKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FailureCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FailureReason);
+
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
+        var attempt = await _db.TenantPaymentAttempts.AsNoTracking().SingleOrDefaultAsync(row =>
+            row.Id == command.PaymentAttemptId
+            && row.PortfolioId == command.PortfolioId
+            && row.TenantAccountId == command.TenantAccountId
+            && row.Provider == command.Provider
+            && row.IdempotencyKey == command.IdempotencyKey, ct);
+        if (attempt is null)
+            return new(ScheduleProviderPaymentReconciliationOutcome.NotFound,
+                command.PortfolioId, command.TenantAccountId, command.PaymentAttemptId,
+                TenantPaymentAttemptState.Unknown, null);
+        if (attempt.State is TenantPaymentAttemptState.Succeeded
+            or TenantPaymentAttemptState.Failed
+            or TenantPaymentAttemptState.Canceled)
+            return new(ScheduleProviderPaymentReconciliationOutcome.AlreadyTerminal,
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+                attempt.NextAttemptAtUtc);
+        if (attempt.State is not (TenantPaymentAttemptState.Prepared
+            or TenantPaymentAttemptState.Submitted))
+            return new(ScheduleProviderPaymentReconciliationOutcome.Stale,
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+                attempt.NextAttemptAtUtc);
+
+        var applied = await AtomicProviderPaymentPersistence.ScheduleReconciliationAsync(
+            _db, context, attempt.Id, attempt.TenantAccountId, attempt.PortfolioId,
+            attempt.Provider, attempt.IdempotencyKey, attempt.ProviderFenceToken,
+            command.NextAttemptAtUtc, command.FailureCode, command.FailureReason, ct);
+        if (!applied)
+        {
+            var current = await _db.TenantPaymentAttempts.AsNoTracking().SingleOrDefaultAsync(row =>
+                row.Id == attempt.Id && row.PortfolioId == attempt.PortfolioId
+                && row.TenantAccountId == attempt.TenantAccountId, ct);
+            return current is null
+                ? new(ScheduleProviderPaymentReconciliationOutcome.NotFound,
+                    command.PortfolioId, command.TenantAccountId, command.PaymentAttemptId,
+                    TenantPaymentAttemptState.Unknown, null)
+                : new(current.State is TenantPaymentAttemptState.Succeeded
+                        or TenantPaymentAttemptState.Failed
+                        or TenantPaymentAttemptState.Canceled
+                        ? ScheduleProviderPaymentReconciliationOutcome.AlreadyTerminal
+                        : ScheduleProviderPaymentReconciliationOutcome.Stale,
+                    current.PortfolioId, current.TenantAccountId, current.Id, current.State,
+                    current.NextAttemptAtUtc);
+        }
+
+        attempt.NextAttemptAtUtc = command.NextAttemptAtUtc;
+        attempt.FailureCode = command.FailureCode;
+        attempt.FailureReason = command.FailureReason;
+        ProviderPaymentHandlerSupport.StageAudit(
+            context, attempt, "Provider payment reconciliation scheduled",
+            actorLabel: "provider:reconciliation-worker");
+        return new(ScheduleProviderPaymentReconciliationOutcome.Scheduled,
+            attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+            command.NextAttemptAtUtc);
+    }
+
+    public Task AuthorizeReplayAsync(
+        ScheduleProviderPaymentReconciliationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, command.IdempotencyKey, _db, ct);
 }
 
 public sealed class FinalizeProviderPaymentCreateHandler
@@ -188,6 +440,7 @@ public sealed class FinalizeProviderPaymentCreateHandler
     public async Task<FinalizeProviderPaymentCreateResult> HandleAsync(
         FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.PaymentAttemptId
                 && candidate.PortfolioId == command.PortfolioId
@@ -205,10 +458,15 @@ public sealed class FinalizeProviderPaymentCreateHandler
                 throw new AtomicReceiptInvariantException(
                     $"Tenant payment context {paymentAttempt.Id} is already bound to another provider object.");
         }
+        if (paymentAttempt.ProviderFenceToken is Guid expectedFence
+            && command.ProviderFenceToken != expectedFence)
+            throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} requires its durable provider fence.");
 
         var stateResult = await ProviderPaymentHandlerSupport.ApplyStateAsync(
             _db, paymentAttempt, command.State, command.ProviderPaymentId, null,
-            command.FailureReason, null, "provider-create-finalize", context, ct);
+            command.FailureReason, null, "provider-create-finalize", context, ct,
+            command.ProviderFenceToken);
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
             throw new AtomicReceiptInvariantException(stateResult.ConflictReason!);
@@ -242,6 +500,7 @@ public sealed class FailProviderPaymentCreateHandler
     public async Task<FailProviderPaymentCreateResult> HandleAsync(
         FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.PaymentAttemptId
                 && candidate.PortfolioId == command.PortfolioId
@@ -255,11 +514,16 @@ public sealed class FailProviderPaymentCreateHandler
             return new(true, paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId,
                 paymentAttempt.Id, paymentAttempt.State);
 
+        if (paymentAttempt.ProviderFenceToken is Guid expectedFence
+            && command.ProviderFenceToken != expectedFence)
+            throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} requires its durable provider fence.");
+
         var databaseNow = await context.ReadDatabaseClockUtcAsync(ct);
         var stateResult = await ProviderPaymentHandlerSupport.ApplyStateAsync(
             _db, paymentAttempt, TenantPaymentAttemptState.Failed, paymentAttempt.ProviderObjectId,
             command.FailureCode, command.FailureReason, databaseNow,
-            "provider-create-failure", context, ct);
+            "provider-create-failure", context, ct, command.ProviderFenceToken);
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
             throw new AtomicReceiptInvariantException(stateResult.ConflictReason!);
@@ -276,6 +540,131 @@ public sealed class FailProviderPaymentCreateHandler
         ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
             command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
             command.Provider, command.IdempotencyKey, _db, ct);
+}
+
+public sealed class AbandonProviderPaymentAttemptHandler
+    : IAtomicCommandHandler<AbandonProviderPaymentAttemptCommand, AbandonProviderPaymentAttemptResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public AbandonProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<AbandonProviderPaymentAttemptResult> HandleAsync(
+        AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
+        var attempt = await _db.TenantPaymentAttempts.AsNoTracking().SingleOrDefaultAsync(row =>
+            row.Id == command.PaymentAttemptId
+            && row.PortfolioId == command.PortfolioId
+            && row.TenantAccountId == command.TenantAccountId
+            && row.Provider == command.Provider
+            && row.IdempotencyKey == command.IdempotencyKey, ct);
+        if (attempt is null)
+            return new(AbandonProviderPaymentAttemptOutcome.NotFound, command.PortfolioId,
+                command.TenantAccountId, command.PaymentAttemptId, TenantPaymentAttemptState.Unknown);
+        if (attempt.State is TenantPaymentAttemptState.Succeeded or TenantPaymentAttemptState.Failed
+            or TenantPaymentAttemptState.Canceled)
+            return new(AbandonProviderPaymentAttemptOutcome.AlreadyTerminal, attempt.PortfolioId,
+                attempt.TenantAccountId, attempt.Id, attempt.State);
+        if (attempt.State == TenantPaymentAttemptState.Submitted)
+        {
+            if (!command.ProviderConfirmed
+                || command.ConfirmedState is not (TenantPaymentAttemptState.Canceled
+                    or TenantPaymentAttemptState.Failed))
+                return new(AbandonProviderPaymentAttemptOutcome.ReconciliationRequired, attempt.PortfolioId,
+                    attempt.TenantAccountId, attempt.Id, attempt.State);
+
+            if (!string.IsNullOrWhiteSpace(attempt.ProviderObjectId)
+                && !string.IsNullOrWhiteSpace(command.ProviderPaymentId)
+                && !string.Equals(attempt.ProviderObjectId, command.ProviderPaymentId,
+                    StringComparison.Ordinal))
+                throw new AtomicReceiptInvariantException(
+                    $"Tenant payment context {attempt.Id} is already bound to another provider object.");
+        }
+
+        if (attempt.State == TenantPaymentAttemptState.Prepared
+            && !string.IsNullOrWhiteSpace(attempt.ProviderObjectId)
+            && !command.ProviderConfirmed)
+            return new(AbandonProviderPaymentAttemptOutcome.ReconciliationRequired, attempt.PortfolioId,
+                attempt.TenantAccountId, attempt.Id, attempt.State);
+
+        var terminalState = command.ProviderConfirmed && command.ConfirmedState is
+            (TenantPaymentAttemptState.Canceled or TenantPaymentAttemptState.Failed)
+            ? command.ConfirmedState.Value
+            : TenantPaymentAttemptState.Canceled;
+        var providerObjectId = command.ProviderPaymentId ?? attempt.ProviderObjectId;
+
+        var result = await ProviderPaymentHandlerSupport.ApplyStateAsync(
+            _db, attempt, terminalState, providerObjectId, "ABANDONED",
+            command.Reason, null, "provider-attempt-abandon", context, ct,
+            attempt.ProviderFenceToken);
+        if (result.Disposition == ProviderPaymentApplyDisposition.Conflict)
+            throw new AtomicReceiptInvariantException(result.ConflictReason!);
+        ProviderPaymentHandlerSupport.StageAudit(context, result.Attempt,
+            "Provider payment attempt abandoned after server-side reconciliation",
+            actorLabel: "provider:attempt-abandon");
+        return new(result.Disposition == ProviderPaymentApplyDisposition.Applied
+                ? AbandonProviderPaymentAttemptOutcome.Applied
+                : AbandonProviderPaymentAttemptOutcome.AlreadyTerminal,
+            result.Attempt.PortfolioId, result.Attempt.TenantAccountId,
+            result.Attempt.Id, result.Attempt.State);
+    }
+
+    public Task AuthorizeReplayAsync(
+        AbandonProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, command.IdempotencyKey, _db, ct);
+}
+
+public sealed class InspectProviderPaymentAttemptHandler
+    : IAtomicCommandHandler<InspectProviderPaymentAttemptCommand, InspectProviderPaymentAttemptResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public InspectProviderPaymentAttemptHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<InspectProviderPaymentAttemptResult> HandleAsync(
+        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct)
+    {
+        var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(
+            _db, command.PortfolioId, ct);
+        var attempt = await (
+            from candidate in _db.Set<TenantPaymentAttempt>().AsNoTracking()
+            join account in _db.Set<TenantAccount>().AsNoTracking()
+                on new { Id = candidate.TenantAccountId, candidate.PortfolioId }
+                equals new { account.Id, account.PortfolioId }
+            where candidate.Id == command.PaymentAttemptId
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.Provider == command.Provider
+                && account.ClosedAtUtc == null
+                && _db.Set<LeaseManagementParty>().Any(party =>
+                    party.LeaseManagementId == account.LeaseManagementId
+                    && party.PortfolioId == command.PortfolioId
+                    && party.TenantId == command.TenantId
+                    && party.EffectiveFrom <= times.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= times.BusinessDate)
+                    && party.Role != LeaseManagementPartyRole.Occupant)
+            select candidate).SingleOrDefaultAsync(ct);
+
+        if (attempt is null)
+            return new(false, command.PortfolioId, command.TenantAccountId,
+                command.PaymentAttemptId, TenantPaymentAttemptType.Charge,
+                TenantPaymentAttemptState.Unknown, 0m, string.Empty, command.Provider,
+                string.Empty, null, null, null);
+
+        return new(true, attempt.PortfolioId, attempt.TenantAccountId, attempt.Id,
+            attempt.AttemptType, attempt.State, attempt.Amount, attempt.Currency,
+            attempt.Provider, attempt.IdempotencyKey, attempt.ProviderObjectId,
+            attempt.ProviderFenceToken, attempt.PreparedAtUtc);
+    }
+
+    public Task AuthorizeReplayAsync(
+        InspectProviderPaymentAttemptCommand command, IAtomicCommandContext context, CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, idempotencyKey: null, _db, ct);
 }
 
 public sealed class RecordVerifiedProviderPaymentEventHandler
@@ -321,6 +710,16 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Provider == command.Provider
                 && candidate.ProviderObjectId == command.ProviderPaymentId, ct);
+        if (paymentAttempt is null && command.EnrollmentPaymentAttemptId is long metadataAttemptId)
+        {
+            paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
+                .SingleOrDefaultAsync(candidate => candidate.Id == metadataAttemptId
+                    && candidate.Provider == command.Provider
+                    && (command.EnrollmentPortfolioId == null
+                        || candidate.PortfolioId == command.EnrollmentPortfolioId)
+                    && (command.EnrollmentTenantAccountId == null
+                        || candidate.TenantAccountId == command.EnrollmentTenantAccountId), ct);
+        }
         if (paymentAttempt is null)
         {
             inbox.FailureKind = ProviderInboxFailureKind.Unmatched;
@@ -331,16 +730,38 @@ public sealed class RecordVerifiedProviderPaymentEventHandler
         if (!ProviderPaymentHandlerSupport.MatchesReceipt(paymentAttempt, command.Amount, command.Currency))
             return await ProviderPaymentHandlerSupport.DeadLetterAsync(inbox,
                 "Provider amount or currency did not match the durable tenant payment context.",
-                now, context, ct, paymentAttempt);
+                now, context, ct, paymentAttempt,
+                providerEventId: command.ProviderEventId,
+                providerReceivedAtUtc: command.ReceivedAtUtc,
+                actorLabel: $"provider:webhook:{command.Provider}");
 
         inbox.PortfolioId = paymentAttempt.PortfolioId;
-        var stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
-            _db, paymentAttempt, command.EventKind, command.FailureReason,
-            $"provider-event:{command.ProviderEventId}", context, ct);
+        ProviderPaymentApplyResult stateResult;
+        try
+        {
+            stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
+                _db, paymentAttempt, command.EventKind, command.FailureReason,
+                $"provider-event:{command.ProviderEventId}", context, ct);
+        }
+        catch (ProviderPaymentPermanentFailureException ex)
+        {
+            if (!ex.SafeToDeadLetter) throw;
+            return await ProviderPaymentHandlerSupport.DeadLetterAsync(
+                inbox, ex.Message, now, context, ct, paymentAttempt,
+                providerEventId: command.ProviderEventId,
+                providerReceivedAtUtc: command.ReceivedAtUtc,
+                actorLabel: $"provider:webhook:{command.Provider}");
+        }
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
         {
             ProviderPaymentHandlerSupport.DeadLetterInbox(inbox, stateResult.ConflictReason!, now);
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Verified provider event {command.ProviderEventId} dead-lettered: {stateResult.ConflictReason}",
+                actorLabel: $"provider:webhook:{command.Provider}",
+                providerEventId: command.ProviderEventId,
+                providerReceivedAtUtc: command.ReceivedAtUtc,
+                providerDeadLetteredAtUtc: now);
             await context.FlushBusinessAsync(ct);
             return new(RecordProviderPaymentEventOutcome.Conflict, inbox.Id,
                 paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId,
@@ -490,6 +911,12 @@ public sealed class ReconcileClaimedProviderPaymentEventHandler
             inbox.FailureKind = ProviderInboxFailureKind.Permanent;
             inbox.LastError = "Provider amount or currency did not match the durable tenant payment context.";
             ProviderPaymentHandlerSupport.ReleaseClaim(inbox);
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Claimed provider event {inbox.ProviderEventId} dead-lettered: {inbox.LastError}",
+                actorLabel: $"provider:worker:{command.ClaimOwner}",
+                providerEventId: inbox.ProviderEventId,
+                providerReceivedAtUtc: inbox.ReceivedAtUtc,
+                providerDeadLetteredAtUtc: now);
             await context.FlushBusinessAsync(ct);
             return new(ReconcileProviderPaymentEventOutcome.DeadLettered, inbox.Id,
                 paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId, paymentAttempt.Id,
@@ -497,14 +924,40 @@ public sealed class ReconcileClaimedProviderPaymentEventHandler
         }
 
         inbox.PortfolioId = paymentAttempt.PortfolioId;
-        var stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
-            _db, paymentAttempt, inbox.EventKind, inbox.FailureReason,
-            $"provider-inbox:{inbox.Id}:{command.ClaimOwner}", context, ct);
+        ProviderPaymentApplyResult stateResult;
+        try
+        {
+            stateResult = await ProviderPaymentHandlerSupport.ApplyEventAsync(
+                _db, paymentAttempt, inbox.EventKind, inbox.FailureReason,
+                $"provider-inbox:{inbox.Id}:{command.ClaimOwner}", context, ct);
+        }
+        catch (ProviderPaymentPermanentFailureException ex)
+        {
+            if (!ex.SafeToDeadLetter) throw;
+            ProviderPaymentHandlerSupport.DeadLetterInbox(inbox, ex.Message, now);
+            ProviderPaymentHandlerSupport.ReleaseClaim(inbox);
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Claimed provider event {inbox.ProviderEventId} dead-lettered: {ex.Message}",
+                actorLabel: $"provider:worker:{command.ClaimOwner}",
+                providerEventId: inbox.ProviderEventId,
+                providerReceivedAtUtc: inbox.ReceivedAtUtc,
+                providerDeadLetteredAtUtc: now);
+            await context.FlushBusinessAsync(ct);
+            return new(ReconcileProviderPaymentEventOutcome.DeadLettered, inbox.Id,
+                paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId,
+                paymentAttempt.Id, paymentAttempt.State, null);
+        }
         paymentAttempt = stateResult.Attempt;
         if (stateResult.Disposition == ProviderPaymentApplyDisposition.Conflict)
         {
             ProviderPaymentHandlerSupport.DeadLetterInbox(inbox, stateResult.ConflictReason!, now);
             ProviderPaymentHandlerSupport.ReleaseClaim(inbox);
+            ProviderPaymentHandlerSupport.StageAudit(context, paymentAttempt,
+                $"Claimed provider event {inbox.ProviderEventId} dead-lettered: {stateResult.ConflictReason}",
+                actorLabel: $"provider:worker:{command.ClaimOwner}",
+                providerEventId: inbox.ProviderEventId,
+                providerReceivedAtUtc: inbox.ReceivedAtUtc,
+                providerDeadLetteredAtUtc: now);
             await context.FlushBusinessAsync(ct);
             return new(ReconcileProviderPaymentEventOutcome.Conflict, inbox.Id,
                 paymentAttempt.PortfolioId, paymentAttempt.TenantAccountId,
@@ -563,6 +1016,19 @@ internal enum ProviderPaymentApplyDisposition
     Conflict,
 }
 
+/// <summary>
+/// A verified provider event can be permanently unprocessable when its immutable receipt target is
+/// no longer valid. Event handlers convert this narrow failure into a durable dead letter. Claim,
+/// transition, database, and other infrastructure failures continue to throw for provider retry.
+/// </summary>
+internal sealed class ProviderPaymentPermanentFailureException : InvalidOperationException
+{
+    public bool SafeToDeadLetter { get; }
+
+    public ProviderPaymentPermanentFailureException(string message, bool safeToDeadLetter = false)
+        : base(message) => SafeToDeadLetter = safeToDeadLetter;
+}
+
 internal sealed record ProviderPaymentApplyResult(
     TenantPaymentAttempt Attempt,
     ProviderPaymentApplyDisposition Disposition,
@@ -608,6 +1074,15 @@ internal static class ProviderPaymentHandlerSupport
         ProviderPaymentEventKind kind, string? failureReason, string claimOwner,
         IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", paymentAttempt.TenantAccountId, ct);
+        paymentAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == paymentAttempt.Id
+                && candidate.PortfolioId == paymentAttempt.PortfolioId
+                && candidate.TenantAccountId == paymentAttempt.TenantAccountId
+                && candidate.Provider == paymentAttempt.Provider, ct)
+            ?? throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} disappeared before provider event application.");
+
         var state = kind switch
         {
             ProviderPaymentEventKind.Pending => TenantPaymentAttemptState.Submitted,
@@ -627,7 +1102,7 @@ internal static class ProviderPaymentHandlerSupport
             state is TenantPaymentAttemptState.Failed or TenantPaymentAttemptState.Unknown
                 ? paymentAttempt.NextAttemptAtUtc
                 : null,
-            claimOwner, context, ct);
+            claimOwner, context, ct, paymentAttempt.ProviderFenceToken);
     }
 
     internal static async Task<ProviderPaymentApplyResult> ApplyStateAsync(
@@ -635,14 +1110,29 @@ internal static class ProviderPaymentHandlerSupport
         TenantPaymentAttempt paymentAttempt,
         TenantPaymentAttemptState state, string? providerObjectId, string? failureCode,
         string? failureReason, DateTime? nextAttemptAtUtc, string claimOwner,
-        IAtomicCommandContext context, CancellationToken ct)
+        IAtomicCommandContext context, CancellationToken ct, Guid? providerFenceToken = null)
     {
+        // Every provider-attempt transition shares the TenantAccount serialization boundary. The
+        // caller's snapshot may have been read before a worker, webhook, or money command won the
+        // race, so re-read it after taking the lock and use only this locked snapshot below.
+        await context.AcquireLockAsync("TenantAccount", paymentAttempt.TenantAccountId, ct);
+        paymentAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == paymentAttempt.Id
+                && candidate.PortfolioId == paymentAttempt.PortfolioId
+                && candidate.TenantAccountId == paymentAttempt.TenantAccountId
+                && candidate.Provider == paymentAttempt.Provider, ct)
+            ?? throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} disappeared before its locked transition.");
+
         if (!string.IsNullOrWhiteSpace(paymentAttempt.ProviderObjectId)
             && !string.IsNullOrWhiteSpace(providerObjectId)
             && !string.Equals(paymentAttempt.ProviderObjectId, providerObjectId, StringComparison.Ordinal))
             return new(paymentAttempt, ProviderPaymentApplyDisposition.Conflict,
                 $"Tenant payment context {paymentAttempt.Id} is already bound to another provider object.");
-        if (paymentAttempt.State == state)
+        var needsProviderObjectBinding = state == TenantPaymentAttemptState.Submitted
+            && !string.IsNullOrWhiteSpace(providerObjectId)
+            && string.IsNullOrWhiteSpace(paymentAttempt.ProviderObjectId);
+        if (paymentAttempt.State == state && !needsProviderObjectBinding)
             return new(paymentAttempt, ProviderPaymentApplyDisposition.AlreadyInState);
         if (paymentAttempt.State == TenantPaymentAttemptState.Failed
             && state == TenantPaymentAttemptState.Submitted)
@@ -656,8 +1146,6 @@ internal static class ProviderPaymentHandlerSupport
         if (state == TenantPaymentAttemptState.Succeeded
             && paymentAttempt.AttemptType != TenantPaymentAttemptType.Verification)
         {
-            await context.AcquireLockAsync(
-                "TenantAccount", paymentAttempt.TenantAccountId, ct);
             receiptTarget = await ValidateReceiptTargetAsync(db, paymentAttempt, context, ct);
         }
 
@@ -681,9 +1169,35 @@ internal static class ProviderPaymentHandlerSupport
 
         long? receiptId = null;
         DateTime? outboxAtUtc = null;
+        Guid? effectiveProviderFenceToken = providerFenceToken ?? paymentAttempt.ProviderFenceToken;
         if (state == TenantPaymentAttemptState.Succeeded
             && paymentAttempt.AttemptType != TenantPaymentAttemptType.Verification)
         {
+            // The receipt/journal/allocation path is itself an open-balance mutation. The
+            // provider caller must prove the exact durable fence before it can write those rows.
+            // Legacy Submitted/Prepared rows without a fence are upgraded in this same atomic
+            // command, preserving old-key recovery without opening an unowned write path.
+            effectiveProviderFenceToken ??= Guid.NewGuid();
+            if (paymentAttempt.ProviderFenceToken is null)
+            {
+                var fenceAttached = await AtomicProviderPaymentPersistence.TransitionAsync(
+                    db, context, paymentAttempt.Id, paymentAttempt.TenantAccountId,
+                    paymentAttempt.PortfolioId, claimToken.Value, TenantPaymentAttemptState.Submitted,
+                    paymentAttempt.ProviderObjectId, null, null, null, ct,
+                    effectiveProviderFenceToken);
+                if (!fenceAttached)
+                    throw new AtomicReceiptInvariantException(
+                        $"Tenant payment context {paymentAttempt.Id} lost its provider fence claim.");
+                claimToken = await AtomicProviderPaymentPersistence.ClaimExactAsync(
+                    db, context, paymentAttempt.Id, paymentAttempt.TenantAccountId,
+                    paymentAttempt.PortfolioId, claimOwner, ct);
+                if (claimToken is null)
+                    throw new AtomicReceiptInvariantException(
+                        $"Tenant payment context {paymentAttempt.Id} lost its upgraded provider claim.");
+            }
+            await AtomicProviderPaymentPersistence.AssertFenceAsync(
+                db, context, paymentAttempt.Id, paymentAttempt.TenantAccountId,
+                paymentAttempt.PortfolioId, effectiveProviderFenceToken.Value, ct);
             (receiptId, outboxAtUtc) = await PostReceiptAsync(
                 db, paymentAttempt, receiptTarget!.Value, context, ct);
         }
@@ -691,7 +1205,7 @@ internal static class ProviderPaymentHandlerSupport
         var applied = await AtomicProviderPaymentPersistence.TransitionAsync(db,
             context, paymentAttempt.Id, paymentAttempt.TenantAccountId, paymentAttempt.PortfolioId,
             claimToken.Value, state, providerObjectId, failureCode, failureReason,
-            nextAttemptAtUtc, ct);
+            nextAttemptAtUtc, ct, effectiveProviderFenceToken);
         if (!applied)
             throw new AtomicReceiptInvariantException(
                 $"Tenant payment context {paymentAttempt.Id} lost its fenced database claim.");
@@ -712,11 +1226,11 @@ internal static class ProviderPaymentHandlerSupport
         CancellationToken ct)
     {
         if (paymentAttempt.AttemptType != TenantPaymentAttemptType.Charge)
-            throw new AtomicReceiptInvariantException(
-                $"Provider receipt finalization does not support {paymentAttempt.AttemptType} attempts.");
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider receipt finalization does not support {paymentAttempt.AttemptType} attempts.", true);
         if (paymentAttempt.ChargeLedgerEntryId is not long targetChargeEntryId)
-            throw new AtomicReceiptInvariantException(
-                $"Provider charge context {paymentAttempt.Id} has no durable target charge.");
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} has no durable target charge.", true);
 
         // Revalidate the immutable intent after taking the account lock and before adding the
         // receipt. A fully settled target remains valid; in that case the entire provider receipt
@@ -737,8 +1251,18 @@ internal static class ProviderPaymentHandlerSupport
                 && balance.ReversedAmount == 0m
             select new { balance.OpenAmount }).SingleOrDefaultAsync(ct);
         if (target is null)
-            throw new AtomicReceiptInvariantException(
-                $"Provider charge context {paymentAttempt.Id} no longer identifies a valid target charge.");
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} no longer identifies a valid target charge.", true);
+
+        var allocationBusinessKey =
+            $"provider-receipt:{paymentAttempt.Id}:allocation:{targetChargeEntryId}";
+        if (await db.Set<TenantLedgerAllocation>().AsNoTracking().AnyAsync(row =>
+                row.PortfolioId == paymentAttempt.PortfolioId
+                && row.TenantAccountId == paymentAttempt.TenantAccountId
+                && row.BusinessKey == allocationBusinessKey, ct))
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} already has an allocation reservation.",
+                safeToDeadLetter: true);
         return (targetChargeEntryId, target.OpenAmount);
     }
 
@@ -755,6 +1279,36 @@ internal static class ProviderPaymentHandlerSupport
             .SingleOrDefaultAsync(ct);
         if (alreadyPosted is not null)
             return (alreadyPosted.Id, alreadyPosted.PostedAtUtc);
+
+        // Recheck the target immediately before any receipt, journal, or allocation row is written.
+        // The account lock normally makes this stable; this second read also turns a concurrent
+        // direct correction into the same permanent dead-letter outcome without a partial receipt.
+        var liveTarget = await db.Set<TenantChargeBalanceProjection>().AsNoTracking()
+            .Where(row => row.PortfolioId == paymentAttempt.PortfolioId
+                && row.TenantAccountId == paymentAttempt.TenantAccountId
+                && row.TenantLedgerEntryId == target.ChargeLedgerEntryId)
+            .Select(row => new { row.OpenAmount, row.ReversedAmount })
+            .SingleOrDefaultAsync(ct);
+        if (liveTarget is null
+            || liveTarget.OpenAmount != target.OpenAmount
+            || liveTarget.ReversedAmount != 0m)
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} changed before its exact target could be settled.");
+
+        // The allocation helper is idempotent by business key. A pre-existing key means a
+        // partially-written historical receipt, not permission to append a second receipt and
+        // silently report an inexact allocation. Decide that permanent branch before the first
+        // receipt/journal/allocation write so the safe dead-letter path remains zero-mutation.
+        var allocationBusinessKey =
+            $"provider-receipt:{paymentAttempt.Id}:allocation:{target.ChargeLedgerEntryId}";
+        if (await db.Set<TenantLedgerAllocation>().AsNoTracking().AnyAsync(row =>
+                row.PortfolioId == paymentAttempt.PortfolioId
+                && row.TenantAccountId == paymentAttempt.TenantAccountId
+                && row.BusinessKey == allocationBusinessKey, ct))
+            throw new ProviderPaymentPermanentFailureException(
+                $"Provider charge context {paymentAttempt.Id} already has an allocation reservation.",
+                safeToDeadLetter: true);
+
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(db, paymentAttempt.PortfolioId, ct);
         var receipt = new TenantLedgerEntry
         {
@@ -788,7 +1342,7 @@ internal static class ProviderPaymentHandlerSupport
         var expectedAllocation = Math.Min(target.OpenAmount, receipt.Amount);
         if (allocation.AllocatedAmount != expectedAllocation
             || allocation.AllocationCount != (expectedAllocation > 0m ? 1 : 0))
-            throw new AtomicReceiptInvariantException(
+            throw new ProviderPaymentPermanentFailureException(
                 $"Provider charge context {paymentAttempt.Id} did not settle its exact target.");
         return (receipt.Id, times.WallClockUtc);
     }
@@ -820,12 +1374,21 @@ internal static class ProviderPaymentHandlerSupport
 
     internal static async Task<RecordVerifiedProviderPaymentEventResult> DeadLetterAsync(
         ProviderInboxEvent inbox, string reason, DateTime now, IAtomicCommandContext context,
-        CancellationToken ct, TenantPaymentAttempt? paymentAttempt = null)
+        CancellationToken ct, TenantPaymentAttempt? paymentAttempt = null,
+        string? providerEventId = null, DateTime? providerReceivedAtUtc = null,
+        string? actorLabel = null)
     {
         inbox.PortfolioId = paymentAttempt?.PortfolioId ?? inbox.PortfolioId;
         inbox.FailureKind = ProviderInboxFailureKind.Permanent;
         inbox.LastError = reason;
         inbox.DeadLetteredAtUtc = now;
+        if (paymentAttempt is not null)
+            StageAudit(context, paymentAttempt,
+                $"Provider event {providerEventId ?? inbox.ProviderEventId} dead-lettered: {reason}",
+                actorLabel: actorLabel ?? $"provider:webhook:{inbox.Provider}",
+                providerEventId: providerEventId ?? inbox.ProviderEventId,
+                providerReceivedAtUtc: providerReceivedAtUtc ?? inbox.ReceivedAtUtc,
+                providerDeadLetteredAtUtc: now);
         await context.FlushBusinessAsync(ct);
         return new(RecordProviderPaymentEventOutcome.Unmatched, inbox.Id, inbox.PortfolioId,
             paymentAttempt?.TenantAccountId, paymentAttempt?.Id, paymentAttempt?.State);
@@ -836,7 +1399,10 @@ internal static class ProviderPaymentHandlerSupport
         TenantPaymentAttempt paymentAttempt,
         string reason,
         int? userId = null,
-        string? actorLabel = null) =>
+        string? actorLabel = null,
+        string? providerEventId = null,
+        DateTime? providerReceivedAtUtc = null,
+        DateTime? providerDeadLetteredAtUtc = null) =>
         context.StageSemanticEvent(new AtomicSemanticAudit(paymentAttempt.PortfolioId,
             nameof(TenantAccount), paymentAttempt.TenantAccountId, AuditLogOperation.Updated,
             UserId: userId,
@@ -848,6 +1414,11 @@ internal static class ProviderPaymentHandlerSupport
                 paymentAttempt.IdempotencyKey, paymentAttempt.AttemptType, paymentAttempt.State,
                 paymentAttempt.Amount, paymentAttempt.Currency,
                 InitiatedByUserId = paymentAttempt.CreatedByUserId,
+                ProviderEventId = providerEventId,
+                ProviderReceivedAtUtc = providerReceivedAtUtc,
+                ProviderDeadLetteredAtUtc = providerDeadLetteredAtUtc,
+                RecoveryStatus = providerEventId is null ? null : "DeadLettered",
+                RecoveryAction = providerEventId is null ? null : "Reconcile or inspect provider object before retrying",
             }), ChangeReason: reason));
 
     internal static async Task AuthorizePaymentPrepareReplayAsync(
@@ -857,10 +1428,7 @@ internal static class ProviderPaymentHandlerSupport
     {
         var times = await RentalCommand.Data.AtomicCommandClock.ReadCommandTimesAsync(db, command.PortfolioId, ct);
         var allowed = await (
-            from balance in db.Set<TenantChargeBalanceProjection>().AsNoTracking()
-            join entry in db.Set<TenantLedgerEntry>().AsNoTracking()
-                on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
-                equals new { entry.Id, entry.PortfolioId, entry.TenantAccountId }
+            from entry in db.Set<TenantLedgerEntry>().AsNoTracking()
             join account in db.Set<TenantAccount>().AsNoTracking()
                 on new { Id = entry.TenantAccountId, entry.PortfolioId }
                 equals new { account.Id, account.PortfolioId }
@@ -882,6 +1450,61 @@ internal static class ProviderPaymentHandlerSupport
         if (!allowed)
             throw new UnauthorizedAccessException(
                 "Current provider payment scope no longer authorizes this replay.");
+
+        var storedAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .Where(candidate => candidate.Provider == command.Provider
+                && candidate.PortfolioId == command.PortfolioId
+                && candidate.TenantAccountId == command.TenantAccountId
+                && candidate.ChargeLedgerEntryId == command.ChargeLedgerEntryId
+                && candidate.AttemptType == TenantPaymentAttemptType.Charge
+                && (candidate.IdempotencyKey == command.IdempotencyKey
+                    || (candidate.CreatedByUserId == command.ActorUserId
+                        && (candidate.IdempotencyKey == $"checkout:tenant-charge:{command.ChargeLedgerEntryId}"
+                            || candidate.IdempotencyKey == $"intent:tenant-charge:{command.ChargeLedgerEntryId}"))))
+            .OrderByDescending(candidate => candidate.IdempotencyKey == command.IdempotencyKey)
+            .Select(candidate => new
+            {
+                candidate.Amount,
+                candidate.Currency,
+                candidate.State,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (storedAttempt is null)
+            throw new AtomicReceiptInvariantException(
+                "The provider payment prepare receipt has no matching durable attempt.");
+        if (storedAttempt.State is TenantPaymentAttemptState.Submitted or TenantPaymentAttemptState.Succeeded)
+            return;
+        if (storedAttempt.State is TenantPaymentAttemptState.Canceled or TenantPaymentAttemptState.Failed)
+            throw new DomainValidationException(
+                "This payment attempt has ended. Reconcile its status, then start a new payment attempt.",
+                statusCode: 409);
+
+        // A prepare receipt is replayable only while the same charge still has the same open
+        // balance. This query deliberately keeps the balance predicate in PostgreSQL so a stale
+        // stored amount can never be returned after a cheque, reversal, or other correction.
+        var liveTarget = await (
+            from balance in db.Set<TenantChargeBalanceProjection>().AsNoTracking()
+            join entry in db.Set<TenantLedgerEntry>().AsNoTracking()
+                on new { Id = balance.TenantLedgerEntryId, balance.PortfolioId, balance.TenantAccountId }
+                equals new { entry.Id, entry.PortfolioId, entry.TenantAccountId }
+            join account in db.Set<TenantAccount>().AsNoTracking()
+                on new { Id = entry.TenantAccountId, entry.PortfolioId }
+                equals new { account.Id, account.PortfolioId }
+            where entry.Id == command.ChargeLedgerEntryId
+                && entry.PortfolioId == command.PortfolioId
+                && entry.TenantAccountId == command.TenantAccountId
+                && entry.Direction == TenantLedgerDirection.Debit
+                && balance.OpenAmount > 0m
+                && balance.ReversedAmount == 0m
+                && account.ClosedAtUtc == null
+            select new { balance.OpenAmount, account.Currency })
+            .SingleOrDefaultAsync(ct);
+        if (liveTarget is null
+            || !string.Equals(liveTarget.Currency, storedAttempt.Currency, StringComparison.OrdinalIgnoreCase)
+            || liveTarget.OpenAmount != storedAttempt.Amount)
+            throw new DomainValidationException(
+                "This payment amount is no longer current. Start a new payment attempt.",
+                statusCode: 409);
     }
 
     internal static async Task AuthorizeAutopaySetupReplayAsync(
@@ -918,7 +1541,7 @@ internal static class ProviderPaymentHandlerSupport
         int tenantAccountId,
         int portfolioId,
         string provider,
-        string idempotencyKey,
+        string? idempotencyKey,
         RentalCommandDbContext db,
         CancellationToken ct)
     {
@@ -927,7 +1550,7 @@ internal static class ProviderPaymentHandlerSupport
                 && candidate.TenantAccountId == tenantAccountId
                 && candidate.PortfolioId == portfolioId
                 && candidate.Provider == provider
-                && candidate.IdempotencyKey == idempotencyKey, ct);
+                && (idempotencyKey == null || candidate.IdempotencyKey == idempotencyKey), ct);
         if (!admitted)
             throw new UnauthorizedAccessException(
                 "The durable provider context no longer admits this replay.");

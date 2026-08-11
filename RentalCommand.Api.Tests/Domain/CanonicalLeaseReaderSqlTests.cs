@@ -791,6 +791,32 @@ public sealed class CanonicalLeaseReaderSqlTests
     }
 
     [Fact]
+    public void Provider_dead_letter_search_stays_in_one_translated_audit_query()
+    {
+        using var db = NewContext();
+        var audit = new AuditQueryService(
+            db,
+            new AuditDescriber(),
+            new AuditDiffBuilder(),
+            Mock.Of<RentalCommand.Core.Time.IAppTimeZoneProvider>(),
+            TimeProvider.System);
+
+        var sql = audit.BuildForensicPageProjectionQuery(
+                portfolioId: 17,
+                operation: null,
+                entityType: nameof(RentalCommand.Core.Entities.TenantAccount),
+                entityId: null,
+                query: new ListQuery { Search = "evt_dead_99", Take = 20 })
+            .ToQueryString();
+
+        sql.Should().Contain("ChangeReason");
+        sql.Should().Contain("NewValues");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("LIMIT");
+        sql.Should().NotContain("ToList");
+    }
+
+    [Fact]
     public void Dashboard_tenant_activity_facts_use_page_keys_and_one_ordered_party_aggregate()
     {
         using var db = NewContext();

@@ -19,6 +19,7 @@ internal static class TenantAccountPostgreSqlContract
         CreatePaymentAttemptExactClaimFunction,
         CreatePaymentAttemptTransitionFunction,
         CreatePaymentAttemptValidator,
+        CreateProviderPaymentFenceAssertion,
         CreateOpenAccountWriteGuard,
         CreateLedgerEntryValidator,
         CreatePaymentAttemptSuccessValidator,
@@ -40,7 +41,9 @@ internal static class TenantAccountPostgreSqlContract
         CreatePaymentAttemptClaimFunction,
         CreatePaymentAttemptExactClaimFunction,
         CreatePaymentAttemptTransitionFunction,
+        CreatePaymentAttemptReconciliationScheduleFunction,
         CreatePaymentAttemptValidator,
+        CreateProviderPaymentFenceAssertion,
         CreateOpenAccountWriteGuard,
         CreateLedgerEntryValidator,
         CreatePaymentAttemptSuccessValidator,
@@ -49,6 +52,34 @@ internal static class TenantAccountPostgreSqlContract
         CreateSecurityDepositAccountValidator,
         CreateSecurityDepositEntryValidator,
         CreateTriggers,
+        CreatePaymentAttemptIntentTriggers,
+    ];
+
+    /// <summary>
+    /// Exact contract that existed immediately before the durable provider-fence migration.
+    /// Down uses this after removing the fence-aware objects and columns; keeping it explicit
+    /// prevents a rollback from leaving a function/trigger that references dropped columns.
+    /// </summary>
+    internal static IReadOnlyList<string> PreFenceCreateStatements { get; } =
+    [
+        CreateAppendOnlyGuard,
+        CreateTenantAccountCurrencyGuard,
+        TenantAccountCloseValidatorStatement(allowPlannedCancellation: true),
+        CreateConditionPeriodGuard,
+        CreatePaymentAttemptWriteGuard,
+        CreatePaymentAttemptIntentGuard,
+        CreatePaymentAttemptClaimFunction,
+        CreatePaymentAttemptExactClaimFunction,
+        CreatePaymentAttemptTransitionFunctionBeforeFence,
+        CreatePaymentAttemptValidator,
+        CreateOpenAccountWriteGuardBeforeFence,
+        CreateLedgerEntryValidator,
+        CreatePaymentAttemptSuccessValidator,
+        CreateLedgerAllocationValidator,
+        CreateAutopayValidator,
+        CreateSecurityDepositAccountValidator,
+        CreateSecurityDepositEntryValidator,
+        CreateTriggersBeforeFence,
         CreatePaymentAttemptIntentTriggers,
     ];
 
@@ -87,6 +118,12 @@ internal static class TenantAccountPostgreSqlContract
             """,
             StringComparison.Ordinal);
     }
+
+    internal static string InteractivePaymentReconciliationScheduleCreateStatement =>
+        CreatePaymentAttemptReconciliationScheduleFunction;
+
+    internal const string InteractivePaymentReconciliationScheduleDropStatement =
+        "DROP FUNCTION IF EXISTS rc_schedule_tenant_payment_reconciliation(bigint, integer, integer, varchar, varchar, uuid, timestamp with time zone, varchar, varchar);";
 
     internal static IReadOnlyList<string> DropStatements { get; } =
     [
@@ -399,6 +436,260 @@ internal static class TenantAccountPostgreSqlContract
           p_provider_object_id varchar(200) DEFAULT NULL,
           p_failure_code varchar(100) DEFAULT NULL,
           p_failure_reason varchar(2000) DEFAULT NULL,
+          p_next_attempt_at_utc timestamp with time zone DEFAULT NULL,
+          p_provider_fence_token uuid DEFAULT NULL)
+        RETURNS boolean
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          prior_state varchar(30);
+          prior_provider_object_id varchar(200);
+          prior_fence_token uuid;
+          now_utc timestamp with time zone := clock_timestamp();
+          changed_count integer;
+        BEGIN
+          IF p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown') THEN
+            RAISE EXCEPTION 'Unsupported TenantPaymentAttempt transition state %', p_new_state
+              USING ERRCODE = '22023';
+          END IF;
+
+          SELECT attempt."State", attempt."ProviderObjectId", attempt."ProviderFenceToken"
+            INTO prior_state, prior_provider_object_id, prior_fence_token
+          FROM "TenantPaymentAttempts" AS attempt
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."ClaimToken" = p_claim_token
+            AND attempt."ClaimExpiresAtUtc" > now_utc
+          FOR UPDATE;
+
+          IF prior_state IS NULL THEN
+            RETURN false;
+          END IF;
+
+          IF prior_provider_object_id IS NOT NULL
+             AND p_provider_object_id IS NOT NULL
+             AND prior_provider_object_id IS DISTINCT FROM p_provider_object_id THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % is already bound to provider object %',
+              p_id, prior_provider_object_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          IF p_new_state = 'Submitted'
+             AND prior_state = 'Prepared'
+             AND p_provider_fence_token IS NULL THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % requires its durable provider fence before submission', p_id
+              USING ERRCODE = '23514';
+          END IF;
+          IF p_new_state = 'Submitted'
+             AND prior_state = 'Submitted'
+             AND prior_fence_token IS NOT NULL
+             AND prior_fence_token IS DISTINCT FROM p_provider_fence_token THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % provider fence does not match its durable reservation', p_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          IF prior_state = 'Succeeded'
+             OR prior_state = 'Canceled'
+             OR (prior_state = 'Failed' AND p_new_state = 'Submitted')
+             OR (prior_state = 'Prepared' AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown'))
+             OR (prior_state IN ('Submitted','Failed','Unknown')
+                 AND p_new_state NOT IN ('Submitted','Succeeded','Failed','Canceled','Unknown')) THEN
+            RAISE EXCEPTION 'Invalid TenantPaymentAttempt transition from % to %', prior_state, p_new_state
+              USING ERRCODE = '23514';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "State" = p_new_state,
+              "ProviderObjectId" = COALESCE(attempt."ProviderObjectId", p_provider_object_id),
+              "ProviderFenceToken" = CASE
+                WHEN p_new_state = 'Submitted' THEN COALESCE(attempt."ProviderFenceToken", p_provider_fence_token)
+                ELSE NULL
+              END,
+              "ProviderFenceAcquiredAtUtc" = CASE
+                WHEN p_new_state = 'Submitted' THEN COALESCE(attempt."ProviderFenceAcquiredAtUtc", now_utc)
+                ELSE NULL
+              END,
+              "SubmittedAtUtc" = CASE
+                WHEN p_new_state IN ('Submitted','Succeeded')
+                  THEN COALESCE(attempt."SubmittedAtUtc", now_utc)
+                ELSE attempt."SubmittedAtUtc"
+              END,
+              "SettledAtUtc" = CASE WHEN p_new_state = 'Succeeded' THEN now_utc ELSE NULL END,
+              "FailureCode" = CASE WHEN p_new_state = 'Succeeded' THEN NULL ELSE p_failure_code END,
+              "FailureReason" = CASE WHEN p_new_state = 'Succeeded' THEN NULL ELSE p_failure_reason END,
+              "NextAttemptAtUtc" = CASE
+                WHEN p_new_state IN ('Failed','Unknown') THEN p_next_attempt_at_utc
+                ELSE NULL
+              END,
+              "ClaimOwner" = NULL,
+              "ClaimToken" = NULL,
+              "ClaimExpiresAtUtc" = NULL,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."ClaimToken" = p_claim_token
+            AND attempt."ClaimExpiresAtUtc" > now_utc;
+
+          GET DIAGNOSTICS changed_count = ROW_COUNT;
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN changed_count = 1;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptExactClaimFunction = """
+        CREATE OR REPLACE FUNCTION rc_claim_exact_tenant_payment_attempt(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_claim_owner varchar(200),
+          p_lease_duration interval DEFAULT interval '5 minutes')
+        RETURNS uuid
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          claimed_token uuid;
+          now_utc timestamp with time zone := clock_timestamp();
+        BEGIN
+          IF NULLIF(btrim(p_claim_owner), '') IS NULL OR p_lease_duration <= interval '0 seconds' THEN
+            RAISE EXCEPTION 'Payment-attempt claim owner and positive lease duration are required'
+              USING ERRCODE = '22023';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "ClaimOwner" = p_claim_owner,
+              "ClaimToken" = gen_random_uuid(),
+              "ClaimExpiresAtUtc" = now_utc + p_lease_duration,
+              "AttemptCount" = CASE
+                WHEN attempt."State" = 'Prepared' AND attempt."ProviderObjectId" IS NULL
+                  THEN attempt."AttemptCount" + 1
+                ELSE attempt."AttemptCount"
+              END,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."State" IN ('Prepared','Submitted','Failed','Unknown')
+            AND (attempt."ClaimToken" IS NULL OR attempt."ClaimExpiresAtUtc" <= now_utc)
+          RETURNING attempt."ClaimToken" INTO claimed_token;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN claimed_token;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptReconciliationScheduleFunction = """
+        CREATE OR REPLACE FUNCTION rc_schedule_tenant_payment_reconciliation(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_provider varchar(100),
+          p_idempotency_key varchar(200),
+          p_provider_fence_token uuid,
+          p_next_attempt_at_utc timestamp with time zone,
+          p_failure_code varchar(100),
+          p_failure_reason varchar(2000))
+        RETURNS boolean
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          changed_count integer;
+          now_utc timestamp with time zone := clock_timestamp();
+        BEGIN
+          IF p_next_attempt_at_utc IS NULL OR p_next_attempt_at_utc <= now_utc THEN
+            RAISE EXCEPTION 'Interactive payment reconciliation must schedule a future attempt'
+              USING ERRCODE = '22023';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "NextAttemptAtUtc" = p_next_attempt_at_utc,
+              "FailureCode" = p_failure_code,
+              "FailureReason" = p_failure_reason,
+              "ClaimOwner" = NULL,
+              "ClaimToken" = NULL,
+              "ClaimExpiresAtUtc" = NULL,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."Provider" = p_provider
+            AND attempt."IdempotencyKey" = p_idempotency_key
+            AND attempt."State" IN ('Prepared','Submitted')
+            AND attempt."ProviderFenceToken" IS NOT DISTINCT FROM p_provider_fence_token;
+
+          GET DIAGNOSTICS changed_count = ROW_COUNT;
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN changed_count = 1;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptValidator = """
+        CREATE OR REPLACE FUNCTION rc_validate_tenant_payment_attempt()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          account_currency varchar(3);
+          original_attempt record;
+        BEGIN
+          SELECT account."Currency"
+            INTO account_currency
+          FROM "TenantAccounts" AS account
+          WHERE account."PortfolioId" = NEW."PortfolioId"
+            AND account."Id" = NEW."TenantAccountId";
+
+          IF account_currency IS NULL OR NEW."Currency" IS DISTINCT FROM account_currency THEN
+            RAISE EXCEPTION 'TenantPaymentAttempt % does not match TenantAccount scope/currency', NEW."Id"
+              USING ERRCODE = '23514';
+          END IF;
+
+          IF NEW."AttemptType" = 'Refund' THEN
+            SELECT source."AttemptType", source."State", source."Amount", source."Currency",
+                   source."Provider", source."ProviderObjectId"
+              INTO original_attempt
+            FROM "TenantPaymentAttempts" AS source
+            WHERE source."Id" = NEW."RefundsPaymentAttemptId"
+              AND source."PortfolioId" = NEW."PortfolioId"
+              AND source."TenantAccountId" = NEW."TenantAccountId";
+
+            IF NOT FOUND
+               OR original_attempt."AttemptType" NOT IN ('Charge', 'UnappliedReceipt')
+               OR original_attempt."State" <> 'Succeeded'
+               OR original_attempt."Amount" IS DISTINCT FROM NEW."Amount"
+               OR original_attempt."Currency" IS DISTINCT FROM NEW."Currency"
+               OR original_attempt."Provider" IS DISTINCT FROM NEW."Provider"
+               OR (original_attempt."Provider" <> 'manual'
+                   AND original_attempt."ProviderObjectId" IS NULL) THEN
+              RAISE EXCEPTION 'Refund TenantPaymentAttempt % lacks exact settled receipt provenance', NEW."Id"
+                USING ERRCODE = '23514';
+            END IF;
+          END IF;
+
+          RETURN NULL;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptTransitionFunctionBeforeFence = """
+        CREATE OR REPLACE FUNCTION rc_transition_tenant_payment_attempt(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_claim_token uuid,
+          p_new_state varchar(30),
+          p_provider_object_id varchar(200) DEFAULT NULL,
+          p_failure_code varchar(100) DEFAULT NULL,
+          p_failure_reason varchar(2000) DEFAULT NULL,
           p_next_attempt_at_utc timestamp with time zone DEFAULT NULL)
         RETURNS boolean
         LANGUAGE plpgsql
@@ -480,98 +771,7 @@ internal static class TenantAccountPostgreSqlContract
         $function$;
         """;
 
-    private const string CreatePaymentAttemptExactClaimFunction = """
-        CREATE OR REPLACE FUNCTION rc_claim_exact_tenant_payment_attempt(
-          p_id bigint,
-          p_tenant_account_id integer,
-          p_portfolio_id integer,
-          p_claim_owner varchar(200),
-          p_lease_duration interval DEFAULT interval '5 minutes')
-        RETURNS uuid
-        LANGUAGE plpgsql
-        AS $function$
-        DECLARE
-          claimed_token uuid;
-          now_utc timestamp with time zone := clock_timestamp();
-        BEGIN
-          IF NULLIF(btrim(p_claim_owner), '') IS NULL OR p_lease_duration <= interval '0 seconds' THEN
-            RAISE EXCEPTION 'Payment-attempt claim owner and positive lease duration are required'
-              USING ERRCODE = '22023';
-          END IF;
-
-          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
-
-          UPDATE "TenantPaymentAttempts" AS attempt
-          SET "ClaimOwner" = p_claim_owner,
-              "ClaimToken" = gen_random_uuid(),
-              "ClaimExpiresAtUtc" = now_utc + p_lease_duration,
-              "AttemptCount" = CASE
-                WHEN attempt."State" = 'Prepared' AND attempt."ProviderObjectId" IS NULL
-                  THEN attempt."AttemptCount" + 1
-                ELSE attempt."AttemptCount"
-              END,
-              "UpdatedAtUtc" = now_utc
-          WHERE attempt."Id" = p_id
-            AND attempt."TenantAccountId" = p_tenant_account_id
-            AND attempt."PortfolioId" = p_portfolio_id
-            AND attempt."State" IN ('Prepared','Submitted','Failed','Unknown')
-            AND (attempt."ClaimToken" IS NULL OR attempt."ClaimExpiresAtUtc" <= now_utc)
-          RETURNING attempt."ClaimToken" INTO claimed_token;
-
-          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
-          RETURN claimed_token;
-        END;
-        $function$;
-        """;
-
-    private const string CreatePaymentAttemptValidator = """
-        CREATE OR REPLACE FUNCTION rc_validate_tenant_payment_attempt()
-        RETURNS trigger
-        LANGUAGE plpgsql
-        AS $function$
-        DECLARE
-          account_currency varchar(3);
-          original_attempt record;
-        BEGIN
-          SELECT account."Currency"
-            INTO account_currency
-          FROM "TenantAccounts" AS account
-          WHERE account."PortfolioId" = NEW."PortfolioId"
-            AND account."Id" = NEW."TenantAccountId";
-
-          IF account_currency IS NULL OR NEW."Currency" IS DISTINCT FROM account_currency THEN
-            RAISE EXCEPTION 'TenantPaymentAttempt % does not match TenantAccount scope/currency', NEW."Id"
-              USING ERRCODE = '23514';
-          END IF;
-
-          IF NEW."AttemptType" = 'Refund' THEN
-            SELECT source."AttemptType", source."State", source."Amount", source."Currency",
-                   source."Provider", source."ProviderObjectId"
-              INTO original_attempt
-            FROM "TenantPaymentAttempts" AS source
-            WHERE source."Id" = NEW."RefundsPaymentAttemptId"
-              AND source."PortfolioId" = NEW."PortfolioId"
-              AND source."TenantAccountId" = NEW."TenantAccountId";
-
-            IF NOT FOUND
-               OR original_attempt."AttemptType" NOT IN ('Charge', 'UnappliedReceipt')
-               OR original_attempt."State" <> 'Succeeded'
-               OR original_attempt."Amount" IS DISTINCT FROM NEW."Amount"
-               OR original_attempt."Currency" IS DISTINCT FROM NEW."Currency"
-               OR original_attempt."Provider" IS DISTINCT FROM NEW."Provider"
-               OR (original_attempt."Provider" <> 'manual'
-                   AND original_attempt."ProviderObjectId" IS NULL) THEN
-              RAISE EXCEPTION 'Refund TenantPaymentAttempt % lacks exact settled receipt provenance', NEW."Id"
-                USING ERRCODE = '23514';
-            END IF;
-          END IF;
-
-          RETURN NULL;
-        END;
-        $function$;
-        """;
-
-    private const string CreateOpenAccountWriteGuard = """
+    private const string CreateOpenAccountWriteGuardBeforeFence = """
         CREATE OR REPLACE FUNCTION rc_guard_open_tenant_account_money_write()
         RETURNS trigger
         LANGUAGE plpgsql
@@ -606,6 +806,205 @@ internal static class TenantAccountPostgreSqlContract
             RAISE EXCEPTION 'TenantAccount % is closed; new money rows are not permitted', account_id
               USING ERRCODE = '23514';
           END IF;
+
+          RETURN NEW;
+        END;
+        $function$;
+        """;
+
+    private static string CreateTriggersBeforeFence =>
+        CreateTriggers.Replace(
+"""
+        CREATE TRIGGER trg_tenant_ledger_allocation_open_account
+        BEFORE INSERT ON "TenantLedgerAllocations"
+        FOR EACH ROW EXECUTE FUNCTION rc_guard_open_tenant_account_money_write();
+
+""",
+            string.Empty,
+            StringComparison.Ordinal);
+
+    private const string CreateProviderPaymentFenceAssertion = """
+        CREATE OR REPLACE FUNCTION rc_assert_provider_payment_fence(
+          p_payment_attempt_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_provider_fence_token uuid)
+        RETURNS bigint
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          reserved_attempt_id bigint;
+        BEGIN
+          SELECT attempt."Id"
+            INTO reserved_attempt_id
+          FROM "TenantPaymentAttempts" AS attempt
+          WHERE attempt."Id" = p_payment_attempt_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."State" = 'Submitted'
+            AND attempt."ProviderFenceToken" = p_provider_fence_token
+          FOR UPDATE;
+
+          IF reserved_attempt_id IS NULL THEN
+            RAISE EXCEPTION 'Provider payment attempt % does not own its durable fence',
+              p_payment_attempt_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          PERFORM set_config(
+            'rental_command.provider_payment_attempt_id', reserved_attempt_id::text, true);
+          PERFORM set_config(
+            'rental_command.provider_payment_fence_token', p_provider_fence_token::text, true);
+          RETURN reserved_attempt_id;
+        END;
+        $function$;
+        """;
+
+    private const string CreateOpenAccountWriteGuard = """
+        CREATE OR REPLACE FUNCTION rc_guard_open_tenant_account_money_write()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          account_id integer;
+          account_closed_at timestamp with time zone;
+          provider_attempt_id bigint;
+          provider_charge_id bigint;
+          provider_name varchar(100);
+          provider_attempt_state varchar(50);
+          submitted_attempt_id bigint;
+          authorized_provider_attempt_id bigint;
+          authorized_provider_fence_token uuid;
+        BEGIN
+          IF NULLIF(current_setting('rental_command.provider_payment_attempt_id', true), '') IS NOT NULL THEN
+            authorized_provider_attempt_id :=
+              NULLIF(current_setting('rental_command.provider_payment_attempt_id', true), '')::bigint;
+            authorized_provider_fence_token :=
+              NULLIF(current_setting('rental_command.provider_payment_fence_token', true), '')::uuid;
+          END IF;
+
+          IF TG_TABLE_NAME = 'TenantLedgerEntries' THEN
+            account_id := NEW."TenantAccountId";
+            provider_attempt_id := NEW."ProviderPaymentAttemptId";
+            IF provider_attempt_id IS NOT NULL THEN
+              SELECT attempt."ChargeLedgerEntryId"
+                     , attempt."Provider"
+                     , attempt."State"
+                INTO provider_charge_id
+                     , provider_name
+                     , provider_attempt_state
+              FROM "TenantPaymentAttempts" AS attempt
+              WHERE attempt."Id" = provider_attempt_id
+                AND attempt."PortfolioId" = NEW."PortfolioId"
+                AND attempt."TenantAccountId" = account_id;
+            END IF;
+          ELSIF TG_TABLE_NAME = 'TenantLedgerAllocations' THEN
+            SELECT credit."TenantAccountId"
+                   , credit."ProviderPaymentAttemptId"
+              INTO account_id
+                   , provider_attempt_id
+            FROM "TenantLedgerEntries" AS credit
+            WHERE credit."PortfolioId" = NEW."PortfolioId"
+              AND credit."Id" = NEW."CreditEntryId";
+          ELSE
+            SELECT deposit_account."TenantAccountId"
+              INTO account_id
+            FROM "SecurityDepositAccounts" AS deposit_account
+            WHERE deposit_account."PortfolioId" = NEW."PortfolioId"
+              AND deposit_account."Id" = NEW."SecurityDepositAccountId";
+          END IF;
+
+          IF account_id IS NULL THEN
+            RETURN NEW;
+          END IF;
+
+          IF authorized_provider_attempt_id IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1
+               FROM "TenantPaymentAttempts" AS authorized
+               WHERE authorized."Id" = authorized_provider_attempt_id
+                 AND authorized."PortfolioId" = NEW."PortfolioId"
+                 AND authorized."TenantAccountId" = account_id
+                 AND authorized."State" = 'Submitted'
+                 AND authorized."ProviderFenceToken" = authorized_provider_fence_token) THEN
+            RAISE EXCEPTION 'Provider payment attempt % no longer owns its durable fence',
+              authorized_provider_attempt_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          IF provider_attempt_id IS NOT NULL AND provider_charge_id IS NULL THEN
+            SELECT attempt."ChargeLedgerEntryId", attempt."Provider", attempt."State"
+              INTO provider_charge_id, provider_name, provider_attempt_state
+            FROM "TenantPaymentAttempts" AS attempt
+            WHERE attempt."Id" = provider_attempt_id
+              AND attempt."PortfolioId" = NEW."PortfolioId"
+              AND attempt."TenantAccountId" = account_id;
+          END IF;
+
+          IF provider_attempt_id IS NOT NULL
+             AND authorized_provider_attempt_id IS DISTINCT FROM provider_attempt_id THEN
+            IF provider_name IS NULL
+               OR provider_attempt_state IN ('Prepared', 'Submitted') THEN
+              RAISE EXCEPTION 'Provider payment attempt % requires its durable fence',
+                provider_attempt_id
+                USING ERRCODE = '23514';
+            END IF;
+            IF provider_name <> 'manual'
+               AND provider_attempt_state IS DISTINCT FROM 'Succeeded' THEN
+              RAISE EXCEPTION 'Provider payment attempt % requires its durable fence',
+                provider_attempt_id
+                USING ERRCODE = '23514';
+            END IF;
+          END IF;
+
+          PERFORM pg_advisory_xact_lock(73001, account_id);
+
+          SELECT account."ClosedAtUtc"
+            INTO account_closed_at
+          FROM "TenantAccounts" AS account
+          WHERE account."PortfolioId" = NEW."PortfolioId"
+            AND account."Id" = account_id;
+
+          IF account_closed_at IS NOT NULL THEN
+            RAISE EXCEPTION 'TenantAccount % is closed; new money rows are not permitted', account_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          -- A Submitted attempt owns the charge-level fence. Every non-provider money write
+          -- must stop rather than send a stale balance to the provider. Prepared reservations
+          -- are explicitly canceled here so a cheque/receipt committed between prepare and
+          -- provider create makes the later submit return a terminal Canceled state.
+          SELECT attempt."Id"
+            INTO submitted_attempt_id
+          FROM "TenantPaymentAttempts" AS attempt
+          WHERE attempt."PortfolioId" = NEW."PortfolioId"
+            AND attempt."TenantAccountId" = account_id
+            AND attempt."State" = 'Submitted'
+            AND (provider_attempt_id IS NULL
+                 OR (attempt."Id" <> provider_attempt_id
+                     AND attempt."ChargeLedgerEntryId" IS NOT DISTINCT FROM provider_charge_id))
+          ORDER BY attempt."Id"
+          LIMIT 1;
+
+          IF submitted_attempt_id IS NOT NULL THEN
+            RAISE EXCEPTION 'TenantAccount % has an in-progress provider payment attempt %',
+              account_id, submitted_attempt_id
+              USING ERRCODE = '23514';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "State" = 'Canceled',
+              "FailureCode" = 'MONEY_MOVEMENT_RESERVED',
+              "FailureReason" = 'Canceled by a committed tenant-account money movement',
+              "ProviderFenceToken" = NULL,
+              "ProviderFenceAcquiredAtUtc" = NULL,
+              "NextAttemptAtUtc" = NULL,
+              "UpdatedAtUtc" = clock_timestamp()
+          WHERE attempt."PortfolioId" = NEW."PortfolioId"
+            AND attempt."TenantAccountId" = account_id
+            AND attempt."State" = 'Prepared';
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
 
           RETURN NEW;
         END;
@@ -1081,6 +1480,10 @@ internal static class TenantAccountPostgreSqlContract
         BEFORE INSERT ON "TenantLedgerEntries"
         FOR EACH ROW EXECUTE FUNCTION rc_guard_open_tenant_account_money_write();
 
+        CREATE TRIGGER trg_tenant_ledger_allocation_open_account
+        BEFORE INSERT ON "TenantLedgerAllocations"
+        FOR EACH ROW EXECUTE FUNCTION rc_guard_open_tenant_account_money_write();
+
         CREATE CONSTRAINT TRIGGER trg_tenant_ledger_entry_validate
         AFTER INSERT ON "TenantLedgerEntries"
         DEFERRABLE INITIALLY DEFERRED
@@ -1151,6 +1554,7 @@ internal static class TenantAccountPostgreSqlContract
         DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_success ON "TenantPaymentAttempts";
         DROP TRIGGER IF EXISTS trg_tenant_ledger_entry_validate ON "TenantLedgerEntries";
         DROP TRIGGER IF EXISTS trg_tenant_ledger_entry_open_account ON "TenantLedgerEntries";
+        DROP TRIGGER IF EXISTS trg_tenant_ledger_allocation_open_account ON "TenantLedgerAllocations";
         DROP TRIGGER IF EXISTS trg_tenant_ledger_entry_append_only ON "TenantLedgerEntries";
         DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_validate ON "TenantPaymentAttempts";
         DROP TRIGGER IF EXISTS trg_tenant_payment_attempt_charge_target_immutable ON "TenantPaymentAttempts";
@@ -1170,7 +1574,10 @@ internal static class TenantAccountPostgreSqlContract
         DROP FUNCTION IF EXISTS rc_validate_tenant_payment_attempt_success();
         DROP FUNCTION IF EXISTS rc_validate_tenant_ledger_entry();
         DROP FUNCTION IF EXISTS rc_validate_tenant_payment_attempt();
+        DROP FUNCTION IF EXISTS rc_assert_provider_payment_fence(bigint, integer, integer, uuid);
+        DROP FUNCTION IF EXISTS rc_schedule_tenant_payment_reconciliation(bigint, integer, integer, varchar, varchar, uuid, timestamp with time zone, varchar, varchar);
         DROP FUNCTION IF EXISTS rc_guard_open_tenant_account_money_write();
+        DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone, uuid);
         DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_claim_exact_tenant_payment_attempt(bigint, integer, integer, varchar, interval);
         DROP FUNCTION IF EXISTS rc_claim_tenant_payment_attempt(bigint, integer, integer, varchar, interval);

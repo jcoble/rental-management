@@ -131,7 +131,15 @@
 	const payMutation = createMutation(() => ({
 		mutationFn: (entry: PortalTenantAccountHistoryItem) =>
 			portal.payCheckout(selectedAccountId as number, entry.tenantLedgerEntryId, returnUrls()),
-		onSuccess: ({ checkoutUrl }) => (window.location.href = checkoutUrl),
+		onSuccess: (checkout) => {
+			if (checkout.alreadyPaid) {
+				queryClient.invalidateQueries({ queryKey: ['portal-tenant-account-history'] });
+				queryClient.invalidateQueries({ queryKey: ['portal-tenant-accounts'] });
+				showSuccess('This payment was already received.');
+				return;
+			}
+			if (checkout.checkoutUrl) window.location.href = checkout.checkoutUrl;
+		},
 		onError: (error) => {
 			if (isStripeOff(error)) paymentProviderUnavailable = true;
 			else showError(apiErrorMessage(error, "We couldn't start the payment. Please try again."));
@@ -171,6 +179,10 @@
 	}
 
 	onMount(() => {
+		void handleCheckoutReturn();
+	});
+
+	async function handleCheckoutReturn() {
 		const result = page.url.searchParams.get('checkout');
 		if (result === 'success') {
 			showSuccess('Payment received — thank you');
@@ -178,14 +190,30 @@
 			queryClient.invalidateQueries({ queryKey: ['portal-tenant-accounts'] });
 			queryClient.invalidateQueries({ queryKey: ['portal-autopay'] });
 		} else if (result === 'cancel') {
-			showInfo('Payment canceled.');
+			const attemptId = Number(page.url.searchParams.get('paymentAttemptId'));
+			const accountId = Number(page.url.searchParams.get('account')) || selectedAccountId;
+			if (Number.isInteger(attemptId) && attemptId > 0 && accountId != null) {
+				try {
+					const canceled = await portal.cancelPaymentAttempt(accountId, attemptId);
+					queryClient.invalidateQueries({ queryKey: ['portal-tenant-account-history'] });
+					queryClient.invalidateQueries({ queryKey: ['portal-tenant-accounts'] });
+					if (canceled.alreadyPaid) showSuccess('The payment was completed before Checkout closed.');
+					else showInfo('Payment canceled. You can try again when you are ready.');
+				} catch (error) {
+					showError(apiErrorMessage(error, "We couldn't confirm the canceled payment yet."));
+				}
+			} else {
+				showInfo('Payment canceled.');
+			}
 		}
 		if (result) {
 			const url = new URL(page.url);
 			url.searchParams.delete('checkout');
+			url.searchParams.delete('paymentAttemptId');
+			url.searchParams.delete('chargeLedgerEntryId');
 			goto(url.pathname + url.search, { replaceState: true, noScroll: true, keepFocus: true });
 		}
-	});
+	}
 </script>
 
 <svelte:head><title>Account history - Rental Command</title></svelte:head>
