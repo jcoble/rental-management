@@ -1020,7 +1020,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
         provider.Reset();
 
-        var now = DateTime.UtcNow;
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var now = clock.GetUtcNow().UtcDateTime;
         var expiredKey = StripePaymentService.BuildPaymentIdempotencyKey(
             "checkout", expiredScenario.ChargeId, expiredScenario.UserId, "worker-expired");
         var openKey = StripePaymentService.BuildPaymentIdempotencyKey(
@@ -1094,7 +1095,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             RetryDelay = TimeSpan.FromSeconds(5),
         };
 
-        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(3,
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(3,
             "the transport failure is scheduled for a later cycle while the terminal and open attempts are processed now");
 
         await using (var firstVerify = NewContext())
@@ -1118,12 +1119,17 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             canceled.ProviderFenceToken.Should().BeNull();
         }
 
-        // The browser is gone, so the next provider observation is supplied only by the worker.
+        // The browser is gone, so the next provider observation is supplied only by the worker. The
+        // retry slot is persisted at the exact five-second boundary; no wall-clock sleep is needed.
         provider.SetReconciled(openId,
             new InteractiveProviderObject("pi_worker_open", "succeeded", openKey,
                 PaymentIntentId: "pi_worker_open"));
-        await Task.Delay(TimeSpan.FromMilliseconds(5500));
-        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(2);
+        clock.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromMilliseconds(1));
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(0,
+            "a cycle immediately before the persisted retry slot must not reconcile either scheduled attempt");
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(2,
+            "a cycle at the persisted retry slot must reconcile both scheduled attempts");
 
         await using (var secondVerify = NewContext())
         {
@@ -1140,11 +1146,217 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         }
 
         // A terminal attempt is no longer a candidate; a later cycle cannot post a second receipt.
-        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(0);
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(0);
         provider.ReconcileCountFor(openId).Should().Be(2);
         provider.ReconcileCountFor(transportId).Should().Be(2,
             "the first transport failure was durably scheduled and retried on the configured cadence");
         provider.ReconcileCountFor(canceledId).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task InteractivePaymentReconciliation_IsolatesRetryPersistenceFailureAcrossPortfolios()
+    {
+        SkipIfNoDocker();
+        var poisonScenario = await SeedScenarioAsync("worker-poison");
+        var healthyScenario = await SeedScenarioAsync("worker-healthy");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var now = clock.GetUtcNow().UtcDateTime;
+        var poisonKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", poisonScenario.ChargeId, poisonScenario.UserId, "worker-poison");
+        var healthyKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", healthyScenario.ChargeId, healthyScenario.UserId, "worker-healthy");
+        long poisonId;
+        long healthyId;
+        await using (var db = NewContext())
+        {
+            var poison = Attempt(poisonScenario, poisonKey, null,
+                TenantPaymentAttemptState.Submitted);
+            poison.PreparedAtUtc = now.AddHours(-2);
+            poison.SubmittedAtUtc = poison.PreparedAtUtc;
+            poison.UpdatedAtUtc = poison.PreparedAtUtc;
+            poison.ProviderFenceToken = Guid.NewGuid();
+            poison.ProviderFenceAcquiredAtUtc = poison.PreparedAtUtc;
+
+            var healthy = Attempt(healthyScenario, healthyKey, null,
+                TenantPaymentAttemptState.Submitted);
+            healthy.PreparedAtUtc = now.AddHours(-1);
+            healthy.SubmittedAtUtc = healthy.PreparedAtUtc;
+            healthy.UpdatedAtUtc = healthy.PreparedAtUtc;
+            healthy.ProviderFenceToken = Guid.NewGuid();
+            healthy.ProviderFenceAcquiredAtUtc = healthy.PreparedAtUtc;
+
+            db.TenantPaymentAttempts.AddRange(poison, healthy);
+            await db.SaveChangesAsync();
+            poisonId = poison.Id;
+            healthyId = healthy.Id;
+        }
+
+        provider.SetReconciled(poisonId,
+            new InteractiveProviderObject("pi_worker_poison", "succeeded", poisonKey,
+                PaymentIntentId: "pi_worker_poison"));
+        provider.SetReconciled(healthyId,
+            new InteractiveProviderObject("pi_worker_healthy", "succeeded", healthyKey,
+                PaymentIntentId: "pi_worker_healthy"));
+        provider.TransportFailureAttemptId = poisonId;
+        provider.TransportFailuresRemaining = 1;
+        Failure.FailScheduleAttemptId = poisonId;
+
+        var options = new InteractivePaymentReconciliationOptions
+        {
+            BatchSize = 10,
+            RetryDelay = TimeSpan.FromMinutes(1),
+            Expiration = TimeSpan.FromHours(24),
+        };
+
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(1,
+            "the healthy portfolio must reach its terminal provider result even when the first candidate cannot persist its retry");
+
+        await using (var firstVerify = NewContext())
+        {
+            var poison = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == poisonId);
+            poison.State.Should().Be(TenantPaymentAttemptState.Submitted);
+            poison.ProviderFenceToken.Should().NotBeNull();
+            poison.NextAttemptAtUtc.Should().BeNull(
+                "a failed retry write must leave the poison attempt durably eligible for a later cycle");
+
+            var healthy = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == healthyId);
+            healthy.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+            healthy.ProviderFenceToken.Should().BeNull();
+            (await firstVerify.TenantLedgerEntries.CountAsync(row =>
+                row.ProviderPaymentAttemptId == healthyId
+                && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+        }
+
+        Failure.FailScheduleAttemptId = null;
+        provider.SetReconciled(poisonId,
+            new InteractiveProviderObject("pi_worker_poison", "succeeded", poisonKey,
+                PaymentIntentId: "pi_worker_poison"));
+        (await RunInteractivePaymentReconciliationCycleAsync(options, clock)).Should().Be(1,
+            "the poison attempt must remain recoverable on a later cycle after the injected write failure is removed");
+
+        await using var secondVerify = NewContext();
+        var recovered = await secondVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == poisonId);
+        recovered.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+        recovered.ProviderFenceToken.Should().BeNull();
+        (await secondVerify.TenantLedgerEntries.CountAsync(row =>
+            row.ProviderPaymentAttemptId == poisonId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ProviderPayment_TenantAccountLockSerializesWorkerWebhookAndInteractiveRaces()
+    {
+        SkipIfNoDocker();
+
+        foreach (var terminalState in new[]
+        {
+            TenantPaymentAttemptState.Succeeded,
+            TenantPaymentAttemptState.Failed,
+            TenantPaymentAttemptState.Canceled,
+        })
+        {
+            var suffix = $"lock-race-{terminalState.ToString().ToLowerInvariant()}";
+            var scenario = await SeedScenarioAsync(suffix);
+            var providerObjectId = $"pi_{suffix}";
+            var key = $"provider-{suffix}";
+            long attemptId;
+            Guid fence;
+            await using (var db = NewContext())
+            {
+                var attempt = Attempt(scenario, key, providerObjectId,
+                    TenantPaymentAttemptState.Submitted);
+                attempt.ProviderFenceToken = Guid.NewGuid();
+                attempt.ProviderFenceAcquiredAtUtc = attempt.PreparedAtUtc;
+                db.TenantPaymentAttempts.Add(attempt);
+                await db.SaveChangesAsync();
+                attemptId = attempt.Id;
+                fence = attempt.ProviderFenceToken!.Value;
+            }
+
+            var eventId = $"evt_{suffix}";
+            var barrier = new SubmitRaceBarrier(3);
+            var worker = ExecuteAtomicAfterBarrierAsync(
+                barrier,
+                new AtomicCommandIdentity("payments.provider-create.finalize-race", key),
+                new FinalizeProviderPaymentCreateCommand(
+                    scenario.PortfolioId, scenario.AccountId, attemptId, "stripe", key,
+                    providerObjectId, terminalState,
+                    terminalState == TenantPaymentAttemptState.Succeeded ? null : "deterministic terminal result",
+                    DateTime.UtcNow, fence),
+                FinalizeCodec);
+            var webhook = ExecuteAtomicAfterBarrierAsync(
+                barrier,
+                new AtomicCommandIdentity("payments.provider-event.record-race", eventId),
+                new RecordVerifiedProviderPaymentEventCommand(
+                    "stripe", eventId, "payment_intent.race", "{}", providerObjectId,
+                    terminalState switch
+                    {
+                        TenantPaymentAttemptState.Succeeded => ProviderPaymentEventKind.Succeeded,
+                        TenantPaymentAttemptState.Failed => ProviderPaymentEventKind.Failed,
+                        _ => ProviderPaymentEventKind.Canceled,
+                    },
+                    100m, "USD",
+                    terminalState == TenantPaymentAttemptState.Succeeded ? null : "deterministic terminal result",
+                    DateTime.UtcNow, DateTime.UtcNow),
+                EventCodec);
+            var interactive = ExecuteAtomicAfterBarrierAsync(
+                barrier,
+                new AtomicCommandIdentity("payments.provider-create.submit-race", $"{key}:interactive"),
+                new SubmitProviderPaymentCreateCommand(
+                    scenario.PortfolioId, scenario.AccountId, attemptId, "stripe", key, DateTime.UtcNow),
+                SubmitCodec);
+
+            await Task.WhenAll(worker, webhook, interactive);
+
+            await using (var verify = NewContext())
+            {
+                var attempt = await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == attemptId);
+                attempt.State.Should().Be(terminalState);
+                attempt.ProviderFenceToken.Should().BeNull("the terminal transition releases the one durable fence");
+                (await verify.TenantLedgerEntries.CountAsync(row =>
+                    row.ProviderPaymentAttemptId == attemptId
+                    && row.EntryType == TenantLedgerEntryType.PaymentReceipt))
+                    .Should().Be(terminalState == TenantPaymentAttemptState.Succeeded ? 1 : 0);
+
+                var webhookTerminalAuditReason = $"Verified provider event {eventId} reconciled";
+                (await verify.Database.SqlQuery<long>($"""
+                    SELECT count(*) AS "Value"
+                    FROM "AtomicAuditLogs"
+                    WHERE "EntityType" = {nameof(TenantAccount)}
+                      AND "EntityId" = {scenario.AccountId}
+                      AND ("NewValues" ->> 'Id')::bigint = {attemptId}
+                      AND "ChangeReason" IN (
+                          'Provider payment context finalized',
+                          'Provider payment context failed',
+                          {webhookTerminalAuditReason})
+                    """).SingleAsync())
+                    .Should().Be(1, "the worker/webhook race has one terminal transition audit");
+            }
+
+            var postRaceSubmit = await ExecuteAtomicAsync(
+                new AtomicCommandIdentity("payments.provider-create.submit-after-race", $"{key}:after"),
+                new SubmitProviderPaymentCreateCommand(
+                    scenario.PortfolioId, scenario.AccountId, attemptId, "stripe", key, DateTime.UtcNow),
+                SubmitCodec);
+            postRaceSubmit.Value.Outcome.Should().Be(terminalState switch
+            {
+                TenantPaymentAttemptState.Succeeded => SubmitProviderPaymentCreateOutcome.Succeeded,
+                TenantPaymentAttemptState.Failed => SubmitProviderPaymentCreateOutcome.Failed,
+                _ => SubmitProviderPaymentCreateOutcome.Canceled,
+            }, "a post-release interactive read must not be rejected by a stale fence");
+
+            var staleEvent = await ExecuteAtomicAsync(
+                new AtomicCommandIdentity("payments.provider-event.record-stale-race", $"{eventId}:pending"),
+                new RecordVerifiedProviderPaymentEventCommand(
+                    "stripe", $"{eventId}:pending", "payment_intent.pending", "{}", providerObjectId,
+                    ProviderPaymentEventKind.Pending, 100m, "USD", null,
+                    DateTime.UtcNow, DateTime.UtcNow),
+                EventCodec);
+            staleEvent.Value.Outcome.Should().Be(RecordProviderPaymentEventOutcome.Conflict,
+                "a stale pending event must not regress a terminal attempt");
+        }
     }
 
     [SkippableFact]
@@ -2063,6 +2275,18 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             .ExecuteAsync(identity, command, codec, ct);
     }
 
+    private async Task<AtomicCommandOutcome<TResult>> ExecuteAtomicAfterBarrierAsync<TCommand, TResult>(
+        SubmitRaceBarrier barrier,
+        AtomicCommandIdentity identity,
+        TCommand command,
+        AtomicJsonResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull
+    {
+        await barrier.WaitAsync(CancellationToken.None);
+        return await ExecuteAtomicAsync(identity, command, codec);
+    }
+
     private async Task<CheckoutResult> CreateCheckoutViaServiceAsync(
         Scenario scenario, string attemptKey, bool throwAfterFinalize = false,
         SubmitRaceBarrier? submitRaceBarrier = null)
@@ -2090,16 +2314,18 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     }
 
     private async Task<int> RunInteractivePaymentReconciliationCycleAsync(
-        InteractivePaymentReconciliationOptions options)
+        InteractivePaymentReconciliationOptions options,
+        TimeProvider? timeProvider = null)
     {
         await using var scope = _services!.CreateAsyncScope();
         var service = new InteractivePaymentReconciliationService(
             scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
             scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
             scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             Options.Create(options),
-            NullLogger<InteractivePaymentReconciliationService>.Instance);
+            NullLogger<InteractivePaymentReconciliationService>.Instance,
+            scope.ServiceProvider.GetRequiredService<IServiceScopeFactory>());
         return await service.ReconcileAsync();
     }
 
@@ -2413,6 +2639,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     private sealed class ProviderPaymentFailureInterceptor : DbCommandInterceptor
     {
         public bool FailAtomicAudit { get; set; }
+        public long? FailScheduleAttemptId { get; set; }
 
         public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
             DbCommand command,
@@ -2440,6 +2667,29 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
                 && command.CommandText.Contains(
                     "INSERT INTO \"AtomicAuditLogs\"", StringComparison.Ordinal))
                 throw new InvalidOperationException("injected provider-payment audit failure");
+
+            if (FailScheduleAttemptId is long attemptId
+                && command.CommandText.Contains(
+                    "rc_schedule_tenant_payment_reconciliation", StringComparison.Ordinal)
+                && command.Parameters.Cast<DbParameter>().Any(parameter =>
+                    parameter.Value is long value && value == attemptId))
+                throw new InvalidOperationException(
+                    $"injected provider-payment retry scheduling failure for attempt {attemptId}");
+        }
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset initialUtcNow) : TimeProvider
+    {
+        private long _utcNowTicks = initialUtcNow.UtcTicks;
+
+        public override DateTimeOffset GetUtcNow() =>
+            new(Interlocked.Read(ref _utcNowTicks), TimeSpan.Zero);
+
+        public void Advance(TimeSpan amount)
+        {
+            if (amount < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(amount));
+            Interlocked.Add(ref _utcNowTicks, amount.Ticks);
         }
     }
 

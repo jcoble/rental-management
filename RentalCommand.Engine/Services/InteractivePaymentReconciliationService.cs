@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Payments;
@@ -31,6 +32,7 @@ public sealed class InteractivePaymentReconciliationService
     private readonly TimeProvider _timeProvider;
     private readonly InteractivePaymentReconciliationOptions _options;
     private readonly ILogger<InteractivePaymentReconciliationService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public InteractivePaymentReconciliationService(
         RentalCommandDbContext db,
@@ -38,7 +40,8 @@ public sealed class InteractivePaymentReconciliationService
         IInteractivePaymentProviderClient provider,
         TimeProvider timeProvider,
         IOptions<InteractivePaymentReconciliationOptions> options,
-        ILogger<InteractivePaymentReconciliationService> logger)
+        ILogger<InteractivePaymentReconciliationService> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _db = db;
         _atomic = atomic;
@@ -46,6 +49,7 @@ public sealed class InteractivePaymentReconciliationService
         _timeProvider = timeProvider;
         _options = options.Value;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<int> ReconcileAsync(CancellationToken ct = default)
@@ -92,45 +96,106 @@ public sealed class InteractivePaymentReconciliationService
             ct.ThrowIfCancellationRequested();
             try
             {
-                await ReconcileCandidateAsync(candidate, now, ct);
-                processed++;
+                if (await ReconcileCandidateInFreshScopeAsync(candidate, now, ct))
+                    processed++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
-            catch (ProviderReconciliationFailureException ex)
-            {
-                var providerFailure = ex.InnerException as InteractiveProviderException;
-                _logger.LogWarning(ex,
-                    "Interactive payment provider reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
-                    ex.Candidate.PaymentAttemptId);
-                await ScheduleRetryAsync(
-                    ex.Candidate,
-                    now,
-                    providerFailure is null
-                        ? "PROVIDER_RECONCILE_RETRY"
-                        : "PROVIDER_RECONCILE_TRANSPORT",
-                    ex.InnerException?.Message ?? ex.Message,
-                    ct);
-            }
-            catch (InteractiveProviderException ex)
-            {
-                _logger.LogWarning(ex,
-                    "Interactive payment provider reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
-                    candidate.PaymentAttemptId);
-                await ScheduleRetryAsync(candidate, now, "PROVIDER_RECONCILE_TRANSPORT", ex.Message, ct);
-            }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
-                    "Interactive payment reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
+                    "Interactive payment reconciliation could not create an isolated scope for attempt {PaymentAttemptId}; continuing the batch.",
                     candidate.PaymentAttemptId);
-                await ScheduleRetryAsync(candidate, now, "PROVIDER_RECONCILE_RETRY", ex.Message, ct);
             }
         }
 
         return processed;
+    }
+
+    private async Task<bool> ReconcileCandidateInFreshScopeAsync(
+        Candidate candidate, DateTime now, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var isolated = new InteractivePaymentReconciliationService(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
+            _timeProvider,
+            Options.Create(_options),
+            _logger,
+            _scopeFactory);
+        return await isolated.ReconcileCandidateWithRecoveryAsync(candidate, now, ct);
+    }
+
+    private async Task<bool> ReconcileCandidateWithRecoveryAsync(
+        Candidate candidate, DateTime now, CancellationToken ct)
+    {
+        try
+        {
+            await ReconcileCandidateAsync(candidate, now, ct);
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ProviderReconciliationFailureException ex)
+        {
+            var providerFailure = ex.InnerException as InteractiveProviderException;
+            _logger.LogWarning(ex,
+                "Interactive payment provider reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
+                ex.Candidate.PaymentAttemptId);
+            await TryScheduleRetryAsync(
+                ex.Candidate,
+                now,
+                providerFailure is null
+                    ? "PROVIDER_RECONCILE_RETRY"
+                    : "PROVIDER_RECONCILE_TRANSPORT",
+                ex.InnerException?.Message ?? ex.Message,
+                ct);
+            return false;
+        }
+        catch (InteractiveProviderException ex)
+        {
+            _logger.LogWarning(ex,
+                "Interactive payment provider reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
+                candidate.PaymentAttemptId);
+            await TryScheduleRetryAsync(candidate, now, "PROVIDER_RECONCILE_TRANSPORT", ex.Message, ct);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Interactive payment reconciliation failed for attempt {PaymentAttemptId}; retaining its fence.",
+                candidate.PaymentAttemptId);
+            await TryScheduleRetryAsync(candidate, now, "PROVIDER_RECONCILE_RETRY", ex.Message, ct);
+            return false;
+        }
+    }
+
+    private async Task TryScheduleRetryAsync(
+        Candidate candidate,
+        DateTime now,
+        string failureCode,
+        string failureReason,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ScheduleRetryAsync(candidate, now, failureCode, failureReason, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Interactive payment retry scheduling failed for attempt {PaymentAttemptId}; the candidate remains eligible for a later cycle.",
+                candidate.PaymentAttemptId);
+        }
     }
 
     private async Task ReconcileCandidateAsync(Candidate candidate, DateTime now, CancellationToken ct)

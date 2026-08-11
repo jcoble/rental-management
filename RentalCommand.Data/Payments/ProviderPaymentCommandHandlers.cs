@@ -440,6 +440,7 @@ public sealed class FinalizeProviderPaymentCreateHandler
     public async Task<FinalizeProviderPaymentCreateResult> HandleAsync(
         FinalizeProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.PaymentAttemptId
                 && candidate.PortfolioId == command.PortfolioId
@@ -499,6 +500,7 @@ public sealed class FailProviderPaymentCreateHandler
     public async Task<FailProviderPaymentCreateResult> HandleAsync(
         FailProviderPaymentCreateCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
         var paymentAttempt = await _db.Set<TenantPaymentAttempt>().AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.Id == command.PaymentAttemptId
                 && candidate.PortfolioId == command.PortfolioId
@@ -1072,6 +1074,15 @@ internal static class ProviderPaymentHandlerSupport
         ProviderPaymentEventKind kind, string? failureReason, string claimOwner,
         IAtomicCommandContext context, CancellationToken ct)
     {
+        await context.AcquireLockAsync("TenantAccount", paymentAttempt.TenantAccountId, ct);
+        paymentAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == paymentAttempt.Id
+                && candidate.PortfolioId == paymentAttempt.PortfolioId
+                && candidate.TenantAccountId == paymentAttempt.TenantAccountId
+                && candidate.Provider == paymentAttempt.Provider, ct)
+            ?? throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} disappeared before provider event application.");
+
         var state = kind switch
         {
             ProviderPaymentEventKind.Pending => TenantPaymentAttemptState.Submitted,
@@ -1101,6 +1112,18 @@ internal static class ProviderPaymentHandlerSupport
         string? failureReason, DateTime? nextAttemptAtUtc, string claimOwner,
         IAtomicCommandContext context, CancellationToken ct, Guid? providerFenceToken = null)
     {
+        // Every provider-attempt transition shares the TenantAccount serialization boundary. The
+        // caller's snapshot may have been read before a worker, webhook, or money command won the
+        // race, so re-read it after taking the lock and use only this locked snapshot below.
+        await context.AcquireLockAsync("TenantAccount", paymentAttempt.TenantAccountId, ct);
+        paymentAttempt = await db.Set<TenantPaymentAttempt>().AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == paymentAttempt.Id
+                && candidate.PortfolioId == paymentAttempt.PortfolioId
+                && candidate.TenantAccountId == paymentAttempt.TenantAccountId
+                && candidate.Provider == paymentAttempt.Provider, ct)
+            ?? throw new AtomicReceiptInvariantException(
+                $"Tenant payment context {paymentAttempt.Id} disappeared before its locked transition.");
+
         if (!string.IsNullOrWhiteSpace(paymentAttempt.ProviderObjectId)
             && !string.IsNullOrWhiteSpace(providerObjectId)
             && !string.Equals(paymentAttempt.ProviderObjectId, providerObjectId, StringComparison.Ordinal))
@@ -1123,8 +1146,6 @@ internal static class ProviderPaymentHandlerSupport
         if (state == TenantPaymentAttemptState.Succeeded
             && paymentAttempt.AttemptType != TenantPaymentAttemptType.Verification)
         {
-            await context.AcquireLockAsync(
-                "TenantAccount", paymentAttempt.TenantAccountId, ct);
             receiptTarget = await ValidateReceiptTargetAsync(db, paymentAttempt, context, ct);
         }
 
