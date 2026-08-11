@@ -370,6 +370,8 @@ public class InspectionService : IInspectionService
             AtomicInspectionMutationOperation.Update, id, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        if (outcome.Value.Error is not null)
+            throw new DomainValidationException(outcome.Value.Error, StatusCodes.Status409Conflict);
         return DeserializeSnapshot<InspectionResponse>(outcome.Value);
     }
 

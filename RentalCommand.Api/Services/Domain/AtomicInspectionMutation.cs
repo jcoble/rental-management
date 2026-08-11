@@ -62,6 +62,8 @@ public sealed class AtomicInspectionMutationHandler
 
     private const int MaxTemplateItems = 100;
     private const int MaxInspectionItems = 100;
+    private static readonly VendorDispatchStatus[] OpenVendorDispatchStatuses =
+        [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
     public async Task<AtomicInspectionMutationResult> HandleAsync(
         AtomicInspectionMutationCommand command,
@@ -527,6 +529,58 @@ public sealed class AtomicInspectionMutationHandler
                 .Select(item => item.SpawnedWorkOrderId!.Value)
                 .Distinct()
                 .ToArrayAsync(ct);
+            foreach (var workOrderId in derivedWorkOrderIds)
+                await attempt.AcquireLockAsync("WorkOrder", workOrderId, ct);
+
+            // These rows are all operational evidence that cannot be detached safely by reopening.
+            // Keep the initial New status row out of the timeline branch; every later activity row
+            // is progression even if the work-order status was left unchanged.
+            var progressedWorkOrderIds = derivedWorkOrderIds.Length == 0
+                ? []
+                : await db.Set<VendorDispatch>()
+                    .Where(dispatch => dispatch.PortfolioId == command.PortfolioId
+                        && derivedWorkOrderIds.Contains(dispatch.WorkOrderId)
+                        && OpenVendorDispatchStatuses.Contains(dispatch.Status))
+                    .Select(dispatch => dispatch.WorkOrderId)
+                    .Concat(db.Set<WorkOrderResponsibility>()
+                        .Where(responsibility => responsibility.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(responsibility.WorkOrderId)
+                            && responsibility.EffectiveToUtc == null)
+                        .Select(responsibility => responsibility.WorkOrderId))
+                    .Concat(db.Set<TechnicianWorkEntry>()
+                        .Where(entry => entry.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(entry.WorkOrderId))
+                        .Select(entry => entry.WorkOrderId))
+                    .Concat(db.Set<Appointment>()
+                        .Where(appointment => appointment.PortfolioId == command.PortfolioId
+                            && appointment.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(appointment.WorkOrderId.Value)
+                            && appointment.Status != AppointmentStatus.Cancelled)
+                        .Select(appointment => appointment.WorkOrderId!.Value))
+                    .Concat(db.Set<Conversation>()
+                        .Where(conversation => conversation.PortfolioId == command.PortfolioId
+                            && conversation.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(conversation.WorkOrderId.Value))
+                        .Select(conversation => conversation.WorkOrderId!.Value))
+                    .Concat(db.Set<Expense>()
+                        .Where(expense => expense.PortfolioId == command.PortfolioId
+                            && expense.WorkOrderId != null
+                            && expense.DeletedAt == null
+                            && derivedWorkOrderIds.Contains(expense.WorkOrderId.Value))
+                        .Select(expense => expense.WorkOrderId!.Value))
+                    .Concat(db.Set<VendorRating>()
+                        .Where(rating => rating.PortfolioId == command.PortfolioId
+                            && rating.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(rating.WorkOrderId.Value))
+                        .Select(rating => rating.WorkOrderId!.Value))
+                    .Concat(db.Set<WorkOrderStatusEvent>()
+                        .Where(statusEvent => statusEvent.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(statusEvent.WorkOrderId)
+                            && (statusEvent.FromStatus != null || statusEvent.Kind != "Status"))
+                        .Select(statusEvent => statusEvent.WorkOrderId))
+                    .Distinct()
+                    .ToArrayAsync(ct);
+            var progressedWorkOrderIdSet = progressedWorkOrderIds.ToHashSet();
             var derivedWorkOrders = derivedWorkOrderIds.Length == 0
                 ? []
                 : await db.Set<WorkOrder>()
@@ -544,12 +598,15 @@ public sealed class AtomicInspectionMutationHandler
                         409);
                 }
 
-                if (workOrder.Status is not (WorkOrderStatus.New
-                    or WorkOrderStatus.Cancelled
-                    or WorkOrderStatus.Archived))
+                if (progressedWorkOrderIdSet.Contains(workOrder.Id)
+                    || workOrder.ScheduledFor is not null
+                    || workOrder.ScheduledWindowEnd is not null
+                    || workOrder.Status is not (WorkOrderStatus.New
+                        or WorkOrderStatus.Cancelled
+                        or WorkOrderStatus.Archived))
                 {
                     throw new DomainValidationException(
-                        "This inspection cannot be reopened because a linked work order has progressed beyond the initial requested state; complete or cancel that work order, then retry with a new request key.",
+                        "This inspection cannot be reopened because a linked work order has already been dispatched or progressed; complete or cancel that work order before reopening the inspection.",
                         409);
                 }
 

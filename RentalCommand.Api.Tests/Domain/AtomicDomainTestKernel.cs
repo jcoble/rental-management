@@ -245,6 +245,14 @@ internal static class AtomicDomainTestKernel
             AtomicInspectionMutationCommand,
             AtomicInspectionMutationResult,
             AtomicInspectionMutationHandler>();
+        services.AddAtomicCommandHandler<
+            DispatchWorkOrderToVendorCommand,
+            DispatchWorkOrderToVendorResult,
+            DispatchWorkOrderToVendorHandler>();
+        services.AddAtomicCommandHandler<
+            CompleteVendorDispatchFromInboundCommand,
+            CompleteVendorDispatchFromInboundResult,
+            CompleteVendorDispatchFromInboundHandler>();
         return services.BuildServiceProvider();
     }
 

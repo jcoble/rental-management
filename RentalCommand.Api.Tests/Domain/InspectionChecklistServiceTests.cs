@@ -16,6 +16,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
@@ -430,6 +431,127 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             recompleted.CompletedAt.Should().NotBe(oldCompletedAt);
             recompleted.ReportStoredFileId.Should().Be(secondSummary.ReportStoredFileId);
         }
+    }
+
+    [Fact]
+    public async Task Reopen_DispatchedNewWorkOrderReturnsConflictAndLeavesDispatchAttached()
+    {
+        var property = SeedProperty();
+        var vendor = SeedVendor();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+
+        var item = created!.Items.OrderBy(candidate => candidate.SortOrder).First();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        var (summary, completionError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        completionError.Should().BeNull();
+        summary.Should().NotBeNull();
+        var workOrderId = summary!.CreatedWorkOrderIds.Should().ContainSingle().Subject;
+
+        var dispatchService = new VendorDispatchService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            NullLogger<VendorDispatchService>.Instance,
+            TimeProvider.System);
+        var dispatch = await dispatchService.DispatchAsync(PortfolioId, workOrderId,
+            new DispatchWorkOrderRequest
+            {
+                IdempotencyKey = NextOperationKey(),
+                VendorId = vendor.Id,
+            },
+            changedByUserId: 7);
+        dispatch.Outcome.Should().Be(DispatchOutcome.Dispatched);
+        dispatch.Dispatch.Should().NotBeNull();
+
+        _db.ChangeTracker.Clear();
+        var inspectionBefore = await _db.Inspections.AsNoTracking()
+            .SingleAsync(inspection => inspection.Id == created.Id);
+        var itemBefore = await _db.InspectionItems.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == item.Id);
+        var workOrderBefore = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(workOrder => workOrder.Id == workOrderId);
+        var dispatchBefore = await _db.VendorDispatches.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == dispatch.Dispatch!.Id);
+        var statusEventCountBefore = await _db.WorkOrderStatusEvents.CountAsync(
+            statusEvent => statusEvent.WorkOrderId == workOrderId);
+        var auditCountBefore = await _db.AtomicAuditLogs.CountAsync(
+            audit => audit.EntityId == workOrderId || audit.EntityId == created.Id || audit.EntityId == item.Id);
+        var outboxCountBefore = await _db.OutboxMessages.CountAsync();
+
+        var reopenException = await Record.ExceptionAsync(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            created.Id,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+
+        using (new AssertionScope())
+        {
+            reopenException.Should().BeOfType<DomainValidationException>();
+            var conflict = reopenException as DomainValidationException;
+            conflict?.StatusCode.Should().Be(409);
+            conflict?.Message.Should().Contain("dispatched or progressed");
+            conflict?.Message.Should().Contain("complete or cancel");
+
+            var inspectionAfter = await _db.Inspections.AsNoTracking()
+                .SingleAsync(inspection => inspection.Id == created.Id);
+            inspectionAfter.Status.Should().Be(inspectionBefore.Status);
+            inspectionAfter.CompletedAt.Should().Be(inspectionBefore.CompletedAt);
+            inspectionAfter.ReportStoredFileId.Should().Be(inspectionBefore.ReportStoredFileId);
+            inspectionAfter.UpdatedAt.Should().Be(inspectionBefore.UpdatedAt);
+
+            var itemAfter = await _db.InspectionItems.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == item.Id);
+            itemAfter.SpawnedWorkOrderId.Should().Be(itemBefore.SpawnedWorkOrderId);
+
+            var workOrderAfter = await _db.WorkOrders.AsNoTracking()
+                .SingleAsync(workOrder => workOrder.Id == workOrderId);
+            workOrderAfter.Status.Should().Be(WorkOrderStatus.New);
+            workOrderAfter.VendorId.Should().Be(vendor.Id);
+            workOrderAfter.UpdatedAt.Should().Be(workOrderBefore.UpdatedAt);
+
+            var dispatchAfter = await _db.VendorDispatches.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == dispatch.Dispatch!.Id);
+            dispatchAfter.Status.Should().Be(VendorDispatchStatus.Dispatched);
+            dispatchAfter.RespondedAtUtc.Should().Be(dispatchBefore.RespondedAtUtc);
+            (await _db.WorkOrderStatusEvents.CountAsync(
+                statusEvent => statusEvent.WorkOrderId == workOrderId)).Should().Be(statusEventCountBefore);
+            (await _db.AtomicAuditLogs.CountAsync(
+                audit => audit.EntityId == workOrderId || audit.EntityId == created.Id || audit.EntityId == item.Id))
+                .Should().Be(auditCountBefore);
+            (await _db.OutboxMessages.CountAsync()).Should().Be(outboxCountBefore);
+        }
+
+        var doneService = new SmsInboundVendorDoneService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            NullLogger<SmsInboundVendorDoneService>.Instance);
+        var done = await doneService.TryHandleAsync(
+            NextOperationKey(), vendor.Phone, "DONE", DateTime.UtcNow);
+
+        done.Handled.Should().BeTrue();
+        done.WorkOrderId.Should().Be(workOrderId);
+        var completedWorkOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(workOrder => workOrder.Id == workOrderId);
+        completedWorkOrder.Status.Should().Be(WorkOrderStatus.Completed);
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(candidate => candidate.Id == item.Id)
+            .Select(candidate => candidate.SpawnedWorkOrderId)
+            .SingleAsync()).Should().Be(workOrderId);
+        (await _db.Inspections.AsNoTracking()
+            .Where(inspection => inspection.Id == created.Id)
+            .Select(inspection => inspection.Status)
+            .SingleAsync()).Should().Be(InspectionStatus.Completed);
     }
 
     [Fact]
@@ -1216,6 +1338,23 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         _db.Properties.Add(property);
         _db.SaveChanges();
         return property;
+    }
+
+    private Vendor SeedVendor()
+    {
+        var now = DateTime.UtcNow;
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Ace Plumbing",
+            ServiceType = "Plumbing",
+            Phone = "+16145550199",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Vendors.Add(vendor);
+        _db.SaveChanges();
+        return vendor;
     }
 
     private void SeedInspection(Property property, DateTime scheduledFor, string outcome)
