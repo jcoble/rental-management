@@ -2,8 +2,10 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,11 +23,16 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
 {
+    private static readonly string SigningKey = Convert.ToBase64String(
+        Enumerable.Range(1, RefreshCredentialTokenFactory.MinimumSigningKeyBytes)
+            .Select(value => (byte)value)
+            .ToArray());
     private static readonly AtomicJsonResultCodec<SessionRefreshMutationResult> Codec =
         new("session-refresh-mutation-result.v1");
 
     private readonly DateTime _now = new(2026, 7, 10, 18, 0, 0, DateTimeKind.Utc);
     private readonly Guid _sessionId = Guid.NewGuid();
+    private int _userId;
     private int _accessContextId;
     private int _membershipId;
     private int _assignmentId;
@@ -74,6 +81,20 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
             RotateSessionRefreshCredentialCommand,
             SessionRefreshMutationResult,
             RotateSessionRefreshCredentialHandler>();
+        services.AddAtomicCommandHandler<
+            RevokeAuthSessionCommand,
+            RevokeAuthSessionResult,
+            RevokeAuthSessionHandler>();
+        services.AddSingleton(new RefreshCredentialTokenFactory(SigningKey));
+        services.AddSingleton<IAuthSecurityClock>(new FixedAuthSecurityClock(_now));
+        services.Configure<AtomicAuthSessionCredentialOptions>(options =>
+        {
+            options.SigningKey = SigningKey;
+            options.CredentialLifetimeDays = 7;
+            options.FamilyAbsoluteLifetimeDays = 30;
+            options.SessionLifetimeDays = 30;
+        });
+        services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
         services.AddSingleton(_failureInterceptor);
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString)
@@ -117,6 +138,78 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         (await db.AuthSessionRefreshCredentials.CountAsync(item => item.Id == credentialId)).Should().Be(1);
         (await db.AtomicAuditLogs.CountAsync(item => item.ChangeReason == "Refresh credential family issued"))
             .Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task ApiCredentialService_RefreshReplayReturnsReuseAndRevokesTheWholeFamily()
+    {
+        SkipIfNoDocker();
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var credentialId = Guid.NewGuid();
+        var bearer = tokens.CreateBearer(credentialId);
+        var familyId = Guid.NewGuid();
+        await ExecuteAtomicAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, tokens.HashBearer(bearer)),
+            Codec);
+
+        await using var scope = _services!.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAtomicAuthSessionCredentialService>();
+        var first = await service.RotateAsync(new AtomicAuthSessionRotationRequest(Guid.NewGuid(), bearer));
+        var replay = await service.RotateAsync(new AtomicAuthSessionRotationRequest(Guid.NewGuid(), bearer));
+
+        first.Status.Should().Be(SessionRefreshMutationStatus.Rotated);
+        replay.Status.Should().Be(SessionRefreshMutationStatus.ReuseDetected);
+        replay.ReplacementBearer.Should().BeNull();
+
+        await using var db = NewPlainContext();
+        (await db.AuthSessions.SingleAsync(item => item.Id == _sessionId)).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        (await db.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == familyId))
+            .RevokedAtUtc.Should().NotBeNull();
+        (await db.AtomicAuditLogs.CountAsync(item =>
+            item.ChangeReason == "Refresh credential reuse detected"))
+            .Should().Be(1);
+        (await service.RotateAsync(new AtomicAuthSessionRotationRequest(
+            Guid.NewGuid(),
+            first.ReplacementBearer!))).Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+    }
+
+    [SkippableFact]
+    public async Task ApiCredentialService_LogoutRevokesTheSessionAndRejectsItsRefreshCredential()
+    {
+        SkipIfNoDocker();
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var credentialId = Guid.NewGuid();
+        var bearer = tokens.CreateBearer(credentialId);
+        var familyId = Guid.NewGuid();
+        await ExecuteAtomicAsync(
+            Identity("issue", Guid.NewGuid()),
+            Issue(familyId, credentialId, tokens.HashBearer(bearer)),
+            Codec);
+
+        await using var scope = _services!.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<IAtomicAuthSessionCredentialService>();
+        var logout = await service.RevokeSessionAsync(
+            new RevokeAuthSessionCommand(
+                _sessionId,
+                _userId,
+                _accessContextId,
+                1,
+                _now.AddMinutes(2),
+                "User signed out"),
+            Guid.NewGuid());
+
+        logout.Revoked.Should().BeTrue();
+        (await service.RotateAsync(new AtomicAuthSessionRotationRequest(
+            Guid.NewGuid(),
+            bearer))).Status.Should().Be(SessionRefreshMutationStatus.Rejected);
+
+        await using var db = NewPlainContext();
+        (await db.AuthSessions.SingleAsync(item => item.Id == _sessionId)).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        (await db.AuthSessionRefreshTokenFamilies.SingleAsync(item => item.Id == familyId))
+            .RevokedAtUtc.Should().NotBeNull();
     }
 
     [SkippableFact]
@@ -393,6 +486,7 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(user, portfolio);
         await db.SaveChangesAsync();
+        _userId = user.Id;
         var context = new WorkspaceAccessContext
         {
             UserId = user.Id,
@@ -514,6 +608,15 @@ public sealed class SessionRefreshAtomicCommandTests : IAsyncLifetime
         public int? UserId => null;
         public string? ActorLabel => "integration:session-refresh";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class FixedAuthSecurityClock : IAuthSecurityClock
+    {
+        private readonly DateTime _utcNow;
+
+        public FixedAuthSecurityClock(DateTime utcNow) => _utcNow = utcNow;
+
+        public DateTime UtcNow() => _utcNow;
     }
 
     private sealed class ReuseFailureInterceptor : SaveChangesInterceptor

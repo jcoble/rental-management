@@ -154,6 +154,34 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         atomic.CallCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task RotateAsync_UsesTheRequestOperationAsTheRotationReceiptIdentity()
+    {
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var operationId = Guid.NewGuid();
+        var presentedBearer = tokens.CreateBearer(Guid.NewGuid());
+        var atomic = new CapturingAtomicUnitOfWork((command, resultType) =>
+        {
+            resultType.Should().Be(typeof(SessionRefreshMutationResult));
+            var rotation = command.Should().BeOfType<RotateSessionRefreshCredentialCommand>().Subject;
+            return new SessionRefreshMutationResult(
+                SessionRefreshMutationStatus.Rotated,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                Guid.NewGuid(),
+                rotation.ReplacementCredentialId);
+        }, AtomicCommandDisposition.Executed);
+        var service = CreateService(atomic, tokens);
+
+        await service.RotateAsync(new AtomicAuthSessionRotationRequest(operationId, presentedBearer));
+
+        var identity = atomic.Identities.Single();
+        identity.CommandType.Should().Be("session-refresh:rotate");
+        identity.IdempotencyKey.Should().Be($"operation:{operationId:N}");
+        atomic.LastCommand.Should().BeOfType<RotateSessionRefreshCredentialCommand>().Subject
+            .OperationId.Should().Be(operationId);
+    }
+
     private static AtomicAuthSessionCredentialService CreateService(
         IAtomicUnitOfWork atomic,
         RefreshCredentialTokenFactory tokens,
@@ -197,6 +225,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
 
         public object? LastCommand { get; private set; }
         public List<object> Commands { get; } = [];
+        public List<AtomicCommandIdentity> Identities { get; } = [];
         public int CallCount { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
@@ -210,6 +239,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
             CallCount++;
             LastCommand = command;
             Commands.Add(command);
+            Identities.Add(identity);
             var value = (TResult)_resultFactory(command, typeof(TResult));
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 value,
