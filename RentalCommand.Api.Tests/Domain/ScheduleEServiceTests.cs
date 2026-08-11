@@ -125,6 +125,103 @@ public class ScheduleEServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetReportAsync_UsesPaidStatusAndPaidAtCashDate()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Cash Basis",
+            AddressLine1 = "1 Cash Basis St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = D(Year, 1, 1),
+            UpdatedAt = D(Year, 1, 1),
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Paid repair",
+                Status = ExpenseStatus.Paid,
+                Amount = 100m,
+                IncurredAt = D(Year, 1, 5),
+                PaidAt = D(Year, 1, 7),
+                CreatedAt = D(Year, 1, 5),
+                UpdatedAt = D(Year, 1, 7),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Insurance,
+                Description = "Prior-year expense paid in tax year",
+                Status = ExpenseStatus.Paid,
+                Amount = 50m,
+                IncurredAt = D(Year - 1, 12, 31),
+                PaidAt = D(Year, 1, 3),
+                CreatedAt = D(Year - 1, 12, 31),
+                UpdatedAt = D(Year, 1, 3),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending repair",
+                Status = ExpenseStatus.Pending,
+                Amount = 200m,
+                IncurredAt = D(Year, 1, 8),
+                CreatedAt = D(Year, 1, 8),
+                UpdatedAt = D(Year, 1, 8),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft repair",
+                Status = ExpenseStatus.Draft,
+                Amount = 300m,
+                IncurredAt = D(Year, 1, 9),
+                CreatedAt = D(Year, 1, 9),
+                UpdatedAt = D(Year, 1, 9),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected repair",
+                Status = ExpenseStatus.Rejected,
+                Amount = 400m,
+                IncurredAt = D(Year, 1, 10),
+                CreatedAt = D(Year, 1, 10),
+                UpdatedAt = D(Year, 1, 10),
+            });
+        _db.SaveChanges();
+        _commands.Clear();
+
+        var report = await _sut.GetReportAsync(_scope, Year, ct: CancellationToken.None);
+
+        report.TotalExpenses.Should().Be(150m);
+        report.Properties.Should().ContainSingle()
+            .Which.TotalExpenses.Should().Be(150m);
+        var sql = string.Join("\n---\n", _commands);
+        sql.Should().Contain("\"Status\" = 2");
+        sql.Should().Contain("PaidAt");
+    }
+
+    [Fact]
     public async Task GetReportAsync_WorkspaceAdministratorAttributesOperationalScopeAndReconcilesUnallocatedActivityInSql()
     {
         var property = SeedProperty("Attributed");
@@ -307,8 +404,8 @@ public class ScheduleEServiceTests : IAsyncLifetime
         };
         _db.Loans.Add(loan);
         _db.SaveChanges();
-        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-01", DueDate = D(Year, 1, 1), InterestAmount = 600m, PrincipalAmount = 100m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_900m, Status = LoanPaymentStatus.Scheduled, CreatedAt = DateTime.UtcNow });
-        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-02", DueDate = D(Year, 2, 1), InterestAmount = 590m, PrincipalAmount = 110m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_790m, Status = LoanPaymentStatus.Scheduled, CreatedAt = DateTime.UtcNow });
+        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-01", DueDate = D(Year, 1, 1), PaidDate = D(Year, 1, 5), InterestAmount = 600m, PrincipalAmount = 100m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_900m, Status = LoanPaymentStatus.Paid, CreatedAt = DateTime.UtcNow });
+        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-02", DueDate = D(Year, 2, 1), PaidDate = D(Year, 2, 5), InterestAmount = 590m, PrincipalAmount = 110m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_790m, Status = LoanPaymentStatus.Paid, CreatedAt = DateTime.UtcNow });
         _db.SaveChanges();
 
         var report = await _sut.GetReportAsync(_scope, Year, ct: CancellationToken.None);
@@ -601,7 +698,8 @@ public class ScheduleEServiceTests : IAsyncLifetime
             EscrowAmount = 0m,
             TotalAmount = 500m,
             BalanceAfter = 99_900m,
-            Status = LoanPaymentStatus.Scheduled,
+            PaidDate = D(Year, 1, 5),
+            Status = LoanPaymentStatus.Paid,
             CreatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();

@@ -893,6 +893,137 @@ public class ReportsServiceTests : IAsyncLifetime
         totalSql.Should().NotBeEmpty("cash-flow grand totals must be summed in SQL, not from month DTOs");
     }
 
+    [Fact]
+    public async Task ExpenseReports_UsePaidStatusAndCashDateAcrossCashFlows()
+    {
+        var property = SeedProperty("H3 cash-basis property");
+        var allocatedPaid = new Expense
+        {
+            PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Portfolio,
+            Category = ScheduleECategory.Repairs,
+            Description = "Allocated December repair paid in January",
+            Status = ExpenseStatus.Paid,
+            Amount = 25m,
+            IncurredAt = D(2025, 12, 31),
+            PaidAt = D(2026, 1, 4),
+            CreatedAt = D(2026, 1, 4),
+            UpdatedAt = D(2026, 1, 4),
+        };
+        var allocatedPending = NewAllocatedStatusExpense(
+            "Allocated pending", ExpenseStatus.Pending, 60m, D(2026, 1, 8));
+        var allocatedDraft = NewAllocatedStatusExpense(
+            "Allocated draft", ExpenseStatus.Draft, 70m, D(2026, 1, 9));
+        var allocatedRejected = NewAllocatedStatusExpense(
+            "Allocated rejected", ExpenseStatus.Rejected, 80m, D(2026, 1, 10));
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Paid in January",
+                Status = ExpenseStatus.Paid,
+                Amount = 100m,
+                IncurredAt = D(2026, 1, 5),
+                PaidAt = D(2026, 1, 7),
+                CreatedAt = D(2026, 1, 5),
+                UpdatedAt = D(2026, 1, 7),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Insurance,
+                Description = "December bill paid in January",
+                Status = ExpenseStatus.Paid,
+                Amount = 50m,
+                IncurredAt = D(2025, 12, 31),
+                PaidAt = D(2026, 1, 3),
+                CreatedAt = D(2025, 12, 31),
+                UpdatedAt = D(2026, 1, 3),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending unpaid bill",
+                Status = ExpenseStatus.Pending,
+                Amount = 200m,
+                IncurredAt = D(2026, 1, 8),
+                CreatedAt = D(2026, 1, 8),
+                UpdatedAt = D(2026, 1, 8),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft expense",
+                Status = ExpenseStatus.Draft,
+                Amount = 300m,
+                IncurredAt = D(2026, 1, 9),
+                CreatedAt = D(2026, 1, 9),
+                UpdatedAt = D(2026, 1, 9),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected expense",
+                Status = ExpenseStatus.Rejected,
+                Amount = 400m,
+                IncurredAt = D(2026, 1, 10),
+                CreatedAt = D(2026, 1, 10),
+                UpdatedAt = D(2026, 1, 10),
+            },
+            allocatedPaid,
+            allocatedPending,
+            allocatedDraft,
+            allocatedRejected);
+        _db.SaveChanges();
+        _db.ExpenseAllocations.AddRange(
+            Allocation(allocatedPaid, property.Id),
+            Allocation(allocatedPending, property.Id),
+            Allocation(allocatedDraft, property.Id),
+            Allocation(allocatedRejected, property.Id));
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+        var cashFlow = await _sut.GetCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        cashFlow.TotalExpense.Should().Be(175m);
+        cashFlow.Months.Single(month => month.MonthKey == "2026-01").Expense.Should().Be(175m);
+        var cashFlowSql = string.Join("\n---\n", _executedSql);
+        AssertPaidStatusInBothExpenseBranches(cashFlowSql);
+
+        _executedSql.Clear();
+        var trueCashFlow = await _sut.GetTrueCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        trueCashFlow.TotalOperatingExpenses.Should().Be(175m);
+        trueCashFlow.Properties.Should().ContainSingle()
+            .Which.OperatingExpenses.Should().Be(175m);
+        var trueCashFlowSql = string.Join("\n---\n", _executedSql);
+        AssertPaidStatusInBothExpenseBranches(trueCashFlowSql);
+    }
+
     // ── Property P&L Summary (DB) ─────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -2266,6 +2397,48 @@ public class ReportsServiceTests : IAsyncLifetime
         _db.TenantLedgerEntries.Add(entry);
         _db.SaveChanges();
         return entry;
+    }
+
+    private Expense NewAllocatedStatusExpense(
+        string description,
+        ExpenseStatus status,
+        decimal amount,
+        DateTime incurredAt) => new()
+    {
+        PortfolioId = PortfolioId,
+        OperationalScope = ExpenseOperationalScope.Portfolio,
+        Category = ScheduleECategory.Repairs,
+        Description = description,
+        Status = status,
+        Amount = amount,
+        IncurredAt = incurredAt,
+        CreatedAt = incurredAt,
+        UpdatedAt = incurredAt,
+    };
+
+    private static ExpenseAllocation Allocation(Expense expense, int propertyId) => new()
+    {
+        PortfolioId = PortfolioId,
+        Expense = expense,
+        ExpenseId = expense.Id,
+        TargetKind = ExpenseAllocationTargetKind.Property,
+        PropertyId = propertyId,
+        Amount = expense.Amount,
+        CreatedAt = expense.CreatedAt,
+    };
+
+    private static void AssertPaidStatusInBothExpenseBranches(string sql)
+    {
+        var branches = sql.Split("UNION ALL", StringSplitOptions.None);
+        branches.Should().Contain(branch =>
+            branch.Contains("\"ExpenseAllocations\"", StringComparison.Ordinal) &&
+            branch.Contains("\"Status\" = 2", StringComparison.Ordinal),
+            "the allocated expense branch must filter to Paid in SQL");
+        branches.Should().Contain(branch =>
+            branch.Contains("\"Expenses\"", StringComparison.Ordinal) &&
+            branch.Contains("NOT EXISTS", StringComparison.Ordinal) &&
+            branch.Contains("\"Status\" = 2", StringComparison.Ordinal),
+            "the unallocated expense branch must filter to Paid in SQL");
     }
 
     private Expense SeedExpense(int? propertyId, decimal amount, DateTime paidAt,
