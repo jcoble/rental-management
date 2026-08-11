@@ -258,6 +258,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         long upcomingRentId;
         long overdueRentId;
+        long overdueLateFeeId;
         WorkspaceReadScope scope = default;
         await using (var setup = NewContext())
         {
@@ -447,6 +448,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             portfolioId = portfolio.Id;
             upcomingRentId = upcomingRent.Id;
             overdueRentId = overdueRent.Id;
+            overdueLateFeeId = overdueLateFee.Id;
         }
 
         await using (var generationScope = _services!.CreateAsyncScope())
@@ -468,10 +470,14 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 select new { policy.AutomationKey, work.TenantLedgerEntryId, work.BusinessKey })
             .ToListAsync();
         candidates.Should().HaveCount(2);
-        candidates.Should().ContainSingle(row =>
-            row.AutomationKey == "rent-reminder" && row.TenantLedgerEntryId == upcomingRentId);
+        // The seeded July 15 rent is future-effective until its EffectiveOn date; the due-date
+        // collision under test is the overdue rent/late-fee pair on July 1.
+        candidates.Should().OnlyContain(row => row.AutomationKey == "late-rent-late-fee");
+        candidates.Should().NotContain(row => row.TenantLedgerEntryId == upcomingRentId);
         candidates.Should().ContainSingle(row =>
             row.AutomationKey == "late-rent-late-fee" && row.TenantLedgerEntryId == overdueRentId);
+        candidates.Should().ContainSingle(row =>
+            row.AutomationKey == "late-rent-late-fee" && row.TenantLedgerEntryId == overdueLateFeeId);
         candidates.Select(row => row.BusinessKey).Should().OnlyHaveUniqueItems();
     }
 

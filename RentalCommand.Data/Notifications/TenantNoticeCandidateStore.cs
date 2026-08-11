@@ -145,7 +145,8 @@ public sealed class TenantNoticeCandidateStore : ITenantNoticeCandidateStore
                    PARTITION BY relationship."TenantNoticePolicyId",
                                 relationship."LeaseManagementId",
                                 relationship."RecipientLeaseManagementPartyId",
-                                charge."DueOn"
+                                charge."DueOn",
+                                charge."EntryType"
                    ORDER BY CASE WHEN charge."EntryType" = 'RentCharge' THEN 0 ELSE 1 END,
                             charge."OpenAmount" DESC,
                             charge."TenantLedgerEntryId"

@@ -22,7 +22,7 @@ public static class SandboxLifecyclePersistence
         "Notifications", "QueuedJobs",
         "PendingFileUploads", "PlaidTokenExchangeAttempts", "AccountingMappingPromotionJobs",
         "AccountingSyncMaps", "AccountingEntityMappings",
-        "BankTransactions", "LoanPayments",
+        "BankStatements", "BankTransactions", "LoanPayments",
         "PropertyDispositions", "ProviderInboxEvents", "OutboxMessages", "SecurityDepositEntries",
         "TenantLedgerAllocations", "TenantLedgerEntries", "TenantPaymentAttempts",
         "TenantAutopayEnrollments", "TenantAccountConditionPeriods", "SecurityDepositAccounts",
@@ -156,6 +156,7 @@ public static class SandboxLifecyclePersistence
               AND "LocalEntityId" IS NOT NULL
             RETURNING 1 AS "Value"
             """, ct);
+        await DeleteSimpleAsync(db, context, "BankStatements", portfolioId, ct);
         await DeleteSimpleAsync(db, context, "BankTransactions", portfolioId, ct);
         await DeleteSimpleAsync(db, context, "LoanPayments", portfolioId, ct);
         await DeleteSimpleAsync(db, context, "PropertyDispositions", portfolioId, ct);
