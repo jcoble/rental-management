@@ -54,6 +54,9 @@ discarding accepted work, or invoking another contract loop.
 
 ## Current live Azure state
 
+Note (2026-08-11): this machine is retired. Use the local Docker stack
+(`scripts/local/preview-stack-local.sh`, http://127.0.0.1:15667).
+
 Stable URL: `https://rental-command.chimp-map.ts.net`  
 VPS: `azureuser@100.126.201.65`  
 Verification lock: `/srv/dev-stacks/.locks/azure-heavy.lock`

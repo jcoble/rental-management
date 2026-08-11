@@ -1,7 +1,0 @@
-[Unit]
-Description=Remove expired Rental Command branch previews
-After=docker.service tailscaled.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/rental-preview-cleanup

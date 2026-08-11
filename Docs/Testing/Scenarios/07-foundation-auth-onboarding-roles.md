@@ -18,9 +18,9 @@ URLs, request/status behavior, console errors, persisted identifiers, and releva
 
 ## Foundation invariants under test
 
-- The browser-facing public origin is exactly `https://rental-command.chimp-map.ts.net`. Enhanced
-  form actions, secure cookies, Google OAuth redirects, and absolute links use that public HTTPS
-  origin, never the VPS's private host/port.
+- The browser-facing origin is exactly the preview stack origin `http://127.0.0.1:15667` (started with
+  `./scripts/local/preview-stack-local.sh`). Enhanced form actions, cookies, Google OAuth redirects,
+  and absolute links use that one origin, never a container-internal host/port.
 - Password and Google login use the same canonical identity/access-context result. Google is shown
   only when both server and web runtime configuration are complete.
 - Unknown accounts and wrong passwords render the same accessible `Invalid email or password`
@@ -66,12 +66,12 @@ URLs, request/status behavior, console errors, persisted identifiers, and releva
 
 ## Preconditions and data hygiene
 
-1. Record the exact preview source SHA and confirm the stable public URL is healthy.
+1. Record the exact preview source SHA and confirm http://127.0.0.1:15667 is healthy.
 2. Confirm the preview's persistent integration status without printing values. Google requires a
    client ID and secret, Google Places requires its API key, and the assistant requires provider,
    model, and key. Email/SMS/push dispatch remains suppressed for this run.
 3. Confirm Google Cloud authorizes exactly
-   `https://rental-command.chimp-map.ts.net/auth/google/callback` before invoking Google login.
+   `http://127.0.0.1:15667/auth/google/callback` before invoking Google login.
 4. Establish the actual database state. A clean reset may contain only the seeded administrator;
    do not assume an old “test customer” still exists.
 5. Use marker `QA-AOR-<HHMMSS>` in new workspace, member, property, owner, tenant, and assignment
