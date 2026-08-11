@@ -56,6 +56,7 @@ public partial class AccountingService : IAccountingService
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
+                e.Status == ExpenseStatus.Paid &&
                 authorizedProperties.Any(property => property.Id == e.PropertyId));
 
         var categoryGroups = await authorizedExpenses
@@ -194,7 +195,10 @@ public partial class AccountingService : IAccountingService
         // Money out: authorized-property expenses, using paid date when present and incurred date otherwise.
         var expensesSpent = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                e.Status == ExpenseStatus.Paid)
             .Join(
                 authorizedPropertyIds,
                 expense => expense.PropertyId!.Value,
@@ -602,6 +606,7 @@ public partial class AccountingService : IAccountingService
             .Where(expense =>
                 expense.PortfolioId == portfolioId &&
                 expense.PropertyId != null &&
+                expense.Status == ExpenseStatus.Paid &&
                 authorizedProperties.Any(property => property.Id == expense.PropertyId))
             .GroupBy(expense => expense.PropertyId!.Value)
             .Select(group => new
@@ -668,6 +673,7 @@ public partial class AccountingService : IAccountingService
             .Where(v =>
                 v.PortfolioId == portfolioId &&
                 v.Expenses.Any(expense =>
+                    expense.Status == ExpenseStatus.Paid &&
                     expense.PropertyId != null &&
                     authorizedProperties.Any(property => property.Id == expense.PropertyId)))
             .Select(v => new
@@ -678,7 +684,7 @@ public partial class AccountingService : IAccountingService
                 v.W9OnFile,
                 TotalPaid = v.Expenses
                     .Where(e =>
-                        (e.Status == ExpenseStatus.Paid || e.PaidAt != null) &&
+                        e.Status == ExpenseStatus.Paid &&
                         e.PropertyId != null &&
                         authorizedProperties.Any(property => property.Id == e.PropertyId))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
@@ -711,6 +717,7 @@ public partial class AccountingService : IAccountingService
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
+                e.Status == ExpenseStatus.Paid &&
                 authorizedProperties.Any(property => property.Id == e.PropertyId))
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
@@ -760,8 +767,9 @@ public partial class AccountingService : IAccountingService
                 e.PropertyId != null &&
                 authorizedProperties.Any(property => property.Id == e.PropertyId) &&
                 e.CapitalizedAssetId == null &&
-                e.IncurredAt >= yearStart &&
-                e.IncurredAt < yearEndExclusive &&
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
                 !(e.Category == ScheduleECategory.MortgageInterest &&
                   e.PropertyId != null &&
                   loanPropertyIdsQuery.Contains(e.PropertyId.Value)) &&
@@ -860,6 +868,7 @@ public partial class AccountingService : IAccountingService
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
+                e.Status == ExpenseStatus.Paid &&
                 authorizedProperties.Any(property => property.Id == e.PropertyId))
             .Select(e => new AccountingReportLedgerRow
             {

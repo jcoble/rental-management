@@ -141,6 +141,81 @@ public class YearEndPacketTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetYearEndPacketData_UsesPaidCashBasisAndLabelsBothExpenseSections()
+    {
+        var graph = SeedYear(Year);
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = graph.Property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Prior-year repair paid in tax year",
+                Status = ExpenseStatus.Paid,
+                Amount = 50m,
+                IncurredAt = new DateTime(Year - 1, 12, 31, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(Year, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = new DateTime(Year, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(Year, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = graph.Property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending repair",
+                Status = ExpenseStatus.Pending,
+                Amount = 100m,
+                IncurredAt = new DateTime(Year, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = new DateTime(Year, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(Year, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = graph.Property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft repair",
+                Status = ExpenseStatus.Draft,
+                Amount = 200m,
+                IncurredAt = new DateTime(Year, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = new DateTime(Year, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(Year, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = graph.Property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected repair",
+                Status = ExpenseStatus.Rejected,
+                Amount = 300m,
+                IncurredAt = new DateTime(Year, 2, 3, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = new DateTime(Year, 2, 3, 0, 0, 0, DateTimeKind.Utc),
+                UpdatedAt = new DateTime(Year, 2, 3, 0, 0, 0, DateTimeKind.Utc),
+            });
+        _db.SaveChanges();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
+
+        packet.ScheduleE.TotalExpenses.Should().Be(2_650m);
+        packet.Properties.Should().ContainSingle().Which.TotalExpenses.Should().Be(2_650m);
+        packet.CashFlowMoneyOut.Should().Be(2_650m);
+        packet.CashFlow.Single(month => month.Month == 1).MoneyOut.Should().Be(650m);
+
+        var pdf = await _sut.GetYearEndPacketAsync(_scope, Year, CancellationToken.None);
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(pdf);
+        text.Should().NotBeNull();
+        text.Should().Contain("Cash basis");
+        text.Should().Contain("paid expenses only");
+        CountOccurrences(text!, "Cash basis").Should().Be(2);
+    }
+
+    [Fact]
     public async Task GetYearEndPacketData_ExcludesSecurityDepositsFromCashFlowMoneyIn()
     {
         var graph = SeedYear(Year);
@@ -446,6 +521,19 @@ public class YearEndPacketTests : IAsyncLifetime
             CreatedByUserId = ActorUserId,
         });
         _db.SaveChanges();
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = source.IndexOf(value, index, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static bool IsStandaloneExpenseTotalByPropertyAggregate(string sql) =>

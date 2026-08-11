@@ -893,6 +893,108 @@ public class ReportsServiceTests : IAsyncLifetime
         totalSql.Should().NotBeEmpty("cash-flow grand totals must be summed in SQL, not from month DTOs");
     }
 
+    [Fact]
+    public async Task ExpenseReports_UsePaidStatusAndCashDateAcrossCashFlows()
+    {
+        var property = SeedProperty("H3 cash-basis property");
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Paid in January",
+                Status = ExpenseStatus.Paid,
+                Amount = 100m,
+                IncurredAt = D(2026, 1, 5),
+                PaidAt = D(2026, 1, 7),
+                CreatedAt = D(2026, 1, 5),
+                UpdatedAt = D(2026, 1, 7),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Insurance,
+                Description = "December bill paid in January",
+                Status = ExpenseStatus.Paid,
+                Amount = 50m,
+                IncurredAt = D(2025, 12, 31),
+                PaidAt = D(2026, 1, 3),
+                CreatedAt = D(2025, 12, 31),
+                UpdatedAt = D(2026, 1, 3),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending unpaid bill",
+                Status = ExpenseStatus.Pending,
+                Amount = 200m,
+                IncurredAt = D(2026, 1, 8),
+                CreatedAt = D(2026, 1, 8),
+                UpdatedAt = D(2026, 1, 8),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft expense",
+                Status = ExpenseStatus.Draft,
+                Amount = 300m,
+                IncurredAt = D(2026, 1, 9),
+                CreatedAt = D(2026, 1, 9),
+                UpdatedAt = D(2026, 1, 9),
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected expense",
+                Status = ExpenseStatus.Rejected,
+                Amount = 400m,
+                IncurredAt = D(2026, 1, 10),
+                CreatedAt = D(2026, 1, 10),
+                UpdatedAt = D(2026, 1, 10),
+            });
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+        var cashFlow = await _sut.GetCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        cashFlow.TotalExpense.Should().Be(150m);
+        cashFlow.Months.Single(month => month.MonthKey == "2026-01").Expense.Should().Be(150m);
+        var cashFlowSql = string.Join("\n---\n", _executedSql);
+        cashFlowSql.Should().Contain("\"Status\" = 2");
+
+        _executedSql.Clear();
+        var trueCashFlow = await _sut.GetTrueCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        trueCashFlow.TotalOperatingExpenses.Should().Be(150m);
+        trueCashFlow.Properties.Should().ContainSingle()
+            .Which.OperatingExpenses.Should().Be(150m);
+        var trueCashFlowSql = string.Join("\n---\n", _executedSql);
+        trueCashFlowSql.Should().Contain("\"Status\" = 2");
+    }
+
     // ── Property P&L Summary (DB) ─────────────────────────────────────────────────────────────────
 
     [Fact]

@@ -121,6 +121,8 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
         col.Item().PaddingBottom(2).Text(
             "IRS Schedule E income and deductible-expense totals across the portfolio for the tax year.")
             .FontSize(8).Italic().FontColor(MutedColor);
+        col.Item().PaddingBottom(2).Text("Cash basis — paid expenses only.")
+            .FontSize(8).Italic().FontColor(MutedColor);
 
         if (report.UnallocatedActivity.RequiresAllocation)
         {
@@ -178,6 +180,8 @@ public sealed class YearEndPacketPdfGenerator : IYearEndPacketPdfGenerator
     private static void ComposePropertyPnL(ColumnDescriptor col, IReadOnlyList<YearEndPropertyPnL> properties)
     {
         SectionTitle(col, "Per-Property Profit & Loss");
+        col.Item().PaddingBottom(2).Text("Cash basis — paid expenses only.")
+            .FontSize(8).Italic().FontColor(MutedColor);
 
         if (properties.Count == 0)
         {

@@ -1559,6 +1559,7 @@ public class ReportsService : IReportsService
               ON expense."PortfolioId" = allocation."PortfolioId"
              AND expense."Id" = allocation."ExpenseId"
              AND expense."DeletedAt" IS NULL
+             AND expense."Status" = 2
             LEFT JOIN "Units" unit
               ON unit."PortfolioId" = allocation."PortfolioId"
              AND unit."Id" = allocation."UnitId"
@@ -1573,6 +1574,7 @@ public class ReportsService : IReportsService
             FROM "Expenses" expense
             WHERE expense."PortfolioId" = @portfolioId
               AND expense."DeletedAt" IS NULL
+              AND expense."Status" = 2
               AND NOT EXISTS (
                   SELECT 1
                   FROM "ExpenseAllocations" allocation
@@ -2000,6 +2002,7 @@ public class ReportsService : IReportsService
             .Where(e => e.PortfolioId == portfolioId);
 
         expenseQuery = expenseQuery.Where(e => e.PropertyId != null &&
+            e.Status == ExpenseStatus.Paid &&
             authorizedProperties.Any(property => property.Id == e.PropertyId.Value));
 
         var expenseEntries = expenseQuery
@@ -2241,6 +2244,7 @@ public class ReportsService : IReportsService
               ON vendor."PortfolioId" = expense."PortfolioId"
              AND vendor."Id" = expense."VendorId"
             WHERE expense."PortfolioId" = @portfolioId
+              AND expense."Status" = 2
               AND COALESCE(expense."PaidAt", expense."IncurredAt")::date >= @fromOn
               AND COALESCE(expense."PaidAt", expense."IncurredAt")::date <= @toOn
         ),
@@ -2709,6 +2713,7 @@ public class ReportsService : IReportsService
         var vendorRowsQuery = _db.Vendors
             .AsNoTracking()
             .Where(v => v.PortfolioId == portfolioId && v.Expenses.Any(e =>
+                e.Status == ExpenseStatus.Paid &&
                 e.PaidAt >= yearStart && e.PaidAt < yearEnd &&
                 e.PropertyId != null &&
                 authorizedProperties.Any(property => property.Id == e.PropertyId.Value)))
@@ -2721,7 +2726,8 @@ public class ReportsService : IReportsService
                 v.Is1099Eligible,
                 v.W9OnFile,
                 TotalPaid = v.Expenses
-                    .Where(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd &&
+                    .Where(e => e.Status == ExpenseStatus.Paid &&
+                        e.PaidAt >= yearStart && e.PaidAt < yearEnd &&
                         e.PropertyId != null &&
                         authorizedProperties.Any(property => property.Id == e.PropertyId.Value))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,

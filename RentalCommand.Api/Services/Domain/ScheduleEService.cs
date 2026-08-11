@@ -127,8 +127,9 @@ public class ScheduleEService : IScheduleEService
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.CapitalizedAssetId == null &&
-                e.IncurredAt >= yearStart &&
-                e.IncurredAt < yearEndExclusive)
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                (e.PaidAt ?? e.IncurredAt) < yearEndExclusive)
             .Select(expense => new ScheduleEExpenseFact
             {
                 PropertyId = expense.WorkOrderId != null

@@ -178,6 +178,83 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
     }
 
     [Fact]
+    public async Task DashboardAccounting_ExcludesUnpaidExpenseStatuses()
+    {
+        await using var context = await postgres.CreateContextAsync();
+        var scope = context.Db.SeedAdministratorScope(
+            1,
+            nameof(DashboardAccounting_ExcludesUnpaidExpenseStatuses));
+        var now = new DateTime(2027, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var property = SeedProperty(context, "H3 dashboard property", now);
+        context.Db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = 1,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Paid dashboard expense",
+                Status = ExpenseStatus.Paid,
+                Amount = 150m,
+                IncurredAt = now.AddDays(-2),
+                PaidAt = now.AddDays(-1),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = 1,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending dashboard expense",
+                Status = ExpenseStatus.Pending,
+                Amount = 200m,
+                IncurredAt = now.AddDays(-2),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = 1,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft dashboard expense",
+                Status = ExpenseStatus.Draft,
+                Amount = 300m,
+                IncurredAt = now.AddDays(-2),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = 1,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected dashboard expense",
+                Status = ExpenseStatus.Rejected,
+                Amount = 400m,
+                IncurredAt = now.AddDays(-2),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await context.Db.SaveChangesAsync();
+        await context.ActivateApiScopeAsync(scope);
+
+        var dashboard = await new DashboardService(
+                context.Db,
+                new AuditDescriber(),
+                new FixedTimeProvider(now))
+            .GetDashboardAsync(scope);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Accounting.ExpensesThisMonthAmount.Should().Be(150m);
+        dashboard.Accounting.NetThisMonth.Should().Be(-150m);
+    }
+
+    [Fact]
     public async Task DashboardAccounting_PreservesAllocationAndReversalAwareReceivableValuesOnPostgreSql()
     {
         await using var context = await postgres.CreateContextAsync();

@@ -175,6 +175,7 @@ public static class FinancialReportProjections
                 equals new { unit.PortfolioId, unit.Id } into unitJoin
             from unit in unitJoin.DefaultIfEmpty()
             where allocation.PortfolioId == portfolioId
+                && expense.Status == ExpenseStatus.Paid
             select new FinancialReportExpenseProjection
             {
                 ExpenseId = expense.Id,
@@ -195,6 +196,7 @@ public static class FinancialReportProjections
         var unallocated =
             from expense in db.Expenses.AsNoTracking()
             where expense.PortfolioId == portfolioId
+                && expense.Status == ExpenseStatus.Paid
                 && !db.ExpenseAllocations.Any(allocation =>
                     allocation.PortfolioId == expense.PortfolioId &&
                     allocation.ExpenseId == expense.Id)
