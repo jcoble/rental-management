@@ -117,19 +117,64 @@ public class ScheduleEService : IScheduleEService
             .Where(entry => entry.PropertyId == null);
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
-        // Resolve the expense's canonical operational context in SQL. Work-order receipts inherit the
-        // work order's Property, direct Unit expenses inherit the Unit's Property, and a direct Property
-        // scope is used otherwise. The blueprint's typed ExpenseAllocation rows do not exist in the
-        // current schema yet, so genuinely portfolio-scoped rows remain unallocated and are reconciled
-        // explicitly below instead of being copied or guessed onto a Property.
-        var expenseFactsQuery = _db.Expenses
+        // Resolve the expense's canonical operational context in SQL. Typed property/unit allocations
+        // contribute their allocated share; owner-entity allocations remain unallocated, and expenses
+        // without allocations inherit the work order, unit, or direct property context. Every branch
+        // stays in the same SQL-side fact relation so property totals cannot double-count a shared row.
+        var allocatedExpenseFactsQuery =
+            from allocation in _db.ExpenseAllocations.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on new { allocation.PortfolioId, Id = allocation.ExpenseId }
+                equals new { expense.PortfolioId, expense.Id }
+            join unit in _db.Units.IgnoreQueryFilters().AsNoTracking()
+                on new { allocation.PortfolioId, Id = allocation.UnitId ?? 0 }
+                equals new { unit.PortfolioId, unit.Id } into unitJoin
+            from unit in unitJoin.DefaultIfEmpty()
+            where allocation.PortfolioId == portfolioId
+                && (allocation.TargetKind == ExpenseAllocationTargetKind.Property ||
+                    allocation.TargetKind == ExpenseAllocationTargetKind.Unit)
+                && expense.CapitalizedAssetId == null
+                && expense.Status == ExpenseStatus.Paid
+                && (expense.PaidAt ?? expense.IncurredAt) >= yearStart
+                && (expense.PaidAt ?? expense.IncurredAt) < yearEndExclusive
+            select new ScheduleEExpenseFact
+            {
+                PropertyId = allocation.TargetKind == ExpenseAllocationTargetKind.Property
+                    ? allocation.PropertyId
+                    : unit == null ? null : (int?)unit.PropertyId,
+                Category = expense.Category,
+                Amount = allocation.Amount,
+            };
+
+        var ownerEntityExpenseFactsQuery =
+            from allocation in _db.ExpenseAllocations.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on new { allocation.PortfolioId, Id = allocation.ExpenseId }
+                equals new { expense.PortfolioId, expense.Id }
+            where allocation.PortfolioId == portfolioId
+                && allocation.TargetKind == ExpenseAllocationTargetKind.OwnerEntity
+                && expense.CapitalizedAssetId == null
+                && expense.Status == ExpenseStatus.Paid
+                && (expense.PaidAt ?? expense.IncurredAt) >= yearStart
+                && (expense.PaidAt ?? expense.IncurredAt) < yearEndExclusive
+            select new ScheduleEExpenseFact
+            {
+                PropertyId = null,
+                Category = expense.Category,
+                Amount = allocation.Amount,
+            };
+
+        var unallocatedExpenseFactsQuery = _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.CapitalizedAssetId == null &&
                 e.Status == ExpenseStatus.Paid &&
                 (e.PaidAt ?? e.IncurredAt) >= yearStart &&
-                (e.PaidAt ?? e.IncurredAt) < yearEndExclusive)
+                (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
+                !_db.ExpenseAllocations.Any(allocation =>
+                    allocation.PortfolioId == e.PortfolioId &&
+                    allocation.ExpenseId == e.Id))
             .Select(expense => new ScheduleEExpenseFact
             {
                 PropertyId = expense.WorkOrderId != null
@@ -150,6 +195,9 @@ public class ScheduleEService : IScheduleEService
                 Category = expense.Category,
                 Amount = expense.Amount,
             });
+        var expenseFactsQuery = allocatedExpenseFactsQuery
+            .Concat(ownerEntityExpenseFactsQuery)
+            .Concat(unallocatedExpenseFactsQuery);
 
         var expenseQuery = expenseFactsQuery
             .Where(expense =>
@@ -166,11 +214,13 @@ public class ScheduleEService : IScheduleEService
         var loanPaymentQuery = LoanPaymentEffectiveQuery.From(_db)
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
+                lp.Status == LoanPaymentStatus.Paid &&
+                lp.PaidDate != null &&
                 _db.Loans.Any(loan =>
                     loan.Id == lp.LoanId &&
                     authorizedProperties.Any(property => property.Id == loan.PropertyId)) &&
-                lp.DueDate >= yearStart &&
-                lp.DueDate < yearEndExclusive);
+                lp.PaidDate >= yearStart &&
+                lp.PaidDate < yearEndExclusive);
         if (propertyId.HasValue)
             loanPaymentQuery = loanPaymentQuery.Where(lp =>
                 _db.Loans.Any(loan => loan.Id == lp.LoanId && loan.PropertyId == propertyId.Value));

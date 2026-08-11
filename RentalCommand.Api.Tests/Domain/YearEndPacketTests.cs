@@ -216,6 +216,183 @@ public class YearEndPacketTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetYearEndPacketData_UsesPaidLoanInterestExcludesCapitalizedCashAndReconcilesPnL()
+    {
+        var graph = SeedYear(Year);
+        graph.Property.PurchasePrice = 300_000m;
+        graph.Property.LandValue = 60_000m;
+        graph.Property.InServiceDate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var now = new DateTime(Year, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var asset = new CapitalAsset
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = graph.Property.Id,
+            Description = "Capitalized roof",
+            CostBasis = 12_000m,
+            InServiceDate = new DateTime(Year - 1, 6, 15, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.CapitalAssets.Add(asset);
+        _db.SaveChanges();
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
+            PropertyId = graph.Property.Id,
+            CapitalizedAssetId = asset.Id,
+            Category = ScheduleECategory.Repairs,
+            Description = "Capitalized roof invoice",
+            Status = ExpenseStatus.Paid,
+            Amount = 9_000m,
+            IncurredAt = new DateTime(Year, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            PaidAt = new DateTime(Year, 2, 2, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var loan = new Loan
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = graph.Property.Id,
+            Lender = "Cash-basis lender",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 100_000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = new DateTime(Year - 1, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            DayOfMonthDue = 15,
+            MonthlyPrincipalInterest = 700m,
+            Status = LoanStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Loans.Add(loan);
+        _db.SaveChanges();
+        _db.LoanPayments.AddRange(
+            new LoanPayment
+            {
+                PortfolioId = PortfolioId,
+                LoanId = loan.Id,
+                PeriodKey = $"{Year}-01",
+                DueDate = new DateTime(Year, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 400m,
+                PrincipalAmount = 300m,
+                TotalAmount = 700m,
+                BalanceAfter = 99_700m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = now,
+            },
+            new LoanPayment
+            {
+                PortfolioId = PortfolioId,
+                LoanId = loan.Id,
+                PeriodKey = $"{Year - 1}-12",
+                DueDate = new DateTime(Year - 1, 12, 15, 0, 0, 0, DateTimeKind.Utc),
+                PaidDate = new DateTime(Year, 1, 10, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 250m,
+                PrincipalAmount = 450m,
+                TotalAmount = 700m,
+                BalanceAfter = 99_250m,
+                Status = LoanPaymentStatus.Paid,
+                CreatedAt = now,
+            });
+        _db.SaveChanges();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
+        var scheduleProperty = packet.ScheduleE.Properties.Should().ContainSingle().Subject;
+        var pnl = packet.Properties.Should().ContainSingle().Subject;
+
+        scheduleProperty.MortgageInterest.Should().Be(250m);
+        scheduleProperty.Depreciation.Should().BePositive();
+        scheduleProperty.TotalExpenses.Should().Be(
+            2_600m + 250m + scheduleProperty.Depreciation);
+        pnl.TotalExpenses.Should().Be(scheduleProperty.TotalExpenses);
+        pnl.Net.Should().Be(scheduleProperty.NetIncome);
+        pnl.ExpensesByCategory.Should().Contain(category =>
+            category.Category == nameof(ScheduleECategory.MortgageInterest) && category.Amount == 250m);
+        pnl.ExpensesByCategory.Should().Contain(category =>
+            category.Category == nameof(ScheduleECategory.Depreciation) &&
+            category.Amount == scheduleProperty.Depreciation);
+        packet.CashFlowMoneyOut.Should().Be(11_600m,
+            "cash flow includes the paid capitalized invoice while Schedule E/P&L excludes it");
+
+        var pdf = await _sut.GetYearEndPacketAsync(_scope, Year, CancellationToken.None);
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(pdf);
+        text.Should().NotBeNull();
+        text.Should().Contain("Cash basis — paid expenses only");
+        text.Should().Contain("Depreciation (non-cash)");
+        text.Should().Contain("Depreciation is non-cash and shown separately");
+    }
+
+    [Fact]
+    public async Task GetYearEndPacketData_AllocatedExpenseStatusesUsePaidCashDate()
+    {
+        var graph = SeedYear(Year);
+        var createdAt = new DateTime(Year, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var allocatedPaid = new Expense
+        {
+            PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Portfolio,
+            Category = ScheduleECategory.Repairs,
+            Description = "Allocated December repair paid in January",
+            Status = ExpenseStatus.Paid,
+            Amount = 25m,
+            IncurredAt = new DateTime(Year - 1, 12, 31, 0, 0, 0, DateTimeKind.Utc),
+            PaidAt = new DateTime(Year, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+        };
+        var allocatedPending = NewAllocatedStatusExpense("Allocated pending", ExpenseStatus.Pending, 60m, createdAt);
+        var allocatedDraft = NewAllocatedStatusExpense("Allocated draft", ExpenseStatus.Draft, 70m, createdAt.AddDays(1));
+        var allocatedRejected = NewAllocatedStatusExpense("Allocated rejected", ExpenseStatus.Rejected, 80m, createdAt.AddDays(2));
+        _db.Expenses.AddRange(allocatedPaid, allocatedPending, allocatedDraft, allocatedRejected);
+        _db.SaveChanges();
+        _db.ExpenseAllocations.AddRange(
+            Allocation(allocatedPaid, graph.Property.Id),
+            Allocation(allocatedPending, graph.Property.Id),
+            Allocation(allocatedDraft, graph.Property.Id),
+            Allocation(allocatedRejected, graph.Property.Id));
+        _db.SaveChanges();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, Year, CancellationToken.None);
+
+        packet.ScheduleE.TotalExpenses.Should().Be(2_625m);
+        packet.Properties.Should().ContainSingle().Which.TotalExpenses.Should().Be(2_625m);
+        packet.CashFlowMoneyOut.Should().Be(2_625m);
+        packet.CashFlow.Single(month => month.Month == 1).MoneyOut.Should().Be(625m);
+    }
+
+    private Expense NewAllocatedStatusExpense(
+        string description,
+        ExpenseStatus status,
+        decimal amount,
+        DateTime createdAt) => new()
+    {
+        PortfolioId = PortfolioId,
+        OperationalScope = ExpenseOperationalScope.Portfolio,
+        Category = ScheduleECategory.Repairs,
+        Description = description,
+        Status = status,
+        Amount = amount,
+        IncurredAt = createdAt,
+        CreatedAt = createdAt,
+        UpdatedAt = createdAt,
+    };
+
+    private static ExpenseAllocation Allocation(Expense expense, int propertyId) => new()
+    {
+        PortfolioId = PortfolioId,
+        Expense = expense,
+        ExpenseId = expense.Id,
+        TargetKind = ExpenseAllocationTargetKind.Property,
+        PropertyId = propertyId,
+        Amount = expense.Amount,
+        CreatedAt = expense.CreatedAt,
+    };
+
+    [Fact]
     public async Task GetYearEndPacketData_ExcludesSecurityDepositsFromCashFlowMoneyIn()
     {
         var graph = SeedYear(Year);

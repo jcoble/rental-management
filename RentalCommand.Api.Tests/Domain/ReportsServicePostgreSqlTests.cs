@@ -186,6 +186,25 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             nameof(DashboardAccounting_ExcludesUnpaidExpenseStatuses));
         var now = new DateTime(2027, 1, 15, 12, 0, 0, DateTimeKind.Utc);
         var property = SeedProperty(context, "H3 dashboard property", now);
+        var allocatedPaid = new Expense
+        {
+            PortfolioId = 1,
+            OperationalScope = ExpenseOperationalScope.Portfolio,
+            Category = ScheduleECategory.Repairs,
+            Description = "Allocated December dashboard expense",
+            Status = ExpenseStatus.Paid,
+            Amount = 25m,
+            IncurredAt = new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc),
+            PaidAt = new DateTime(2027, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var allocatedPending = NewAllocatedStatusExpense(
+            "Allocated pending dashboard expense", ExpenseStatus.Pending, 60m, now);
+        var allocatedDraft = NewAllocatedStatusExpense(
+            "Allocated draft dashboard expense", ExpenseStatus.Draft, 70m, now);
+        var allocatedRejected = NewAllocatedStatusExpense(
+            "Allocated rejected dashboard expense", ExpenseStatus.Rejected, 80m, now);
         context.Db.Expenses.AddRange(
             new Expense
             {
@@ -239,7 +258,17 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
                 IncurredAt = now.AddDays(-2),
                 CreatedAt = now,
                 UpdatedAt = now,
-            });
+            },
+            allocatedPaid,
+            allocatedPending,
+            allocatedDraft,
+            allocatedRejected);
+        await context.Db.SaveChangesAsync();
+        context.Db.ExpenseAllocations.AddRange(
+            Allocation(allocatedPaid, property.Id, now),
+            Allocation(allocatedPending, property.Id, now),
+            Allocation(allocatedDraft, property.Id, now),
+            Allocation(allocatedRejected, property.Id, now));
         await context.Db.SaveChangesAsync();
         await context.ActivateApiScopeAsync(scope);
 
@@ -250,8 +279,8 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
             .GetDashboardAsync(scope);
 
         dashboard.Should().NotBeNull();
-        dashboard!.Accounting.ExpensesThisMonthAmount.Should().Be(150m);
-        dashboard.Accounting.NetThisMonth.Should().Be(-150m);
+        dashboard!.Accounting.ExpensesThisMonthAmount.Should().Be(175m);
+        dashboard.Accounting.NetThisMonth.Should().Be(-175m);
     }
 
     [Fact]
@@ -472,6 +501,34 @@ public sealed class ReportsServicePostgreSqlTests(MigratedPostgreSqlFixture post
         context.Db.SaveChanges();
         return account;
     }
+
+    private static Expense NewAllocatedStatusExpense(
+        string description,
+        ExpenseStatus status,
+        decimal amount,
+        DateTime incurredAt) => new()
+    {
+        PortfolioId = 1,
+        OperationalScope = ExpenseOperationalScope.Portfolio,
+        Category = ScheduleECategory.Repairs,
+        Description = description,
+        Status = status,
+        Amount = amount,
+        IncurredAt = incurredAt,
+        CreatedAt = incurredAt,
+        UpdatedAt = incurredAt,
+    };
+
+    private static ExpenseAllocation Allocation(Expense expense, int propertyId, DateTime createdAt) => new()
+    {
+        PortfolioId = 1,
+        Expense = expense,
+        ExpenseId = expense.Id,
+        TargetKind = ExpenseAllocationTargetKind.Property,
+        PropertyId = propertyId,
+        Amount = expense.Amount,
+        CreatedAt = createdAt,
+    };
 
     private static void SeedReceiptAllocation(
         MigratedPostgreSqlTestContext context,

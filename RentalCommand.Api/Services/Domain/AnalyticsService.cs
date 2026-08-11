@@ -189,15 +189,16 @@ public sealed class AnalyticsService : IAnalyticsService
               GROUP BY date_trunc('month', allocation."EffectiveOn"::timestamp)::date
             ),
             expenses_by_month AS (
-              SELECT date_trunc('month', expense."IncurredAt" AT TIME ZONE 'UTC')::date AS "Month",
+              SELECT date_trunc('month', COALESCE(expense."PaidAt", expense."IncurredAt") AT TIME ZONE 'UTC')::date AS "Month",
                      sum(expense."Amount")::numeric AS "Expenses"
               FROM "Expenses" AS expense
               JOIN authorized_properties AS property ON property."Id" = expense."PropertyId"
               WHERE expense."PortfolioId" = {{scope.PortfolioId}}
                 AND expense."DeletedAt" IS NULL
-                AND expense."IncurredAt" >= {{trendStartUtc}}
-                AND expense."IncurredAt" < {{trendEndUtc}}
-              GROUP BY date_trunc('month', expense."IncurredAt" AT TIME ZONE 'UTC')::date
+                AND expense."Status" = 2
+                AND COALESCE(expense."PaidAt", expense."IncurredAt") >= {{trendStartUtc}}
+                AND COALESCE(expense."PaidAt", expense."IncurredAt") < {{trendEndUtc}}
+              GROUP BY date_trunc('month', COALESCE(expense."PaidAt", expense."IncurredAt") AT TIME ZONE 'UTC')::date
             ),
             trend AS (
               SELECT jsonb_agg(

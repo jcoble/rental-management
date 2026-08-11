@@ -897,6 +897,25 @@ public class ReportsServiceTests : IAsyncLifetime
     public async Task ExpenseReports_UsePaidStatusAndCashDateAcrossCashFlows()
     {
         var property = SeedProperty("H3 cash-basis property");
+        var allocatedPaid = new Expense
+        {
+            PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Portfolio,
+            Category = ScheduleECategory.Repairs,
+            Description = "Allocated December repair paid in January",
+            Status = ExpenseStatus.Paid,
+            Amount = 25m,
+            IncurredAt = D(2025, 12, 31),
+            PaidAt = D(2026, 1, 4),
+            CreatedAt = D(2026, 1, 4),
+            UpdatedAt = D(2026, 1, 4),
+        };
+        var allocatedPending = NewAllocatedStatusExpense(
+            "Allocated pending", ExpenseStatus.Pending, 60m, D(2026, 1, 8));
+        var allocatedDraft = NewAllocatedStatusExpense(
+            "Allocated draft", ExpenseStatus.Draft, 70m, D(2026, 1, 9));
+        var allocatedRejected = NewAllocatedStatusExpense(
+            "Allocated rejected", ExpenseStatus.Rejected, 80m, D(2026, 1, 10));
         _db.Expenses.AddRange(
             new Expense
             {
@@ -964,7 +983,17 @@ public class ReportsServiceTests : IAsyncLifetime
                 IncurredAt = D(2026, 1, 10),
                 CreatedAt = D(2026, 1, 10),
                 UpdatedAt = D(2026, 1, 10),
-            });
+            },
+            allocatedPaid,
+            allocatedPending,
+            allocatedDraft,
+            allocatedRejected);
+        _db.SaveChanges();
+        _db.ExpenseAllocations.AddRange(
+            Allocation(allocatedPaid, property.Id),
+            Allocation(allocatedPending, property.Id),
+            Allocation(allocatedDraft, property.Id),
+            Allocation(allocatedRejected, property.Id));
         _db.SaveChanges();
 
         _executedSql.Clear();
@@ -975,10 +1004,10 @@ public class ReportsServiceTests : IAsyncLifetime
             PropertyIds = [property.Id],
         }, CancellationToken.None);
 
-        cashFlow.TotalExpense.Should().Be(150m);
-        cashFlow.Months.Single(month => month.MonthKey == "2026-01").Expense.Should().Be(150m);
+        cashFlow.TotalExpense.Should().Be(175m);
+        cashFlow.Months.Single(month => month.MonthKey == "2026-01").Expense.Should().Be(175m);
         var cashFlowSql = string.Join("\n---\n", _executedSql);
-        cashFlowSql.Should().Contain("\"Status\" = 2");
+        AssertPaidStatusInBothExpenseBranches(cashFlowSql);
 
         _executedSql.Clear();
         var trueCashFlow = await _sut.GetTrueCashFlowAsync(_scope, new ReportRangeQuery
@@ -988,11 +1017,11 @@ public class ReportsServiceTests : IAsyncLifetime
             PropertyIds = [property.Id],
         }, CancellationToken.None);
 
-        trueCashFlow.TotalOperatingExpenses.Should().Be(150m);
+        trueCashFlow.TotalOperatingExpenses.Should().Be(175m);
         trueCashFlow.Properties.Should().ContainSingle()
-            .Which.OperatingExpenses.Should().Be(150m);
+            .Which.OperatingExpenses.Should().Be(175m);
         var trueCashFlowSql = string.Join("\n---\n", _executedSql);
-        trueCashFlowSql.Should().Contain("\"Status\" = 2");
+        AssertPaidStatusInBothExpenseBranches(trueCashFlowSql);
     }
 
     // ── Property P&L Summary (DB) ─────────────────────────────────────────────────────────────────
@@ -2368,6 +2397,48 @@ public class ReportsServiceTests : IAsyncLifetime
         _db.TenantLedgerEntries.Add(entry);
         _db.SaveChanges();
         return entry;
+    }
+
+    private Expense NewAllocatedStatusExpense(
+        string description,
+        ExpenseStatus status,
+        decimal amount,
+        DateTime incurredAt) => new()
+    {
+        PortfolioId = PortfolioId,
+        OperationalScope = ExpenseOperationalScope.Portfolio,
+        Category = ScheduleECategory.Repairs,
+        Description = description,
+        Status = status,
+        Amount = amount,
+        IncurredAt = incurredAt,
+        CreatedAt = incurredAt,
+        UpdatedAt = incurredAt,
+    };
+
+    private static ExpenseAllocation Allocation(Expense expense, int propertyId) => new()
+    {
+        PortfolioId = PortfolioId,
+        Expense = expense,
+        ExpenseId = expense.Id,
+        TargetKind = ExpenseAllocationTargetKind.Property,
+        PropertyId = propertyId,
+        Amount = expense.Amount,
+        CreatedAt = expense.CreatedAt,
+    };
+
+    private static void AssertPaidStatusInBothExpenseBranches(string sql)
+    {
+        var branches = sql.Split("UNION ALL", StringSplitOptions.None);
+        branches.Should().Contain(branch =>
+            branch.Contains("\"ExpenseAllocations\"", StringComparison.Ordinal) &&
+            branch.Contains("\"Status\" = 2", StringComparison.Ordinal),
+            "the allocated expense branch must filter to Paid in SQL");
+        branches.Should().Contain(branch =>
+            branch.Contains("\"Expenses\"", StringComparison.Ordinal) &&
+            branch.Contains("NOT EXISTS", StringComparison.Ordinal) &&
+            branch.Contains("\"Status\" = 2", StringComparison.Ordinal),
+            "the unallocated expense branch must filter to Paid in SQL");
     }
 
     private Expense SeedExpense(int? propertyId, decimal amount, DateTime paidAt,

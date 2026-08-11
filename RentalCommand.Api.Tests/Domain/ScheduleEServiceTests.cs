@@ -404,8 +404,8 @@ public class ScheduleEServiceTests : IAsyncLifetime
         };
         _db.Loans.Add(loan);
         _db.SaveChanges();
-        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-01", DueDate = D(Year, 1, 1), InterestAmount = 600m, PrincipalAmount = 100m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_900m, Status = LoanPaymentStatus.Scheduled, CreatedAt = DateTime.UtcNow });
-        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-02", DueDate = D(Year, 2, 1), InterestAmount = 590m, PrincipalAmount = 110m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_790m, Status = LoanPaymentStatus.Scheduled, CreatedAt = DateTime.UtcNow });
+        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-01", DueDate = D(Year, 1, 1), PaidDate = D(Year, 1, 5), InterestAmount = 600m, PrincipalAmount = 100m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_900m, Status = LoanPaymentStatus.Paid, CreatedAt = DateTime.UtcNow });
+        _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-02", DueDate = D(Year, 2, 1), PaidDate = D(Year, 2, 5), InterestAmount = 590m, PrincipalAmount = 110m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_790m, Status = LoanPaymentStatus.Paid, CreatedAt = DateTime.UtcNow });
         _db.SaveChanges();
 
         var report = await _sut.GetReportAsync(_scope, Year, ct: CancellationToken.None);
@@ -698,7 +698,8 @@ public class ScheduleEServiceTests : IAsyncLifetime
             EscrowAmount = 0m,
             TotalAmount = 500m,
             BalanceAfter = 99_900m,
-            Status = LoanPaymentStatus.Scheduled,
+            PaidDate = D(Year, 1, 5),
+            Status = LoanPaymentStatus.Paid,
             CreatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();

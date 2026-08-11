@@ -1005,7 +1005,6 @@ public partial class AccountingService : IAccountingService
 
         var paidExpenseQuery = FinancialReportProjections.BuildExpenseAllocationProjection(_db, portfolioId)
             .Where(expense =>
-                expense.Status == ExpenseStatus.Paid &&
                 expense.EffectiveAt >= yearStart &&
                 expense.EffectiveAt < yearEndExclusive &&
                 ((expense.PropertyId != null &&
@@ -1016,110 +1015,18 @@ public partial class AccountingService : IAccountingService
         var yearEndOn = yearStartOn.AddYears(1);
         var tenantIncomeForYear = TenantIncomeQuery(portfolioId, authorizedProperties)
             .Where(income => income.EffectiveOn >= yearStartOn && income.EffectiveOn < yearEndOn);
-
-        var propertyFinancialTotalsQuery = tenantIncomeForYear
-            .Select(income => new
-            {
-                income.PropertyId,
-                Income = income.Amount,
-                Expense = 0m,
-                ExpenseCategory = (ScheduleECategory?)null,
-            })
-            .Concat(paidExpenseQuery
-                .Where(expense => expense.PropertyId != null)
-                .Select(expense => new
-                {
-                    PropertyId = expense.PropertyId!.Value,
-                    Income = 0m,
-                    Expense = expense.Amount,
-                    ExpenseCategory = (ScheduleECategory?)expense.Category,
-                }))
-            .GroupBy(component => component.PropertyId)
-            .Select(group => new
-            {
-                PropertyId = group.Key,
-                Income = group.Sum(component => component.Income),
-                TotalExpenses = group.Sum(component => component.Expense),
-                Advertising = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Advertising ? component.Expense : 0m),
-                AutoTravel = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.AutoTravel ? component.Expense : 0m),
-                CleaningMaintenance = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.CleaningMaintenance ? component.Expense : 0m),
-                Commissions = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Commissions ? component.Expense : 0m),
-                Insurance = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Insurance ? component.Expense : 0m),
-                LegalProfessional = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.LegalProfessional ? component.Expense : 0m),
-                ManagementFees = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.ManagementFees ? component.Expense : 0m),
-                MortgageInterest = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.MortgageInterest ? component.Expense : 0m),
-                Repairs = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Repairs ? component.Expense : 0m),
-                Supplies = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Supplies ? component.Expense : 0m),
-                Taxes = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Taxes ? component.Expense : 0m),
-                Utilities = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Utilities ? component.Expense : 0m),
-                Depreciation = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Depreciation ? component.Expense : 0m),
-                Other = group.Sum(component =>
-                    component.ExpenseCategory == ScheduleECategory.Other ? component.Expense : 0m),
-            });
-
-        var properties = await (
-                from property in authorizedProperties
-                join totals in propertyFinancialTotalsQuery on property.Id equals totals.PropertyId
-                orderby property.Name
-                select new
-                {
-                    property.Id,
-                    property.Name,
-                    totals.Income,
-                    totals.TotalExpenses,
-                    totals.Advertising,
-                    totals.AutoTravel,
-                    totals.CleaningMaintenance,
-                    totals.Commissions,
-                    totals.Insurance,
-                    totals.LegalProfessional,
-                    totals.ManagementFees,
-                    totals.MortgageInterest,
-                    totals.Repairs,
-                    totals.Supplies,
-                    totals.Taxes,
-                    totals.Utilities,
-                    totals.Depreciation,
-                    totals.Other,
-                })
-            .ToListAsync(ct);
-
-        var propertyPnL = properties
+        // Schedule E is the authoritative authorized, deductible per-property fact set. Reuse its
+        // already SQL-aggregated rows so capitalized expenses, paid loan interest, and non-cash
+        // depreciation reconcile exactly with the packet's P&L.
+        var propertyPnL = scheduleE.Properties
             .Select(property => new YearEndPropertyPnL
             {
-                PropertyId = property.Id,
-                PropertyName = property.Name,
-                Income = property.Income,
-                ExpensesByCategory = BuildYearEndExpenseCategories(
-                    property.Advertising,
-                    property.AutoTravel,
-                    property.CleaningMaintenance,
-                    property.Commissions,
-                    property.Insurance,
-                    property.LegalProfessional,
-                    property.ManagementFees,
-                    property.MortgageInterest,
-                    property.Repairs,
-                    property.Supplies,
-                    property.Taxes,
-                    property.Utilities,
-                    property.Depreciation,
-                    property.Other),
+                PropertyId = property.PropertyId,
+                PropertyName = property.PropertyName,
+                Income = property.RentalIncome,
+                ExpensesByCategory = property.ExpensesByCategory,
                 TotalExpenses = property.TotalExpenses,
-                Net = property.Income - property.TotalExpenses,
+                Net = property.NetIncome,
             })
             .ToList();
 
