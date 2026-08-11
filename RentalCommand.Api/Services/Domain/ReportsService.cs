@@ -2966,19 +2966,28 @@ public class ReportsService : IReportsService
                 HAVING COUNT(*) FILTER (WHERE authorized."PropertyId" IS NOT NULL) > 0
                    AND COUNT(*) FILTER (WHERE authorized."PropertyId" IS NULL) = 0
             ),
+            bounded_distributions AS MATERIALIZED (
+                SELECT distribution."Id",
+                       distribution."OwnerEntityId",
+                       distribution."PropertyId",
+                       distribution."Amount"
+                FROM "OwnerDistributions" AS distribution
+                WHERE distribution."PortfolioId" = {scope.PortfolioId}
+                  AND distribution."DeletedAt" IS NULL
+                  AND distribution."Status" = {(int)OwnerDistributionStatus.Approved}
+                  AND (distribution."PortfolioId", distribution."Status", distribution."Date")
+                      >= ({scope.PortfolioId}, {(int)OwnerDistributionStatus.Approved}, {start})
+                  AND (distribution."PortfolioId", distribution."Status", distribution."Date")
+                      < ({scope.PortfolioId}, {(int)OwnerDistributionStatus.Approved}, {end})
+            ),
             authorized_distributions AS MATERIALIZED (
                 SELECT distribution."Id", distribution."OwnerEntityId", distribution."Amount"
-                FROM "OwnerDistributions" AS distribution
+                FROM bounded_distributions AS distribution
                 LEFT JOIN authorized_properties AS authorized
                     ON authorized."PropertyId" = distribution."PropertyId"
                 LEFT JOIN fully_authorized_owners AS owner_scope
                     ON owner_scope."OwnerEntityId" = distribution."OwnerEntityId"
-                WHERE distribution."PortfolioId" = {scope.PortfolioId}
-                  AND distribution."DeletedAt" IS NULL
-                  AND distribution."Status" = {(int)OwnerDistributionStatus.Approved}
-                  AND distribution."Date" >= {start}
-                  AND distribution."Date" < {end}
-                  AND ((distribution."PropertyId" IS NOT NULL
+                WHERE ((distribution."PropertyId" IS NOT NULL
                         AND authorized."PropertyId" IS NOT NULL)
                        OR (distribution."PropertyId" IS NULL
                            AND owner_scope."OwnerEntityId" IS NOT NULL))
@@ -3035,17 +3044,22 @@ public class ReportsService : IReportsService
                              AND COALESCE(expense."PaidAt", expense."IncurredAt") >= ownership."EffectiveFromUtc"
                              AND (ownership."EffectiveToUtc" IS NULL
                                   OR COALESCE(expense."PaidAt", expense."IncurredAt") < ownership."EffectiveToUtc")
+                             AND expense."DeletedAt" IS NULL
                        ), 0.0) AS "Expenses",
                        COALESCE(property."ManagementFeePercent", 0.0) AS "ManagementFeePercent"
                 FROM "PropertyOwnerships" AS ownership
                 INNER JOIN authorized_properties AS authorized
                     ON authorized."PropertyId" = ownership."PropertyId"
+                INNER JOIN "Portfolios" AS portfolio
+                    ON portfolio."Id" = ownership."PortfolioId"
+                   AND portfolio."DeletedAt" IS NULL
                 INNER JOIN "Properties" AS property
                     ON property."PortfolioId" = ownership."PortfolioId"
                    AND property."Id" = ownership."PropertyId"
                 INNER JOIN "OwnerEntities" AS owner_entity
                     ON owner_entity."PortfolioId" = ownership."PortfolioId"
                    AND owner_entity."Id" = ownership."OwnerEntityId"
+                   AND owner_entity."DeletedAt" IS NULL
                 WHERE ownership."PortfolioId" = {scope.PortfolioId}
                   AND ownership."EffectiveFromUtc" < {end}
                   AND (ownership."EffectiveToUtc" IS NULL

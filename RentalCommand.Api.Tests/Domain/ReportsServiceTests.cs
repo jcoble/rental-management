@@ -1623,7 +1623,29 @@ public class ReportsServiceTests : IAsyncLifetime
         SeedOwnerDistribution(owner.Id, 1_250m, D(2027, 1, 25));
         SeedOwnerDistribution(owner.Id, 100m, D(2027, 1, 25), status: OwnerDistributionStatus.Rejected);
         SeedOwnerDistribution(owner.Id, 900m, D(2026, 12, 25));
+        var historyOwners = Enumerable.Range(0, 100)
+            .Select(index => new OwnerEntity
+            {
+                PortfolioId = PortfolioId,
+                OwnerEntityType = OwnerEntityType.LLC,
+                Name = $"History Owner {index}",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            })
+            .ToArray();
+        _db.OwnerEntities.AddRange(historyOwners);
         _db.SaveChanges();
+        _db.OwnerDistributions.AddRange(historyOwners.SelectMany(historyOwner =>
+            Enumerable.Range(0, 120).Select(index =>
+                CreateOwnerDistribution(
+                    historyOwner.Id,
+                    0m,
+                    D(2018 + (index % 12), 1 + (index % 12), 1 + (index % 27)),
+                    status: (index / 12) % 2 == 0
+                        ? OwnerDistributionStatus.Approved
+                        : OwnerDistributionStatus.Rejected))));
+        _db.SaveChanges();
+        await _db.Database.ExecuteSqlRawAsync("ANALYZE \"OwnerDistributions\"");
         _executedSql.Clear();
         _recordedCommands.Clear();
 
@@ -1653,11 +1675,75 @@ public class ReportsServiceTests : IAsyncLifetime
         _output.WriteLine(explain);
         await File.WriteAllTextAsync("/tmp/bugfix-c1-owner-distribution-explain.txt", explain);
         explain.Should().Contain("OwnerDistributions");
-        explain.Should().Contain("PortfolioId");
-        explain.Should().Contain("Status");
-        explain.Should().Contain("Date");
+        var distributionAccess = explain
+            .Split('\n')
+            .SingleOrDefault(line =>
+                line.Contains("IX_OwnerDistributions_PortfolioId_Status_Date", StringComparison.Ordinal)
+                && (line.Contains("Index Scan", StringComparison.Ordinal)
+                    || line.Contains("Bitmap Index Scan", StringComparison.Ordinal)));
+        distributionAccess.Should().NotBeNull(
+            "the approved, year-bounded owner-distribution source must use the status/date index rather than an all-history portfolio access path");
+        explain
+            .Split('\n')
+            .Where(line => line.Contains("Index Cond:", StringComparison.Ordinal))
+            .Should().Contain(line =>
+                line.Contains("\"PortfolioId\"", StringComparison.Ordinal)
+                && line.Contains("\"Status\"", StringComparison.Ordinal)
+                && line.Contains("\"Date\"", StringComparison.Ordinal),
+                "the physical index condition must bind portfolio, approved status, and both report-date bounds");
         ownerStatements.Should().OnlyContain(statement =>
             statement.Contains("authorized_distributions AS MATERIALIZED", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_ExcludesSoftDeletedPaidExpensesFromOwnerRowsAndTotals()
+    {
+        var owner = SeedOwner("Expense Filter Holdings LLC");
+        var property = SeedProperty("Expense Filter Maple");
+        SeedOwnership(owner, property, D(2026, 1, 1));
+
+        SeedExpense(property.Id, 300m, D(2027, 1, 10));
+        var deletedExpense = SeedExpense(property.Id, 300m, D(2027, 1, 10));
+        deletedExpense.DeletedAt = D(2027, 1, 11);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.NetToOwner.Should().Be(-300m);
+        row.TotalDistributed.Should().Be(0m);
+        row.Undistributed.Should().Be(-300m);
+        report.TotalNetToOwners.Should().Be(-300m);
+        report.TotalDistributed.Should().Be(0m);
+        report.TotalUndistributed.Should().Be(-300m);
+
+        string.Join("\n", _executedSql)
+            .Should().Contain("expense.\"DeletedAt\" IS NULL",
+                "the raw expense aggregate must preserve Expense.DeletedAt == null");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_ExcludesSoftDeletedOwnersFromRowsAndTotals()
+    {
+        var owner = SeedOwner("Deleted Owner Holdings LLC");
+        var property = SeedProperty("Deleted Owner Maple");
+        SeedOwnership(owner, property, D(2026, 1, 1));
+        SeedExpense(property.Id, 150m, D(2027, 1, 10));
+        owner.DeletedAt = D(2027, 1, 11);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
+
+        report.Rows.Should().BeEmpty("a soft-deleted owner is excluded by the OwnerEntity query filter");
+        report.TotalNetToOwners.Should().Be(0m);
+        report.TotalDistributed.Should().Be(0m);
+        report.TotalUndistributed.Should().Be(0m);
+
+        string.Join("\n", _executedSql)
+            .Should().Contain("owner_entity.\"DeletedAt\" IS NULL",
+                "the raw owner join must preserve OwnerEntity.DeletedAt == null");
     }
 
     [Fact]
@@ -1927,8 +2013,21 @@ public class ReportsServiceTests : IAsyncLifetime
         OwnerDistributionStatus status = OwnerDistributionStatus.Approved,
         int? propertyId = null)
     {
+        var distribution = CreateOwnerDistribution(ownerId, amount, date, status, propertyId);
+        _db.OwnerDistributions.Add(distribution);
+        _db.SaveChanges();
+        return distribution;
+    }
+
+    private static OwnerDistribution CreateOwnerDistribution(
+        int ownerId,
+        decimal amount,
+        DateTime date,
+        OwnerDistributionStatus status = OwnerDistributionStatus.Approved,
+        int? propertyId = null)
+    {
         var now = DateTime.UtcNow;
-        var distribution = new OwnerDistribution
+        return new OwnerDistribution
         {
             PortfolioId = PortfolioId,
             OwnerEntityId = ownerId,
@@ -1944,9 +2043,6 @@ public class ReportsServiceTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _db.OwnerDistributions.Add(distribution);
-        _db.SaveChanges();
-        return distribution;
     }
 
     private Unit SeedUnit(string number, int? propertyId = null)
@@ -2361,18 +2457,21 @@ public class ReportsServiceTests : IAsyncLifetime
         statements.Should().OnlyContain(statement =>
             statement.Contains("fully_authorized_owners AS MATERIALIZED", StringComparison.Ordinal),
             "propertyless payouts must remain tied to the shared fully-authorized owner relation");
-        statements.Select(ExtractAuthorizedDistributionSource).Should().OnlyContain(source =>
+        statements.Should().OnlyContain(statement =>
+            statement.Contains("bounded_distributions AS MATERIALIZED", StringComparison.Ordinal),
+            "the distribution source must be materialized only after portfolio/status/date bounds");
+        statements.Select(ExtractBoundedDistributionSource).Should().OnlyContain(source =>
             source.Contains("\"Status\" =", StringComparison.Ordinal)
-            && source.Contains("\"Date\" >=", StringComparison.Ordinal)
-            && source.Contains("\"Date\" <", StringComparison.Ordinal),
-            "the selective distribution source must carry approved and year predicates before materialization");
+            && source.Contains("(distribution.\"PortfolioId\", distribution.\"Status\", distribution.\"Date\")", StringComparison.Ordinal)
+            && source.Contains("distribution.\"Date\"", StringComparison.Ordinal),
+            "the selective distribution source must carry approved and composite portfolio/status/year predicates before materialization");
         return statements;
     }
 
-    private static string ExtractAuthorizedDistributionSource(string sql)
+    private static string ExtractBoundedDistributionSource(string sql)
     {
-        var start = sql.IndexOf("authorized_distributions AS MATERIALIZED", StringComparison.Ordinal);
-        var end = sql.IndexOf("distribution_totals AS", start, StringComparison.Ordinal);
+        var start = sql.IndexOf("bounded_distributions AS MATERIALIZED", StringComparison.Ordinal);
+        var end = sql.IndexOf("authorized_distributions AS MATERIALIZED", start, StringComparison.Ordinal);
         start.Should().BeGreaterThanOrEqualTo(0);
         end.Should().BeGreaterThan(start);
         return sql[start..end];
