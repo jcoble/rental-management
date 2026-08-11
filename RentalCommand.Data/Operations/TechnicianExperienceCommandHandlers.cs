@@ -22,6 +22,13 @@ public sealed class RecordTechnicianWorkEntryHandler
         Validate(command);
         await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var now = await context.ReadDatabaseClockUtcAsync(ct);
+        if (!await _db.Set<WorkOrder>().AsNoTracking().AnyAsync(workOrder =>
+                workOrder.Id == command.WorkOrderId &&
+                workOrder.PortfolioId == command.PortfolioId &&
+                workOrder.Status != WorkOrderStatus.Cancelled &&
+                workOrder.Status != WorkOrderStatus.Archived, ct))
+            throw new DomainValidationException(
+                "Cancelled or archived work orders cannot receive technician entries.", 409);
         var responsibility = await AssignedTechnicianCommandAuthorization.RequireResponsibilityAsync(
             _db, command.PortfolioId, command.ActorUserId, command.ActorSessionId,
             command.ActorAccessContextId, command.ActorAccessRevision, command.WorkOrderId,
@@ -132,8 +139,11 @@ public sealed class SendTechnicianAssignmentMessageHandler
             CapabilityKeys.AssignedWorkConverse, now, ct);
         var work = await _db.Set<WorkOrder>()
             .Where(item => item.Id == command.WorkOrderId && item.PortfolioId == command.PortfolioId)
-            .Select(item => new { item.TenantId, item.PropertyId, item.Title })
+            .Select(item => new { item.TenantId, item.PropertyId, item.Title, item.Status })
             .SingleAsync(ct);
+        if (work.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived)
+            throw new DomainValidationException(
+                "Cancelled or archived work orders cannot receive technician messages.", 409);
         if (work.TenantId is null)
             throw new DomainValidationException("This assignment has no permitted tenant contact.");
 

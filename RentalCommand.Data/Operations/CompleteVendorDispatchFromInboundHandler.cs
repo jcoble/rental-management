@@ -55,6 +55,8 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 && candidate.Vendor.NormalizedPhone == command.NormalizedFromPhone
                 && candidate.WorkOrder != null
                 && candidate.WorkOrder.PortfolioId == candidate.PortfolioId
+                && candidate.WorkOrder.Status != WorkOrderStatus.Cancelled
+                && candidate.WorkOrder.Status != WorkOrderStatus.Archived
                 && candidate.WorkOrder.DeletedAt == null)
             .OrderByDescending(candidate => candidate.DispatchedAtUtc)
             .ThenByDescending(candidate => candidate.Id)
@@ -86,6 +88,8 @@ public sealed class CompleteVendorDispatchFromInboundHandler
                 && candidate.Vendor.PortfolioId == candidate.PortfolioId
                 && candidate.WorkOrder != null
                 && candidate.WorkOrder.PortfolioId == candidate.PortfolioId
+                && candidate.WorkOrder.Status != WorkOrderStatus.Cancelled
+                && candidate.WorkOrder.Status != WorkOrderStatus.Archived
                 && candidate.WorkOrder.DeletedAt == null,
                 ct);
         if (dispatch?.Vendor is null || dispatch.WorkOrder is null)

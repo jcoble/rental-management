@@ -28,9 +28,9 @@ public sealed class CloseWorkOrderResponsibilityHandler
         CloseWorkOrderResponsibilityCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         await context.AcquireLockAsync(
             "WorkspaceAccessContext", command.ActorAccessContextId, ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         await WorkOrderResponsibilityCommandAuthorization.AuthorizeManagerAsync(command.PortfolioId,
@@ -121,13 +121,16 @@ public sealed class UpdateAssignedWorkOrderHandler
         UpdateAssignedWorkOrderCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         await context.AcquireLockAsync(
             "WorkspaceAccessContext", command.ActorAccessContextId, ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         var workOrder = await AuthorizeAndLoadAsync(
             command, _db, securityNowUtc, businessNowUtc, tracking: true, ct);
+        if (workOrder.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived)
+            throw new DomainValidationException(
+                "Cancelled or archived work orders cannot be updated by a technician.", 409);
         if (workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc)
             return new(UpdateAssignedWorkOrderOutcome.Stale, workOrder.Id, workOrder.Status,
                 workOrder.ScheduledFor, workOrder.ScheduledWindowEnd, workOrder.CompletedAt, workOrder.UpdatedAt);

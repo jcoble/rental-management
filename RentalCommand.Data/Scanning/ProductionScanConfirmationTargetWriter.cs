@@ -5,6 +5,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Operations;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data.Accounting;
@@ -68,6 +69,9 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     {
         command.Target.Validate();
         var capabilities = RequiredCapabilities(command.Target.Kind);
+        if (command.Target.Kind == ScanConfirmationTargetKind.Expense &&
+            command.Target.Expense?.WorkOrderId is int workOrderId)
+            await WorkOrderProgressionLock.AcquireAsync(context, ct, workOrderId);
         var securityNowUtc = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await IsDraftAuthorizedAsync(command, capabilities, _db, securityNowUtc, ct))
             throw Unauthorized();
@@ -301,6 +305,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
     {
         var receipt = Required(target.Receipt);
         var reviewed = RequireReviewedExpenseFacts(receipt, target);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, target.WorkOrderId);
 
         var location = await ResolveExpenseLocationAsync(command.PortfolioId, target, _db, ct);
         var vendorId = await ResolveOrCreateVendorAsync(
@@ -1348,6 +1353,8 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             var workOrderLocation = await db.Set<WorkOrder>()
                 .Where(order => order.Id == workOrderId
                     && order.PortfolioId == portfolioId
+                    && order.Status != WorkOrderStatus.Cancelled
+                    && order.Status != WorkOrderStatus.Archived
                     && (target.PropertyId == null || order.PropertyId == target.PropertyId)
                     && (target.UnitId == null || order.UnitId == target.UnitId))
                 .Select(order => new ExpenseLocationContext(

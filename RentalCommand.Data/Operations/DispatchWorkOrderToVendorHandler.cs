@@ -43,7 +43,9 @@ public sealed class DispatchWorkOrderToVendorHandler
         var vendorExists = await _db.Set<Vendor>()
             .AnyAsync(candidate => candidate.Id == command.VendorId
                 && candidate.PortfolioId == command.PortfolioId, ct);
-        if (workOrder is null || !vendorExists)
+        if (workOrder is null ||
+            workOrder.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived ||
+            !vendorExists)
         {
             return Empty(DispatchWorkOrderToVendorOutcome.NotFound, command);
         }

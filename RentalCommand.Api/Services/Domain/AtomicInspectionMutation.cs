@@ -528,6 +528,7 @@ public sealed class AtomicInspectionMutationHandler
                     && item.SpawnedWorkOrderId != null)
                 .Select(item => item.SpawnedWorkOrderId!.Value)
                 .Distinct()
+                .OrderBy(workOrderId => workOrderId)
                 .ToArrayAsync(ct);
             foreach (var workOrderId in derivedWorkOrderIds)
                 await attempt.AcquireLockAsync("WorkOrder", workOrderId, ct);
@@ -578,6 +579,7 @@ public sealed class AtomicInspectionMutationHandler
                             && derivedWorkOrderIds.Contains(statusEvent.WorkOrderId)
                             && (statusEvent.FromStatus != null || statusEvent.Kind != "Status"))
                         .Select(statusEvent => statusEvent.WorkOrderId))
+                    .TagWith("Inspection reopen progression predicate")
                     .Distinct()
                     .ToArrayAsync(ct);
             var progressedWorkOrderIdSet = progressedWorkOrderIds.ToHashSet();

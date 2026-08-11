@@ -30,13 +30,16 @@ public sealed class AssignWorkOrderResponsibilityHandler
         CancellationToken ct)
     {
         Validate(command);
-        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         await context.AcquireLockAsync(
             "WorkspaceAccessContext", command.ActorAccessContextId, ct);
+        await context.AcquireLockAsync("WorkOrder", command.WorkOrderId, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNowUtc = command.BusinessNowUtc;
         var workOrder = await AuthorizeActorAndLoadWorkOrderAsync(
             command, _db, businessNowUtc, securityNowUtc, ct);
+        if (workOrder.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived)
+            throw new DomainValidationException(
+                "Cancelled or archived work orders cannot receive a new responsibility.", 409);
 
         var target = await _db.Set<MembershipRoleAssignment>()
             .AsNoTracking()

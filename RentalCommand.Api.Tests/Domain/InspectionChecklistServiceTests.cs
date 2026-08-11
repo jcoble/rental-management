@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
@@ -35,6 +36,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
+    private readonly ReopenProgressionGate _reopenProgressionGate = new();
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
     private InspectionService _service = null!;
@@ -53,7 +55,9 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
         _db = _ctx.Db;
-        _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(_ctx.ConnectionString);
+        _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(
+            _ctx.ConnectionString,
+            [_reopenProgressionGate]);
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
 
         _service = new InspectionService(
@@ -552,6 +556,109 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             .Where(inspection => inspection.Id == created.Id)
             .Select(inspection => inspection.Status)
             .SingleAsync()).Should().Be(InspectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Reopen_SerializesAppointmentAndWorkOrderProgressionWriters()
+    {
+        var scenario = await SeedProgressionScenarioAsync();
+        _reopenProgressionGate.Arm();
+
+        var reopenTask = Task.Run(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            scenario.InspectionId,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+        await _reopenProgressionGate.ProgressionReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+        using var appointmentScope = _services.CreateScope();
+        using var editScope = _services.CreateScope();
+        using var commentScope = _services.CreateScope();
+        var appointmentDb = appointmentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var editDb = editScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var commentDb = commentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var appointmentService = new AppointmentService(
+            appointmentDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            appointmentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var editService = new WorkOrderService(
+            editDb,
+            new NoopInspectionDataUpdate(),
+            new NoopMessagePublisher(),
+            new InMemoryFileStorage(),
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System,
+            editScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var commentService = new WorkOrderService(
+            commentDb,
+            new NoopInspectionDataUpdate(),
+            new NoopMessagePublisher(),
+            new InMemoryFileStorage(),
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System,
+            commentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+
+        var appointmentTask = Task.Run(() => appointmentService.CreateAuthorizedAsync(
+            _scope,
+            new CreateAppointmentRequest
+            {
+                PropertyId = scenario.PropertyId,
+                UnitId = scenario.UnitId,
+                LeaseManagementId = scenario.LeaseManagementId,
+                TenantId = scenario.TenantId,
+                WorkOrderId = scenario.WorkOrderId,
+                Title = "Reopen race appointment",
+                Type = AppointmentType.MaintenanceVisit,
+                Status = AppointmentStatus.Scheduled,
+                ScheduledStart = DateTime.UtcNow.AddHours(1),
+                ScheduledEnd = DateTime.UtcNow.AddHours(2),
+            },
+            NextOperationKey()));
+        var editTask = Task.Run(() => editService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.WorkOrderId,
+            new UpdateWorkOrderRequest { Title = "Reopen race edit" },
+            NextOperationKey()));
+        var commentTask = Task.Run(() => commentService.CommentAuthorizedAsync(
+            _scope,
+            scenario.WorkOrderId,
+            new WorkOrderCommentRequest { Body = "Reopen race comment" },
+            NextOperationKey()));
+
+        var writerTasks = new Task[] { appointmentTask, editTask, commentTask };
+        var delay = Task.Delay(TimeSpan.FromMilliseconds(500));
+        var firstCompleted = await Task.WhenAny(writerTasks.Append(delay));
+        var writersBlockedBehindReopen = firstCompleted == delay;
+
+        _reopenProgressionGate.Release();
+        var reopened = await reopenTask;
+        await Task.WhenAll(writerTasks);
+
+        writersBlockedBehindReopen.Should().BeTrue(
+            "every progression writer must wait for reopen's transaction-scoped WorkOrder lock");
+        reopened.Should().NotBeNull();
+        reopened!.Status.Should().Be(InspectionStatus.Scheduled);
+        appointmentTask.Result.Should().BeNull();
+        editTask.Result.Should().BeNull();
+        commentTask.Result.Should().BeNull();
+
+        _db.ChangeTracker.Clear();
+        var workOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == scenario.WorkOrderId);
+        workOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+        workOrder.Title.Should().Be("Inspection-derived work order");
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(row => row.Id == scenario.InspectionItemId)
+            .Select(row => row.SpawnedWorkOrderId)
+            .SingleAsync()).Should().BeNull();
+        (await _db.Appointments.AsNoTracking()
+            .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId)).Should().Be(0);
+        (await _db.Notifications.AsNoTracking()
+            .CountAsync(row => row.RelatedEntityType == nameof(Appointment))).Should().Be(0);
+        (await _db.WorkOrderStatusEvents.AsNoTracking()
+            .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId &&
+                (row.Kind == "Edit" || row.Kind == "Comment"))).Should().Be(0);
     }
 
     [Fact]
@@ -1357,6 +1464,162 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         return vendor;
     }
 
+    private async Task<ProgressionScenario> SeedProgressionScenarioAsync()
+    {
+        var seededAt = DateTime.UtcNow.AddMinutes(-10);
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Reopen race property {Guid.NewGuid():N}",
+            AddressLine1 = "100 Simulation Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = $"R{Guid.NewGuid():N}"[..8],
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Jordan",
+            LastName = "Miles",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenantEmail = $"reopen-race-{Guid.NewGuid():N}@example.test";
+        var tenantUser = new ApplicationUser
+        {
+            UserName = tenantEmail,
+            NormalizedUserName = tenantEmail.ToUpperInvariant(),
+            Email = tenantEmail,
+            NormalizedEmail = tenantEmail.ToUpperInvariant(),
+            DisplayName = "Reopen Race Tenant",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = seededAt,
+        };
+        var leaseManagement = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            PublicId = Guid.NewGuid(),
+            RelationshipNumber = $"LM-REOPEN-{Guid.NewGuid():N}",
+            CreatedByUserId = _scope.UserId,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = leaseManagement,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(seededAt.AddDays(-1)),
+            ChangeReason = "Reopen race fixture",
+            CreatedByUserId = _scope.UserId,
+            CreatedAtUtc = seededAt,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = tenantUser,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        };
+        var tenantAccess = new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = accessContext,
+            ApplicationUser = tenantUser,
+            LeaseManagementParty = party,
+            GrantedAtUtc = seededAt,
+            GrantedByUserId = _scope.UserId,
+            Reason = "Reopen race fixture",
+        };
+        _db.Add(tenantAccess);
+        await _db.SaveChangesAsync();
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseManagementId = leaseManagement.Id,
+            Title = "Inspection-derived work order",
+            Description = "Reopen race fixture",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = PortfolioId,
+            FromStatus = null,
+            ToStatus = WorkOrderStatus.New,
+            Kind = "Status",
+            Visibility = "Public",
+            ChangedByLabel = "Inspection",
+            CreatedAtUtc = seededAt,
+        });
+        _db.Add(workOrder);
+        await _db.SaveChangesAsync();
+
+        var inspection = new Inspection
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            LeaseManagementId = leaseManagement.Id,
+            Type = InspectionType.MoveIn,
+            Status = InspectionStatus.Completed,
+            ScheduledFor = seededAt,
+            CompletedAt = seededAt,
+            Outcome = "Completed",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var item = new InspectionItem
+        {
+            PortfolioId = PortfolioId,
+            Inspection = inspection,
+            Area = "Kitchen",
+            Label = "Sink",
+            Result = InspectionItemResult.Fail,
+            SortOrder = 1,
+            SpawnedWorkOrderId = workOrder.Id,
+        };
+        inspection.Items.Add(item);
+        _db.Add(inspection);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        return new(
+            property.Id,
+            unit.Id,
+            leaseManagement.Id,
+            tenant.Id,
+            workOrder.Id,
+            inspection.Id,
+            item.Id,
+            tenantUser.Id,
+            accessContext.Id,
+            accessContext.AccessRevision);
+    }
+
     private void SeedInspection(Property property, DateTime scheduledFor, string outcome)
     {
         _db.Inspections.Add(new Inspection
@@ -1380,6 +1643,55 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class NoopMessagePublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey,
+            TPayload payload, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed record ProgressionScenario(
+        int PropertyId,
+        int UnitId,
+        int LeaseManagementId,
+        int TenantId,
+        int WorkOrderId,
+        int InspectionId,
+        int InspectionItemId,
+        int TenantUserId,
+        int TenantAccessContextId,
+        long TenantAccessRevision);
+
+    private sealed class ReopenProgressionGate : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _progressionReadReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        public Task ProgressionReadReached => _progressionReadReached.Task;
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public void Release() => _release.TrySetResult();
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _armed) == 1 &&
+                command.CommandText.Contains("Inspection reopen progression predicate", StringComparison.Ordinal))
+            {
+                _progressionReadReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider

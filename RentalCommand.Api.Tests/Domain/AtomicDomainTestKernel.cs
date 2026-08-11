@@ -237,9 +237,11 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForInspectionsPostgreSql(string connectionString)
+    internal static ServiceProvider CreateForInspectionsPostgreSql(
+        string connectionString,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = CorePostgreSql(connectionString);
+        var services = CorePostgreSql(connectionString, interceptors: interceptors);
         services.AddPendingFileUploadStore();
         services.AddAtomicCommandHandler<
             AtomicInspectionMutationCommand,
@@ -253,6 +255,19 @@ internal static class AtomicDomainTestKernel
             CompleteVendorDispatchFromInboundCommand,
             CompleteVendorDispatchFromInboundResult,
             CompleteVendorDispatchFromInboundHandler>();
+        services.AddAtomicCommandHandler<
+            CreateAppointmentCommand,
+            OperationMutationResult,
+            CreateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateAppointmentCommand,
+            OperationMutationResult,
+            UpdateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            DeleteAppointmentCommand,
+            OperationMutationResult,
+            DeleteAppointmentHandler>();
+        AddWorkOrderHandlers(services);
         return services.BuildServiceProvider();
     }
 
