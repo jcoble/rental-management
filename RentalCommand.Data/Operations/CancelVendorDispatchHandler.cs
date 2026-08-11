@@ -48,7 +48,8 @@ public sealed class CancelVendorDispatchHandler
         }
 
         var workOrder = await workOrders.SingleOrDefaultAsync(ct);
-        if (workOrder is null)
+        if (workOrder is null ||
+            workOrder.Status is WorkOrderStatus.Cancelled or WorkOrderStatus.Archived)
         {
             return Empty(CancelVendorDispatchOutcome.NotFound, command);
         }

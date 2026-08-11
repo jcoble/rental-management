@@ -11,6 +11,7 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Payments;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Screening;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -18,6 +19,7 @@ using RentalCommand.Data.Auth;
 using RentalCommand.Data.Operations;
 using RentalCommand.Data.Payments;
 using RentalCommand.Data.Scanning;
+using RentalCommand.Data.Screening;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -235,13 +237,52 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForInspectionsPostgreSql(string connectionString)
+    internal static ServiceProvider CreateForInspectionsPostgreSql(
+        string connectionString,
+        IEnumerable<IInterceptor>? interceptors = null)
     {
-        var services = CorePostgreSql(connectionString);
+        var services = CorePostgreSql(connectionString, interceptors: interceptors);
+        services.AddPendingFileUploadStore();
         services.AddAtomicCommandHandler<
             AtomicInspectionMutationCommand,
             AtomicInspectionMutationResult,
             AtomicInspectionMutationHandler>();
+        services.AddAtomicCommandHandler<
+            DispatchWorkOrderToVendorCommand,
+            DispatchWorkOrderToVendorResult,
+            DispatchWorkOrderToVendorHandler>();
+        services.AddAtomicCommandHandler<
+            CompleteVendorDispatchFromInboundCommand,
+            CompleteVendorDispatchFromInboundResult,
+            CompleteVendorDispatchFromInboundHandler>();
+        services.AddAtomicCommandHandler<
+            CreateAppointmentCommand,
+            OperationMutationResult,
+            CreateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            UpdateAppointmentCommand,
+            OperationMutationResult,
+            UpdateAppointmentHandler>();
+        services.AddAtomicCommandHandler<
+            DeleteAppointmentCommand,
+            OperationMutationResult,
+            DeleteAppointmentHandler>();
+        AddWorkOrderHandlers(services);
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForScreeningPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddPendingFileUploadStore();
+        services.AddAtomicCommandHandler<
+            PrepareAdverseActionNoticeCommand,
+            PrepareAdverseActionNoticeResult,
+            PrepareAdverseActionNoticeHandler>();
+        services.AddAtomicCommandHandler<
+            CreateAdverseActionNoticeCommand,
+            CreateAdverseActionNoticeResult,
+            CreateAdverseActionNoticeHandler>();
         return services.BuildServiceProvider();
     }
 

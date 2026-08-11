@@ -131,6 +131,7 @@ public class InspectionController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(InspectionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<InspectionResponse>> Update(
         int id,
         [FromBody] UpdateInspectionRequest request,

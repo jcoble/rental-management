@@ -3,12 +3,14 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Documents;
 using RentalCommand.Data.Inspections;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -42,8 +44,12 @@ public sealed record AtomicInspectionMutationResult(
     string? Error = null);
 
 public sealed record AttachInspectionReportRequest(
-    string FileName,
+    Guid PendingUploadId,
+    string Purpose,
+    string OperationKeyHash,
+    string RequestFingerprint,
     string StoragePath,
+    string FileName,
     string ContentType,
     long FileSize);
 
@@ -56,6 +62,8 @@ public sealed class AtomicInspectionMutationHandler
 
     private const int MaxTemplateItems = 100;
     private const int MaxInspectionItems = 100;
+    private static readonly VendorDispatchStatus[] OpenVendorDispatchStatuses =
+        [VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged];
 
     public async Task<AtomicInspectionMutationResult> HandleAsync(
         AtomicInspectionMutationCommand command,
@@ -460,6 +468,7 @@ public sealed class AtomicInspectionMutationHandler
             throw new ArgumentOutOfRangeException(nameof(command.Operation));
 
         var requestUpdate = Read<UpdateInspectionRequest>(command);
+        var wasCompleted = inspection.Status == InspectionStatus.Completed;
         if (requestUpdate.Status is InspectionStatus.Completed && inspection.Status != InspectionStatus.Completed)
             throw new DomainValidationException(
                 "Use the Complete action to finish an inspection so its checklist is verified, failed items become work orders, and the report is generated.");
@@ -498,6 +507,170 @@ public sealed class AtomicInspectionMutationHandler
         if (requestUpdate.Outcome is not null) inspection.Outcome = requestUpdate.Outcome;
         if (requestUpdate.Notes is not null) inspection.Notes = requestUpdate.Notes;
         if (requestUpdate.Inspector is not null) inspection.Inspector = requestUpdate.Inspector;
+
+        var reopening = wasCompleted
+            && requestUpdate.Status.HasValue
+            && requestUpdate.Status.Value != InspectionStatus.Completed;
+        if (reopening)
+        {
+            var previousReportId = inspection.ReportStoredFileId;
+            inspection.CompletedAt = null;
+            inspection.ReportStoredFileId = null;
+
+            var derivedItems = await db.Set<InspectionItem>()
+                .Where(item => item.PortfolioId == command.PortfolioId
+                    && item.InspectionId == inspection.Id
+                    && item.SpawnedWorkOrderId != null)
+                .ToListAsync(ct);
+            var derivedWorkOrderIds = await db.Set<InspectionItem>()
+                .Where(item => item.PortfolioId == command.PortfolioId
+                    && item.InspectionId == inspection.Id
+                    && item.SpawnedWorkOrderId != null)
+                .Select(item => item.SpawnedWorkOrderId!.Value)
+                .Distinct()
+                .OrderBy(workOrderId => workOrderId)
+                .ToArrayAsync(ct);
+            foreach (var workOrderId in derivedWorkOrderIds)
+                await attempt.AcquireLockAsync("WorkOrder", workOrderId, ct);
+
+            // These rows are all operational evidence that cannot be detached safely by reopening.
+            // Keep the initial New status row out of the timeline branch; every later activity row
+            // is progression even if the work-order status was left unchanged.
+            var progressedWorkOrderIds = derivedWorkOrderIds.Length == 0
+                ? []
+                : await db.Set<VendorDispatch>()
+                    .Where(dispatch => dispatch.PortfolioId == command.PortfolioId
+                        && derivedWorkOrderIds.Contains(dispatch.WorkOrderId)
+                        && OpenVendorDispatchStatuses.Contains(dispatch.Status))
+                    .Select(dispatch => dispatch.WorkOrderId)
+                    .Concat(db.Set<WorkOrderResponsibility>()
+                        .Where(responsibility => responsibility.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(responsibility.WorkOrderId)
+                            && responsibility.EffectiveToUtc == null)
+                        .Select(responsibility => responsibility.WorkOrderId))
+                    .Concat(db.Set<TechnicianWorkEntry>()
+                        .Where(entry => entry.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(entry.WorkOrderId))
+                        .Select(entry => entry.WorkOrderId))
+                    .Concat(db.Set<Appointment>()
+                        .Where(appointment => appointment.PortfolioId == command.PortfolioId
+                            && appointment.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(appointment.WorkOrderId.Value)
+                            && appointment.Status != AppointmentStatus.Cancelled)
+                        .Select(appointment => appointment.WorkOrderId!.Value))
+                    .Concat(db.Set<Conversation>()
+                        .Where(conversation => conversation.PortfolioId == command.PortfolioId
+                            && conversation.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(conversation.WorkOrderId.Value))
+                        .Select(conversation => conversation.WorkOrderId!.Value))
+                    .Concat(db.Set<Expense>()
+                        .Where(expense => expense.PortfolioId == command.PortfolioId
+                            && expense.WorkOrderId != null
+                            && expense.DeletedAt == null
+                            && derivedWorkOrderIds.Contains(expense.WorkOrderId.Value))
+                        .Select(expense => expense.WorkOrderId!.Value))
+                    .Concat(db.Set<VendorRating>()
+                        .Where(rating => rating.PortfolioId == command.PortfolioId
+                            && rating.WorkOrderId != null
+                            && derivedWorkOrderIds.Contains(rating.WorkOrderId.Value))
+                        .Select(rating => rating.WorkOrderId!.Value))
+                    .Concat(db.Set<WorkOrderStatusEvent>()
+                        .Where(statusEvent => statusEvent.PortfolioId == command.PortfolioId
+                            && derivedWorkOrderIds.Contains(statusEvent.WorkOrderId)
+                            && (statusEvent.FromStatus != null || statusEvent.Kind != "Status"))
+                        .Select(statusEvent => statusEvent.WorkOrderId))
+                    .TagWith("Inspection reopen progression predicate")
+                    .Distinct()
+                    .ToArrayAsync(ct);
+            var progressedWorkOrderIdSet = progressedWorkOrderIds.ToHashSet();
+            var derivedWorkOrders = derivedWorkOrderIds.Length == 0
+                ? []
+                : await db.Set<WorkOrder>()
+                    .IgnoreQueryFilters()
+                    .Where(workOrder => workOrder.PortfolioId == command.PortfolioId
+                        && derivedWorkOrderIds.Contains(workOrder.Id))
+                    .ToListAsync(ct);
+            var workOrdersById = derivedWorkOrders.ToDictionary(workOrder => workOrder.Id);
+            foreach (var item in derivedItems)
+            {
+                if (!workOrdersById.TryGetValue(item.SpawnedWorkOrderId!.Value, out var workOrder))
+                {
+                    throw new DomainValidationException(
+                        "This inspection cannot be reopened because a linked work order is unavailable; retry with a new request key.",
+                        409);
+                }
+
+                if (progressedWorkOrderIdSet.Contains(workOrder.Id)
+                    || workOrder.ScheduledFor is not null
+                    || workOrder.ScheduledWindowEnd is not null
+                    || workOrder.Status is not (WorkOrderStatus.New
+                        or WorkOrderStatus.Cancelled
+                        or WorkOrderStatus.Archived))
+                {
+                    throw new DomainValidationException(
+                        "This inspection cannot be reopened because a linked work order has already been dispatched or progressed; complete or cancel that work order before reopening the inspection.",
+                        409);
+                }
+
+                if (workOrder.Status == WorkOrderStatus.New)
+                {
+                    workOrder.Status = WorkOrderStatus.Cancelled;
+                    workOrder.UpdatedAt = now;
+                    db.Add(new WorkOrderStatusEvent
+                    {
+                        PortfolioId = command.PortfolioId,
+                        WorkOrderId = workOrder.Id,
+                        FromStatus = WorkOrderStatus.New,
+                        ToStatus = WorkOrderStatus.Cancelled,
+                        Kind = "Status",
+                        Visibility = "Public",
+                        Note = "Inspection reopened; derived work order cancelled.",
+                        ChangedByUserId = command.ActorUserId,
+                        ChangedByLabel = "Inspection",
+                        CreatedAtUtc = now,
+                    });
+                    attempt.BindSemanticAudit(workOrder, Audit(command, nameof(WorkOrder), workOrder.Id,
+                        AuditLogOperation.Updated,
+                        "Inspection reopened; derived work order cancelled"));
+                    StageDataUpdate(attempt, command, nameof(WorkOrder), workOrder.Id, now,
+                        suffix: $"work-order-{workOrder.Id}");
+                }
+            }
+            foreach (var item in derivedItems)
+            {
+                item.SpawnedWorkOrderId = null;
+                attempt.BindSemanticAudit(item, Audit(command, nameof(InspectionItem), item.Id,
+                    AuditLogOperation.Updated, "Inspection reopened; derived work-order link cleared"));
+            }
+
+            if (previousReportId.HasValue)
+            {
+                var previousReport = await db.Set<StoredFile>()
+                    .SingleOrDefaultAsync(file => file.Id == previousReportId.Value
+                        && file.PortfolioId == command.PortfolioId
+                        && file.EntityType == nameof(Inspection), ct);
+                if (previousReport is not null && previousReport.DeletedAt is null)
+                {
+                    previousReport.DeletedAt = now;
+                    attempt.BindSemanticAudit(previousReport, Audit(command, nameof(StoredFile),
+                        previousReport.Id, AuditLogOperation.Deleted,
+                        "Inspection reopened; prior report retired"));
+                    attempt.StageOutbox(new OutboxMessage
+                    {
+                        PortfolioId = command.PortfolioId,
+                        MessageType = "blob-delete",
+                        Payload = JsonSerializer.Serialize(new
+                        {
+                            storedFileId = previousReport.Id,
+                            storagePath = previousReport.FilePath,
+                        }),
+                        IdempotencyKey = $"inspection-report-retire:{inspection.Id}:{previousReport.Id}",
+                        CreatedAtUtc = now,
+                        NextAttemptAtUtc = now,
+                    });
+                }
+            }
+        }
         inspection.UpdatedAt = now;
         attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
             AuditLogOperation.Updated, "Inspection updated"));
@@ -604,13 +777,36 @@ public sealed class AtomicInspectionMutationHandler
         if (inspection.Status != InspectionStatus.Completed)
             return Rejected(command.EntityId, "Complete the inspection before attaching its report.");
         if (inspection.ReportStoredFileId.HasValue)
-            return Applied(inspection.ReportStoredFileId.Value,
-                JsonSerializer.Serialize(inspection.ReportStoredFileId.Value));
+            return Rejected(command.EntityId,
+                "This inspection already has a finalized report. Start a new inspection revision for another report.");
 
         var request = Read<AttachInspectionReportRequest>(command);
-        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.StoragePath)
+        if (request.PendingUploadId == Guid.Empty
+            || string.IsNullOrWhiteSpace(request.Purpose)
+            || string.IsNullOrWhiteSpace(request.OperationKeyHash)
+            || string.IsNullOrWhiteSpace(request.RequestFingerprint)
+            || string.IsNullOrWhiteSpace(request.FileName)
+            || string.IsNullOrWhiteSpace(request.StoragePath)
             || string.IsNullOrWhiteSpace(request.ContentType) || request.FileSize <= 0)
             throw new ArgumentException("Inspection report file metadata is incomplete.");
+        var pending = (await AtomicPendingFileUploadPersistence.LockPreparedSetAsync(
+            db,
+            attempt,
+            command.PortfolioId,
+            command.ActorUserId,
+            [new AtomicPendingFileUploadExpectation(
+                request.PendingUploadId,
+                request.Purpose,
+                request.OperationKeyHash,
+                request.RequestFingerprint,
+                request.StoragePath,
+                request.FileName,
+                request.ContentType,
+                request.FileSize)],
+            ct)).SingleOrDefault()
+            ?? throw new DomainValidationException(
+                "This inspection report upload is no longer available; retry with a new request key.",
+                409);
         var stored = new StoredFile
         {
             PortfolioId = command.PortfolioId,
@@ -625,6 +821,10 @@ public sealed class AtomicInspectionMutationHandler
         db.Add(stored);
         attempt.BindSemanticAudit(stored, Audit(command, nameof(StoredFile), 0,
             AuditLogOperation.Created, "Inspection report stored"));
+        await attempt.FlushBusinessAsync(ct);
+        pending.State = PendingFileUploadState.Finalized;
+        pending.StoredFileId = stored.Id;
+        pending.UpdatedAtUtc = await attempt.ReadDatabaseClockUtcAsync(ct);
         await attempt.FlushBusinessAsync(ct);
         inspection.ReportStoredFileId = stored.Id;
         inspection.UpdatedAt = now;
