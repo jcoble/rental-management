@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -1151,8 +1152,8 @@ public class ScanController : ManagementControllerBase
             body.UnitBathrooms,
             body.UnitSquareFeet,
             body.LeaseNumber,
-            body.StartDate,
-            body.EndDate,
+            body.StartDate?.ToUtc(),
+            body.EndDate?.ToUtc(),
             body.MonthlyRent,
             body.SecurityDeposit,
             body.LateFee,
@@ -1161,7 +1162,7 @@ public class ScanController : ManagementControllerBase
             TermsSchemaVersion: body.TermsSchemaVersion,
             TermsPayload: body.TermsPayload,
             GracePeriodDays: body.GracePeriodDays,
-            PossessionGivenAtUtc: body.PossessionGivenAtUtc,
+            PossessionGivenAtUtc: body.PossessionGivenAtUtc?.ToUtc(),
             RentTrackingStartMode: body.RentTrackingStartMode,
             RentTrackingStartOn: body.RentTrackingStartOn);
         var command = new CreateManualLeaseCommand(

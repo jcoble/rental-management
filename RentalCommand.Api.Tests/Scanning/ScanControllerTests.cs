@@ -501,6 +501,60 @@ public class ScanControllerTests : IAsyncLifetime
         errors.Should().NotBeEmpty();
     }
 
+    [Fact]
+    public async Task CreateManualLease_NormalizesDateTimesBeforeAtomicAdmission()
+    {
+        var atomic = new RecordingAtomicUnitOfWork
+        {
+            Outcome = new AtomicCommandOutcome<ConfirmScanDraftResult>(
+                new ConfirmScanDraftResult(
+                    ConfirmScanDraftOutcome.Confirmed,
+                    17,
+                    nameof(LeaseAgreement),
+                    91,
+                    LeaseManagementId: 90),
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()),
+        };
+        var controller = CreateController(Mock.Of<IScanService>(), atomic: atomic);
+        var body = new CreateManualLeaseRequest
+        {
+            PropertyId = 12,
+            UnitId = 34,
+            TenantId = 56,
+            TenantName = "Manual Tenant",
+            PropertyName = "Manual House",
+            PropertyAddress = "12 Main Street",
+            PropertyCity = "Columbus",
+            PropertyState = "OH",
+            PropertyPostalCode = "43215",
+            LeaseNumber = "MANUAL-17",
+            StartDate = new DateTime(2026, 9, 1),
+            EndDate = new DateTime(2027, 8, 31),
+            MonthlyRent = 1_450m,
+            SecurityDeposit = 1_450m,
+            LateFee = 75m,
+            RentDueDay = 1,
+            TermsPayload = "{}",
+            PossessionGivenAtUtc = new DateTime(2026, 9, 2),
+        };
+
+        var result = await controller.CreateManualLease(
+            body,
+            "manual-lease-date-kind",
+            CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        var command = atomic.Command.Should().BeOfType<CreateManualLeaseCommand>().Subject;
+        command.Target.StartDate.Should().Be(new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.StartDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
+        command.Target.EndDate.Should().Be(new DateTime(2027, 8, 31, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.EndDate!.Value.Kind.Should().Be(DateTimeKind.Utc);
+        command.Target.PossessionGivenAtUtc.Should()
+            .Be(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc));
+        command.Target.PossessionGivenAtUtc!.Value.Kind.Should().Be(DateTimeKind.Utc);
+    }
+
     [Theory]
     [InlineData(AtomicCommandDisposition.Executed, false)]
     [InlineData(AtomicCommandDisposition.Replayed, true)]
