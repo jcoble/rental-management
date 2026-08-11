@@ -53,6 +53,7 @@
 	}));
 	const receipt = $derived(paymentQuery.data);
 	const moneyDate = $derived(businessDateOrToday(accountQuery.data?.businessDate));
+	const accountDatePending = $derived(!accountQuery.data && accountQuery.isPending);
 	const entryKind = $derived.by(() => {
 		if (!receipt) return 'payment';
 		if (['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'DepositCharge', 'ManualCharge', 'OpeningBalance'].includes(receipt.entryType)) return 'charge';
@@ -89,7 +90,7 @@
 	}
 
 	function openCorrection() {
-		if (!receipt || !correctionAllowed) return;
+		if (!receipt || !correctionAllowed || accountDatePending) return;
 		correction = paymentCorrectionContext(receipt, accountQuery.data?.businessDate);
 		correctionKey = crypto.randomUUID();
 		correctionResult = null;
@@ -164,7 +165,15 @@
 			</div>
 			<div class="flex flex-col items-end gap-3">
 				{#if correctionAllowed}
-					<Button variant="outline" onclick={openCorrection} data-testid="correct-payment-action">Fix this payment</Button>
+					<Button
+						variant="outline"
+						onclick={openCorrection}
+						disabled={accountDatePending}
+						aria-busy={accountDatePending}
+						data-testid="correct-payment-action"
+					>
+						{accountDatePending ? 'Loading business date…' : 'Fix this payment'}
+					</Button>
 				{/if}
 			</div>
 		</HeroCard>

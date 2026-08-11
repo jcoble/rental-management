@@ -99,7 +99,7 @@
 
 	$effect(() => {
 		const nextKey = open
-			? `${moneyDate}|${seed?.description ?? ''}|${seed?.effectiveOn ?? ''}|${seed?.dueOn ?? ''}|${seed?.chargeType ?? ''}`
+			? `${seed?.description ?? ''}|${seed?.effectiveOn ?? ''}|${seed?.dueOn ?? ''}|${seed?.chargeType ?? ''}`
 			: '';
 		if (open && nextKey !== initializedKey) {
 			form = {

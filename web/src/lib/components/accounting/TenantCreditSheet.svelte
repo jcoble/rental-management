@@ -71,7 +71,7 @@
 	);
 
 	$effect(() => {
-		const nextKey = open ? `${moneyDate}|${initialTargetEntryId ?? 'new'}` : '';
+		const nextKey = open ? `${initialTargetEntryId ?? 'new'}` : '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',

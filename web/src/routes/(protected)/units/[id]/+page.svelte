@@ -217,7 +217,11 @@
 
 	$effect(() => {
 		const isConfirmMoveInAction = page.url.searchParams.get('action') === 'confirm-move-in';
-		if (!dashboard || !isConfirmMoveInAction) return;
+		if (!isConfirmMoveInAction) {
+			handledMoveInActionKey = '';
+			return;
+		}
+		if (!dashboard || (!moveInContextQuery.data && moveInContextQuery.isPending)) return;
 
 		if (activeTab !== 'tenant-lease' || activeView !== 'agreements') {
 			const url = new URL(page.url);
@@ -232,7 +236,7 @@
 			return;
 		}
 
-		const actionKey = `${id}:${dashboard.currentLease?.id ?? 'no-lease'}:${page.url.search}:${moveInBusinessDate}`;
+		const actionKey = `${id}:${dashboard.currentLease?.id ?? 'no-lease'}:${page.url.search}`;
 		if (untrack(() => handledMoveInActionKey) !== actionKey) {
 			handledMoveInActionKey = actionKey;
 			moveInDepositEffectiveOn = moveInBusinessDate;

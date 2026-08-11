@@ -58,14 +58,14 @@
 
 	$effect(() => {
 		const nextKey = open
-			? `${moneyDate}|${schedule?.id ?? 'new'}|${schedule?.nextRunDate ?? ''}`
+			? `${schedule?.id ?? 'new'}|${schedule?.nextRunDate ?? ''}`
 			: '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				displayName: schedule?.displayName ?? '',
 				amount: schedule ? String(schedule.amount) : '',
 				ledgerAccountId: schedule?.ledgerAccountId ?? null,
-				effectiveStartOn: schedule?.effectiveStartOn ?? moneyDate,
+				effectiveStartOn: schedule ? schedule.effectiveStartOn : moneyDate,
 				effectiveEndOn: schedule?.effectiveEndOn ?? '',
 				monthlyDueDay: String(schedule?.monthlyDueDay ?? 1)
 			};

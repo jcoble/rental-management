@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	creditTargets: vi.fn(),
 	monthSummary: vi.fn(),
 	ledgerSummary: vi.fn(),
+	list: vi.fn(),
 	recurringCharges: vi.fn(),
 	deposit: vi.fn(),
 	postCredit: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('$lib/api/endpoints/tenant-ledgers', async () => {
 		...actual,
 		tenantLedgers: {
 			...actual.tenantLedgers,
+			list: mocks.list,
 			monthSummary: mocks.monthSummary,
 			ledgerSummary: mocks.ledgerSummary,
 			recurringCharges: mocks.recurringCharges,
@@ -168,6 +170,7 @@ function setupQueries(entry: TenantLedgerRow): void {
 		take: 50
 	});
 	mocks.monthSummary.mockResolvedValue([summary(entry)]);
+	mocks.list.mockResolvedValue({ items: [], totalCount: 0, skip: 0, take: 100 });
 	mocks.ledgerSummary.mockResolvedValue({
 		periodMonths: 12, currency: 'USD', chargeAmount: entry.chargeAmount, paymentAmount: entry.paymentAmount,
 		creditAmount: entry.creditAmount, endingBalance: entry.runningAmountOwed,
@@ -178,6 +181,16 @@ function setupQueries(entry: TenantLedgerRow): void {
 	mocks.postCredit.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
 	mocks.reverseCharge.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
 	mocks.reverseLedgerEntry.mockResolvedValue({ value: { found: true, applied: true }, replayed: false });
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
 
 async function renderPanel(entry: TenantLedgerRow) {
@@ -205,6 +218,29 @@ describe('rendered tenant ledger panel flow boundaries', () => {
 		const view = await renderPanel(entry);
 		await fireEvent.click(view.getByRole('menuitem', { name: 'Give credit' }));
 		await waitFor(() => expect(view.getByTestId('tenant-credit-sheet').textContent).toContain('Rent for February 2027'));
+	});
+
+	it('gates money actions until the account business-date query settles', async () => {
+		const entry = row({ tenantLedgerEntryId: 47 });
+		const account = deferred<Record<string, unknown>>();
+		setupQueries(entry);
+		mocks.account.mockReturnValueOnce(account.promise);
+		const view = render(TenantLedgerPanelFlowHarness, { props: { dashboard } });
+
+		await waitFor(() => expect(view.getByTestId(`tenant-ledger-actions-trigger-${entry.tenantLedgerEntryId}`)).toBeTruthy());
+		const recordPayment = view.getByRole('button', { name: 'Record payment', exact: true }) as HTMLButtonElement;
+		const addCharge = view.getByRole('button', { name: 'Add charge', exact: true }) as HTMLButtonElement;
+		const giveCredit = view.getByRole('button', { name: 'Give credit', exact: true }) as HTMLButtonElement;
+		const recurring = view.getByRole('button', { name: /Recurring charge/ }) as HTMLButtonElement;
+		expect(recordPayment.disabled).toBe(true);
+		expect(addCharge.disabled).toBe(true);
+		expect(giveCredit.disabled).toBe(true);
+		expect(recurring.disabled).toBe(true);
+
+		account.resolve({ businessDate: '2027-02-28', currency: 'USD' });
+		await waitFor(() => expect(recordPayment.disabled).toBe(false));
+		await fireEvent.click(recordPayment);
+		await waitFor(() => expect((view.getByTestId('record-payment-date') as HTMLInputElement).value).toBe('02/28/2027'));
 	});
 
 	it('defaults every tenant ledger money sheet to the server business date', async () => {

@@ -59,7 +59,7 @@
 	const openCharges = $derived(openChargesQuery.data?.items ?? []);
 
 	$effect(() => {
-		const nextKey = open ? `${moneyDate}|${defaultPayerName}` : '';
+		const nextKey = open ? `open|${defaultPayerName}` : '';
 		if (open && nextKey !== initializedKey) {
 			form = {
 				amount: '',

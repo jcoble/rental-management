@@ -38,4 +38,15 @@ describe('money-entry date defaults', () => {
 			expect(contents).not.toContain('new Date().toISOString().slice(0, 10)');
 		}
 	});
+
+	it('does not re-key an open form or move-in dialog when the date query changes', () => {
+		const sourceByPath = (path: string) => source(path);
+		expect(sourceByPath('../src/lib/components/accounting/OneTimeChargeSheet.svelte')).not.toContain('${moneyDate}|');
+		expect(sourceByPath('../src/lib/components/accounting/RecordPaymentSheet.svelte')).not.toContain('${moneyDate}|');
+		expect(sourceByPath('../src/lib/components/accounting/TenantCreditSheet.svelte')).not.toContain('${moneyDate}|');
+		expect(sourceByPath('../src/lib/components/accounting/RecurringChargeSheet.svelte')).not.toContain('${moneyDate}|');
+		const unitPage = sourceByPath('../src/routes/(protected)/units/[id]/+page.svelte');
+		expect(unitPage).not.toContain(':${moveInBusinessDate}');
+		expect(unitPage).toContain('!moveInContextQuery.data && moveInContextQuery.isPending');
+	});
 });
