@@ -273,7 +273,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task RentBatch_RoutineSchedulerNeverBackfillsPriorMonths()
+    public async Task RentBatch_TrackingStartModesUseLeaseStartForwardOnlyAndCustomCutoff()
     {
         SkipIfNoDocker();
         var leaseStart = new DateOnly(2026, 5, 10);
@@ -294,7 +294,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             RentCommand("rent-cutoffs"),
             Codec);
 
-        result.Value.RentChargeCount.Should().Be(3);
+        result.Value.RentChargeCount.Should().Be(6);
         await using var verify = NewContext();
         var rows = await verify.TenantLedgerEntries
             .Where(row =>
@@ -307,15 +307,20 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
 
         rows.Where(row => row.TenantAccountId == noCutoff.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
-            .Should().Equal([(new DateOnly(2026, 7, 1), 3100m)],
-                "a null tracking cutoff starts routine billing in the current business month, not at lease inception");
+            .Should().Equal([
+                (new DateOnly(2026, 5, 10), 2200m),
+                (new DateOnly(2026, 6, 1), 3100m),
+                (new DateOnly(2026, 7, 1), 3100m)],
+                "a null tracking start selects BackfillFromLeaseStart");
         rows.Where(row => row.TenantAccountId == current.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
             .Should().Equal((new DateOnly(2026, 7, 15), 1700m));
         rows.Where(row => row.TenantAccountId == custom.AccountId)
             .Select(row => (row.EffectiveOn, row.Amount))
-            .Should().Equal([(new DateOnly(2026, 7, 1), 3100m)],
-                "an old explicit tracking cutoff still cannot turn routine scheduling into historical recovery");
+            .Should().Equal([
+                (new DateOnly(2026, 6, 20), 1136.67m),
+                (new DateOnly(2026, 7, 1), 3100m)],
+                "a stored custom cutoff starts billing at that cutoff");
     }
 
     [SkippableFact]
@@ -584,6 +589,7 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             "refunded-advance-credit",
             receiptNow,
             new DateOnly(2027, 1, 1),
+            rentTrackingStartOn: new DateOnly(2027, 2, 1),
             termEndOn: new DateOnly(2027, 12, 31),
             rentDueDay: 1,
             baseRentAmount: 1200m);

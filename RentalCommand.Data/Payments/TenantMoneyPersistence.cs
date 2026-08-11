@@ -215,9 +215,11 @@ internal static class TenantMoneyPersistence
         var mutationTargets = new AtomicSqlMutationTarget[] {
             new AtomicSqlMutationTarget("TenantLedgerEntries", AtomicSqlMutationOperation.Insert) };
 
-        // The lateral month series is deliberately inside PostgreSQL. Routine scheduling starts at
-        // the current business month and never backfills a prior month. Scheduled billing only posts
-        // charges; receipt allocation belongs exclusively to the explicit-target receipt command.
+        // The lateral month series is deliberately inside PostgreSQL. Its lower bound is the
+        // account's durable tracking start (or the lease start when backfill is selected), while
+        // the upper bound is always the current business month so future rent is never posted.
+        // Scheduled billing only posts charges; receipt allocation belongs exclusively to the
+        // explicit-target receipt command.
         return await db.ExecuteAtomicSqlMutationAsync<TenantMoneyScheduledCharge>(context, $"""
             WITH agreement_periods AS MATERIALIZED (
                 SELECT agreement."PortfolioId",
@@ -242,7 +244,6 @@ internal static class TenantMoneyPersistence
                            COALESCE(
                                account."RentTrackingStartOn",
                                agreement."TermStartOn"),
-                           date_trunc('month', effective_date.business_date::timestamp)::date,
                            month.month_start::date) AS period_start,
                        LEAST(
                            COALESCE(agreement."TermEndOn", 'infinity'::date),
@@ -267,8 +268,7 @@ internal static class TenantMoneyPersistence
                         agreement."GoverningFromOn",
                         COALESCE(
                             account."RentTrackingStartOn",
-                            agreement."TermStartOn"),
-                        date_trunc('month', effective_date.business_date::timestamp)::date)::timestamp),
+                            agreement."TermStartOn"))::timestamp),
                     date_trunc('month', effective_date.business_date::timestamp),
                     interval '1 month') AS month(month_start)
                 WHERE agreement."FullyExecutedAtUtc" IS NOT NULL
@@ -743,7 +743,8 @@ internal static class TenantMoneyPersistence
                  AND settings."EnableLateFees"
                 LEFT JOIN caps AS cap ON cap.state = upper(COALESCE(property."State", ''))
                 CROSS JOIN LATERAL (
-                    SELECT rc_business_date(rent."PortfolioId") AS business_date
+                    SELECT rc_business_date(rent."PortfolioId") AS business_date,
+                           rc_effective_now_utc(rent."PortfolioId") AS effective_now_utc
                 ) AS effective_date
                 JOIN LATERAL (
                     SELECT candidate_agreement."Id",
@@ -788,6 +789,14 @@ internal static class TenantMoneyPersistence
                           governing_agreement."GracePeriodDays"::integer,
                           settings."LateFeeGraceDays",
                           0)
+                  -- Backfilled rent carries a historical period date but is newly posted. Late
+                  -- fees begin only after the configured grace period has elapsed since posting,
+                  -- never on the sweep that first creates a historical charge.
+                  AND rent."PostedAtUtc" <= effective_date.effective_now_utc
+                      - GREATEST(
+                          governing_agreement."GracePeriodDays"::integer,
+                          settings."LateFeeGraceDays",
+                          0) * interval '1 day'
                   AND governing_agreement."LateFeeAmount" > 0
                   AND management."CanceledAtUtc" IS NULL
                   AND account."ClosedAtUtc" IS NULL

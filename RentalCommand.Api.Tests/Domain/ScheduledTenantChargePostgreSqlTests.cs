@@ -141,6 +141,297 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RentBatch_BackfillFromLeaseStart_PostsEveryDueMonthThroughCurrent()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(marchBusinessDate);
+
+        var result = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-backfill-from-lease-start"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("a2c0d5c8-4ba6-4e59-a348-2e13a7f5f601"),
+                marchBusinessDate,
+                200),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(3);
+        _ctx.Db.ChangeTracker.Clear();
+        var rows = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .OrderBy(entry => entry.DueOn)
+            .Select(entry => new { entry.BusinessKey, entry.DueOn })
+            .ToListAsync();
+
+        rows.Select(row => row.BusinessKey).Should().Equal(
+            $"rent:{graph.LeaseAgreementPublicId}:2027-01",
+            $"rent:{graph.LeaseAgreementPublicId}:2027-02",
+            $"rent:{graph.LeaseAgreementPublicId}:2027-03");
+        rows.Select(row => row.DueOn).Should().Equal(
+            new DateOnly(2027, 01, 01),
+            new DateOnly(2027, 02, 01),
+            new DateOnly(2027, 03, 01));
+    }
+
+    [Fact]
+    public async Task RentBatch_UsesOneSetBasedSqlSeriesFromTrackingStartToCurrentMonth()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(marchBusinessDate);
+        var capture = new RentSqlCaptureInterceptor();
+        await using var services = AtomicDomainTestKernel.CreateForScheduledTenantChargesPostgreSql(
+            _ctx.ConnectionString,
+            [capture]);
+        var atomic = services.GetRequiredService<IAtomicUnitOfWork>();
+
+        var result = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-generated-sql"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("c4bb4ba8-03d1-4523-bd5d-0eabf0d96110"),
+                marchBusinessDate,
+                200),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(3);
+        var sql = capture.Commands.Single(command => command.Contains("generate_series", StringComparison.Ordinal));
+        sql.Should().Contain("INSERT INTO \"TenantLedgerEntries\"");
+        sql.Should().Contain("ON CONFLICT (\"TenantAccountId\", \"BusinessKey\") DO NOTHING");
+        sql.Should().Contain("account.\"RentTrackingStartOn\"");
+        sql.Should().Contain("date_trunc('month', effective_date.business_date::timestamp)");
+        sql.Should().NotContain("effective_date.business_date::timestamp)::date");
+        var seriesStart = sql.IndexOf("CROSS JOIN LATERAL generate_series", StringComparison.Ordinal);
+        Console.WriteLine($"H4_RENT_SQL={sql[seriesStart..Math.Min(sql.Length, seriesStart + 900)]}");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(entry =>
+            entry.TenantAccountId == graph.TenantAccountId
+            && entry.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(3);
+    }
+
+    [Fact]
+    public async Task RentBatch_ForwardOnlyRetroactiveLease_DoesNotBackfillBeforeTrackingStart()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        await SetRentTrackingStartOnAsync(graph.TenantAccountId, DateOnly.FromDateTime(marchBusinessDate));
+        SetFrozenBusinessDate(marchBusinessDate);
+
+        var result = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-forward-only-retroactive"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("bd9c58ae-66cd-4f79-8e1b-25d2cdb3fd02"),
+                marchBusinessDate,
+                200),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(1);
+        _ctx.Db.ChangeTracker.Clear();
+        var rows = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .Select(entry => new { entry.BusinessKey, entry.DueOn })
+            .ToListAsync();
+
+        rows.Should().ContainSingle();
+        rows[0].BusinessKey.Should().Be($"rent:{graph.LeaseAgreementPublicId}:2027-03");
+        rows[0].DueOn.Should().Be(new DateOnly(2027, 03, 08));
+    }
+
+    [Fact]
+    public async Task RentBatch_CustomCutoffDateBackdated_PostsFromCutoffThroughCurrent()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        await SetRentTrackingStartOnAsync(graph.TenantAccountId, new DateOnly(2027, 02, 01));
+        SetFrozenBusinessDate(marchBusinessDate);
+
+        var result = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-custom-cutoff"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("dbd7b9c0-dc02-40df-98f1-67982d9ec703"),
+                marchBusinessDate,
+                200),
+            Codec);
+
+        result.Value.RentChargeCount.Should().Be(2);
+        _ctx.Db.ChangeTracker.Clear();
+        var rows = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .OrderBy(entry => entry.DueOn)
+            .Select(entry => new { entry.BusinessKey, entry.DueOn })
+            .ToListAsync();
+
+        rows.Select(row => row.BusinessKey).Should().Equal(
+            $"rent:{graph.LeaseAgreementPublicId}:2027-02",
+            $"rent:{graph.LeaseAgreementPublicId}:2027-03");
+        rows.Select(row => row.DueOn).Should().Equal(
+            new DateOnly(2027, 02, 01),
+            new DateOnly(2027, 03, 01));
+    }
+
+    [Fact]
+    public async Task RentBatch_AfterOutageAcrossMonthBoundary_PostsAllMissedMonths()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var januaryBusinessDate = new DateTime(2027, 01, 08, 12, 00, 00, DateTimeKind.Utc);
+        await SetRentTrackingStartOnAsync(graph.TenantAccountId, new DateOnly(2027, 01, 08));
+        SetFrozenBusinessDate(januaryBusinessDate);
+
+        var first = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-outage-before-boundary"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("3d9a4c2d-c3f4-4dd1-b684-7edc53a05704"),
+                januaryBusinessDate,
+                200),
+            Codec);
+
+        first.Value.RentChargeCount.Should().Be(1);
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(marchBusinessDate);
+        var recovery = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-outage-after-boundary"),
+            new ApplyScheduledRentChargeBatchCommand(
+                Guid.Parse("e2b70213-8d4a-4c4f-957b-8fac44a3f605"),
+                marchBusinessDate,
+                200),
+            Codec);
+
+        recovery.Value.RentChargeCount.Should().Be(2);
+        _ctx.Db.ChangeTracker.Clear();
+        var rows = await _ctx.Db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .OrderBy(entry => entry.DueOn)
+            .Select(entry => entry.BusinessKey)
+            .ToListAsync();
+
+        rows.Should().Equal(
+            $"rent:{graph.LeaseAgreementPublicId}:2027-01",
+            $"rent:{graph.LeaseAgreementPublicId}:2027-02",
+            $"rent:{graph.LeaseAgreementPublicId}:2027-03");
+    }
+
+    [Fact]
+    public async Task RentBatch_RerunUsesPerMonthBusinessKeyAndCreatesNoDuplicates()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(marchBusinessDate);
+        var command = new ApplyScheduledRentChargeBatchCommand(
+            Guid.Parse("e3b8a631-7ee0-44ea-a76d-190fb8c8a606"),
+            marchBusinessDate,
+            200);
+
+        var first = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-rerun-first"),
+            command,
+            Codec);
+        var rerun = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.rent.apply",
+                "h4-rerun-second"),
+            command with { RunToken = Guid.Parse("f3e0bc0e-a7b0-4ee9-9f12-91d684a4d607") },
+            Codec);
+
+        first.Value.RentChargeCount.Should().Be(3);
+        rerun.Value.RentChargeCount.Should().Be(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(entry =>
+            entry.TenantAccountId == graph.TenantAccountId
+            && entry.EntryType == TenantLedgerEntryType.RentCharge)).Should().Be(3);
+        (await _ctx.Db.TenantLedgerEntries
+            .Where(entry => entry.TenantAccountId == graph.TenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.RentCharge)
+            .GroupBy(entry => entry.BusinessKey)
+            .Select(group => group.Count())
+            .ToListAsync()).Should().OnlyContain(count => count == 1);
+    }
+
+    [Fact]
+    public async Task LateFeeBatch_BackfilledRentWaitsForGraceFromPostingTime()
+    {
+        var graph = SeedInitialAgreementReadyForJanuaryRent();
+        var marchBusinessDate = new DateTime(2027, 03, 08, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(marchBusinessDate);
+        _ctx.Db.TenantLedgerEntries.AddRange(
+            BackfilledRent(new DateOnly(2027, 01, 01), graph, marchBusinessDate),
+            BackfilledRent(new DateOnly(2027, 02, 01), graph, marchBusinessDate),
+            BackfilledRent(new DateOnly(2027, 03, 01), graph, marchBusinessDate));
+        await _ctx.Db.SaveChangesAsync();
+
+        var sameDayLateFees = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.late-fee.apply",
+                "h4-late-fee-backfill-same-day"),
+            new ApplyScheduledLateFeeChargeBatchCommand(
+                Guid.Parse("f91537a3-54d6-4d0b-9f12-43af5e7bd609"),
+                marchBusinessDate,
+                200,
+                StateLateFeeCapsJson: "[]"),
+            LateFeeCodec);
+
+        sameDayLateFees.Value.LateFeeChargeCount.Should().Be(0);
+        (await _ctx.Db.TenantLedgerEntries.CountAsync(entry =>
+            entry.TenantAccountId == graph.TenantAccountId
+            && entry.EntryType == TenantLedgerEntryType.LateFeeCharge)).Should().Be(0);
+
+        var afterGrace = new DateTime(2027, 03, 14, 12, 00, 00, DateTimeKind.Utc);
+        SetFrozenBusinessDate(afterGrace);
+        var afterGraceLateFees = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "scheduled-tenant-charges.late-fee.apply",
+                "h4-late-fee-backfill-after-grace"),
+            new ApplyScheduledLateFeeChargeBatchCommand(
+                Guid.Parse("e0e6b9de-f270-4d64-94dc-eaa8bb2f760a"),
+                afterGrace,
+                200,
+                StateLateFeeCapsJson: "[]"),
+            LateFeeCodec);
+
+        afterGraceLateFees.Value.LateFeeChargeCount.Should().Be(3);
+
+        TenantLedgerEntry BackfilledRent(
+            DateOnly dueOn,
+            InitialLeaseGraph lease,
+            DateTime postedAtUtc) => new()
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = lease.TenantAccountId,
+            LeaseAgreementId = lease.LeaseAgreementId,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 1_300m,
+            Currency = "USD",
+            EffectiveOn = dueOn,
+            DueOn = dueOn,
+            PostedAtUtc = postedAtUtc,
+            Description = $"Backfilled rent due {dueOn:MMM d, yyyy}",
+            BusinessKey = $"rent:{lease.LeaseAgreementPublicId}:{dueOn:yyyy-MM}",
+            CreatedByUserId = 1,
+        };
+    }
+
+    [Fact]
     public async Task LateFeeBatch_UsesGoverningCorrection_KeepsPeriodKey_AndRollsBackBeforeReplay()
     {
         var graph = SeedCorrectedAgreementWithExistingJanuaryRent();
@@ -1008,6 +1299,15 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
     private void EnsureFrozenBusinessDate()
         => SetFrozenBusinessDate(SeededAtUtc);
 
+    private async Task SetRentTrackingStartOnAsync(int tenantAccountId, DateOnly? rentTrackingStartOn)
+    {
+        _ctx.Db.ChangeTracker.Clear();
+        var account = await _ctx.Db.TenantAccounts.SingleAsync(row => row.Id == tenantAccountId);
+        account.RentTrackingStartOn = rentTrackingStartOn;
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+    }
+
     private void SetFrozenBusinessDate(DateTime frozenAtUtc)
     {
         var clock = _ctx.Db.SimulationClocks.SingleOrDefault(clock => clock.Id == 1);
@@ -1163,6 +1463,30 @@ public sealed class ScheduledTenantChargePostgreSqlTests : IAsyncLifetime
             {
                 ReadCount++;
             }
+        }
+    }
+
+    private sealed class RentSqlCaptureInterceptor : DbCommandInterceptor
+    {
+        public List<string> Commands { get; } = [];
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            Commands.Add(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
         }
     }
 }
