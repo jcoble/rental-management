@@ -1387,6 +1387,11 @@ public class ReportsServiceTests : IAsyncLifetime
         var totalsSql = string.Join("\n---\n", totalSql);
         totalsSql.Should().Contain("vw_security_deposit_balances");
         totalsSql.Should().Contain("TotalDeductions");
+        totalsSql.Should().Contain("authorized_properties AS MATERIALIZED",
+            "security-deposit totals must join one materialized property authorization set");
+        totalSql.Should().OnlyContain(sql =>
+            sql.Contains("public.rc_api_effective_capability_scopes(", StringComparison.Ordinal),
+            "security-deposit aggregates must resolve authorization through the shared scope relation");
     }
 
     [Fact]
@@ -1425,6 +1430,40 @@ public class ReportsServiceTests : IAsyncLifetime
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("vw_security_deposit_balances", StringComparison.OrdinalIgnoreCase),
             "the deposit report total count must be a SQL count over the filtered register");
+    }
+
+    [Fact]
+    public async Task GetSecurityDepositRegisterAsync_ExcludesDepositOutsideSelectedPropertyScope()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 1000m);
+        SeedSecurityDeposit(mapleLease, D(2026, 1, 1), "selected-maple");
+        SeedSecurityDeposit(oakLease, D(2026, 1, 2), "excluded-oak");
+
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            maple.Id,
+            nameof(GetSecurityDepositRegisterAsync_ExcludesDepositOutsideSelectedPropertyScope));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _executedSql.Clear();
+
+        var report = await _sut.GetSecurityDepositRegisterAsync(
+            selectedScope, new ReportRangeQuery(), CancellationToken.None);
+
+        report.Rows.Should().ContainSingle(row => row.PropertyId == maple.Id);
+        report.Rows.Should().NotContain(row => row.PropertyId == oak.Id);
+        report.TotalCount.Should().Be(1);
+        report.TotalHeld.Should().Be(1000m);
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("authorized_properties AS MATERIALIZED", StringComparison.Ordinal),
+                "security-deposit row/count SQL must preserve the selected-property authorization boundary");
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("public.rc_api_effective_capability_scopes(", StringComparison.Ordinal),
+                "security-deposit row/count SQL must resolve authorization through the shared scope relation");
     }
 
     // ── Property filter IDOR guard (DB) ────────────────────────────────────────────────────────────
@@ -1595,10 +1634,12 @@ public class ReportsServiceTests : IAsyncLifetime
         var sql = string.Join("\n---\n", _executedSql);
         sql.Should().Contain("\"OwnerDistributions\"", "recorded owner payouts must be summed from the distribution table");
         sql.Should().ContainEquivalentOf("SUM", "owner net and distributed totals must be aggregated in SQL");
-        sql.Should().Contain("ELSE EXISTS",
-            "portfolio-level owner distributions must be included by the translated SQL predicate");
-        sql.Should().Contain("NOT EXISTS",
+        sql.Should().Contain("authorized_distributions AS MATERIALIZED",
+            "owner payouts must join one materialized distribution authorization set");
+        sql.Should().Contain("fully_authorized_owners AS MATERIALIZED",
             "propertyless payouts must remain blocked unless the owner's active ownership scope is fully authorized");
+        sql.Should().NotContain("ELSE EXISTS",
+            "the owner distribution authorization must not be a per-output-row correlated branch");
     }
 
     [Fact]
@@ -1640,12 +1681,15 @@ public class ReportsServiceTests : IAsyncLifetime
         report.TotalDistributed.Should().Be(4_100m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        _executedSql.Should().ContainSingle(
-            command => command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase),
-            "owner distribution rows and totals must be produced by one SQL statement");
+        _executedSql.Should().Contain(
+            command => command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
+                && command.Contains("authorized_distributions AS MATERIALIZED", StringComparison.Ordinal),
+            "owner distribution row work must join one materialized authorization set");
         sql.Should().Contain("\"OwnerDistributions\"");
-        sql.Should().Contain("NOT EXISTS",
+        sql.Should().Contain("fully_authorized_owners AS MATERIALIZED",
             "propertyless payouts must still require authorization for every active owner property");
+        sql.Should().NotContain("NOT EXISTS",
+            "propertyless payout authorization must not be re-evaluated as a per-owner correlated predicate");
     }
 
     // ── Lease expirations (DB) ─────────────────────────────────────────────────────────────────────

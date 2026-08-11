@@ -2973,6 +2973,8 @@ internal static class FoundationBaselinePostgreSql
           integer, uuid, text, text, bigint, integer, text, integer, integer, text, text);
         DROP FUNCTION IF EXISTS rc_api_resource_scope_allows(
           integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean);
+        DROP FUNCTION IF EXISTS rc_api_authorized_tenant_accounts(
+          integer, uuid, integer, integer, bigint, text[]);
         DROP FUNCTION IF EXISTS rc_api_all_properties_scope_allows(integer);
         DROP FUNCTION IF EXISTS rc_api_effective_capability_scopes(
           integer, uuid, integer, integer, bigint, text[], text);

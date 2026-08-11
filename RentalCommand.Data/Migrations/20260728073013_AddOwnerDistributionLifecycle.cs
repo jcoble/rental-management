@@ -81,7 +81,7 @@ namespace RentalCommand.Data.Migrations
                 SET "Status" = 1,
                     "ApprovedAt" = COALESCE("UpdatedAt", "CreatedAt"),
                     "ApprovedBusinessDate" = date_trunc('day', COALESCE("Date", "UpdatedAt", "CreatedAt"))
-                WHERE "DeletedAt" IS NULL
+                WHERE "DeletedAt" IS NULL;
                 """);
 
             migrationBuilder.CreateIndex(
