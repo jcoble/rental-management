@@ -1,4 +1,7 @@
+import { businessDateOrToday } from '../../utils/business-date.ts';
+
 /** Formats a number as USD currency (matches the DataGrid's currency formatter). */
+
 export function money(value: number | null | undefined): string {
 	if (value == null) return '—';
 	return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
@@ -130,7 +133,7 @@ export function paymentCorrectionContext(receipt: {
 		providerReference?: string | null;
 	} | null;
 	sourceStoredFileId?: number | null;
-}): PaymentCorrectionContext {
+}, businessDate?: string | null): PaymentCorrectionContext {
 	return {
 		tenantAccountId: receipt.tenantAccountId,
 		tenantLedgerEntryId: receipt.tenantLedgerEntryId,
@@ -139,7 +142,7 @@ export function paymentCorrectionContext(receipt: {
 		unitNumber: receipt.unitNumber,
 		tenantName: receipt.tenantName?.trim() || 'Tenant not named',
 		amount: receipt.amount,
-		effectiveOn: new Date().toISOString().slice(0, 10),
+		effectiveOn: businessDateOrToday(businessDate),
 		reason: `${PAYMENT_CORRECTION_REASON}: ${receipt.description}`,
 		paymentMethodSummary: receipt.providerAttempt?.paymentMethodSummary?.trim() || '',
 		externalReference: receipt.providerAttempt?.providerReference?.trim() || '',

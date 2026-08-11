@@ -14,6 +14,7 @@
 		paymentCorrectionContext
 	} from '$lib/components/unit/money';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import { formatResidentName } from '$lib/accounting/money-display';
 	import { normalizeTenantLedgerDescription } from '$lib/accounting/tenant-ledger-display';
 	import { apiErrorMessage } from '$lib/utils/toast';
@@ -45,7 +46,14 @@
 		queryFn: () => tenantAccounts.entry(tenantAccountId, tenantLedgerEntryId),
 		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0
 	}));
+	const accountQuery = createQuery(() => ({
+		queryKey: ['tenant-account-summary', tenantAccountId],
+		enabled: tenantAccountId > 0,
+		queryFn: () => tenantAccounts.get(tenantAccountId)
+	}));
 	const receipt = $derived(paymentQuery.data);
+	const moneyDate = $derived(businessDateOrToday(accountQuery.data?.businessDate));
+	const accountDatePending = $derived(!accountQuery.data && accountQuery.isPending);
 	const entryKind = $derived.by(() => {
 		if (!receipt) return 'payment';
 		if (['RentCharge', 'AddendumCharge', 'LateFeeCharge', 'DepositCharge', 'ManualCharge', 'OpeningBalance'].includes(receipt.entryType)) return 'charge';
@@ -82,8 +90,8 @@
 	}
 
 	function openCorrection() {
-		if (!receipt || !correctionAllowed) return;
-		correction = paymentCorrectionContext(receipt);
+		if (!receipt || !correctionAllowed || accountDatePending) return;
+		correction = paymentCorrectionContext(receipt, accountQuery.data?.businessDate);
 		correctionKey = crypto.randomUUID();
 		correctionResult = null;
 		correctionError = '';
@@ -157,7 +165,15 @@
 			</div>
 			<div class="flex flex-col items-end gap-3">
 				{#if correctionAllowed}
-					<Button variant="outline" onclick={openCorrection} data-testid="correct-payment-action">Fix this payment</Button>
+					<Button
+						variant="outline"
+						onclick={openCorrection}
+						disabled={accountDatePending}
+						aria-busy={accountDatePending}
+						data-testid="correct-payment-action"
+					>
+						{accountDatePending ? 'Loading business date…' : 'Fix this payment'}
+					</Button>
 				{/if}
 			</div>
 		</HeroCard>
@@ -177,7 +193,7 @@
 					<div><dt class="text-xs text-muted-foreground">Original payment</dt><dd class="font-medium">{money(correction.amount, receipt.currency)} · {formatDateOnly(receipt.effectiveOn)}</dd></div>
 				</dl>
 				<div class="mt-4 grid gap-3 sm:grid-cols-2">
-					<label class="text-xs font-medium text-muted-foreground">Correction date<DatePicker bind:value={correction.effectiveOn} /></label>
+					<label class="text-xs font-medium text-muted-foreground">Correction date<DatePicker bind:value={correction.effectiveOn} todayValue={moneyDate} /></label>
 					<label class="text-xs font-medium text-muted-foreground">Payment method<Input bind:value={correction.paymentMethodSummary} /></label>
 					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Reason<Input bind:value={correction.reason} /></label>
 					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Refund reference<Input bind:value={correction.externalReference} placeholder="Check or payout confirmation number" /></label>

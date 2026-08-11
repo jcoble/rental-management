@@ -1,8 +1,8 @@
-import { cleanup, render, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PaymentDetailHarness from './PaymentDetailHarness.svelte';
 
-const mocks = vi.hoisted(() => ({ entry: vi.fn() }));
+const mocks = vi.hoisted(() => ({ entry: vi.fn(), account: vi.fn() }));
 
 vi.mock('$lib/api/endpoints/tenant-accounts', async () => {
 	const actual = await vi.importActual<typeof import('$lib/api/endpoints/tenant-accounts')>(
@@ -10,8 +10,13 @@ vi.mock('$lib/api/endpoints/tenant-accounts', async () => {
 	);
 	return {
 		...actual,
-		tenantAccounts: { ...actual.tenantAccounts, entry: mocks.entry }
+		tenantAccounts: { ...actual.tenantAccounts, entry: mocks.entry, get: mocks.account }
 	};
+});
+
+vi.mock('$lib/stores/auth.svelte', async () => {
+	const actual = await vi.importActual<typeof import('$lib/stores/auth.svelte')>('$lib/stores/auth.svelte');
+	return { ...actual, currentCapabilities: () => new Set(['money.payments.manage']) };
 });
 
 afterEach(() => cleanup());
@@ -51,6 +56,7 @@ describe('payment detail description display', () => {
 			monthCharges: 0,
 			monthPaymentsAndCredits: 1950
 		});
+		mocks.account.mockResolvedValue({ businessDate: '2027-02-28' });
 	});
 
 	it('normalizes a legacy payment description at the PaymentDetail render site', async () => {
@@ -59,5 +65,33 @@ describe('payment detail description display', () => {
 		await waitFor(() => expect(view.getByTestId('payment-card-receipt')).toBeTruthy());
 		expect(view.getByTestId('payment-card-receipt').textContent).toContain('Rent payment for July 2026');
 		expect(view.getByTestId('payment-card-receipt').textContent).not.toContain('Rent payment for 2026-07');
+	});
+
+	it('waits for the account date before allowing correction and uses it when it arrives', async () => {
+		let resolveAccount!: (value: { businessDate: string }) => void;
+		mocks.account.mockReturnValueOnce(new Promise((resolve) => { resolveAccount = resolve; }));
+		const view = render(PaymentDetailHarness);
+
+		const action = await waitFor(() => view.getByTestId('correct-payment-action') as HTMLButtonElement);
+		expect(action.disabled).toBe(true);
+
+		resolveAccount({ businessDate: '2027-02-28' });
+		await waitFor(() => expect(action.disabled).toBe(false));
+		await fireEvent.click(action);
+		await waitFor(() => expect(view.getByTestId('payment-correction-form')).toBeTruthy());
+		expect((view.getByTestId('payment-correction-form').querySelector('input') as HTMLInputElement).value).toBe('02/28/2027');
+	});
+
+	it('opens with the local fallback only after a failed account-date query', async () => {
+		let rejectAccount!: (reason?: unknown) => void;
+		mocks.account.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectAccount = reject; }));
+		const view = render(PaymentDetailHarness);
+
+		await waitFor(() => expect((view.getByTestId('correct-payment-action') as HTMLButtonElement).disabled).toBe(true));
+		rejectAccount(new Error('account unavailable'));
+		await waitFor(() => expect((view.getByTestId('correct-payment-action') as HTMLButtonElement).disabled).toBe(false));
+		await fireEvent.click(view.getByTestId('correct-payment-action'));
+		await waitFor(() => expect(view.getByTestId('payment-correction-form')).toBeTruthy());
+		expect((view.getByTestId('payment-correction-form').querySelector('input') as HTMLInputElement).value).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
 	});
 });

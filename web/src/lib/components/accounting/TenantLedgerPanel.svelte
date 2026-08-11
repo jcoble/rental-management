@@ -32,6 +32,7 @@
 		type TenantLedgerRowAction
 	} from '$lib/accounting/tenant-ledger-action-flows';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { businessDateOrToday } from '$lib/utils/business-date';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -131,6 +132,10 @@
 	}));
 
 	const accountSummary = $derived(accountQuery.data);
+	const moneyDate = $derived(businessDateOrToday(accountSummary?.businessDate));
+	const moneyActionsPending = $derived(
+		tenantAccountId != null && !accountQuery.data && accountQuery.isPending
+	);
 	const ledgerSummary = $derived(ledgerSummaryQuery.data as TenantLedgerPeriodSummary | null | undefined);
 	const monthSummaries = $derived(monthSummaryQuery.data ?? []);
 	const currency = $derived(
@@ -190,11 +195,13 @@
 	}
 
 	function openNewCharge(): void {
+		if (moneyActionsPending) return;
 		chargeSeed = null;
 		sheet = 'charge';
 	}
 
 	function openRecurring(schedule: RecurringTenantChargeRow | null): void {
+		if (moneyActionsPending) return;
 		recurringTarget = schedule;
 		sheet = 'recurring';
 	}
@@ -230,12 +237,15 @@
 		if (flow.kind === 'view') {
 			openEntryDetail(flow.row);
 		} else if (flow.kind === 'give-credit') {
+			if (moneyActionsPending) return;
 			creditTarget = flow.row;
 			sheet = 'credit';
 		} else if (flow.kind === 'related-charge') {
+			if (moneyActionsPending) return;
 			chargeSeed = flow.seed;
 			sheet = 'charge';
 		} else if (flow.kind === 'reverse') {
+			if (moneyActionsPending) return;
 			openFixCharge(flow.row);
 		} else if (onopenallocationreview) {
 			onopenallocationreview(flow.entryId, flow.allocations);
@@ -245,7 +255,7 @@
 	}
 
 	function applyFix(): void {
-		if (!fixTarget || !fixChoice) return;
+		if (!fixTarget || !fixChoice || moneyActionsPending) return;
 		const target = fixTarget;
 		if (fixChoice === 'reduce') {
 			fixTarget = null;
@@ -275,7 +285,7 @@
 				const reversal = buildTenantLedgerReversalRequest(
 					tenantAccountId as number,
 					target,
-					new Date().toISOString().slice(0, 10)
+					moneyDate
 				);
 				if (target.type === 'OpeningBalance') {
 					return tenantMoney.reverseLedgerEntry(tenantAccountId as number, crypto.randomUUID(), {
@@ -356,11 +366,11 @@
 	</div>
 
 	<div class="flex flex-wrap items-center gap-2" data-testid="tenant-ledger-actions">
-		<Button size="sm" onclick={() => sheet = 'payment'} disabled={tenantAccountId == null}>Record payment</Button>
-		<Button size="sm" variant="outline" onclick={openNewCharge} disabled={tenantAccountId == null}>Add charge</Button>
-		<Button size="sm" variant="outline" onclick={() => { creditTarget = null; sheet = 'credit'; }} disabled={tenantAccountId == null}>Give credit</Button>
+		<Button size="sm" onclick={() => { if (!moneyActionsPending) sheet = 'payment'; }} disabled={tenantAccountId == null || moneyActionsPending} aria-busy={moneyActionsPending}>Record payment</Button>
+		<Button size="sm" variant="outline" onclick={openNewCharge} disabled={tenantAccountId == null || moneyActionsPending} aria-busy={moneyActionsPending}>Add charge</Button>
+		<Button size="sm" variant="outline" onclick={() => { if (moneyActionsPending) return; creditTarget = null; sheet = 'credit'; }} disabled={tenantAccountId == null || moneyActionsPending} aria-busy={moneyActionsPending}>Give credit</Button>
 		<DropdownMenu.Root>
-			<DropdownMenu.Trigger class="inline-flex h-9 items-center gap-1 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm hover:bg-muted disabled:pointer-events-none disabled:opacity-50" disabled={tenantAccountId == null}>
+			<DropdownMenu.Trigger class="inline-flex h-9 items-center gap-1 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm hover:bg-muted disabled:pointer-events-none disabled:opacity-50" disabled={tenantAccountId == null || moneyActionsPending} aria-busy={moneyActionsPending}>
 				Recurring charge <ChevronDown class="size-4" />
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content align="start" class="w-72">
@@ -426,6 +436,7 @@
 	tenantAccountId={tenantAccountId ?? 0}
 	currency={currency}
 	defaultPayerName={dashboard.currentTenant?.name ?? dashboard.currentTenants?.[0]?.name ?? ''}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -438,6 +449,7 @@
 	unitLabel={`Unit ${dashboard.unit.unitNumber}`}
 	currentBalance={balanceDue}
 	currency={currency}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -446,6 +458,7 @@
 	tenantAccountId={tenantAccountId ?? 0}
 	currency={currency}
 	initialTargetEntryId={creditTarget?.tenantLedgerEntryId ?? null}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
@@ -456,6 +469,7 @@
 	propertyId={dashboard.unit.propertyId}
 	unitId={dashboard.unit.id}
 	schedule={recurringTarget}
+	businessDate={accountSummary?.businessDate}
 	onclose={closeSheet}
 	onsaved={invalidateMoney}
 />
