@@ -645,12 +645,11 @@ public class UnitDashboardServiceTests : IAsyncLifetime
             openWork.ScheduledFor!.Value,
             TimeSpan.FromMilliseconds(1));
 
-        _executedSql.Should().Contain(command => command.Contains("FROM \"WorkOrders\"")
-            && command.Contains("GROUP BY")
-            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
-        _executedSql.Should().Contain(command => command.Contains("FROM \"Expenses\"")
-            && command.Contains("GROUP BY")
-            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
+        var dashboardSql = _executedSql.Should().ContainSingle(command =>
+            command.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase)).Subject;
+        dashboardSql.Should().Contain("FROM \"WorkOrders\"");
+        dashboardSql.Should().Contain("FROM \"Expenses\"");
+        dashboardSql.ToLowerInvariant().Should().Contain("sum(");
     }
 
     [Fact]
