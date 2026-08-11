@@ -13,17 +13,16 @@ namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Canonical staff reader for one continuous tenant receivable account. Authorization remains a
-/// correlated database predicate in every detail, count, page, charge, and deposit statement.
+/// translated database join in every detail, count, page, charge, and deposit statement.
 /// </summary>
 public sealed class TenantAccountQueryService : ITenantAccountQueryService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly TimeProvider _timeProvider;
 
     public TenantAccountQueryService(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
-        _timeProvider = timeProvider;
+        _ = timeProvider;
     }
 
     public async Task<TenantAccountPageResponse> ListAccountsPageAsync(
@@ -175,7 +174,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         TenantAccountListQuery query)
     {
         var rows =
-            from account in BuildAuthorizedAccountQuery(scope)
+            from account in BuildAuthorizedAccountListRowQuery(scope)
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, Id = account.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
@@ -1416,34 +1415,58 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
 
     internal IQueryable<TenantAccount> BuildAuthorizedAccountQuery(WorkspaceReadScope scope)
     {
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var authorizedProperties = _db.Properties.AsNoTracking().WhereAuthorized(
-            _db, scope, CapabilityKeys.MoneyBalancesRead, utcNow);
+        var authorizedPropertyIds = _db.AuthorizedPropertyIds(
+            scope, [CapabilityKeys.MoneyBalancesRead]);
 
         return
             from account in _db.TenantAccounts.AsNoTracking()
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, Id = account.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
+            join authorizedPropertyId in authorizedPropertyIds
+                on management.PropertyId equals authorizedPropertyId
             where account.PortfolioId == scope.PortfolioId
-                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             select account;
+    }
+
+    private IQueryable<AuthorizedTenantAccountListRow> BuildAuthorizedAccountListRowQuery(
+        WorkspaceReadScope scope)
+    {
+        var capabilityKeys = new[] { CapabilityKeys.MoneyBalancesRead };
+        return _db.Database.SqlQuery<AuthorizedTenantAccountListRow>($"""
+            SELECT authorized_account."Id",
+                   authorized_account."PublicId",
+                   authorized_account."PortfolioId",
+                   authorized_account."LeaseManagementId",
+                   authorized_account."AccountNumber",
+                   authorized_account."Currency",
+                   authorized_account."OpenedAtUtc",
+                   authorized_account."ClosedAtUtc"
+            FROM public.rc_api_authorized_tenant_accounts(
+                {scope.PortfolioId},
+                {scope.SessionId},
+                {scope.UserId},
+                {scope.AccessContextId},
+                {scope.AccessRevision},
+                {capabilityKeys}) AS authorized_account
+            """);
     }
 
     internal IQueryable<TenantAccount> BuildAuthorizedDepositAccountQuery(
         WorkspaceReadScope scope)
     {
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var authorizedProperties = TenantAccountDepositAuthorization.AuthorizedProperties(
-            _db, scope, utcNow);
+        var authorizedPropertyIds = _db.AuthorizedPropertyIds(
+            scope,
+            [CapabilityKeys.MoneyDepositsManage, CapabilityKeys.LeasingDepositsRead]);
 
         return
             from account in _db.TenantAccounts.AsNoTracking()
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, Id = account.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
+            join authorizedPropertyId in authorizedPropertyIds
+                on management.PropertyId equals authorizedPropertyId
             where account.PortfolioId == scope.PortfolioId
-                && authorizedProperties.Any(property => property.Id == management.PropertyId)
             select account;
     }
 
@@ -1483,6 +1506,18 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
             rows = rows.Where(row => row.EffectiveOn < throughExclusive);
         }
         return rows;
+    }
+
+    private sealed class AuthorizedTenantAccountListRow
+    {
+        public int Id { get; init; }
+        public Guid PublicId { get; init; }
+        public int PortfolioId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public string AccountNumber { get; init; } = string.Empty;
+        public string Currency { get; init; } = string.Empty;
+        public DateTime OpenedAtUtc { get; init; }
+        public DateTime? ClosedAtUtc { get; init; }
     }
 
     private static IQueryable<TenantChargeResponse> ApplyChargeFilters(

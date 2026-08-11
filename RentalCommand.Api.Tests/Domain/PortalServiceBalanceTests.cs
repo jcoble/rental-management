@@ -39,6 +39,9 @@ public sealed class PortalServiceBalanceTests
         }).ToQueryString();
 
         AssertCurrentTenantAccess(sql);
+        sql.Should().Contain("authorized_tenant_accounts AS MATERIALIZED",
+            "the portal account page must join one materialized tenant-account authorization set");
+        sql.Should().Contain("vw_effective_tenant_access", Exactly.Once());
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("vw_lease_agreement_status");
         sql.Should().Contain("vw_tenant_account_balances");
@@ -386,6 +389,30 @@ public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
 
         deniedPage.Should().BeNull();
         _commands.Should().ContainSingle("unauthorized account lookup stops before charge queries");
+    }
+
+    [Fact]
+    public async Task AccountPage_ExcludesUnauthorizedTenantAccount_AndJoinsMaterializedAccessSet()
+    {
+        var scenario = await SeedScenarioAsync();
+        _commands.Clear();
+
+        var page = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .ListTenantAccountsPageAsync(
+                scenario.Scope,
+                new PortalTenantAccountListQuery { Take = 20 });
+
+        page.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle(item => item.TenantAccountId == scenario.TenantAccountId);
+        page.Items.Should().NotContain(item => item.TenantAccountId == scenario.UnauthorizedTenantAccountId);
+        _commands.Should().HaveCount(2, "account count and page must remain bounded database statements");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("authorized_tenant_accounts AS MATERIALIZED", StringComparison.Ordinal),
+            "portal account count/page SQL must preserve the effective tenant-access boundary");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("vw_effective_tenant_access", StringComparison.Ordinal),
+            "portal account count/page must resolve the effective access view once per statement");
     }
 
     [Fact]

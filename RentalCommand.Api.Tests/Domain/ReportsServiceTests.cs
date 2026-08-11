@@ -1,7 +1,10 @@
 using System.Data.Common;
+using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -9,6 +12,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
+using Xunit.Abstractions;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -25,20 +29,23 @@ public class ReportsServiceTests : IAsyncLifetime
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
+    private readonly List<RecordedDbCommand> _recordedCommands = [];
+    private readonly ITestOutputHelper _output;
     private MigratedPostgreSqlTestContext _context = null!;
     private RentalCommandDbContext _db = null!;
     private ReportsService _sut = null!;
     private WorkspaceReadScope _scope;
 
-    public ReportsServiceTests(MigratedPostgreSqlFixture fixture)
+    public ReportsServiceTests(MigratedPostgreSqlFixture fixture, ITestOutputHelper output)
     {
         _fixture = fixture;
+        _output = output;
     }
 
     public async Task InitializeAsync()
     {
         _context = await _fixture.CreateContextAsync(
-            [new RecordingCommandInterceptor(_executedSql)]);
+            [new RecordingCommandInterceptor(_executedSql, _recordedCommands)]);
         _db = _context.Db;
         _scope = SeedAdministratorScope();
         await _context.ActivateApiScopeAsync(_scope);
@@ -1387,6 +1394,11 @@ public class ReportsServiceTests : IAsyncLifetime
         var totalsSql = string.Join("\n---\n", totalSql);
         totalsSql.Should().Contain("vw_security_deposit_balances");
         totalsSql.Should().Contain("TotalDeductions");
+        totalsSql.Should().Contain("authorized_properties AS MATERIALIZED",
+            "security-deposit totals must join one materialized property authorization set");
+        totalSql.Should().OnlyContain(sql =>
+            sql.Contains("public.rc_api_effective_capability_scopes(", StringComparison.Ordinal),
+            "security-deposit aggregates must resolve authorization through the shared scope relation");
     }
 
     [Fact]
@@ -1425,6 +1437,40 @@ public class ReportsServiceTests : IAsyncLifetime
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("vw_security_deposit_balances", StringComparison.OrdinalIgnoreCase),
             "the deposit report total count must be a SQL count over the filtered register");
+    }
+
+    [Fact]
+    public async Task GetSecurityDepositRegisterAsync_ExcludesDepositOutsideSelectedPropertyScope()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 1000m);
+        SeedSecurityDeposit(mapleLease, D(2026, 1, 1), "selected-maple");
+        SeedSecurityDeposit(oakLease, D(2026, 1, 2), "excluded-oak");
+
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            maple.Id,
+            nameof(GetSecurityDepositRegisterAsync_ExcludesDepositOutsideSelectedPropertyScope));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        _executedSql.Clear();
+
+        var report = await _sut.GetSecurityDepositRegisterAsync(
+            selectedScope, new ReportRangeQuery(), CancellationToken.None);
+
+        report.Rows.Should().ContainSingle(row => row.PropertyId == maple.Id);
+        report.Rows.Should().NotContain(row => row.PropertyId == oak.Id);
+        report.TotalCount.Should().Be(1);
+        report.TotalHeld.Should().Be(1000m);
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("authorized_properties AS MATERIALIZED", StringComparison.Ordinal),
+                "security-deposit row/count SQL must preserve the selected-property authorization boundary");
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(sql => sql.Contains("public.rc_api_effective_capability_scopes(", StringComparison.Ordinal),
+                "security-deposit row/count SQL must resolve authorization through the shared scope relation");
     }
 
     // ── Property filter IDOR guard (DB) ────────────────────────────────────────────────────────────
@@ -1577,8 +1623,31 @@ public class ReportsServiceTests : IAsyncLifetime
         SeedOwnerDistribution(owner.Id, 1_250m, D(2027, 1, 25));
         SeedOwnerDistribution(owner.Id, 100m, D(2027, 1, 25), status: OwnerDistributionStatus.Rejected);
         SeedOwnerDistribution(owner.Id, 900m, D(2026, 12, 25));
+        var historyOwners = Enumerable.Range(0, 100)
+            .Select(index => new OwnerEntity
+            {
+                PortfolioId = PortfolioId,
+                OwnerEntityType = OwnerEntityType.LLC,
+                Name = $"History Owner {index}",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            })
+            .ToArray();
+        _db.OwnerEntities.AddRange(historyOwners);
         _db.SaveChanges();
+        _db.OwnerDistributions.AddRange(historyOwners.SelectMany(historyOwner =>
+            Enumerable.Range(0, 120).Select(index =>
+                CreateOwnerDistribution(
+                    historyOwner.Id,
+                    0m,
+                    D(2018 + (index % 12), 1 + (index % 12), 1 + (index % 27)),
+                    status: (index / 12) % 2 == 0
+                        ? OwnerDistributionStatus.Approved
+                        : OwnerDistributionStatus.Rejected))));
+        _db.SaveChanges();
+        await _db.Database.ExecuteSqlRawAsync("ANALYZE \"OwnerDistributions\"");
         _executedSql.Clear();
+        _recordedCommands.Clear();
 
         var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
 
@@ -1593,12 +1662,88 @@ public class ReportsServiceTests : IAsyncLifetime
         report.TotalUndistributed.Should().Be(350m);
 
         var sql = string.Join("\n---\n", _executedSql);
+        var ownerStatements = AssertOwnerDistributionStatements();
         sql.Should().Contain("\"OwnerDistributions\"", "recorded owner payouts must be summed from the distribution table");
         sql.Should().ContainEquivalentOf("SUM", "owner net and distributed totals must be aggregated in SQL");
-        sql.Should().Contain("ELSE EXISTS",
-            "portfolio-level owner distributions must be included by the translated SQL predicate");
-        sql.Should().Contain("NOT EXISTS",
-            "propertyless payouts must remain blocked unless the owner's active ownership scope is fully authorized");
+        sql.Should().NotContain("ELSE EXISTS",
+            "the owner distribution authorization must not be a per-output-row correlated branch");
+
+        var explain = await ExplainAsync(_recordedCommands.Single(command =>
+            command.CommandText.Contains("\"OwnerDistributions\"", StringComparison.Ordinal)
+            && command.CommandText.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)));
+        _output.WriteLine("--- OWNER DISTRIBUTION EXPLAIN ---");
+        _output.WriteLine(explain);
+        await File.WriteAllTextAsync("/tmp/bugfix-c1-owner-distribution-explain.txt", explain);
+        explain.Should().Contain("OwnerDistributions");
+        var distributionAccess = explain
+            .Split('\n')
+            .SingleOrDefault(line =>
+                line.Contains("IX_OwnerDistributions_PortfolioId_Status_Date", StringComparison.Ordinal)
+                && (line.Contains("Index Scan", StringComparison.Ordinal)
+                    || line.Contains("Bitmap Index Scan", StringComparison.Ordinal)));
+        distributionAccess.Should().NotBeNull(
+            "the approved, year-bounded owner-distribution source must use the status/date index rather than an all-history portfolio access path");
+        explain
+            .Split('\n')
+            .Where(line => line.Contains("Index Cond:", StringComparison.Ordinal))
+            .Should().Contain(line =>
+                line.Contains("\"PortfolioId\"", StringComparison.Ordinal)
+                && line.Contains("\"Status\"", StringComparison.Ordinal)
+                && line.Contains("\"Date\"", StringComparison.Ordinal),
+                "the physical index condition must bind portfolio, approved status, and both report-date bounds");
+        ownerStatements.Should().OnlyContain(statement =>
+            statement.Contains("authorized_distributions AS MATERIALIZED", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_ExcludesSoftDeletedPaidExpensesFromOwnerRowsAndTotals()
+    {
+        var owner = SeedOwner("Expense Filter Holdings LLC");
+        var property = SeedProperty("Expense Filter Maple");
+        SeedOwnership(owner, property, D(2026, 1, 1));
+
+        SeedExpense(property.Id, 300m, D(2027, 1, 10));
+        var deletedExpense = SeedExpense(property.Id, 300m, D(2027, 1, 10));
+        deletedExpense.DeletedAt = D(2027, 1, 11);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.NetToOwner.Should().Be(-300m);
+        row.TotalDistributed.Should().Be(0m);
+        row.Undistributed.Should().Be(-300m);
+        report.TotalNetToOwners.Should().Be(-300m);
+        report.TotalDistributed.Should().Be(0m);
+        report.TotalUndistributed.Should().Be(-300m);
+
+        string.Join("\n", _executedSql)
+            .Should().Contain("expense.\"DeletedAt\" IS NULL",
+                "the raw expense aggregate must preserve Expense.DeletedAt == null");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_ExcludesSoftDeletedOwnersFromRowsAndTotals()
+    {
+        var owner = SeedOwner("Deleted Owner Holdings LLC");
+        var property = SeedProperty("Deleted Owner Maple");
+        SeedOwnership(owner, property, D(2026, 1, 1));
+        SeedExpense(property.Id, 150m, D(2027, 1, 10));
+        owner.DeletedAt = D(2027, 1, 11);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetOwnerDistributionsAsync(_scope, 2027, CancellationToken.None);
+
+        report.Rows.Should().BeEmpty("a soft-deleted owner is excluded by the OwnerEntity query filter");
+        report.TotalNetToOwners.Should().Be(0m);
+        report.TotalDistributed.Should().Be(0m);
+        report.TotalUndistributed.Should().Be(0m);
+
+        string.Join("\n", _executedSql)
+            .Should().Contain("owner_entity.\"DeletedAt\" IS NULL",
+                "the raw owner join must preserve OwnerEntity.DeletedAt == null");
     }
 
     [Fact]
@@ -1630,6 +1775,7 @@ public class ReportsServiceTests : IAsyncLifetime
         SeedOwnerDistribution(owner.Id, 4_100m, D(2027, 1, 25));
         _db.SaveChanges();
         _executedSql.Clear();
+        _recordedCommands.Clear();
 
         var report = await sut.GetOwnerDistributionsAsync(selectedScope, 2027, CancellationToken.None);
 
@@ -1640,12 +1786,51 @@ public class ReportsServiceTests : IAsyncLifetime
         report.TotalDistributed.Should().Be(4_100m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        _executedSql.Should().ContainSingle(
-            command => command.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase),
-            "owner distribution rows and totals must be produced by one SQL statement");
+        AssertOwnerDistributionStatements();
         sql.Should().Contain("\"OwnerDistributions\"");
-        sql.Should().Contain("NOT EXISTS",
-            "propertyless payouts must still require authorization for every active owner property");
+        sql.Should().NotContain("NOT EXISTS",
+            "propertyless payout authorization must not be re-evaluated as a per-owner correlated predicate");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_PropertylessPayoutIsExcludedWhenOwnerHasAnUnauthorizedCurrentProperty()
+    {
+        var owner = SeedOwner("Split Scope Holdings LLC");
+        var authorizedProperty = SeedProperty("Authorized Maple");
+        var unauthorizedProperty = SeedProperty("Unauthorized Oak");
+        SeedOwnership(owner, authorizedProperty, D(2026, 1, 1));
+        SeedOwnership(owner, unauthorizedProperty, D(2026, 1, 1));
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            authorizedProperty.Id,
+            nameof(OwnerDistributions_PropertylessPayoutIsExcludedWhenOwnerHasAnUnauthorizedCurrentProperty));
+        await _context.ActivateApiScopeAsync(selectedScope);
+        var sut = new ReportsService(
+            _db,
+            new OwnerStatementService(_db, TimeProvider.System),
+            new ScheduleEService(_db),
+            new PropertyDispositionService(_db, TimeProvider.System),
+            new FixedTimeProvider(new DateTimeOffset(D(2027, 1, 31))));
+
+        var lease = SeedLease(
+            authorizedProperty,
+            SeedUnit("1", authorizedProperty.Id),
+            SeedTenant("Authorized", "Tenant"),
+            rent: 5_000m);
+        SeedPayment(lease, 5_000m, dueDate: D(2027, 1, 1), paidInFull: true, paidDate: D(2027, 1, 5));
+        SeedOwnerDistribution(owner.Id, 4_100m, D(2027, 1, 25));
+        _db.SaveChanges();
+        _executedSql.Clear();
+        _recordedCommands.Clear();
+
+        var report = await sut.GetOwnerDistributionsAsync(selectedScope, 2027, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.OwnerName.Should().Be(owner.Name);
+        row.TotalDistributed.Should().Be(0m,
+            "a propertyless payout must fail closed when the owner has one current property outside the selected scope");
+        report.TotalDistributed.Should().Be(0m);
+        AssertOwnerDistributionStatements();
     }
 
     // ── Lease expirations (DB) ─────────────────────────────────────────────────────────────────────
@@ -1828,8 +2013,21 @@ public class ReportsServiceTests : IAsyncLifetime
         OwnerDistributionStatus status = OwnerDistributionStatus.Approved,
         int? propertyId = null)
     {
+        var distribution = CreateOwnerDistribution(ownerId, amount, date, status, propertyId);
+        _db.OwnerDistributions.Add(distribution);
+        _db.SaveChanges();
+        return distribution;
+    }
+
+    private static OwnerDistribution CreateOwnerDistribution(
+        int ownerId,
+        decimal amount,
+        DateTime date,
+        OwnerDistributionStatus status = OwnerDistributionStatus.Approved,
+        int? propertyId = null)
+    {
         var now = DateTime.UtcNow;
-        var distribution = new OwnerDistribution
+        return new OwnerDistribution
         {
             PortfolioId = PortfolioId,
             OwnerEntityId = ownerId,
@@ -1845,9 +2043,6 @@ public class ReportsServiceTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _db.OwnerDistributions.Add(distribution);
-        _db.SaveChanges();
-        return distribution;
     }
 
     private Unit SeedUnit(string number, int? propertyId = null)
@@ -2243,14 +2438,121 @@ public class ReportsServiceTests : IAsyncLifetime
         return payment;
     }
 
-    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    private string[] AssertOwnerDistributionStatements()
     {
+        var statements = _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
+                && sql.Contains("\"OwnerDistributions\"", StringComparison.Ordinal))
+            .ToArray();
+
+        statements.Should().HaveCount(2,
+            "owner distribution rows and totals must each be one owner-distribution SELECT");
+        statements.Should().OnlyContain(statement =>
+            CountOccurrences(statement, "public.rc_api_effective_capability_scopes(") == 1,
+            "each owner-distribution SELECT must resolve effective scopes exactly once");
+        statements.Should().OnlyContain(statement =>
+            CountOccurrences(statement, "effective_scopes AS MATERIALIZED") == 1
+            && CountOccurrences(statement, "authorized_properties AS MATERIALIZED") == 1,
+            "each owner-distribution SELECT must have one shared effective scope/property pair");
+        statements.Should().OnlyContain(statement =>
+            statement.Contains("fully_authorized_owners AS MATERIALIZED", StringComparison.Ordinal),
+            "propertyless payouts must remain tied to the shared fully-authorized owner relation");
+        statements.Should().OnlyContain(statement =>
+            statement.Contains("bounded_distributions AS MATERIALIZED", StringComparison.Ordinal),
+            "the distribution source must be materialized only after portfolio/status/date bounds");
+        statements.Select(ExtractBoundedDistributionSource).Should().OnlyContain(source =>
+            source.Contains("\"Status\" =", StringComparison.Ordinal)
+            && source.Contains("(distribution.\"PortfolioId\", distribution.\"Status\", distribution.\"Date\")", StringComparison.Ordinal)
+            && source.Contains("distribution.\"Date\"", StringComparison.Ordinal),
+            "the selective distribution source must carry approved and composite portfolio/status/year predicates before materialization");
+        return statements;
+    }
+
+    private static string ExtractBoundedDistributionSource(string sql)
+    {
+        var start = sql.IndexOf("bounded_distributions AS MATERIALIZED", StringComparison.Ordinal);
+        var end = sql.IndexOf("authorized_distributions AS MATERIALIZED", start, StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0);
+        end.Should().BeGreaterThan(start);
+        return sql[start..end];
+    }
+
+    private async Task<string> ExplainAsync(RecordedDbCommand recordedCommand)
+    {
+        var connection = _db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"EXPLAIN (ANALYZE, BUFFERS, VERBOSE, COSTS OFF, TIMING OFF, SUMMARY OFF) "
+            + recordedCommand.CommandText.Trim().TrimEnd(';');
+        foreach (var parameter in recordedCommand.Parameters)
+            command.Parameters.Add(parameter.CreateNpgsqlParameter());
+
+        await using var reader = await command.ExecuteReaderAsync();
+        var plan = new StringBuilder();
+        while (await reader.ReadAsync())
+            plan.AppendLine(reader.GetString(0));
+        return plan.ToString();
+    }
+
+    private static int CountOccurrences(string value, string token)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = value.IndexOf(token, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += token.Length;
+        }
+
+        return count;
+    }
+
+    private sealed record RecordedDbCommand(
+        string CommandText,
+        IReadOnlyList<RecordedParameter> Parameters);
+
+    private sealed record RecordedParameter(
+        string Name,
+        object? Value,
+        NpgsqlDbType? NpgsqlDbType)
+    {
+        public NpgsqlParameter CreateNpgsqlParameter()
+        {
+            var parameter = NpgsqlDbType is { } type
+                ? new NpgsqlParameter(Name, type)
+                : new NpgsqlParameter(Name, Value ?? DBNull.Value);
+            parameter.Value = Value ?? DBNull.Value;
+            return parameter;
+        }
+    }
+
+    private sealed class RecordingCommandInterceptor(
+        List<string> commands,
+        List<RecordedDbCommand>? recordedCommands = null) : DbCommandInterceptor
+    {
+        private void Record(DbCommand command)
+        {
+            commands.Add(command.CommandText);
+            recordedCommands?.Add(new RecordedDbCommand(
+                command.CommandText,
+                command.Parameters
+                    .Cast<DbParameter>()
+                    .Select(parameter => new RecordedParameter(
+                        parameter.ParameterName,
+                        parameter.Value,
+                        (parameter as NpgsqlParameter)?.NpgsqlDbType))
+                    .ToArray()));
+        }
+
         public override InterceptionResult<DbDataReader> ReaderExecuting(
             DbCommand command,
             CommandEventData eventData,
             InterceptionResult<DbDataReader> result)
         {
-            commands.Add(command.CommandText);
+            Record(command);
             return base.ReaderExecuting(command, eventData, result);
         }
 
@@ -2260,7 +2562,7 @@ public class ReportsServiceTests : IAsyncLifetime
             InterceptionResult<DbDataReader> result,
             CancellationToken cancellationToken = default)
         {
-            commands.Add(command.CommandText);
+            Record(command);
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
 
@@ -2269,7 +2571,7 @@ public class ReportsServiceTests : IAsyncLifetime
             CommandEventData eventData,
             InterceptionResult<object> result)
         {
-            commands.Add(command.CommandText);
+            Record(command);
             return base.ScalarExecuting(command, eventData, result);
         }
 
@@ -2279,7 +2581,7 @@ public class ReportsServiceTests : IAsyncLifetime
             InterceptionResult<object> result,
             CancellationToken cancellationToken = default)
         {
-            commands.Add(command.CommandText);
+            Record(command);
             return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
         }
     }

@@ -35,6 +35,8 @@ public sealed class TenantAccountQueryServiceSqlTests
         var sql = NewService(db).BuildDetailQuery(Scope, 41).ToQueryString();
 
         AssertAuthorized(sql);
+        sql.Should().Contain("authorized_properties AS MATERIALIZED",
+            "staff account pages must join one materialized property authorization set");
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("vw_tenant_account_balances");
@@ -61,8 +63,8 @@ public sealed class TenantAccountQueryServiceSqlTests
             Take = 25,
         }).ToQueryString();
 
-        AssertAuthorized(sql);
-        sql.Should().Contain("TenantAccounts");
+        AssertAccountListAuthorized(sql);
+        sql.Should().Contain("rc_api_authorized_tenant_accounts");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("vw_tenant_account_balances");
@@ -572,6 +574,18 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().Contain("public.rc_api_effective_capability_scopes(", Exactly.Once());
         sql.Should().Contain(CapabilityKeys.MoneyBalancesRead);
         sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("MembershipRoleAssignments");
+            sql.Should().NotContain("MembershipRoleAssignmentProperties");
+    }
+
+    private static void AssertAccountListAuthorized(string sql)
+    {
+        sql.Should().Contain("rc_api_authorized_tenant_accounts(", Exactly.Once());
+        sql.Should().Contain(CapabilityKeys.MoneyBalancesRead);
+        sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("FROM \"TenantAccounts\"");
         sql.Should().NotContain("AuthSessions");
         sql.Should().NotContain("RoleProfileCapabilities");
         sql.Should().NotContain("MembershipRoleAssignments");

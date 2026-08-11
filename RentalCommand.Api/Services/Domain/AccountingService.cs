@@ -152,11 +152,14 @@ public partial class AccountingService : IAccountingService
     public Task<MoneySnapshotResponse> GetSnapshotAsync(
         WorkspaceReadScope scope,
         CancellationToken ct = default) =>
-        GetSnapshotCoreAsync(scope.PortfolioId, AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead), ct);
+        GetSnapshotCoreAsync(
+            scope.PortfolioId,
+            AuthorizedPropertyIds(scope, CapabilityKeys.MoneyBalancesRead),
+            ct);
 
     private async Task<MoneySnapshotResponse> GetSnapshotCoreAsync(
         int portfolioId,
-        IQueryable<Property> authorizedProperties,
+        IQueryable<int> authorizedPropertyIds,
         CancellationToken ct)
     {
         var now = _timeProvider.UtcNow();
@@ -172,7 +175,7 @@ public partial class AccountingService : IAccountingService
         // loaded into memory.
         // A Partial payment's collected cash also lands on its PaidDate, so it counts as money-in for the
         // period — contributing its AmountPaid (not its full Amount). Paid contributes the full Amount.
-        var paymentsCollected = await TenantIncomeQuery(portfolioId, authorizedProperties)
+        var paymentsCollected = await TenantIncomeQuery(portfolioId, authorizedPropertyIds)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -191,10 +194,12 @@ public partial class AccountingService : IAccountingService
         // Money out: authorized-property expenses, using paid date when present and incurred date otherwise.
         var expensesSpent = await _db.Expenses
             .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                authorizedProperties.Any(property => property.Id == e.PropertyId))
+            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Join(
+                authorizedPropertyIds,
+                expense => expense.PropertyId!.Value,
+                propertyId => propertyId,
+                (expense, _) => expense)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -205,14 +210,17 @@ public partial class AccountingService : IAccountingService
 
         var spentMtd = expensesSpent?.Mtd ?? 0m;
         var spent30 = expensesSpent?.Last30 ?? 0m;
-        var debtServiceSpent = await LoanPaymentEffectiveQuery.From(_db)
-            .Where(payment =>
-                payment.PortfolioId == portfolioId &&
-                payment.Status == LoanPaymentStatus.Paid &&
-                payment.PaidDate != null &&
-                _db.Loans.Any(loan =>
-                    loan.Id == payment.LoanId &&
-                    authorizedProperties.Any(property => property.Id == loan.PropertyId)))
+        var debtServiceSpent = await (
+            from payment in LoanPaymentEffectiveQuery.From(_db)
+            join loan in _db.Loans.AsNoTracking()
+                on new { payment.PortfolioId, payment.LoanId }
+                equals new { loan.PortfolioId, LoanId = loan.Id }
+            join propertyId in authorizedPropertyIds
+                on loan.PropertyId equals propertyId
+            where payment.PortfolioId == portfolioId
+                && payment.Status == LoanPaymentStatus.Paid
+                && payment.PaidDate != null
+            select payment)
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -229,7 +237,8 @@ public partial class AccountingService : IAccountingService
         // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
         // list (GetPastDueAsync), so this KPI can never disagree with the destination row count.
         // Both figures are derived SQL-side; no payment rows are loaded to count.
-        var pastDueSummary = await PastDueSummaryQuery(portfolioId, authorizedProperties).FirstOrDefaultAsync(ct);
+        var pastDueSummary = await PastDueSummaryQuery(portfolioId, authorizedPropertyIds)
+            .FirstOrDefaultAsync(ct);
         var pastDueAmount = pastDueSummary?.TotalPastDueAmount ?? 0m;
         var pastDueCount = pastDueSummary?.TotalCount ?? 0;
 
@@ -260,19 +269,20 @@ public partial class AccountingService : IAccountingService
         CancellationToken ct = default) =>
         GetPastDueCoreAsync(
             scope.PortfolioId,
-            AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead),
+            AuthorizedPropertyIds(scope, CapabilityKeys.MoneyBalancesRead),
             query.NormalizedSkip,
             query.NormalizedTake,
             ct);
 
     private async Task<PastDueResponse> GetPastDueCoreAsync(
         int portfolioId,
-        IQueryable<Property> authorizedProperties,
+        IQueryable<int> authorizedPropertyIds,
         int skip,
         int take,
         CancellationToken ct)
     {
-        var summary = await PastDueSummaryQuery(portfolioId, authorizedProperties).FirstOrDefaultAsync(ct);
+        var summary = await PastDueSummaryQuery(portfolioId, authorizedPropertyIds)
+            .FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
         var businessDate = summary?.BusinessDate;
@@ -291,7 +301,7 @@ public partial class AccountingService : IAccountingService
         }
 
         var items = await (
-                from balance in CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+                from balance in CurrentTenantBalanceQuery(portfolioId, authorizedPropertyIds)
                 join management in _db.LeaseManagements.AsNoTracking()
                     on new { balance.PortfolioId, Id = balance.LeaseManagementId }
                     equals new { management.PortfolioId, management.Id }
@@ -367,6 +377,19 @@ public partial class AccountingService : IAccountingService
                     balance.PastDueAmount > 0m ? balance.PastDueAmount : 0m),
             });
 
+    private IQueryable<PastDueSummary> PastDueSummaryQuery(
+        int portfolioId,
+        IQueryable<int> authorizedPropertyIds) =>
+        CurrentTenantBalanceQuery(portfolioId, authorizedPropertyIds)
+            .GroupBy(balance => balance.BusinessDate)
+            .Select(g => new PastDueSummary
+            {
+                BusinessDate = g.Key,
+                TotalCount = g.Count(balance => balance.PastDueAmount > 0m),
+                TotalPastDueAmount = g.Sum(balance =>
+                    balance.PastDueAmount > 0m ? balance.PastDueAmount : 0m),
+            });
+
     /// <summary>
     /// Canonical tenant balances that still belong on current operational money surfaces. Agreement
     /// expiration does not end a resident relationship: open possession remains Occupied (and is
@@ -382,6 +405,32 @@ public partial class AccountingService : IAccountingService
             equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
         where balance.PortfolioId == portfolioId
             && authorizedProperties.Any(property => property.Id == lifecycle.PropertyId)
+            && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+        select new CurrentTenantBalanceRow
+        {
+            PortfolioId = balance.PortfolioId,
+            PropertyId = lifecycle.PropertyId,
+            LeaseManagementId = balance.LeaseManagementId,
+            TenantAccountId = balance.TenantAccountId,
+            BusinessDate = balance.BusinessDate,
+            ReceivableBalance = balance.ReceivableBalance,
+            PastDueAmount = balance.PastDueAmount,
+            PastDueCount = balance.PastDueCount,
+            CurrentAgreementId = lifecycle.CurrentAgreementId,
+            CurrentPrimaryPartyId = lifecycle.CurrentPrimaryPartyId,
+            CurrentPrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+        };
+
+    private IQueryable<CurrentTenantBalanceRow> CurrentTenantBalanceQuery(
+        int portfolioId,
+        IQueryable<int> authorizedPropertyIds) =>
+        from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+        join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            on new { balance.PortfolioId, balance.LeaseManagementId }
+            equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+        join propertyId in authorizedPropertyIds
+            on lifecycle.PropertyId equals propertyId
+        where balance.PortfolioId == portfolioId
             && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
         select new CurrentTenantBalanceRow
         {
@@ -1230,6 +1279,40 @@ public partial class AccountingService : IAccountingService
             UnitId = management.UnitId,
         };
 
+    private IQueryable<TenantIncomeRow> TenantIncomeQuery(
+        int portfolioId,
+        IQueryable<int> authorizedPropertyIds) =>
+        from allocation in _db.TenantLedgerAllocations.AsNoTracking()
+        join receipt in _db.TenantLedgerEntries.AsNoTracking()
+            on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
+            equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
+        join charge in _db.TenantLedgerEntries.AsNoTracking()
+            on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
+            equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
+        join account in _db.TenantAccounts.AsNoTracking()
+            on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
+            equals new { account.PortfolioId, account.Id }
+        join management in _db.LeaseManagements.AsNoTracking()
+            on new { account.PortfolioId, Id = account.LeaseManagementId }
+            equals new { management.PortfolioId, management.Id }
+        join propertyId in authorizedPropertyIds
+            on management.PropertyId equals propertyId
+        where allocation.PortfolioId == portfolioId
+            && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
+            && charge.EntryType != TenantLedgerEntryType.DepositCharge
+        select new TenantIncomeRow
+        {
+            ReceiptId = receipt.Id,
+            TenantAccountId = account.Id,
+            LeaseManagementId = management.Id,
+            EffectiveOn = receipt.EffectiveOn,
+            PostedAtUtc = receipt.PostedAtUtc,
+            Description = receipt.Description,
+            Amount = allocation.Amount,
+            PropertyId = management.PropertyId,
+            UnitId = management.UnitId,
+        };
+
     private IQueryable<Property> AuthorizedProperties(
         WorkspaceReadScope scope,
         string capabilityKey) =>
@@ -1240,6 +1323,11 @@ public partial class AccountingService : IAccountingService
                 scope,
                 capabilityKey,
                 _timeProvider.UtcNow());
+
+    private IQueryable<int> AuthorizedPropertyIds(
+        WorkspaceReadScope scope,
+        string capabilityKey) =>
+        _db.AuthorizedPropertyIds(scope, [capabilityKey]);
 
     private IQueryable<int> BuildAllPropertiesAuthorityQuery(
         WorkspaceReadScope scope,
