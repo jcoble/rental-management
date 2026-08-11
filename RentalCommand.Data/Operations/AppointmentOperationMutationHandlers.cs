@@ -22,6 +22,7 @@ public sealed class CreateAppointmentHandler
         CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var capability = AppointmentOperationValidation.ManageCapability(command.Type);
@@ -66,6 +67,7 @@ public sealed class CreateAppointmentHandler
     public async Task AuthorizeReplayAsync(CreateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var capability = AppointmentOperationValidation.ManageCapability(command.Type);
         if (!await StaffOperationAuthorization.CanManageNullablePropertyAsync(command.PortfolioId, command.Actor,
@@ -99,6 +101,14 @@ public sealed class UpdateAppointmentHandler
         UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
+        var currentWorkOrderId = await _db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
+            .Select(item => item.WorkOrderId)
+            .SingleOrDefaultAsync(ct);
+        await WorkOrderProgressionLock.AcquireAsync(
+            context, ct, currentWorkOrderId, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
@@ -177,6 +187,14 @@ public sealed class UpdateAppointmentHandler
     public async Task AuthorizeReplayAsync(UpdateAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
+        var currentWorkOrderId = await _db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
+            .Select(item => item.WorkOrderId)
+            .SingleOrDefaultAsync(ct);
+        await WorkOrderProgressionLock.AcquireAsync(
+            context, ct, currentWorkOrderId, command.WorkOrderId);
         var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         var current = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
                 command.PortfolioId, command.Actor, _db,
@@ -232,6 +250,13 @@ public sealed class DeleteAppointmentHandler
         IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
+        var currentWorkOrderId = await _db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
+            .Select(item => item.WorkOrderId)
+            .SingleOrDefaultAsync(ct);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         var entity = await StaffOperationAuthorization.AuthorizedAppointmentsByType(
@@ -255,6 +280,13 @@ public sealed class DeleteAppointmentHandler
     public async Task AuthorizeReplayAsync(DeleteAppointmentCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         AppointmentOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAppointmentAsync(context, ct, command.AppointmentId);
+        var currentWorkOrderId = await _db.Set<Appointment>()
+            .AsNoTracking()
+            .Where(item => item.Id == command.AppointmentId && item.PortfolioId == command.PortfolioId)
+            .Select(item => item.WorkOrderId)
+            .SingleOrDefaultAsync(ct);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, currentWorkOrderId);
         var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await StaffOperationAuthorization.AuthorizedAppointmentsByType(
                 command.PortfolioId, command.Actor, _db,
@@ -567,6 +599,8 @@ internal static class AppointmentOperationValidation
             .AnyAsync(workOrder =>
                 workOrder.Id == workOrderId.Value &&
                 workOrder.PropertyId == propertyId.Value &&
+                workOrder.Status != WorkOrderStatus.Cancelled &&
+                workOrder.Status != WorkOrderStatus.Archived &&
                 (!unitId.HasValue ? workOrder.UnitId == null : workOrder.UnitId == unitId.Value) &&
                 (!tenantId.HasValue ? workOrder.TenantId == null : workOrder.TenantId == tenantId.Value),
                 ct);

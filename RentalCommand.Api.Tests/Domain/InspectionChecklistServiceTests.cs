@@ -1,10 +1,13 @@
 using FluentAssertions;
+using FluentAssertions.Execution;
+using System.Text;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
@@ -14,7 +17,9 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -31,6 +36,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
+    private readonly ReopenProgressionGate _reopenProgressionGate = new();
     private MigratedPostgreSqlTestContext _ctx = null!;
     private RentalCommandDbContext _db = null!;
     private InspectionService _service = null!;
@@ -49,7 +55,9 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     {
         _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
         _db = _ctx.Db;
-        _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(_ctx.ConnectionString);
+        _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(
+            _ctx.ConnectionString,
+            [_reopenProgressionGate]);
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
 
         _service = new InspectionService(
@@ -57,6 +65,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             TimeProvider.System,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -332,6 +341,430 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReopenThenRecomplete_ClearsCompletionArtifactsAndGeneratesFreshReport()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+
+        var items = created!.Items.OrderBy(i => i.SortOrder).ToList();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Before reopen" }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+        var (firstSummary, firstError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        firstError.Should().BeNull();
+        firstSummary.Should().NotBeNull();
+        var oldReportId = firstSummary!.ReportStoredFileId;
+        oldReportId.Should().NotBeNull();
+        var firstWorkOrderIds = firstSummary.CreatedWorkOrderIds.ToArray();
+        firstWorkOrderIds.Should().ContainSingle();
+        var oldCompletedAt = await _db.Inspections.AsNoTracking()
+            .Where(inspection => inspection.Id == created.Id)
+            .Select(inspection => inspection.CompletedAt)
+            .SingleAsync();
+
+        var reopened = await _service.UpdateAuthorizedAsync(_scope, created.Id,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled }, NextOperationKey());
+        reopened.Should().NotBeNull();
+
+        using (new AssertionScope())
+        {
+            var reopenedRow = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+            reopenedRow.Status.Should().Be(InspectionStatus.Scheduled);
+            reopenedRow.CompletedAt.Should().BeNull();
+            reopenedRow.ReportStoredFileId.Should().BeNull();
+            (await _db.StoredFiles.IgnoreQueryFilters().AsNoTracking()
+                .SingleAsync(file => file.Id == oldReportId!.Value))
+                .DeletedAt.Should().NotBeNull();
+            (await _db.InspectionItems.AsNoTracking()
+                .Where(item => item.InspectionId == created.Id)
+                .Select(item => item.SpawnedWorkOrderId)
+                .ToListAsync())
+                .Should().OnlyContain(workOrderId => workOrderId == null);
+            var retiredWorkOrder = await _db.WorkOrders.AsNoTracking()
+                .SingleAsync(workOrder => workOrder.Id == firstWorkOrderIds[0]);
+            retiredWorkOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+            retiredWorkOrder.DeletedAt.Should().BeNull("cancellation keeps the work-order history row");
+            (await _db.WorkOrderStatusEvents.AsNoTracking()
+                .Where(statusEvent => statusEvent.WorkOrderId == retiredWorkOrder.Id)
+                .OrderBy(statusEvent => statusEvent.Id)
+                .Select(statusEvent => new { statusEvent.FromStatus, statusEvent.ToStatus, statusEvent.Visibility })
+                .ToListAsync())
+                .Should().Contain(eventRow =>
+                    eventRow.FromStatus == WorkOrderStatus.New
+                    && eventRow.ToStatus == WorkOrderStatus.Cancelled
+                    && eventRow.Visibility == "Public");
+            (await _db.WorkOrders.AsNoTracking()
+                .Where(workOrder => workOrder.Id == retiredWorkOrder.Id
+                    && workOrder.Status != WorkOrderStatus.Completed
+                    && workOrder.Status != WorkOrderStatus.Cancelled
+                    && workOrder.Status != WorkOrderStatus.Archived)
+                .CountAsync()).Should().Be(0);
+
+            await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+                new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "After reopen" }, NextOperationKey());
+            var (secondSummary, secondError) = await _service.CompleteAuthorizedAsync(
+                _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+            secondError.Should().BeNull();
+            secondSummary.Should().NotBeNull();
+            secondSummary!.ReportStoredFileId.Should().NotBeNull();
+            secondSummary.ReportStoredFileId.Should().NotBe(oldReportId);
+            secondSummary.CreatedWorkOrderIds.Should().ContainSingle();
+            secondSummary.CreatedWorkOrderIds.Should().NotContain(firstWorkOrderIds);
+            (await (from item in _db.InspectionItems.AsNoTracking()
+                    join workOrder in _db.WorkOrders.AsNoTracking()
+                        on item.SpawnedWorkOrderId equals workOrder.Id
+                    where item.Id == items[0].Id
+                        && workOrder.DeletedAt == null
+                        && workOrder.Status != WorkOrderStatus.Completed
+                        && workOrder.Status != WorkOrderStatus.Cancelled
+                        && workOrder.Status != WorkOrderStatus.Archived
+                    select workOrder.Id).CountAsync()).Should().Be(1);
+
+            var recompleted = await _db.Inspections.AsNoTracking().SingleAsync(inspection => inspection.Id == created.Id);
+            recompleted.CompletedAt.Should().NotBe(oldCompletedAt);
+            recompleted.ReportStoredFileId.Should().Be(secondSummary.ReportStoredFileId);
+        }
+    }
+
+    [Fact]
+    public async Task Reopen_DispatchedNewWorkOrderReturnsConflictAndLeavesDispatchAttached()
+    {
+        var property = SeedProperty();
+        var vendor = SeedVendor();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+
+        var item = created!.Items.OrderBy(candidate => candidate.SortOrder).First();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        var (summary, completionError) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: NextOperationKey());
+        completionError.Should().BeNull();
+        summary.Should().NotBeNull();
+        var workOrderId = summary!.CreatedWorkOrderIds.Should().ContainSingle().Subject;
+
+        var dispatchService = new VendorDispatchService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            NullLogger<VendorDispatchService>.Instance,
+            TimeProvider.System);
+        var dispatch = await dispatchService.DispatchAsync(PortfolioId, workOrderId,
+            new DispatchWorkOrderRequest
+            {
+                IdempotencyKey = NextOperationKey(),
+                VendorId = vendor.Id,
+            },
+            changedByUserId: 7);
+        dispatch.Outcome.Should().Be(DispatchOutcome.Dispatched);
+        dispatch.Dispatch.Should().NotBeNull();
+
+        _db.ChangeTracker.Clear();
+        var inspectionBefore = await _db.Inspections.AsNoTracking()
+            .SingleAsync(inspection => inspection.Id == created.Id);
+        var itemBefore = await _db.InspectionItems.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == item.Id);
+        var workOrderBefore = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(workOrder => workOrder.Id == workOrderId);
+        var dispatchBefore = await _db.VendorDispatches.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == dispatch.Dispatch!.Id);
+        var statusEventCountBefore = await _db.WorkOrderStatusEvents.CountAsync(
+            statusEvent => statusEvent.WorkOrderId == workOrderId);
+        var auditCountBefore = await _db.AtomicAuditLogs.CountAsync(
+            audit => audit.EntityId == workOrderId || audit.EntityId == created.Id || audit.EntityId == item.Id);
+        var outboxCountBefore = await _db.OutboxMessages.CountAsync();
+
+        var reopenException = await Record.ExceptionAsync(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            created.Id,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+
+        using (new AssertionScope())
+        {
+            reopenException.Should().BeOfType<DomainValidationException>();
+            var conflict = reopenException as DomainValidationException;
+            conflict?.StatusCode.Should().Be(409);
+            conflict?.Message.Should().Contain("dispatched or progressed");
+            conflict?.Message.Should().Contain("complete or cancel");
+
+            var inspectionAfter = await _db.Inspections.AsNoTracking()
+                .SingleAsync(inspection => inspection.Id == created.Id);
+            inspectionAfter.Status.Should().Be(inspectionBefore.Status);
+            inspectionAfter.CompletedAt.Should().Be(inspectionBefore.CompletedAt);
+            inspectionAfter.ReportStoredFileId.Should().Be(inspectionBefore.ReportStoredFileId);
+            inspectionAfter.UpdatedAt.Should().Be(inspectionBefore.UpdatedAt);
+
+            var itemAfter = await _db.InspectionItems.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == item.Id);
+            itemAfter.SpawnedWorkOrderId.Should().Be(itemBefore.SpawnedWorkOrderId);
+
+            var workOrderAfter = await _db.WorkOrders.AsNoTracking()
+                .SingleAsync(workOrder => workOrder.Id == workOrderId);
+            workOrderAfter.Status.Should().Be(WorkOrderStatus.New);
+            workOrderAfter.VendorId.Should().Be(vendor.Id);
+            workOrderAfter.UpdatedAt.Should().Be(workOrderBefore.UpdatedAt);
+
+            var dispatchAfter = await _db.VendorDispatches.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == dispatch.Dispatch!.Id);
+            dispatchAfter.Status.Should().Be(VendorDispatchStatus.Dispatched);
+            dispatchAfter.RespondedAtUtc.Should().Be(dispatchBefore.RespondedAtUtc);
+            (await _db.WorkOrderStatusEvents.CountAsync(
+                statusEvent => statusEvent.WorkOrderId == workOrderId)).Should().Be(statusEventCountBefore);
+            (await _db.AtomicAuditLogs.CountAsync(
+                audit => audit.EntityId == workOrderId || audit.EntityId == created.Id || audit.EntityId == item.Id))
+                .Should().Be(auditCountBefore);
+            (await _db.OutboxMessages.CountAsync()).Should().Be(outboxCountBefore);
+        }
+
+        var doneService = new SmsInboundVendorDoneService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
+            NullLogger<SmsInboundVendorDoneService>.Instance);
+        var done = await doneService.TryHandleAsync(
+            NextOperationKey(), vendor.Phone, "DONE", DateTime.UtcNow);
+
+        done.Handled.Should().BeTrue();
+        done.WorkOrderId.Should().Be(workOrderId);
+        var completedWorkOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(workOrder => workOrder.Id == workOrderId);
+        completedWorkOrder.Status.Should().Be(WorkOrderStatus.Completed);
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(candidate => candidate.Id == item.Id)
+            .Select(candidate => candidate.SpawnedWorkOrderId)
+            .SingleAsync()).Should().Be(workOrderId);
+        (await _db.Inspections.AsNoTracking()
+            .Where(inspection => inspection.Id == created.Id)
+            .Select(inspection => inspection.Status)
+            .SingleAsync()).Should().Be(InspectionStatus.Completed);
+    }
+
+    [Fact]
+    public async Task Reopen_SerializesAppointmentAndWorkOrderProgressionWriters()
+    {
+        var scenario = await SeedProgressionScenarioAsync();
+        _reopenProgressionGate.Arm();
+
+        var reopenTask = Task.Run(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            scenario.InspectionId,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+        await _reopenProgressionGate.ProgressionReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+        using var appointmentScope = _services.CreateScope();
+        using var editScope = _services.CreateScope();
+        using var commentScope = _services.CreateScope();
+        var appointmentDb = appointmentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var editDb = editScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var commentDb = commentScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var appointmentService = new AppointmentService(
+            appointmentDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            appointmentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var editService = new WorkOrderService(
+            editDb,
+            new NoopInspectionDataUpdate(),
+            new NoopMessagePublisher(),
+            new InMemoryFileStorage(),
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System,
+            editScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var commentService = new WorkOrderService(
+            commentDb,
+            new NoopInspectionDataUpdate(),
+            new NoopMessagePublisher(),
+            new InMemoryFileStorage(),
+            NullLogger<WorkOrderService>.Instance,
+            TimeProvider.System,
+            commentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+
+        var appointmentTask = Task.Run(() => appointmentService.CreateAuthorizedAsync(
+            _scope,
+            new CreateAppointmentRequest
+            {
+                PropertyId = scenario.PropertyId,
+                UnitId = scenario.UnitId,
+                LeaseManagementId = scenario.LeaseManagementId,
+                TenantId = scenario.TenantId,
+                WorkOrderId = scenario.WorkOrderId,
+                Title = "Reopen race appointment",
+                Type = AppointmentType.MaintenanceVisit,
+                Status = AppointmentStatus.Scheduled,
+                ScheduledStart = DateTime.UtcNow.AddHours(1),
+                ScheduledEnd = DateTime.UtcNow.AddHours(2),
+            },
+            NextOperationKey()));
+        var editTask = Task.Run(() => editService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.WorkOrderId,
+            new UpdateWorkOrderRequest { Title = "Reopen race edit" },
+            NextOperationKey()));
+        var commentTask = Task.Run(() => commentService.CommentAuthorizedAsync(
+            _scope,
+            scenario.WorkOrderId,
+            new WorkOrderCommentRequest { Body = "Reopen race comment" },
+            NextOperationKey()));
+
+        var writerTasks = new Task[] { appointmentTask, editTask, commentTask };
+        var delay = Task.Delay(TimeSpan.FromMilliseconds(500));
+        var firstCompleted = await Task.WhenAny(writerTasks.Append(delay));
+        var writersBlockedBehindReopen = firstCompleted == delay;
+
+        _reopenProgressionGate.Release();
+        var reopened = await reopenTask;
+        await Task.WhenAll(writerTasks);
+
+        writersBlockedBehindReopen.Should().BeTrue(
+            "every progression writer must wait for reopen's transaction-scoped WorkOrder lock");
+        reopened.Should().NotBeNull();
+        reopened!.Status.Should().Be(InspectionStatus.Scheduled);
+        appointmentTask.Result.Should().BeNull();
+        editTask.Result.Should().BeNull();
+        commentTask.Result.Should().BeNull();
+
+        _db.ChangeTracker.Clear();
+        var workOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == scenario.WorkOrderId);
+        workOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+        workOrder.Title.Should().Be("Inspection-derived work order");
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(row => row.Id == scenario.InspectionItemId)
+            .Select(row => row.SpawnedWorkOrderId)
+            .SingleAsync()).Should().BeNull();
+        (await _db.Appointments.AsNoTracking()
+            .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId)).Should().Be(0);
+        (await _db.Notifications.AsNoTracking()
+            .CountAsync(row => row.RelatedEntityType == nameof(Appointment))).Should().Be(0);
+        (await _db.WorkOrderStatusEvents.AsNoTracking()
+            .CountAsync(row => row.WorkOrderId == scenario.WorkOrderId &&
+                (row.Kind == "Edit" || row.Kind == "Comment"))).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Reopen_CannotLeaveReactivatedAppointmentOnDetachedWorkOrderAfterStaleRelink()
+    {
+        var scenario = await SeedStaleAppointmentScenarioAsync();
+        var appointmentGate = new StaleAppointmentLinkGate();
+        await using var updaterServices = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
+            _ctx.ConnectionString,
+            TimeProvider.System,
+            [appointmentGate]);
+        await using var relinkServices = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
+            _ctx.ConnectionString,
+            TimeProvider.System);
+        using var updaterScope = updaterServices.CreateScope();
+        using var relinkScope = relinkServices.CreateScope();
+        var updaterDb = updaterScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var relinkDb = relinkScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var updaterService = new AppointmentService(
+            updaterDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            updaterScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var relinkService = new AppointmentService(
+            relinkDb,
+            new NoopInspectionDataUpdate(),
+            TimeProvider.System,
+            relinkScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+
+        appointmentGate.Arm();
+        _reopenProgressionGate.Arm();
+        var updaterTask = Task.Run(() => updaterService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.AppointmentId,
+            new UpdateAppointmentRequest { Status = AppointmentStatus.Scheduled },
+            NextOperationKey()));
+        try
+        {
+            await appointmentGate.CurrentLinkReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException)
+        {
+            throw new InvalidOperationException("Appointment link gate was not reached.");
+        }
+
+        var relinkTask = Task.Run(() => relinkService.UpdateAuthorizedAsync(
+            _scope,
+            scenario.AppointmentId,
+            new UpdateAppointmentRequest { WorkOrderId = scenario.Progression.WorkOrderId },
+            NextOperationKey()));
+        // The unfixed path can commit the relink while the updater is paused. The fixed path holds
+        // the appointment lock first, so the relink waits until the updater and reopen settle.
+        var relinkCommittedBeforeReopen =
+            await Task.WhenAny(relinkTask, Task.Delay(TimeSpan.FromSeconds(2))) == relinkTask;
+
+        var reopenTask = Task.Run(() => _service.UpdateAuthorizedAsync(
+            _scope,
+            scenario.Progression.InspectionId,
+            new UpdateInspectionRequest { Status = InspectionStatus.Scheduled },
+            NextOperationKey()));
+        await _reopenProgressionGate.ProgressionReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+        if (relinkCommittedBeforeReopen)
+        {
+            appointmentGate.Release();
+            try
+            {
+                await updaterTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                _reopenProgressionGate.Release();
+                throw new InvalidOperationException("Updater did not finish after releasing the appointment gate.");
+            }
+            _reopenProgressionGate.Release();
+        }
+        else
+        {
+            _reopenProgressionGate.Release();
+            appointmentGate.Release();
+        }
+        await Task.WhenAll(updaterTask, relinkTask, reopenTask)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        reopenTask.Result.Should().NotBeNull();
+        reopenTask.Result!.Status.Should().Be(InspectionStatus.Scheduled);
+        _db.ChangeTracker.Clear();
+        var workOrder = await _db.WorkOrders.AsNoTracking()
+            .SingleAsync(row => row.Id == scenario.Progression.WorkOrderId);
+        workOrder.Status.Should().Be(WorkOrderStatus.Cancelled);
+        (await _db.InspectionItems.AsNoTracking()
+            .Where(row => row.Id == scenario.Progression.InspectionItemId)
+            .Select(row => row.SpawnedWorkOrderId)
+            .SingleAsync()).Should().BeNull();
+
+        var appointment = await _db.Appointments.AsNoTracking()
+            .Where(row => row.Id == scenario.AppointmentId)
+            .Select(row => new { row.WorkOrderId, row.Status })
+            .SingleAsync();
+        (appointment.WorkOrderId == scenario.Progression.WorkOrderId &&
+            appointment.Status != AppointmentStatus.Cancelled)
+            .Should().BeFalse(
+                "a cancelled appointment must not be reactivated on the work order that reopen detached");
+    }
+
+    [Fact]
     public async Task Complete_UsesBusinessClockForCompletionWorkOrdersAndReport()
     {
         var businessNowUtc = DateTime.SpecifyKind(
@@ -344,6 +777,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             logger,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -386,6 +820,152 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Complete_UsesDatabaseWallClockForPendingUpload_WhenBusinessTimeIsPastCleanupTtl()
+    {
+        var businessNowUtc = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(-2), DateTimeKind.Utc);
+        var clock = new MutableTimeProvider(new DateTimeOffset(businessNowUtc));
+        var storage = new CleanupRaceFileStorage();
+        storage.BeforeUploadAsync = async _ =>
+        {
+            await using var cleanupScope = _services.CreateAsyncScope();
+            var claims = await cleanupScope.ServiceProvider
+                .GetRequiredService<IPendingFileUploadStore>()
+                .ClaimExpiredAsync(
+                    "inspection-business-time-cleanup",
+                    TimeSpan.FromHours(24),
+                    TimeSpan.FromMinutes(5),
+                    10);
+            storage.Claims.AddRange(claims);
+        };
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            clock,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = businessNowUtc,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var items = created!.Items.OrderBy(item => item.SortOrder).Take(2).ToArray();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "inspection-business-time-cleanup-fence");
+
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+        summary!.ReportStoredFileId.Should().NotBeNull();
+        storage.Claims.Should().BeEmpty("a newly admitted upload must not be cleanup-eligible because business time is old");
+        storage.UploadCount.Should().Be(1);
+
+        var pending = await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf"
+                && upload.ActorScopeId == _scope.UserId);
+        pending.State.Should().Be(PendingFileUploadState.Finalized);
+        pending.CreatedAtUtc.Should().BeAfter(DateTime.UtcNow.AddHours(-1));
+        var report = await _db.StoredFiles.AsNoTracking().SingleAsync(file => file.Id == summary.ReportStoredFileId);
+        report.UploadedAt.Should().Be(businessNowUtc);
+    }
+
+    [Fact]
+    public async Task Complete_RetryAfterCleanupReturnsConflictWithoutReportSideEffects()
+    {
+        var storage = new CleanupRaceFileStorage();
+        storage.BeforeUploadAsync = async _ =>
+        {
+            await using var cleanupScope = _services.CreateAsyncScope();
+            var cleanupStore = cleanupScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>();
+            var claims = await cleanupStore.ClaimExpiredAsync(
+                "inspection-abandoned-cleanup",
+                TimeSpan.Zero,
+                TimeSpan.FromMinutes(5),
+                10);
+            storage.Claims.AddRange(claims);
+            foreach (var claim in claims)
+                await cleanupStore.MarkAbandonedAsync(claim.Id, claim.ClaimOwner, claim.ClaimToken);
+        };
+        _service = new InspectionService(
+            _db,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        }, NextOperationKey());
+        created.Should().NotBeNull();
+        var items = created!.Items.OrderBy(item => item.SortOrder).Take(2).ToArray();
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
+        const string operationKey = "inspection-abandoned-retry";
+        var reportDataUpdatesBefore = await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.EndsWith(":report-file"));
+
+        var firstError = await Record.ExceptionAsync(() => _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey));
+        var pendingAfterFirst = await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf");
+        await using var retryScope = _services.CreateAsyncScope();
+        var retryDb = retryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var retryService = new InspectionService(
+            retryDb,
+            new NoopInspectionDataUpdate(),
+            storage,
+            new DeterministicInspectionPdfGenerator(),
+            retryScope.ServiceProvider.GetRequiredService<IPendingFileUploadStore>(),
+            NullLogger<InspectionService>.Instance,
+            TimeProvider.System,
+            retryScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>());
+        var secondError = await Record.ExceptionAsync(() => retryService.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey));
+
+        firstError.Should().BeOfType<DomainValidationException>();
+        secondError.Should().BeOfType<DomainValidationException>(
+            $"pending state after first attempt was {pendingAfterFirst.State} (claim {pendingAfterFirst.CleanupClaimToken})");
+        firstError!.Message.Should().Contain("retry with a new request key");
+        secondError!.Message.Should().Contain("retry with a new request key");
+        storage.UploadCount.Should().Be(1);
+        (await _db.StoredFiles.AsNoTracking()
+            .CountAsync(file => file.EntityType == nameof(Inspection) && file.EntityId == created.Id))
+            .Should().Be(0);
+        (await _db.OutboxMessages.AsNoTracking()
+            .CountAsync(message => message.MessageType == "data-update"
+                && message.IdempotencyKey.EndsWith(":report-file")))
+            .Should().Be(reportDataUpdatesBefore);
+        (await _db.PendingFileUploads.AsNoTracking()
+            .SingleAsync(upload => upload.Purpose == "inspection-report-pdf"))
+            .State.Should().Be(PendingFileUploadState.Abandoned);
+    }
+
+    [Fact]
     public async Task Complete_UsesCurrentSecurityAccessWhenBusinessClockPredatesAccess()
     {
         var securityNowUtc = DateTime.SpecifyKind(
@@ -398,6 +978,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -441,6 +1022,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -547,6 +1129,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -614,6 +1197,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -672,6 +1256,7 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
+            _services.GetRequiredService<IPendingFileUploadStore>(),
             NullLogger<InspectionService>.Instance,
             clock,
             _services.GetRequiredService<IAtomicUnitOfWork>());
@@ -965,6 +1550,233 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
         return property;
     }
 
+    private Vendor SeedVendor()
+    {
+        var now = DateTime.UtcNow;
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Ace Plumbing",
+            ServiceType = "Plumbing",
+            Phone = "+16145550199",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Vendors.Add(vendor);
+        _db.SaveChanges();
+        return vendor;
+    }
+
+    private async Task<ProgressionScenario> SeedProgressionScenarioAsync()
+    {
+        var seededAt = DateTime.UtcNow.AddMinutes(-10);
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Reopen race property {Guid.NewGuid():N}",
+            AddressLine1 = "100 Simulation Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = $"R{Guid.NewGuid():N}"[..8],
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Jordan",
+            LastName = "Miles",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var tenantEmail = $"reopen-race-{Guid.NewGuid():N}@example.test";
+        var tenantUser = new ApplicationUser
+        {
+            UserName = tenantEmail,
+            NormalizedUserName = tenantEmail.ToUpperInvariant(),
+            Email = tenantEmail,
+            NormalizedEmail = tenantEmail.ToUpperInvariant(),
+            DisplayName = "Reopen Race Tenant",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = seededAt,
+        };
+        var leaseManagement = new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            PublicId = Guid.NewGuid(),
+            RelationshipNumber = $"LM-REOPEN-{Guid.NewGuid():N}",
+            CreatedByUserId = _scope.UserId,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = leaseManagement,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(seededAt.AddDays(-1)),
+            ChangeReason = "Reopen race fixture",
+            CreatedByUserId = _scope.UserId,
+            CreatedAtUtc = seededAt,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = tenantUser,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = seededAt,
+            UpdatedAtUtc = seededAt,
+        };
+        var tenantAccess = new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = accessContext,
+            ApplicationUser = tenantUser,
+            LeaseManagementParty = party,
+            GrantedAtUtc = seededAt,
+            GrantedByUserId = _scope.UserId,
+            Reason = "Reopen race fixture",
+        };
+        _db.Add(tenantAccess);
+        await _db.SaveChangesAsync();
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseManagementId = leaseManagement.Id,
+            Title = "Inspection-derived work order",
+            Description = "Reopen race fixture",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = PortfolioId,
+            FromStatus = null,
+            ToStatus = WorkOrderStatus.New,
+            Kind = "Status",
+            Visibility = "Public",
+            ChangedByLabel = "Inspection",
+            CreatedAtUtc = seededAt,
+        });
+        _db.Add(workOrder);
+        await _db.SaveChangesAsync();
+
+        var inspection = new Inspection
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            LeaseManagementId = leaseManagement.Id,
+            Type = InspectionType.MoveIn,
+            Status = InspectionStatus.Completed,
+            ScheduledFor = seededAt,
+            CompletedAt = seededAt,
+            Outcome = "Completed",
+            CreatedAt = seededAt,
+            UpdatedAt = seededAt,
+        };
+        var item = new InspectionItem
+        {
+            PortfolioId = PortfolioId,
+            Inspection = inspection,
+            Area = "Kitchen",
+            Label = "Sink",
+            Result = InspectionItemResult.Fail,
+            SortOrder = 1,
+            SpawnedWorkOrderId = workOrder.Id,
+        };
+        inspection.Items.Add(item);
+        _db.Add(inspection);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        return new(
+            property.Id,
+            unit.Id,
+            leaseManagement.Id,
+            tenant.Id,
+            workOrder.Id,
+            inspection.Id,
+            item.Id,
+            tenantUser.Id,
+            accessContext.Id,
+            accessContext.AccessRevision);
+    }
+
+    private async Task<StaleAppointmentScenario> SeedStaleAppointmentScenarioAsync()
+    {
+        var progression = await SeedProgressionScenarioAsync();
+        var sourceWorkOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = progression.PropertyId,
+            UnitId = progression.UnitId,
+            TenantId = progression.TenantId,
+            LeaseManagementId = progression.LeaseManagementId,
+            Title = "Stale-link source work order",
+            Description = "Stale-link source fixture",
+            Category = "Maintenance",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = DateTime.UtcNow.AddMinutes(-10),
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-10),
+        };
+        sourceWorkOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = PortfolioId,
+            FromStatus = null,
+            ToStatus = WorkOrderStatus.New,
+            Kind = "Status",
+            Visibility = "Public",
+            ChangedByLabel = "Stale-link fixture",
+            CreatedAtUtc = sourceWorkOrder.RequestedAt,
+        });
+        _db.WorkOrders.Add(sourceWorkOrder);
+        await _db.SaveChangesAsync();
+
+        var scheduledStart = DateTime.UtcNow.AddHours(1);
+        var appointment = new Appointment
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = progression.PropertyId,
+            UnitId = progression.UnitId,
+            LeaseManagementId = progression.LeaseManagementId,
+            TenantId = progression.TenantId,
+            WorkOrderId = sourceWorkOrder.Id,
+            Title = "Stale-link appointment",
+            Type = AppointmentType.MaintenanceVisit,
+            Status = AppointmentStatus.Cancelled,
+            ScheduledStart = scheduledStart,
+            ScheduledEnd = scheduledStart.AddHours(1),
+            CreatedAt = sourceWorkOrder.RequestedAt,
+            UpdatedAt = sourceWorkOrder.RequestedAt,
+        };
+        _db.Appointments.Add(appointment);
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+        return new(progression, sourceWorkOrder.Id, appointment.Id);
+    }
+
     private void SeedInspection(Property property, DateTime scheduledFor, string outcome)
     {
         _db.Inspections.Add(new Inspection
@@ -988,6 +1800,114 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class NoopMessagePublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey,
+            TPayload payload, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed record ProgressionScenario(
+        int PropertyId,
+        int UnitId,
+        int LeaseManagementId,
+        int TenantId,
+        int WorkOrderId,
+        int InspectionId,
+        int InspectionItemId,
+        int TenantUserId,
+        int TenantAccessContextId,
+        long TenantAccessRevision);
+
+    private sealed record StaleAppointmentScenario(
+        ProgressionScenario Progression,
+        int SourceWorkOrderId,
+        int AppointmentId);
+
+    private sealed class ReopenProgressionGate : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _progressionReadReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        public Task ProgressionReadReached => _progressionReadReached.Task;
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public void Release() => _release.TrySetResult();
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _armed) == 1 &&
+                command.CommandText.Contains("Inspection reopen progression predicate", StringComparison.Ordinal))
+            {
+                _progressionReadReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    private sealed class StaleAppointmentLinkGate : DbCommandInterceptor
+    {
+        private TaskCompletionSource _currentLinkReadReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+
+        public Task CurrentLinkReadReached => Volatile.Read(ref _currentLinkReadReached).Task;
+
+        public void Arm()
+        {
+            Interlocked.Exchange(ref _currentLinkReadReached,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            Interlocked.Exchange(ref _armed, 1);
+        }
+
+        public void Release() => _release.TrySetResult();
+
+        public override DbDataReader ReaderExecuted(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result)
+        {
+            if (ShouldPause(command))
+            {
+                _currentLinkReadReached.TrySetResult();
+                _release.Task.GetAwaiter().GetResult();
+            }
+
+            return base.ReaderExecuted(command, eventData, result);
+        }
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (ShouldPause(command))
+            {
+                _currentLinkReadReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private bool ShouldPause(DbCommand command) =>
+            Volatile.Read(ref _armed) == 1 &&
+            command.CommandText.Contains("a.\"WorkOrderId\"", StringComparison.Ordinal) &&
+            command.CommandText.Contains("@command_AppointmentId", StringComparison.Ordinal);
     }
 
     private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
@@ -1056,6 +1976,50 @@ public class InspectionChecklistServiceTests : IAsyncLifetime
             _files.Remove(path);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class CleanupRaceFileStorage : IFileStorage
+    {
+        private readonly Dictionary<string, byte[]> _files = new(StringComparer.Ordinal);
+
+        public Func<string, Task>? BeforeUploadAsync { get; set; }
+        public List<PendingFileUploadCleanupClaim> Claims { get; } = [];
+        public int UploadCount { get; private set; }
+
+        public Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async Task UploadAtAsync(
+            Stream content,
+            string storagePath,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default)
+        {
+            if (BeforeUploadAsync is not null)
+                await BeforeUploadAsync(storagePath);
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, ct);
+            _files[storagePath] = buffer.ToArray();
+            UploadCount++;
+        }
+
+        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default) =>
+            _files.TryGetValue(path, out var bytes)
+                ? Task.FromResult<Stream>(new MemoryStream(bytes))
+                : throw new FileNotFoundException(path);
+
+        public Task DeleteAsync(string path, CancellationToken ct = default)
+        {
+            _files.Remove(path);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DeterministicInspectionPdfGenerator : IInspectionReportPdfGenerator
+    {
+        public byte[] Generate(InspectionReportData data) =>
+            Encoding.UTF8.GetBytes($"{data.Type}|{data.CompletedAt:O}|{data.FailCount}|{data.PassCount}");
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

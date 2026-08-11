@@ -20,6 +20,7 @@ public sealed class CreateVendorRatingHandler
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await context.ReadDatabaseClockUtcAsync(ct);
         var businessNow = command.BusinessNowUtc;
         await context.AcquireLockAsync("Vendor", command.VendorId, ct);
@@ -106,6 +107,7 @@ public sealed class CreateVendorRatingHandler
         CreateVendorRatingCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         VendorRatingOperationValidation.Validate(command);
+        await WorkOrderProgressionLock.AcquireAsync(context, ct, command.WorkOrderId);
         var securityNow = await _db.Database.SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"").SingleAsync(ct);
         if (!await AuthorizedVendors(
                 command, _db, command.BusinessNowUtc, securityNow, tracking: false).AnyAsync(ct))
@@ -130,7 +132,9 @@ public sealed class CreateVendorRatingHandler
             vendor.PortfolioId == command.PortfolioId &&
             (command.WorkOrderId.HasValue
                 ? workOrders.Any(workOrder =>
-                    workOrder.Id == command.WorkOrderId.Value && workOrder.VendorId == vendor.Id)
+                    workOrder.Id == command.WorkOrderId.Value && workOrder.VendorId == vendor.Id &&
+                    workOrder.Status != WorkOrderStatus.Cancelled &&
+                    workOrder.Status != WorkOrderStatus.Archived)
                 : assignments.Any()));
         return tracking ? query : query.AsNoTracking();
     }

@@ -568,6 +568,145 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CancelRejectsWhenLinkedAppointmentSetChangesAfterLockedSnapshot_AndRollsBack()
+    {
+        var scenario = await SeedTenantScenarioAsync(status: WorkOrderStatus.Scheduled);
+        var manager = _context.Db.SeedAdministratorScope(
+            PortfolioId,
+            nameof(CancelRejectsWhenLinkedAppointmentSetChangesAfterLockedSnapshot_AndRollsBack));
+        var workOrder = await _context.Db.WorkOrders.AsNoTracking()
+            .Where(row => row.Id == scenario.WorkOrderId)
+            .Select(row => new
+            {
+                row.PropertyId,
+                row.UnitId,
+                row.LeaseManagementId,
+                row.TenantId,
+                row.Title,
+                row.Description,
+                row.Status,
+                row.UpdatedAt,
+            })
+            .SingleAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        var linkedSetGate = new LinkedAppointmentSetGate();
+        await using var workOrderServices = AtomicDomainTestKernel.CreateForWorkOrdersPostgreSql(
+            _context.ConnectionString,
+            new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)),
+            [linkedSetGate]);
+        await using var appointmentServices = AtomicDomainTestKernel.CreateForAppointmentsPostgreSql(
+            _context.ConnectionString,
+            new FixedTimeProvider(new DateTimeOffset(BusinessNowUtc)));
+        using var workOrderScope = workOrderServices.CreateScope();
+        using var appointmentScope = appointmentServices.CreateScope();
+        var workOrderAtomic = workOrderScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+        var appointmentAtomic = appointmentScope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+
+        var cancelIdentity = Identity(
+            "portal.work-order.cancel",
+            "linked-appointment-set-conflict");
+        var cancelCommand = new CancelTenantWorkOrderCommand(
+            PortfolioId,
+            scenario.TenantUserId,
+            scenario.AuthSessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            scenario.WorkOrderId,
+            "Resident no longer needs the repair.",
+            BusinessNowUtc,
+            cancelIdentity.IdempotencyKey);
+        var createIdentity = Identity(
+            "appointment.create",
+            "linked-appointment-set-conflict-direct-create");
+        var createCommand = new CreateAppointmentCommand(
+            PortfolioId,
+            Actor(manager),
+            workOrder.PropertyId,
+            workOrder.UnitId,
+            workOrder.LeaseManagementId,
+            null,
+            workOrder.TenantId,
+            scenario.WorkOrderId,
+            "Direct linked appointment",
+            null,
+            null,
+            AppointmentType.MaintenanceVisit,
+            AppointmentStatus.Scheduled,
+            BusinessNowUtc.AddDays(2),
+            BusinessNowUtc.AddDays(2).AddHours(2),
+            null,
+            workOrder.Description,
+            BusinessNowUtc,
+            createIdentity.IdempotencyKey);
+
+        linkedSetGate.Arm();
+        var cancelTask = Task.Run(() => workOrderAtomic.ExecuteAsync(cancelIdentity, cancelCommand, Codec));
+        try
+        {
+            await linkedSetGate.SecondSetReadReached.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var created = await Task.Run(() => appointmentAtomic.ExecuteAsync(
+                    createIdentity,
+                    createCommand,
+                    new AtomicJsonResultCodec<OperationMutationResult>("appointment-mutation-tests.v1")))
+                .WaitAsync(TimeSpan.FromSeconds(15));
+            created.Value.Outcome.Should().Be(OperationMutationOutcome.Applied);
+
+            linkedSetGate.Release();
+            var conflict = await Assert.ThrowsAsync<DomainValidationException>(async () => await cancelTask);
+            conflict.StatusCode.Should().Be(409);
+            conflict.Message.Should().Be("The linked appointment changed; refresh and retry.");
+
+            _context.Db.ChangeTracker.Clear();
+            var persisted = await _context.Db.WorkOrders.AsNoTracking()
+                .Where(row => row.Id == scenario.WorkOrderId)
+                .Select(row => new
+                {
+                    row.Status,
+                    row.UpdatedAt,
+                    StatusEventCount = _context.Db.WorkOrderStatusEvents.AsNoTracking()
+                        .Count(statusEvent => statusEvent.WorkOrderId == row.Id),
+                    AppointmentCount = _context.Db.Appointments.AsNoTracking()
+                        .Count(appointment => appointment.WorkOrderId == row.Id),
+                    AppointmentStatus = _context.Db.Appointments.AsNoTracking()
+                        .Where(appointment => appointment.WorkOrderId == row.Id)
+                        .Select(appointment => appointment.Status)
+                        .Single(),
+                    CancelAuditCount = _context.Db.AtomicAuditLogs.AsNoTracking()
+                        .Count(audit => audit.CommandIdempotencyKey == cancelIdentity.IdempotencyKey),
+                    CancelNotificationCount = _context.Db.Notifications.AsNoTracking()
+                        .Count(notification => notification.RelatedEntityType == nameof(Appointment)
+                            && notification.RelatedEntityId == created.Value.EntityId
+                            && notification.Type == "TenantAppointmentCancelled"),
+                    CancelOutboxCount = _context.Db.OutboxMessages.AsNoTracking()
+                        .Count(outbox => outbox.IdempotencyKey ==
+                                $"tenant-work-order-cancel:{cancelIdentity.IdempotencyKey}" ||
+                            outbox.IdempotencyKey ==
+                                $"appointment-work-order-sync:{cancelIdentity.IdempotencyKey}"),
+                    CancelReceiptCount = _context.Db.AtomicCommandReceipts.AsNoTracking()
+                        .Count(receipt => receipt.CommandType == cancelIdentity.CommandType
+                            && receipt.IdempotencyKey == cancelIdentity.IdempotencyKey),
+                })
+                .SingleAsync();
+
+            persisted.Status.Should().Be(workOrder.Status);
+            persisted.UpdatedAt.Should().Be(workOrder.UpdatedAt);
+            persisted.StatusEventCount.Should().Be(0);
+            persisted.AppointmentCount.Should().Be(1);
+            persisted.AppointmentStatus.Should().Be(AppointmentStatus.Scheduled);
+            persisted.CancelAuditCount.Should().Be(0);
+            persisted.CancelNotificationCount.Should().Be(0);
+            persisted.CancelOutboxCount.Should().Be(0);
+            persisted.CancelReceiptCount.Should().Be(0);
+        }
+        finally
+        {
+            linkedSetGate.Release();
+        }
+    }
+
+    [Fact]
     public void Model_WorkOrderAppointmentIndexIsUniqueFiltered_AndExpenseWorkOrderIndexAllowsMany()
     {
         var appointmentWorkOrderIndex = _context.Db.Model.FindEntityType(typeof(Appointment))!
@@ -1212,6 +1351,47 @@ public sealed class WorkOrderRoleMutationPostgreSqlTests : IAsyncLifetime
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class LinkedAppointmentSetGate : DbCommandInterceptor
+    {
+        private readonly TaskCompletionSource _secondSetReadReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _armed;
+        private int _linkedSetReadCount;
+
+        public Task SecondSetReadReached => _secondSetReadReached.Task;
+
+        public void Arm()
+        {
+            Interlocked.Exchange(ref _linkedSetReadCount, 0);
+            Interlocked.Exchange(ref _armed, 1);
+        }
+
+        public void Release() => _release.TrySetResult();
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (ShouldPause(command) && Interlocked.Increment(ref _linkedSetReadCount) == 2)
+            {
+                _secondSetReadReached.TrySetResult();
+                await _release.Task.WaitAsync(cancellationToken);
+            }
+
+            return await base.ReaderExecutedAsync(command, eventData, result, cancellationToken);
+        }
+
+        private bool ShouldPause(DbCommand command) =>
+            Volatile.Read(ref _armed) == 1 &&
+            command.CommandText.Contains("\"Appointments\"", StringComparison.Ordinal) &&
+            command.CommandText.Contains("\"WorkOrderId\"", StringComparison.Ordinal) &&
+            command.CommandText.Contains("ORDER BY", StringComparison.Ordinal);
     }
 
     private sealed record TenantScenario(

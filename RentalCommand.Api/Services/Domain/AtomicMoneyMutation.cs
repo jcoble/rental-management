@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Money;
+using RentalCommand.Core.Operations;
 using RentalCommand.Api.Services;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
@@ -30,6 +31,7 @@ public sealed class AtomicMoneyMutationHandler
         await attempt.AcquireLockAsync(
             "WorkspaceAccessContext", command.AccessContextId, ct);
         await attempt.AcquireLockAsync("Portfolio", command.PortfolioId, ct);
+        await AcquireProgressionWorkOrderLockAsync(command, attempt, ct);
         var times = await AtomicCommandDbClock.ReadCommandTimesAsync(_db, command.PortfolioId, ct);
         var securityNowUtc = times.WallClockUtc;
         var businessNowUtc = command.BusinessNowUtc;
@@ -67,9 +69,67 @@ public sealed class AtomicMoneyMutationHandler
         AtomicMoneyMutationCommand command, IAtomicCommandContext context, CancellationToken ct)
     {
         Validate(command);
+        await AcquireProgressionWorkOrderLockAsync(command, context, ct);
         var securityNowUtc = await context.ReadDatabaseClockUtcAsync(ct);
         if (!await HasReplayAuthorityAsync(command, _db, securityNowUtc, ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
+    }
+
+    private async Task AcquireProgressionWorkOrderLockAsync(
+        AtomicMoneyMutationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        int? currentWorkOrderId = null;
+        int? requestedWorkOrderId = null;
+
+        if (command.Domain == AtomicMoneyDomain.Expense)
+        {
+            if (command.Operation != AtomicMoneyOperation.Create)
+                await context.AcquireLockAsync("Expense", command.EntityId, ct);
+            if (command.Operation == AtomicMoneyOperation.Create)
+            {
+                requestedWorkOrderId = Read<CreateExpenseRequest>(command).WorkOrderId;
+            }
+            else
+            {
+                currentWorkOrderId = await _db.Set<Expense>().IgnoreQueryFilters()
+                    .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+                    .Select(row => row.WorkOrderId)
+                    .SingleOrDefaultAsync(ct);
+                if (command.Operation == AtomicMoneyOperation.Update)
+                    requestedWorkOrderId = Read<UpdateExpenseRequest>(command).WorkOrderId;
+            }
+        }
+        else if (command.Domain == AtomicMoneyDomain.CapitalAsset &&
+                 command.Operation == AtomicMoneyOperation.CapitalizeExpense)
+        {
+            await context.AcquireLockAsync("Expense", command.EntityId, ct);
+            currentWorkOrderId = await _db.Set<Expense>().IgnoreQueryFilters()
+                .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+                .Select(row => row.WorkOrderId)
+                .SingleOrDefaultAsync(ct);
+        }
+        else if (command.Domain == AtomicMoneyDomain.CapitalAsset &&
+                 command.Operation == AtomicMoneyOperation.Delete)
+        {
+            await context.AcquireLockAsync("CapitalAsset", command.EntityId, ct);
+            var sourceExpenseId = await _db.Set<CapitalAsset>().IgnoreQueryFilters()
+                .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+                .Select(row => row.SourceExpenseId)
+                .SingleOrDefaultAsync(ct);
+            if (sourceExpenseId.HasValue)
+            {
+                await context.AcquireLockAsync("Expense", sourceExpenseId.Value, ct);
+                currentWorkOrderId = await _db.Set<Expense>().IgnoreQueryFilters()
+                    .Where(row => row.Id == sourceExpenseId.Value && row.PortfolioId == command.PortfolioId)
+                    .Select(row => row.WorkOrderId)
+                    .SingleOrDefaultAsync(ct);
+            }
+        }
+
+        await WorkOrderProgressionLock.AcquireAsync(
+            context, ct, currentWorkOrderId, requestedWorkOrderId);
     }
 
     private async Task<bool> HasReplayAuthorityAsync(
@@ -622,6 +682,12 @@ public sealed class AtomicMoneyMutationHandler
                 row.Id == command.EntityId && row.PortfolioId == command.PortfolioId
                 && row.DeletedAt == null, ct);
             if (expense?.PropertyId is not int propertyId || expense.CapitalizedAssetId is not null)
+                return Missing();
+            if (expense.WorkOrderId is int workOrderId &&
+                !await db.Set<WorkOrder>().AsNoTracking().AnyAsync(workOrder =>
+                    workOrder.Id == workOrderId && workOrder.PortfolioId == command.PortfolioId &&
+                    workOrder.Status != WorkOrderStatus.Cancelled &&
+                    workOrder.Status != WorkOrderStatus.Archived, ct))
                 return Missing();
             if (!await HasPropertyAuthorityAsync(command, db, securityNowUtc,
                     propertyId, expense.UnitId, null, ct))
@@ -1474,6 +1540,8 @@ public sealed class AtomicMoneyMutationHandler
                 await portfolio.SelectMany(_ => db.Set<WorkOrder>()
                         .Where(candidate =>
                             candidate.Id == workOrderId && candidate.PortfolioId == portfolioId &&
+                            candidate.Status != WorkOrderStatus.Cancelled &&
+                            candidate.Status != WorkOrderStatus.Archived &&
                             (propertyId == null || candidate.PropertyId == propertyId) &&
                             (unitId == null || candidate.UnitId == unitId)))
                     .Select(candidate => new ExpenseReferenceContext(

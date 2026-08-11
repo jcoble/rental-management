@@ -1,15 +1,20 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Documents;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Screening;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Documents;
 using RentalCommand.Data.Screening;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -31,6 +36,7 @@ public sealed class ScreeningService : IScreeningService
     private readonly IFileStorage _storage;
     private readonly IAdverseActionNoticePdfGenerator _pdf;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
 
     public ScreeningService(
@@ -39,6 +45,7 @@ public sealed class ScreeningService : IScreeningService
         IFileStorage storage,
         IAdverseActionNoticePdfGenerator pdf,
         IAtomicUnitOfWork atomic,
+        IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider)
     {
         _db = db;
@@ -46,6 +53,7 @@ public sealed class ScreeningService : IScreeningService
         _storage = storage;
         _pdf = pdf;
         _atomic = atomic;
+        _pendingUploads = pendingUploads;
         _timeProvider = timeProvider;
     }
 
@@ -304,7 +312,8 @@ public sealed class ScreeningService : IScreeningService
         if (value.Reason is null || value.CreditReportingAgencyName is null
             || value.CreditReportingAgencyAddress is null || value.CreditReportingAgencyPhone is null
             || value.CreditReportingAgencyBlock is null || value.FileName is null
-            || value.StorageKey is null || value.ApplicantName is null)
+            || value.ScreeningId <= 0 || value.DecisionRecordedAtUtc is null
+            || value.DecisionFingerprint is null || value.ApplicantName is null)
             throw new AtomicReceiptInvariantException("The adverse-action preparation receipt is incomplete.");
 
         var pdfBytes = _pdf.Generate(new AdverseActionNoticeData
@@ -320,26 +329,90 @@ public sealed class ScreeningService : IScreeningService
             CreditReportingAgencyPhone = value.CreditReportingAgencyPhone,
         });
 
-        var committedFileSize = await _db.StoredFiles.AsNoTracking()
-            .Where(file => file.PortfolioId == scope.PortfolioId
-                && file.FilePath == value.StorageKey
-                && _db.RentalApplications.AsNoTracking()
-                    .WhereAuthorized(
-                        _db,
-                        scope,
-                        new[] { CapabilityKeys.LeasingApplicationsManage },
-                        _timeProvider.UtcNow())
-                    .Any(application => application.Id == applicationId))
-            .Select(file => (long?)file.FileSize)
-            .SingleOrDefaultAsync(ct);
-        if (!committedFileSize.HasValue)
+        var pdfSha256 = Convert.ToHexString(SHA256.HashData(pdfBytes)).ToLowerInvariant();
+        const string purpose = "adverse-action-pdf";
+        var requestFingerprint = Digest(JsonSerializer.Serialize(new
         {
-            await _storage.UploadAtAsync(
-                new MemoryStream(pdfBytes, writable: false),
-                value.StorageKey,
-                value.FileName,
-                "application/pdf",
-                ct);
+            scope.PortfolioId,
+            scope.UserId,
+            applicationId,
+            value.ScreeningId,
+            value.FileName,
+            contentType = "application/pdf",
+            sizeBytes = pdfBytes.LongLength,
+            pdfSha256,
+            value.Reason,
+            value.CreditReportingAgencyBlock,
+            value.GeneratedAtUtc,
+        }));
+        var admission = await _pendingUploads.PrepareAsync(
+            scope.PortfolioId,
+            scope.UserId,
+            purpose,
+            operationKey,
+            requestFingerprint,
+            value.FileName,
+            "application/pdf",
+            pdfBytes.LongLength,
+            value.GeneratedAtUtc,
+            ct);
+        switch (admission.State)
+        {
+            case PendingFileUploadState.Finalized:
+                if (!admission.StoredFileId.HasValue)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized adverse-action notice admission has no StoredFile id.");
+                var finalizedNotice = await _db.Set<AdverseActionNotice>().AsNoTracking()
+                    .Where(notice => notice.PortfolioId == scope.PortfolioId
+                        && notice.ApplicationId == applicationId
+                        && notice.StoredFileId == admission.StoredFileId.Value)
+                    .Select(notice => new
+                    {
+                        notice.Id,
+                        notice.ApplicationId,
+                        notice.Reason,
+                        notice.CreditReportingAgency,
+                        notice.GeneratedAtUtc,
+                        StoredFileId = notice.StoredFileId!.Value,
+                        notice.SentAtUtc,
+                    })
+                    .SingleOrDefaultAsync(ct);
+                if (finalizedNotice is null)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized adverse-action notice admission has no active notice.");
+                return new AdverseActionNoticeResponse
+                {
+                    Id = finalizedNotice.Id,
+                    ApplicationId = finalizedNotice.ApplicationId,
+                    Reason = finalizedNotice.Reason,
+                    CreditReportingAgency = finalizedNotice.CreditReportingAgency,
+                    GeneratedAtUtc = finalizedNotice.GeneratedAtUtc,
+                    StoredFileId = finalizedNotice.StoredFileId,
+                    SentAtUtc = finalizedNotice.SentAtUtc,
+                };
+
+            case PendingFileUploadState.Abandoned:
+                throw new DomainValidationException(
+                    "This adverse-action notice upload was abandoned or claimed for cleanup; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared when admission.CleanupClaimed:
+                throw new DomainValidationException(
+                    "This adverse-action notice upload is currently unavailable for finalization; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared:
+                await _storage.UploadAtAsync(
+                    new MemoryStream(pdfBytes, writable: false),
+                    admission.StoragePath,
+                    value.FileName,
+                    "application/pdf",
+                    ct);
+                break;
+
+            default:
+                throw new AtomicReceiptInvariantException(
+                    "The adverse-action notice upload admission has an unknown state.");
         }
 
         var finalized = await _atomic.ExecuteAsync(
@@ -347,15 +420,23 @@ public sealed class ScreeningService : IScreeningService
             new CreateAdverseActionNoticeCommand(
                 scope.PortfolioId,
                 applicationId,
+                value.ScreeningId,
+                value.DecisionRecordedAtUtc.Value,
+                value.DecisionFingerprint,
                 scope.UserId,
                 scope.SessionId,
                 scope.AccessContextId,
                 scope.AccessRevision,
                 value.Reason,
                 value.CreditReportingAgencyBlock,
+                admission.Id,
+                purpose,
+                PendingFileUploadStore.ComputeOperationKeyHash(operationKey),
+                requestFingerprint,
+                admission.StoragePath,
                 value.FileName,
-                value.StorageKey,
-                committedFileSize ?? pdfBytes.LongLength,
+                "application/pdf",
+                pdfBytes.LongLength,
                 value.SendToApplicant,
                 $"adverse-action:{scope.PortfolioId}:{applicationId}:{digest}",
                 value.GeneratedAtUtc),

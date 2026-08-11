@@ -8,6 +8,7 @@ using RentalCommand.Core.Conversations;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Navigation;
+using RentalCommand.Core.Operations;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Conversations;
@@ -47,6 +48,13 @@ public sealed class SendConversationMessageHandler
         Tenant tenant;
         if (command.ConversationId is { } conversationId)
         {
+            var linkedWorkOrderId = await _db.Set<Conversation>()
+                .AsNoTracking()
+                .Where(candidate => candidate.Id == conversationId &&
+                    candidate.PortfolioId == command.PortfolioId)
+                .Select(candidate => candidate.WorkOrderId)
+                .SingleOrDefaultAsync(ct);
+            await WorkOrderProgressionLock.AcquireAsync(context, ct, linkedWorkOrderId);
             await context.AcquireLockAsync("Conversation", conversationId, ct);
             var conversationQuery = _db.Set<Conversation>()
                 .Include(candidate => candidate.Tenant)
@@ -63,6 +71,16 @@ public sealed class SendConversationMessageHandler
 
             var existing = await conversationQuery.SingleOrDefaultAsync(ct);
             if (existing?.Tenant is null)
+            {
+                return NotFound();
+            }
+
+            if (existing.WorkOrderId is int workOrderId &&
+                !await _db.Set<WorkOrder>().AsNoTracking().AnyAsync(workOrder =>
+                    workOrder.Id == workOrderId &&
+                    workOrder.PortfolioId == command.PortfolioId &&
+                    workOrder.Status != WorkOrderStatus.Cancelled &&
+                    workOrder.Status != WorkOrderStatus.Archived, ct))
             {
                 return NotFound();
             }

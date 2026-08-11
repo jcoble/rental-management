@@ -11,6 +11,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -25,8 +26,29 @@ public class InspectionService : IInspectionService
     private readonly IAtomicUnitOfWork? _atomic;
     private readonly IFileStorage _storage;
     private readonly IInspectionReportPdfGenerator _pdf;
+    private readonly IPendingFileUploadStore? _pendingUploads;
     private readonly ILogger<InspectionService> _logger;
     private readonly TimeProvider _timeProvider;
+
+    public InspectionService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IFileStorage storage,
+        IInspectionReportPdfGenerator pdf,
+        IPendingFileUploadStore? pendingUploads,
+        ILogger<InspectionService> logger,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
+    {
+        _db = db;
+        _ = dataUpdate;
+        _storage = storage;
+        _pdf = pdf;
+        _pendingUploads = pendingUploads;
+        _logger = logger;
+        _timeProvider = timeProvider;
+        _atomic = atomic;
+    }
 
     public InspectionService(
         RentalCommandDbContext db,
@@ -36,14 +58,8 @@ public class InspectionService : IInspectionService
         ILogger<InspectionService> logger,
         TimeProvider timeProvider,
         IAtomicUnitOfWork? atomic = null)
+        : this(db, dataUpdate, storage, pdf, null, logger, timeProvider, atomic)
     {
-        _db = db;
-        _ = dataUpdate;
-        _storage = storage;
-        _pdf = pdf;
-        _logger = logger;
-        _timeProvider = timeProvider;
-        _atomic = atomic;
     }
 
     private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
@@ -354,6 +370,8 @@ public class InspectionService : IInspectionService
             AtomicInspectionMutationOperation.Update, id, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        if (outcome.Value.Error is not null)
+            throw new DomainValidationException(outcome.Value.Error, StatusCodes.Status409Conflict);
         return DeserializeSnapshot<InspectionResponse>(outcome.Value);
     }
 
@@ -470,6 +488,10 @@ public class InspectionService : IInspectionService
             summary.ReportStoredFileId = await EnsureInspectionReportAsync(
                 scope, id, summary, operationKey, ct);
         }
+        catch (DomainValidationException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
@@ -512,7 +534,9 @@ public class InspectionService : IInspectionService
 
         var file = await _db.StoredFiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == inspection.ReportStoredFileId.Value && f.PortfolioId == portfolioId, ct);
+            .FirstOrDefaultAsync(f => f.Id == inspection.ReportStoredFileId.Value
+                && f.PortfolioId == portfolioId
+                && f.DeletedAt == null, ct);
         if (file == null)
         {
             return null;
@@ -715,14 +739,85 @@ public class InspectionService : IInspectionService
         };
         var pdfBytes = _pdf.Generate(data);
         var fileName = $"inspection-{inspectionId}-report.pdf";
-        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"{scope.PortfolioId}:{inspectionId}:{operationKey}"))).ToLowerInvariant()[..24];
-        var storagePath = $"inspection-{inspectionId}-{digest}-report.pdf";
-        await using (var content = new MemoryStream(pdfBytes))
-            await _storage.UploadAtAsync(content, storagePath, fileName, "application/pdf", ct);
+        const string purpose = "inspection-report-pdf";
+        var pdfSha256 = Convert.ToHexString(SHA256.HashData(pdfBytes)).ToLowerInvariant();
+        var requestFingerprint = Digest(JsonSerializer.Serialize(new
+        {
+            scope.PortfolioId,
+            scope.UserId,
+            inspectionId,
+            fileName,
+            contentType = "application/pdf",
+            sizeBytes = pdfBytes.LongLength,
+            pdfSha256,
+            header.CompletedAt,
+            summary.TotalItems,
+            summary.PassCount,
+            summary.FailCount,
+            summary.NotApplicableCount,
+            summary.PendingCount,
+        }));
+        var pendingUploads = _pendingUploads ?? throw new InvalidOperationException(
+            "Inspection report uploads require a durable upload admission.");
+        var admission = await pendingUploads.PrepareAsync(
+            scope.PortfolioId,
+            scope.UserId,
+            purpose,
+            operationKey,
+            requestFingerprint,
+            fileName,
+            "application/pdf",
+            pdfBytes.LongLength,
+            header.CompletedAt ?? _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
+        switch (admission.State)
+        {
+            case PendingFileUploadState.Finalized:
+                if (!admission.StoredFileId.HasValue)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized inspection report admission has no StoredFile id.");
+                var finalizedReportExists = await _db.StoredFiles.AsNoTracking()
+                    .AnyAsync(file => file.Id == admission.StoredFileId.Value
+                        && file.PortfolioId == scope.PortfolioId
+                        && file.EntityType == nameof(Inspection)
+                        && file.EntityId == inspectionId
+                        && file.DeletedAt == null, ct);
+                if (!finalizedReportExists)
+                    throw new AtomicReceiptInvariantException(
+                        "The finalized inspection report admission has no active report file.");
+                return admission.StoredFileId.Value;
+
+            case PendingFileUploadState.Abandoned:
+                throw new DomainValidationException(
+                    "This inspection report upload was abandoned or claimed for cleanup; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared when admission.CleanupClaimed:
+                throw new DomainValidationException(
+                    "This inspection report upload is currently unavailable for finalization; retry with a new request key.",
+                    409);
+
+            case PendingFileUploadState.Prepared:
+                await using (var content = new MemoryStream(pdfBytes, writable: false))
+                {
+                    await _storage.UploadAtAsync(content, admission.StoragePath, fileName, "application/pdf", ct);
+                }
+                break;
+
+            default:
+                throw new AtomicReceiptInvariantException(
+                    "The inspection report upload admission has an unknown state.");
+        }
 
         var request = new AttachInspectionReportRequest(
-            fileName, storagePath, "application/pdf", pdfBytes.LongLength);
+            admission.Id,
+            purpose,
+            PendingFileUploadStore.ComputeOperationKeyHash(operationKey),
+            requestFingerprint,
+            admission.StoragePath,
+            fileName,
+            "application/pdf",
+            pdfBytes.LongLength);
         var command = CreateAtomicCommand(scope, AtomicInspectionMutationDomain.Inspection,
             AtomicInspectionMutationOperation.AttachReport, inspectionId, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
@@ -735,6 +830,9 @@ public class InspectionService : IInspectionService
             ? throw new AtomicReceiptInvariantException("Inspection report receipt has no StoredFile id.")
             : JsonSerializer.Deserialize<int>(outcome.Value.ResponseJson);
     }
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private AtomicInspectionMutationCommand CreateAtomicCommand<TRequest>(
         WorkspaceReadScope scope,
