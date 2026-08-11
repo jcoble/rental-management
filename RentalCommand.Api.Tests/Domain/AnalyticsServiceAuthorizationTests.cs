@@ -81,6 +81,107 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetOverviewAsync_ExpenseTrendUsesPaidStatusAndPaidDate()
+    {
+        var property = SeedProperty(
+            "Cash Basis Trend", "505", WorkOrderPriority.Normal, 999m, 1_000m, 1_000m, 0m);
+        var seededExpense = _ctx.Db.Expenses.Single(expense => expense.PropertyId == property.Id);
+        seededExpense.Status = ExpenseStatus.Pending;
+
+        var createdAt = Now.UtcDateTime;
+        _ctx.Db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "January paid repair",
+                Status = ExpenseStatus.Paid,
+                Amount = 100m,
+                IncurredAt = new DateTime(2026, 1, 5, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2026, 1, 7, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Insurance,
+                Description = "December bill paid in January",
+                Status = ExpenseStatus.Paid,
+                Amount = 50m,
+                IncurredAt = new DateTime(2025, 12, 31, 0, 0, 0, DateTimeKind.Utc),
+                PaidAt = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Pending repair",
+                Status = ExpenseStatus.Pending,
+                Amount = 200m,
+                IncurredAt = new DateTime(2026, 1, 8, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Draft repair",
+                Status = ExpenseStatus.Draft,
+                Amount = 300m,
+                IncurredAt = new DateTime(2026, 1, 9, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
+                PropertyId = property.Id,
+                Category = ScheduleECategory.Repairs,
+                Description = "Rejected repair",
+                Status = ExpenseStatus.Rejected,
+                Amount = 400m,
+                IncurredAt = new DateTime(2026, 1, 10, 0, 0, 0, DateTimeKind.Utc),
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            });
+        await _ctx.Db.SaveChangesAsync();
+
+        var scope = SeedSelectedPropertyScope(property.Id, RoleProfileKeys.WorkspaceAdministrator);
+        await _ctx.Db.SaveChangesAsync();
+        await FreezeDatabaseBusinessClockAsync(Now);
+
+        var sut = new AnalyticsService(
+            _ctx.Db,
+            new FixedTimeProvider(Now),
+            new FixedAuthSecurityClock(Now.UtcDateTime));
+        _commands.Clear();
+
+        var result = await sut.GetOverviewAsync(scope);
+
+        var january = result.Trend.Single(point => point.Month == "2026-01");
+        january.Expenses.Should().Be(150m);
+        january.Net.Should().Be(-150m);
+        result.Trend.Single(point => point.Month == "2025-12").Expenses.Should().Be(0m);
+
+        _commands.Should().ContainSingle();
+        _commands[0].Should().Contain("expense.\"Status\" = 2");
+        _commands[0].Should().Contain("COALESCE(expense.\"PaidAt\", expense.\"IncurredAt\")");
+    }
+
+    [Fact]
     public async Task GetOverviewAsync_WithoutReportsReadCapabilityReturnsNoPropertyMetrics()
     {
         var property = SeedProperty(
@@ -186,8 +287,10 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             Property = property,
             Unit = unit,
             Description = $"{name} expense",
+            Status = ExpenseStatus.Paid,
             Amount = expenseAmount,
             IncurredAt = now,
+            PaidAt = now,
             CreatedAt = now,
             UpdatedAt = now,
         };

@@ -352,6 +352,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Count()
         let receiptCost = _db.Expenses.AsNoTracking()
             .Where(expense => expense.PortfolioId == portfolioId
+                && expense.Status == ExpenseStatus.Paid
                 && (expense.UnitId == unitId
                     || (expense.WorkOrderId != null && _db.WorkOrders.AsNoTracking()
                         .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
