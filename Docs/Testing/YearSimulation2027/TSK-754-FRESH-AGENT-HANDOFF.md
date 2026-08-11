@@ -175,6 +175,10 @@ proof passed before this checkpoint. Do not replace either repair with an altern
   `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-754-year-simulation-execution`
 - Branch: `tsk-754-year-simulation-execution`
 - HEAD: `8f0b3c5e1d0c0893161fccd85526133ec00f45a1`
+Note (2026-08-11): every Azure/remote-runner item below (API tunnel, emulator, installed APK, the
+remote-verification handoff) is retired and unusable. Use the local Docker stack
+(`scripts/local/preview-stack-local.sh`, http://127.0.0.1:15667) and a local Android emulator.
+
 - Shared worktree is intentionally very dirty: 711 status entries at this checkpoint. Never reset,
   stash, clean, switch, or remove it. Preserve all unrelated WIP.
 - PostgreSQL: `rentalcommand-tsk754-db`, database `rentalcommand_tsk754`, port 5754, running.
@@ -322,6 +326,8 @@ Runtime state:
   biometric authentication or ask the user to operate it;
 - use the existing Azure Android emulator for mobile checkpoints, with standard password
   login, and use the canonical remote-verification handoff for any renewed tunnel/build work;
+  Note (2026-08-11): that machine is retired — use a local Android emulator and the local Docker
+  stack (`scripts/local/preview-stack-local.sh`);
 - the primary browser session is `tsk754-feb05-web-receipts`; its opener owns closing the
   exact daemon and Chrome helper tree when browser work finishes.
 
@@ -934,6 +940,10 @@ Run the Flutter app in debug mode against this device so UI changes can use hot 
 leave a stale Flutter process or ADB log stream running when handing the lane off again.
 
 ### Azure emulator — fallback/checkpoint
+
+Note (2026-08-11): this machine is retired. Everything in this section is a historical record and
+must not be used. Use the local Docker stack (`scripts/local/preview-stack-local.sh`,
+http://127.0.0.1:15667) and a local Android emulator instead.
 
 - Host: `azureuser@100.126.201.65`
 - SSH key: `~/.ssh/rental-build-runner-01-key.pem`

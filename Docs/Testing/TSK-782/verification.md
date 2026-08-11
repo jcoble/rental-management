@@ -9,6 +9,10 @@ was not used for final proof.
 
 ## Automated verification
 
+Note (2026-08-11): the `redacted-host.example.invalid` host used in the APK build below is
+retired. This is a record of what was run, not a command to re-run; build against the local Docker
+stack (`scripts/local/preview-stack-local.sh`, http://127.0.0.1:15667) instead.
+
 - `flutter test test/biometric_login_screen_test.dart test/biometric_auth_controller_test.dart test/biometric_auth_service_test.dart test/biometric_settings_test.dart test/auth_repository_test.dart`
   - Result: `+28: All tests passed!`
 - `flutter analyze lib/features/auth/login_screen.dart test/biometric_login_screen_test.dart`

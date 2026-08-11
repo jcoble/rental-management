@@ -1274,7 +1274,7 @@ For each principal path inspect generated SQL and query count:
 
 ## 10. Phased implementation slices
 
-Each slice is buildable within the integration branch, but old and new behavior never merge together. Heavy tests are serialized and may run on the Azure verification runner.
+Each slice is buildable within the integration branch, but old and new behavior never merge together. Heavy tests are serialized. (Note (2026-08-11): the Azure verification runner this originally named is retired; run heavy tests locally.)
 
 ### Slice A — schema kernel and projections
 

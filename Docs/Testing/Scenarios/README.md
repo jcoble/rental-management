@@ -4,7 +4,7 @@ This directory is the complete exploratory guide set for the Rental Command web 
 
 ## Execution conventions
 
-- Use local development from ./scripts/start-dev.sh or the approved preview https://redacted-host.example.invalid.
+- Use local development from ./scripts/start-dev.sh or the local preview stack at http://127.0.0.1:15667, started with ./scripts/local/preview-stack-local.sh. The old remote preview host is retired; there is no remote target.
 - Preview is a live shared simulation. Testers/verifiers are read-mostly; every additive write must be prefixed QA-YYYYMMDD, and no existing record may be deleted, voided, mutated, or reset.
 - Use the seeded local administrator admin@rentalcommand.local / Admin123! or the role-specific QA identity named by the scenario.
 - Read the scenario's source paths, project instructions, and relevant controller/service code before opening the browser.
