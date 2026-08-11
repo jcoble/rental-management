@@ -1,3 +1,5 @@
+using RentalCommand.Core.Time;
+
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
@@ -42,5 +44,5 @@ public static class ListDateRange
 
     // Midnight (start of day) of the given calendar date IN the business zone, expressed as a UTC instant.
     private static DateTime ToUtcStartOfDay(DateTime day, TimeZoneInfo tz) =>
-        TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(day.Date, DateTimeKind.Unspecified), tz);
+        LocalDateTimeResolver.ConvertToUtc(DateTime.SpecifyKind(day.Date, DateTimeKind.Unspecified), tz);
 }

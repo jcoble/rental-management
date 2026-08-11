@@ -287,6 +287,10 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             LastGeneratedAtUtc = t.LastGeneratedAtUtc,
             IsActive = t.IsActive,
             Priority = t.Priority,
+            AutomationFailureAttemptCount = t.WorkerClaimAttemptCount,
+            AutomationFailureReason = t.WorkerClaimLastFailureReason,
+            AutomationFailureAtUtc = t.WorkerClaimLastFailureAtUtc,
+            AutomationQuarantinedAtUtc = t.WorkerClaimQuarantinedAtUtc,
             CreatedAt = t.CreatedAt,
             UpdatedAt = t.UpdatedAt,
         });

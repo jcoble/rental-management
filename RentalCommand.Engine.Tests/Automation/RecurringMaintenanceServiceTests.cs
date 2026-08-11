@@ -9,6 +9,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Automation;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -41,6 +42,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
             ApplyClaimedRecurringMaintenanceBatchCommand,
             ApplyScheduledFinanceBatchResult,
             ApplyClaimedRecurringMaintenanceBatchHandler>();
+        services.AddScoped<IScheduledAutomationClaimStore, TestScheduledAutomationClaimStore>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -186,10 +188,129 @@ public class RecurringMaintenanceServiceTests : IDisposable
         reloaded.NextDueDate.Date.Should().BeAfter(today);
     }
 
+    [Fact]
+    public async Task SpringForwardGap_At0230_GeneratesTheShiftedWorkOrder()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var property = SeedProperty();
+        var task = SeedTask(
+            property.Id,
+            interval: RecurrenceInterval.Monthly,
+            nextDueDate: dueDate,
+            isActive: true,
+            title: "Spring-forward HVAC check",
+            category: "HVAC",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: new TimeOnly(2, 30),
+            estimatedCost: null);
+
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        var scheduled = _ctx.Db.WorkOrders.Single(row => row.RecurringMaintenanceTaskId == task.Id)
+            .ScheduledFor;
+        scheduled.Should().Be(new DateTime(2027, 3, 14, 7, 30, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task FailedTask_DoesNotBlockHealthyTaskBehindIt()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var poison = SeedTask(
+            SeedProperty().Id,
+            (RecurrenceInterval)999,
+            dueDate,
+            isActive: true,
+            title: "Unsupported interval");
+        var healthy = SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy schedule",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        _ctx.Db.WorkOrders.Single(row => row.RecurringMaintenanceTaskId == healthy.Id).Should().NotBeNull();
+        _ctx.Db.WorkOrders.Should().NotContain(row => row.RecurringMaintenanceTaskId == poison.Id);
+        _ctx.Db.ChangeTracker.Clear();
+        var failed = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id);
+        failed.WorkerClaimAttemptCount.Should().Be(1);
+        failed.WorkerClaimLastFailureReason.Should().Contain("Unsupported recurring-maintenance interval");
+        failed.WorkerClaimQuarantinedAtUtc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FailedTask_IsQuarantinedAfterThreeAttempts_AndLaterHealthyWorkContinues()
+    {
+        var businessDate = new DateTime(2027, 3, 14, 12, 0, 0, DateTimeKind.Utc);
+        var dueDate = new DateTime(2027, 3, 14, 0, 0, 0, DateTimeKind.Utc);
+        var poison = SeedTask(
+            SeedProperty().Id,
+            (RecurrenceInterval)999,
+            dueDate,
+            isActive: true,
+            title: "Quarantine me");
+        SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy first",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+        var sut = BuildService(true, new FixedTimeProvider(businessDate));
+
+        (await sut.GenerateAsync()).Should().Be(1);
+        (await sut.GenerateAsync()).Should().Be(0);
+        (await sut.GenerateAsync()).Should().Be(0);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var quarantined = _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id);
+        quarantined.WorkerClaimAttemptCount.Should().Be(
+            ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts);
+        quarantined.WorkerClaimQuarantinedAtUtc.Should().NotBeNull();
+        quarantined.WorkerClaimLastFailureReason.Should().Contain("Unsupported recurring-maintenance interval");
+        quarantined.WorkerClaimToken.Should().BeNull();
+
+        var laterHealthy = SeedTask(
+            SeedProperty(2).Id,
+            RecurrenceInterval.Monthly,
+            dueDate,
+            isActive: true,
+            title: "Healthy after quarantine",
+            category: "General",
+            priority: WorkOrderPriority.Normal,
+            scheduledTime: null,
+            estimatedCost: null,
+            portfolioId: 2);
+        (await sut.GenerateAsync()).Should().Be(1);
+        _ctx.Db.WorkOrders.Should().Contain(row => row.RecurringMaintenanceTaskId == laterHealthy.Id);
+        _ctx.Db.RecurringMaintenanceTasks.Single(row => row.Id == poison.Id)
+            .WorkerClaimAttemptCount.Should().Be(ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
-    private RecurringMaintenanceService BuildService(bool enable)
+    private RecurringMaintenanceService BuildService(
+        bool enable,
+        TimeProvider? timeProvider = null)
     {
         var now = DateTime.UtcNow;
         var settings = _ctx.Db.AutomationSettings.SingleOrDefault(row => row.PortfolioId == PortfolioId);
@@ -211,19 +332,20 @@ public class RecurringMaintenanceServiceTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return new RecurringMaintenanceService(
-            _services.GetRequiredService<IAtomicUnitOfWork>(),
-            TimeProvider.System,
+            _services.GetRequiredService<IServiceScopeFactory>(),
+            timeProvider ?? TimeProvider.System,
             new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
-            new TestScheduledAutomationClaimStore(_ctx.Db),
+            _services.GetRequiredService<IScheduledAutomationClaimStore>(),
             NullLogger<RecurringMaintenanceService>.Instance);
     }
 
-    private Property SeedProperty()
+    private Property SeedProperty(int portfolioId = PortfolioId)
     {
+        EnsurePortfolio(portfolioId);
         var now = DateTime.UtcNow;
         var property = new Property
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = portfolioId,
             Name = "Test Property",
             AddressLine1 = "123 Main St",
             City = "Springfield",
@@ -256,12 +378,14 @@ public class RecurringMaintenanceServiceTests : IDisposable
         string? category,
         WorkOrderPriority priority,
         TimeOnly? scheduledTime,
-        decimal? estimatedCost)
+        decimal? estimatedCost,
+        int portfolioId = PortfolioId)
     {
+        EnsurePortfolio(portfolioId);
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = portfolioId,
             PropertyId = propertyId,
             Title = title,
             Category = category,
@@ -277,5 +401,26 @@ public class RecurringMaintenanceServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private void EnsurePortfolio(int portfolioId)
+    {
+        if (_ctx.Db.Portfolios.Any(row => row.Id == portfolioId)) return;
+        var now = DateTime.UtcNow;
+        _ctx.Db.Portfolios.Add(new Portfolio
+        {
+            Id = portfolioId,
+            Name = $"Test Portfolio {portfolioId}",
+            ManagementCompanyName = "Test Co",
+            TimeZone = "America/New_York",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }

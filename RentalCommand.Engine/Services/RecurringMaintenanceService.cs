@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Automation;
@@ -7,27 +8,27 @@ using RentalCommand.Data.Automation;
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Claims due recurring-maintenance schedules, then atomically creates their work orders and advances
-/// every claimed schedule. A failed batch leaves its claim leases intact for a safe later retry.
+/// Claims due recurring-maintenance schedules, then applies each schedule in its own atomic scope.
+/// A failed schedule is recorded and released without blocking the rest of the claimed batch.
 /// </summary>
 public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
 {
     private static readonly AtomicJsonResultCodec<ApplyScheduledFinanceBatchResult> ResultCodec =
         new("scheduled-automation.recurring-maintenance.apply.v1");
-    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeProvider _timeProvider;
     private readonly IAppTimeZoneProvider _tz;
     private readonly IScheduledAutomationClaimStore _claims;
     private readonly ILogger<RecurringMaintenanceService> _logger;
 
     public RecurringMaintenanceService(
-        IAtomicUnitOfWork atomic,
+        IServiceScopeFactory scopeFactory,
         TimeProvider timeProvider,
         IAppTimeZoneProvider tz,
         IScheduledAutomationClaimStore claims,
         ILogger<RecurringMaintenanceService> logger)
     {
-        _atomic = atomic;
+        _scopeFactory = scopeFactory;
         _timeProvider = timeProvider;
         _tz = tz;
         _claims = claims;
@@ -49,27 +50,43 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             ct);
         if (claims.Count == 0) return 0;
 
+        var generated = 0;
+        foreach (var claim in claims)
+        {
+            ct.ThrowIfCancellationRequested();
+            generated += await ApplyClaimAsync(claim, today, now, businessTimeZone.Id, ct);
+        }
+
+        if (generated > 0)
+            _logger.LogInformation(
+                "RecurringMaintenanceService created {Count} work order(s) from recurring maintenance schedules.",
+                generated);
+        return generated;
+    }
+
+    private async Task<int> ApplyClaimAsync(
+        ScheduledAutomationClaim claim,
+        DateTime today,
+        DateTime appliedAtUtc,
+        string businessTimeZoneId,
+        CancellationToken ct)
+    {
         try
         {
-            var token = RequireSingleToken(claims);
-            var outcome = await _atomic.ExecuteAsync(
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
+            var outcome = await atomic.ExecuteAsync(
                 new AtomicCommandIdentity(
                     "scheduled-automation.recurring-maintenance.apply",
-                    token.ToString("N")),
+                    $"{claim.ClaimToken:N}:{claim.Id}"),
                 new ApplyClaimedRecurringMaintenanceBatchCommand(
-                    claims.Select(claim => claim.Id).ToArray(),
-                    token,
+                    [claim.Id],
+                    claim.ClaimToken,
                     today,
-                    _timeProvider.GetUtcNow().UtcDateTime,
-                    businessTimeZone.Id),
+                    appliedAtUtc,
+                    businessTimeZoneId),
                 ResultCodec,
                 ct);
-            if (outcome.Value.GeneratedRowCount > 0)
-            {
-                _logger.LogInformation(
-                    "RecurringMaintenanceService created {Count} work order(s) from recurring maintenance schedules.",
-                    outcome.Value.GeneratedRowCount);
-            }
             return outcome.Value.GeneratedRowCount;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -80,16 +97,61 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         {
             _logger.LogError(
                 ex,
-                "Recurring-maintenance atomic batch failed; claims remain leased for safe retry");
+                "Recurring-maintenance task {RecurringMaintenanceTaskId} failed; isolating it from the remaining claimed schedules.",
+                claim.Id);
+            await TryRecordFailureAsync(claim, appliedAtUtc, ex, ct);
             return 0;
         }
     }
 
-    private static Guid RequireSingleToken(IReadOnlyList<ScheduledAutomationClaim> claims)
+    private async Task TryRecordFailureAsync(
+        ScheduledAutomationClaim claim,
+        DateTime failedAtUtc,
+        Exception exception,
+        CancellationToken ct)
     {
-        var token = claims[0].ClaimToken;
-        if (claims.Any(claim => claim.ClaimToken != token))
-            throw new InvalidOperationException("A recurring-maintenance claim batch must share one token.");
-        return token;
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var claims = scope.ServiceProvider.GetRequiredService<IScheduledAutomationClaimStore>();
+            var recorded = await claims.RecordRecurringMaintenanceFailureAsync(
+                claim,
+                failedAtUtc,
+                BuildFailureReason(exception),
+                ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts,
+                ct);
+            if (!recorded)
+                _logger.LogWarning(
+                    "Recurring-maintenance task {RecurringMaintenanceTaskId} failure could not be recorded because its claim was lost.",
+                    claim.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception recordException)
+        {
+            // Failure recording is deliberately contained: it must not turn one bad row into a
+            // batch-wide failure. The claim lease expiry remains the recovery path if this write fails.
+            _logger.LogError(
+                recordException,
+                "Recurring-maintenance failure record could not be persisted for task {RecurringMaintenanceTaskId}; the claim will be recovered after lease expiry.",
+                claim.Id);
+        }
+    }
+
+    private static string BuildFailureReason(Exception exception)
+    {
+        var root = exception;
+        while (root.InnerException is not null)
+            root = root.InnerException;
+
+        var message = string.IsNullOrWhiteSpace(root.Message)
+            ? "Recurring-maintenance generation failed without a reason."
+            : root.Message.Trim();
+        var reason = $"{root.GetType().Name}: {message}";
+        return reason.Length <= ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength
+            ? reason
+            : reason[..ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength];
     }
 }
