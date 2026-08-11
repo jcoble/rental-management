@@ -95,11 +95,13 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         }
         catch (Exception ex)
         {
+            var correlationId = BuildFailureCorrelationId();
             _logger.LogError(
                 ex,
-                "Recurring-maintenance task {RecurringMaintenanceTaskId} failed; isolating it from the remaining claimed schedules.",
-                claim.Id);
-            await TryRecordFailureAsync(claim, appliedAtUtc, ex, ct);
+                "Recurring-maintenance task {RecurringMaintenanceTaskId} failed; isolating it from the remaining claimed schedules. CorrelationId: {FailureCorrelationId}.",
+                claim.Id,
+                correlationId);
+            await TryRecordFailureAsync(claim, appliedAtUtc, ex, correlationId, ct);
             return 0;
         }
     }
@@ -108,6 +110,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         ScheduledAutomationClaim claim,
         DateTime failedAtUtc,
         Exception exception,
+        string correlationId,
         CancellationToken ct)
     {
         try
@@ -117,7 +120,7 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
             var recorded = await claims.RecordRecurringMaintenanceFailureAsync(
                 claim,
                 failedAtUtc,
-                BuildFailureReason(exception),
+                BuildFailureReason(exception, correlationId),
                 ScheduledAutomationPolicy.RecurringMaintenanceQuarantineAfterAttempts,
                 ct);
             if (!recorded)
@@ -140,18 +143,35 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
         }
     }
 
-    private static string BuildFailureReason(Exception exception)
+    internal static string BuildFailureReason(Exception exception, string correlationId)
     {
         var root = exception;
         while (root.InnerException is not null)
             root = root.InnerException;
 
-        var message = string.IsNullOrWhiteSpace(root.Message)
-            ? "Recurring-maintenance generation failed without a reason."
-            : root.Message.Trim();
-        var reason = $"{root.GetType().Name}: {message}";
+        var reason = root switch
+        {
+            InvalidOperationException invalidOperation
+                when invalidOperation.Message.StartsWith(
+                    "Unsupported recurring-maintenance interval",
+                    StringComparison.Ordinal) =>
+                "This recurring maintenance schedule uses an unsupported repeat interval. " +
+                "Edit it and choose a supported interval.",
+            ArgumentException argument
+                when argument.Message.Contains("invalid time", StringComparison.OrdinalIgnoreCase) =>
+                "The scheduled time falls during a daylight-saving time change. Pick a different time.",
+            ScheduledFinanceClaimLostException =>
+                "This recurring maintenance schedule changed while it was running. It will be retried automatically.",
+            _ => BuildUnknownFailureReason(correlationId),
+        };
         return reason.Length <= ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength
             ? reason
             : reason[..ScheduledAutomationPolicy.RecurringMaintenanceFailureReasonMaxLength];
     }
+
+    private static string BuildUnknownFailureReason(string correlationId) =>
+        $"Recurring maintenance could not be generated. Check the schedule and try again. " +
+        $"Reference: {correlationId}";
+
+    private static string BuildFailureCorrelationId() => $"RM-{Guid.NewGuid():N}";
 }

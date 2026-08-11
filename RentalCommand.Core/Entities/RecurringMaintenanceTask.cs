@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
@@ -9,7 +10,7 @@ namespace RentalCommand.Core.Entities;
 /// by the <see cref="RecurrenceInterval"/>. The per-task <see cref="IsActive"/> flag is the real
 /// on/off switch — deactivating it stops generation without losing the chore's history.
 /// </summary>
-public class RecurringMaintenanceTask
+public class RecurringMaintenanceTask : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
