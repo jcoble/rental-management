@@ -9,7 +9,10 @@ using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Core.Auth;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -170,10 +173,43 @@ public class AuthControllerCookieTests
         controller.Response.Headers.SetCookie.ToString().Should().Contain("rc_refresh_token=");
     }
 
+    [Fact]
+    public async Task Logout_does_not_flow_request_abort_into_accepted_revocation()
+    {
+        var requestAbort = new CancellationTokenSource();
+        requestAbort.Cancel();
+        var sessionId = Guid.NewGuid();
+        var capturedToken = default(CancellationToken);
+        var atomicCredentials = new Mock<IAtomicAuthSessionCredentialService>();
+        atomicCredentials
+            .Setup(service => service.RevokeSessionAsync(
+                It.IsAny<RevokeAuthSessionCommand>(),
+                It.IsAny<Guid>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<RevokeAuthSessionCommand, Guid, CancellationToken>(
+                (_, _, cancellationToken) => capturedToken = cancellationToken)
+            .ReturnsAsync(new RevokeAuthSessionResult(true, sessionId));
+
+        var controller = CreateController(
+            Mock.Of<IAuthService>(),
+            atomicCredentials: atomicCredentials.Object);
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            sessionId, 41, 72, 9, 3, null, null, null);
+        controller.HttpContext.RequestAborted = requestAbort.Token;
+
+        var result = await controller.Logout();
+
+        result.Should().BeOfType<OkObjectResult>();
+        capturedToken.Should().NotBe(requestAbort.Token);
+        capturedToken.CanBeCanceled.Should().BeTrue();
+        capturedToken.IsCancellationRequested.Should().BeFalse();
+    }
+
     private static AuthController CreateController(
         IAuthService authService,
         IGoogleAuthService? googleAuthService = null,
-        GoogleAuthOptions? googleOptions = null)
+        GoogleAuthOptions? googleOptions = null,
+        IAtomicAuthSessionCredentialService? atomicCredentials = null)
     {
         var environment = new Mock<IWebHostEnvironment>();
         environment.SetupGet(env => env.EnvironmentName).Returns(Environments.Development);
@@ -185,7 +221,7 @@ public class AuthControllerCookieTests
             Options.Create(googleOptions ?? new GoogleAuthOptions()),
             environment.Object,
             configuration,
-            Mock.Of<IAtomicAuthSessionCredentialService>(),
+            atomicCredentials ?? Mock.Of<IAtomicAuthSessionCredentialService>(),
             Mock.Of<ICanonicalAccessTokenService>(),
             Mock.Of<RentalCommand.Core.Authorization.IAccessEnvelopeQuery>(),
             Mock.Of<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>(),

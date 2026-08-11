@@ -118,6 +118,19 @@ public sealed record RotateSessionRefreshCredentialCommand(
     [property: AtomicFingerprintIgnore] DateTime PresentedAtUtc,
     [property: AtomicFingerprintIgnore] DateTime ReplacementExpiresAtUtc) : IAtomicCommandData;
 
+/// <summary>
+/// Raised when an atomic refresh-rotation replay cannot prove ownership of the original receipt.
+/// This is an authentication failure, not an infrastructure failure, so the HTTP boundary maps it
+/// to a plain 401 response instead of exposing a generic 500.
+/// </summary>
+public sealed class RefreshTokenRotationOwnershipException : UnauthorizedAccessException
+{
+    public RefreshTokenRotationOwnershipException()
+        : base("This refresh token is no longer valid. Please sign in again.")
+    {
+    }
+}
+
 public enum SessionRefreshMutationStatus
 {
     Issued,

@@ -243,7 +243,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         var replacementCandidate = _tokens.CreateBearer(replacementCredentialId);
         var replacementExpiresAt = now.AddDays(_options.CredentialLifetimeDays);
         var command = new RotateSessionRefreshCredentialCommand(
-            presentedCredentialId,
+            request.OperationId,
             _tokens.HashBearer(request.PresentedBearer),
             replacementCredentialId,
             _tokens.HashBearer(replacementCandidate),
@@ -251,7 +251,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             replacementExpiresAt);
 
         var outcome = await _atomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForRotation(presentedCredentialId),
+            SessionRefreshCommandIdentity.ForRotation(request.OperationId),
             command,
             RotationCodec,
             ct);

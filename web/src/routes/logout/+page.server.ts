@@ -1,45 +1,95 @@
 /**
  * Logout — supports GET (direct navigation to /logout) and POST (form action).
- * Clears the local session cookies and best-effort revokes the refresh token
- * on the API.
+ * Clears the local session cookies and revokes the server-side session on the API.
  */
 
 import { redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import type { Cookies } from '@sveltejs/kit';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
-import { AUTH_COOKIE_NAMES, deleteAuthCookies, getRefreshToken } from '$lib/server/auth-cookies';
+import { serverRefreshToken } from '$lib/server/token-refresh';
+import {
+	AUTH_COOKIE_NAMES,
+	deleteAuthCookies,
+	getAccessToken,
+	getAccessTokenExpiration,
+	getRefreshToken
+} from '$lib/server/auth-cookies';
 
-async function revokeRefreshToken(refreshToken: string) {
+const LOGOUT_FETCH_TIMEOUT_MS = 1500;
+
+type RevokeResult = { ok: boolean; status: number };
+
+async function revokeSession(accessToken: string, refreshToken?: string): Promise<RevokeResult> {
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 1500);
+	const timeout = setTimeout(() => controller.abort(), LOGOUT_FETCH_TIMEOUT_MS);
 	try {
-		await fetch(`${SERVER_API_BASE_URL}/auth/logout`, {
+		const response = await fetch(`${SERVER_API_BASE_URL}/auth/logout`, {
 			method: 'POST',
 			signal: controller.signal,
-			headers: { Cookie: `${AUTH_COOKIE_NAMES.refreshToken}=${refreshToken}` }
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				...(refreshToken ? { Cookie: `${AUTH_COOKIE_NAMES.refreshToken}=${refreshToken}` } : {})
+			}
 		});
-	} catch {
-		// Local cookie deletion is authoritative for this browser session.
+		if (!response.ok) {
+			console.error(`Logout API returned ${response.status}; server session revocation did not succeed.`);
+		}
+		return { ok: response.ok, status: response.status };
+	} catch (error) {
+		console.error('Logout API request failed; server session revocation did not succeed.', error);
+		return { ok: false, status: 0 };
 	} finally {
 		clearTimeout(timeout);
 	}
 }
 
-function performLogout(cookies: Cookies) {
+function isExpired(expiration: string | undefined): boolean {
+	if (!expiration) return false;
+	const timestamp = Date.parse(expiration);
+	return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+async function performLogout(cookies: Cookies): Promise<void> {
+	const accessToken = getAccessToken(cookies);
 	const refreshToken = getRefreshToken(cookies);
-	deleteAuthCookies(cookies);
-	if (refreshToken) void revokeRefreshToken(refreshToken);
+	try {
+		let bearer = accessToken;
+		if ((!bearer || isExpired(getAccessTokenExpiration(cookies))) && refreshToken) {
+			const refreshed = await serverRefreshToken(refreshToken);
+			bearer = refreshed?.accessToken;
+			if (!bearer) {
+				console.error('Logout could not refresh an access token; server session may remain active.');
+			}
+		}
+
+		if (bearer) {
+			const result = await revokeSession(bearer, refreshToken);
+			if (!result.ok && result.status === 401 && refreshToken && bearer === accessToken) {
+				// The access cookie may be stale even when its companion expiration cookie is missing.
+				// Reuse the shared refresh single-flight before giving up on server-side revocation.
+				const refreshed = await serverRefreshToken(refreshToken);
+				if (refreshed?.accessToken) {
+					await revokeSession(refreshed.accessToken, refreshToken);
+				}
+			}
+		}
+	} catch (error) {
+		// Sign-out must remain usable if the API or refresh path is unavailable.
+		console.error('Logout could not revoke the server session.', error);
+	} finally {
+		deleteAuthCookies(cookies);
+	}
 }
 
 export const load: PageServerLoad = async ({ cookies }) => {
-	performLogout(cookies);
+	await performLogout(cookies);
 	throw redirect(303, '/login');
 };
 
 export const actions: Actions = {
 	default: async ({ cookies }) => {
-		performLogout(cookies);
+		await performLogout(cookies);
 		throw redirect(303, '/login');
 	}
 };

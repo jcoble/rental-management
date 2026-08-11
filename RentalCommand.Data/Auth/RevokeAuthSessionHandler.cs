@@ -21,15 +21,6 @@ public sealed class RevokeAuthSessionHandler
         CancellationToken ct)
     {
         await context.AcquireLockAsync("AuthSession", command.AuthSessionId, ct);
-        var session = await _db.Set<AuthSession>()
-            .Include(item => item.RefreshTokenFamilies)
-            .ThenInclude(item => item.Credentials)
-            .SingleOrDefaultAsync(item =>
-                item.Id == command.AuthSessionId &&
-                item.UserId == command.UserId &&
-                item.ActiveAccessContextId == command.AccessContextId,
-                ct)
-            ?? throw new UnauthorizedAccessException("Authentication session is unavailable.");
         var access = await _db.Set<WorkspaceAccessContext>()
             .WhereEffective()
             .Where(item => item.Id == command.AccessContextId && item.UserId == command.UserId)
@@ -40,18 +31,47 @@ public sealed class RevokeAuthSessionHandler
             throw new UnauthorizedAccessException("The access envelope is stale.");
         }
 
-        session.Status = AuthSessionStatus.Revoked;
-        session.RevokedAtUtc = command.RevokedAtUtc;
-        session.RevocationReason = command.Reason;
-        foreach (var family in session.RefreshTokenFamilies.Where(item => item.RevokedAtUtc == null))
+        var familyIds = _db.Set<AuthSessionRefreshTokenFamily>()
+            .IgnoreQueryFilters()
+            .Where(family =>
+                family.AuthSessionId == command.AuthSessionId &&
+                family.AuthSession!.UserId == command.UserId &&
+                family.AuthSession.ActiveAccessContextId == command.AccessContextId)
+            .Select(family => family.Id);
+
+        await _db.Set<AuthSessionRefreshCredential>()
+            .IgnoreQueryFilters()
+            .Where(credential =>
+                credential.RevokedAtUtc == null &&
+                familyIds.Contains(credential.RefreshTokenFamilyId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(credential => credential.RevokedAtUtc, command.RevokedAtUtc)
+                .SetProperty(credential => credential.RevocationReason, command.Reason), ct);
+
+        await _db.Set<AuthSessionRefreshTokenFamily>()
+            .IgnoreQueryFilters()
+            .Where(family =>
+                family.AuthSessionId == command.AuthSessionId &&
+                family.AuthSession!.UserId == command.UserId &&
+                family.AuthSession.ActiveAccessContextId == command.AccessContextId &&
+                family.RevokedAtUtc == null)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(family => family.RevokedAtUtc, command.RevokedAtUtc)
+                .SetProperty(family => family.RevocationReason, command.Reason), ct);
+
+        var revokedSessions = await _db.Set<AuthSession>()
+            .IgnoreQueryFilters()
+            .Where(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.UserId &&
+                session.ActiveAccessContextId == command.AccessContextId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                .SetProperty(session => session.RevokedAtUtc, command.RevokedAtUtc)
+                .SetProperty(session => session.RevocationReason, command.Reason), ct);
+        if (revokedSessions != 1)
         {
-            family.RevokedAtUtc = command.RevokedAtUtc;
-            family.RevocationReason = command.Reason;
-            foreach (var credential in family.Credentials.Where(item => item.RevokedAtUtc == null))
-            {
-                credential.RevokedAtUtc = command.RevokedAtUtc;
-                credential.RevocationReason = command.Reason;
-            }
+            throw new UnauthorizedAccessException("Authentication session is unavailable.");
         }
 
         context.StageSemanticEvent(new AtomicSemanticAudit(
@@ -63,7 +83,7 @@ public sealed class RevokeAuthSessionHandler
             ActorLabel: "authentication:logout",
             NewValues: JsonSerializer.Serialize(new { command.AuthSessionId, command.Reason }),
             ChangeReason: "Authentication session revoked"));
-        return new RevokeAuthSessionResult(true, session.Id);
+        return new RevokeAuthSessionResult(true, command.AuthSessionId);
     }
 
     public async Task AuthorizeReplayAsync(

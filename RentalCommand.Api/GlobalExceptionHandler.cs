@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 
 namespace RentalCommand.Api;
 
@@ -44,6 +45,15 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         switch (exception)
         {
+            case RefreshTokenRotationOwnershipException:
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Unauthorized",
+                    Detail = "This refresh token is no longer valid. Please sign in again.",
+                };
+                break;
+
             case AtomicIdempotencyConflictException idempotencyConflict:
                 problem = new ProblemDetails
                 {

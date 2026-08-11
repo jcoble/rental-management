@@ -382,6 +382,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             auth.RefreshAsync(refreshed.Tokens.RefreshToken))).Success.Should().BeFalse();
 
         var revokedSession = await _ctx.Db.AuthSessions
+            .AsNoTracking()
             .Include(row => row.RefreshTokenFamilies)
             .ThenInclude(row => row.Credentials)
             .SingleAsync(row => row.Id == session.Id);
