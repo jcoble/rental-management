@@ -277,7 +277,10 @@ internal static class TenantChargeBalanceViewSql
                  reversal."ReversesEntryId" AS "TenantLedgerEntryId",
                  sum(reversal."Amount") AS "ReversedAmount"
           FROM "TenantLedgerEntries" AS reversal
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = reversal."PortfolioId"
           WHERE reversal."EntryType" = 'Reversal'
+            AND reversal."EffectiveOn" <= effective_time."BusinessDate"
           GROUP BY reversal."PortfolioId", reversal."TenantAccountId", reversal."ReversesEntryId"
         ),
         debit_allocations AS (
@@ -286,6 +289,14 @@ internal static class TenantChargeBalanceViewSql
                  allocation."DebitEntryId" AS "TenantLedgerEntryId",
                  sum(allocation."Amount") AS "NetAllocations"
           FROM "TenantLedgerAllocations" AS allocation
+          JOIN "TenantLedgerEntries" AS credit
+            ON credit."PortfolioId" = allocation."PortfolioId"
+           AND credit."TenantAccountId" = allocation."TenantAccountId"
+           AND credit."Id" = allocation."CreditEntryId"
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = allocation."PortfolioId"
+          WHERE credit."Direction" = 'Credit'
+            AND credit."EffectiveOn" <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         charge_rows AS (
@@ -364,7 +375,10 @@ internal static class TenantAccountBalanceViewSql
                  reversal."ReversesEntryId" AS "TenantLedgerEntryId",
                  sum(reversal."Amount") AS "ReversedAmount"
           FROM "TenantLedgerEntries" AS reversal
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = reversal."PortfolioId"
           WHERE reversal."EntryType" = 'Reversal'
+            AND reversal."EffectiveOn" <= effective_time."BusinessDate"
           GROUP BY reversal."PortfolioId", reversal."TenantAccountId", reversal."ReversesEntryId"
         ),
         effective_entries AS (
@@ -394,6 +408,14 @@ internal static class TenantAccountBalanceViewSql
                  allocation."DebitEntryId" AS "TenantLedgerEntryId",
                  sum(allocation."Amount") AS "NetAllocations"
           FROM "TenantLedgerAllocations" AS allocation
+          JOIN "TenantLedgerEntries" AS credit
+            ON credit."PortfolioId" = allocation."PortfolioId"
+           AND credit."TenantAccountId" = allocation."TenantAccountId"
+           AND credit."Id" = allocation."CreditEntryId"
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = allocation."PortfolioId"
+          WHERE credit."Direction" = 'Credit'
+            AND credit."EffectiveOn" <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId", allocation."DebitEntryId"
         ),
         account_allocations AS (
@@ -401,6 +423,14 @@ internal static class TenantAccountBalanceViewSql
                  allocation."TenantAccountId",
                  sum(allocation."Amount") AS "NetAllocations"
           FROM "TenantLedgerAllocations" AS allocation
+          JOIN "TenantLedgerEntries" AS credit
+            ON credit."PortfolioId" = allocation."PortfolioId"
+           AND credit."TenantAccountId" = allocation."TenantAccountId"
+           AND credit."Id" = allocation."CreditEntryId"
+          JOIN effective_portfolio_time AS effective_time
+            ON effective_time."PortfolioId" = allocation."PortfolioId"
+          WHERE credit."Direction" = 'Credit'
+            AND credit."EffectiveOn" <= effective_time."BusinessDate"
           GROUP BY allocation."PortfolioId", allocation."TenantAccountId"
         ),
         account_entry_totals AS (
