@@ -132,6 +132,14 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentStatus(submitResult);
         }
 
+        // The atomic Submit receipt is the durable cross-process owner for the provider boundary.
+        // A replay can only reconcile the exact stored key; it must never independently create.
+        if (submitted.Disposition == AtomicCommandDisposition.Replayed)
+        {
+            submitResult = await ReconcileInteractiveAttemptAsync(submitResult, ct);
+            return CreateIntentStatus(submitResult);
+        }
+
         InteractiveProviderObject intent;
         try
         {
@@ -220,6 +228,14 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutStatus(submitResult);
         }
 
+        // The atomic Submit receipt is the durable cross-process owner for the provider boundary.
+        // A replay can only reconcile the exact stored key; it must never independently create.
+        if (submitted.Disposition == AtomicCommandDisposition.Replayed)
+        {
+            submitResult = await ReconcileInteractiveAttemptAsync(submitResult, ct);
+            return CheckoutStatus(submitResult);
+        }
+
         var resolvedSuccessUrl = ResolveSuccessUrl(successUrl, submitResult.PaymentAttemptId,
             chargeLedgerEntryId);
         var resolvedCancelUrl = ResolveCancelUrl(cancelUrl, submitResult.PaymentAttemptId,
@@ -301,6 +317,14 @@ public class StripePaymentService : IStripePaymentService
         {
             if (submitResult.Outcome == SubmitProviderPaymentCreateOutcome.AlreadySubmitted)
                 submitResult = await ReconcileInteractiveSetupAttemptAsync(submitResult, ct);
+            return CheckoutStatus(submitResult);
+        }
+
+        // The atomic Submit receipt is the durable cross-process owner for the provider boundary.
+        // A replay can only reconcile the exact stored key; it must never independently create.
+        if (submitted.Disposition == AtomicCommandDisposition.Replayed)
+        {
+            submitResult = await ReconcileInteractiveSetupAttemptAsync(submitResult, ct);
             return CheckoutStatus(submitResult);
         }
 

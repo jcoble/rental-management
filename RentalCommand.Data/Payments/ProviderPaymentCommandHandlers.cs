@@ -340,6 +340,96 @@ public sealed class SubmitProviderPaymentCreateHandler
             command.Provider, command.IdempotencyKey, _db, ct);
 }
 
+/// <summary>
+/// Compare-and-set retry scheduling for the Engine reconciliation worker. The provider call is
+/// always outside this command transaction; this command only persists the next durable slot and
+/// retains the Submitted fence until a later provider-confirmed terminal transition.
+/// </summary>
+public sealed class ScheduleProviderPaymentReconciliationHandler
+    : IAtomicCommandHandler<ScheduleProviderPaymentReconciliationCommand,
+        ScheduleProviderPaymentReconciliationResult>
+{
+    private readonly RentalCommandDbContext _db;
+
+    public ScheduleProviderPaymentReconciliationHandler(RentalCommandDbContext db) => _db = db;
+
+    public async Task<ScheduleProviderPaymentReconciliationResult> HandleAsync(
+        ScheduleProviderPaymentReconciliationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct)
+    {
+        if (command.NextAttemptAtUtc <= command.ScheduledAtUtc)
+            throw new ArgumentException("Next reconciliation must be later than the scheduling time.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.IdempotencyKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FailureCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FailureReason);
+
+        await context.AcquireLockAsync("TenantAccount", command.TenantAccountId, ct);
+        var attempt = await _db.TenantPaymentAttempts.AsNoTracking().SingleOrDefaultAsync(row =>
+            row.Id == command.PaymentAttemptId
+            && row.PortfolioId == command.PortfolioId
+            && row.TenantAccountId == command.TenantAccountId
+            && row.Provider == command.Provider
+            && row.IdempotencyKey == command.IdempotencyKey, ct);
+        if (attempt is null)
+            return new(ScheduleProviderPaymentReconciliationOutcome.NotFound,
+                command.PortfolioId, command.TenantAccountId, command.PaymentAttemptId,
+                TenantPaymentAttemptState.Unknown, null);
+        if (attempt.State is TenantPaymentAttemptState.Succeeded
+            or TenantPaymentAttemptState.Failed
+            or TenantPaymentAttemptState.Canceled)
+            return new(ScheduleProviderPaymentReconciliationOutcome.AlreadyTerminal,
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+                attempt.NextAttemptAtUtc);
+        if (attempt.State is not (TenantPaymentAttemptState.Prepared
+            or TenantPaymentAttemptState.Submitted))
+            return new(ScheduleProviderPaymentReconciliationOutcome.Stale,
+                attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+                attempt.NextAttemptAtUtc);
+
+        var applied = await AtomicProviderPaymentPersistence.ScheduleReconciliationAsync(
+            _db, context, attempt.Id, attempt.TenantAccountId, attempt.PortfolioId,
+            attempt.Provider, attempt.IdempotencyKey, attempt.ProviderFenceToken,
+            command.NextAttemptAtUtc, command.FailureCode, command.FailureReason, ct);
+        if (!applied)
+        {
+            var current = await _db.TenantPaymentAttempts.AsNoTracking().SingleOrDefaultAsync(row =>
+                row.Id == attempt.Id && row.PortfolioId == attempt.PortfolioId
+                && row.TenantAccountId == attempt.TenantAccountId, ct);
+            return current is null
+                ? new(ScheduleProviderPaymentReconciliationOutcome.NotFound,
+                    command.PortfolioId, command.TenantAccountId, command.PaymentAttemptId,
+                    TenantPaymentAttemptState.Unknown, null)
+                : new(current.State is TenantPaymentAttemptState.Succeeded
+                        or TenantPaymentAttemptState.Failed
+                        or TenantPaymentAttemptState.Canceled
+                        ? ScheduleProviderPaymentReconciliationOutcome.AlreadyTerminal
+                        : ScheduleProviderPaymentReconciliationOutcome.Stale,
+                    current.PortfolioId, current.TenantAccountId, current.Id, current.State,
+                    current.NextAttemptAtUtc);
+        }
+
+        attempt.NextAttemptAtUtc = command.NextAttemptAtUtc;
+        attempt.FailureCode = command.FailureCode;
+        attempt.FailureReason = command.FailureReason;
+        ProviderPaymentHandlerSupport.StageAudit(
+            context, attempt, "Provider payment reconciliation scheduled",
+            actorLabel: "provider:reconciliation-worker");
+        return new(ScheduleProviderPaymentReconciliationOutcome.Scheduled,
+            attempt.PortfolioId, attempt.TenantAccountId, attempt.Id, attempt.State,
+            command.NextAttemptAtUtc);
+    }
+
+    public Task AuthorizeReplayAsync(
+        ScheduleProviderPaymentReconciliationCommand command,
+        IAtomicCommandContext context,
+        CancellationToken ct) =>
+        ProviderPaymentHandlerSupport.AuthorizeSystemAttemptReplayAsync(
+            command.PaymentAttemptId, command.TenantAccountId, command.PortfolioId,
+            command.Provider, command.IdempotencyKey, _db, ct);
+}
+
 public sealed class FinalizeProviderPaymentCreateHandler
     : IAtomicCommandHandler<FinalizeProviderPaymentCreateCommand, FinalizeProviderPaymentCreateResult>
 {

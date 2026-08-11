@@ -41,6 +41,7 @@ internal static class TenantAccountPostgreSqlContract
         CreatePaymentAttemptClaimFunction,
         CreatePaymentAttemptExactClaimFunction,
         CreatePaymentAttemptTransitionFunction,
+        CreatePaymentAttemptReconciliationScheduleFunction,
         CreatePaymentAttemptValidator,
         CreateProviderPaymentFenceAssertion,
         CreateOpenAccountWriteGuard,
@@ -117,6 +118,12 @@ internal static class TenantAccountPostgreSqlContract
             """,
             StringComparison.Ordinal);
     }
+
+    internal static string InteractivePaymentReconciliationScheduleCreateStatement =>
+        CreatePaymentAttemptReconciliationScheduleFunction;
+
+    internal const string InteractivePaymentReconciliationScheduleDropStatement =
+        "DROP FUNCTION IF EXISTS rc_schedule_tenant_payment_reconciliation(bigint, integer, integer, varchar, varchar, uuid, timestamp with time zone, varchar, varchar);";
 
     internal static IReadOnlyList<string> DropStatements { get; } =
     [
@@ -574,6 +581,54 @@ internal static class TenantAccountPostgreSqlContract
 
           PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
           RETURN claimed_token;
+        END;
+        $function$;
+        """;
+
+    private const string CreatePaymentAttemptReconciliationScheduleFunction = """
+        CREATE OR REPLACE FUNCTION rc_schedule_tenant_payment_reconciliation(
+          p_id bigint,
+          p_tenant_account_id integer,
+          p_portfolio_id integer,
+          p_provider varchar(100),
+          p_idempotency_key varchar(200),
+          p_provider_fence_token uuid,
+          p_next_attempt_at_utc timestamp with time zone,
+          p_failure_code varchar(100),
+          p_failure_reason varchar(2000))
+        RETURNS boolean
+        LANGUAGE plpgsql
+        AS $function$
+        DECLARE
+          changed_count integer;
+          now_utc timestamp with time zone := clock_timestamp();
+        BEGIN
+          IF p_next_attempt_at_utc IS NULL OR p_next_attempt_at_utc <= now_utc THEN
+            RAISE EXCEPTION 'Interactive payment reconciliation must schedule a future attempt'
+              USING ERRCODE = '22023';
+          END IF;
+
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'on', true);
+
+          UPDATE "TenantPaymentAttempts" AS attempt
+          SET "NextAttemptAtUtc" = p_next_attempt_at_utc,
+              "FailureCode" = p_failure_code,
+              "FailureReason" = p_failure_reason,
+              "ClaimOwner" = NULL,
+              "ClaimToken" = NULL,
+              "ClaimExpiresAtUtc" = NULL,
+              "UpdatedAtUtc" = now_utc
+          WHERE attempt."Id" = p_id
+            AND attempt."TenantAccountId" = p_tenant_account_id
+            AND attempt."PortfolioId" = p_portfolio_id
+            AND attempt."Provider" = p_provider
+            AND attempt."IdempotencyKey" = p_idempotency_key
+            AND attempt."State" IN ('Prepared','Submitted')
+            AND attempt."ProviderFenceToken" IS NOT DISTINCT FROM p_provider_fence_token;
+
+          GET DIAGNOSTICS changed_count = ROW_COUNT;
+          PERFORM set_config('rental_command.tenant_payment_attempt_write', 'off', true);
+          RETURN changed_count = 1;
         END;
         $function$;
         """;
@@ -1520,6 +1575,7 @@ internal static class TenantAccountPostgreSqlContract
         DROP FUNCTION IF EXISTS rc_validate_tenant_ledger_entry();
         DROP FUNCTION IF EXISTS rc_validate_tenant_payment_attempt();
         DROP FUNCTION IF EXISTS rc_assert_provider_payment_fence(bigint, integer, integer, uuid);
+        DROP FUNCTION IF EXISTS rc_schedule_tenant_payment_reconciliation(bigint, integer, integer, varchar, varchar, uuid, timestamp with time zone, varchar, varchar);
         DROP FUNCTION IF EXISTS rc_guard_open_tenant_account_money_write();
         DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone, uuid);
         DROP FUNCTION IF EXISTS rc_transition_tenant_payment_attempt(bigint, integer, integer, uuid, varchar, varchar, varchar, varchar, timestamp with time zone);

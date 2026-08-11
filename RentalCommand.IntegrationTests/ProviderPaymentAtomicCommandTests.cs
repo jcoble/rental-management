@@ -44,6 +44,9 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         new("prepare-provider-payment-create-result.v1");
     private static readonly AtomicJsonResultCodec<SubmitProviderPaymentCreateResult> SubmitCodec =
         new("submit-provider-payment-create-result.v1");
+    private static readonly AtomicJsonResultCodec<ScheduleProviderPaymentReconciliationResult>
+        ScheduleReconciliationCodec =
+        new("schedule-provider-payment-reconciliation-result.v1");
     private static readonly AtomicJsonResultCodec<RecordTenantReceiptResult> ReceiptCodec =
         new("tenant-account.receipt.record.v1");
     private static readonly AtomicJsonResultCodec<FailProviderPaymentCreateResult> FailCodec =
@@ -103,6 +106,10 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             SubmitProviderPaymentCreateCommand,
             SubmitProviderPaymentCreateResult,
             SubmitProviderPaymentCreateHandler>();
+        services.AddAtomicCommandHandler<
+            ScheduleProviderPaymentReconciliationCommand,
+            ScheduleProviderPaymentReconciliationResult,
+            ScheduleProviderPaymentReconciliationHandler>();
         services.AddAtomicCommandHandler<
             RecordTenantReceiptCommand,
             RecordTenantReceiptResult,
@@ -177,6 +184,9 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         (await HasDatabaseFunctionAsync(db,
             "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
             .Should().BeTrue();
+        (await HasDatabaseFunctionAsync(db,
+            "rc_schedule_tenant_payment_reconciliation(bigint,integer,integer,character varying,character varying,uuid,timestamp with time zone,character varying,character varying)"))
+            .Should().BeTrue();
         (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeTrue();
 
         await ExecuteDurableFenceMigrationAsync(db, "Down");
@@ -191,6 +201,9 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             .Should().BeTrue($"installed transition signatures: {string.Join(", ", priorTransitionSignatures)}");
         (await HasDatabaseFunctionAsync(db,
             "rc_transition_tenant_payment_attempt(bigint,integer,integer,uuid,character varying,character varying,character varying,character varying,timestamp with time zone,uuid)"))
+            .Should().BeFalse();
+        (await HasDatabaseFunctionAsync(db,
+            "rc_schedule_tenant_payment_reconciliation(bigint,integer,integer,character varying,character varying,uuid,timestamp with time zone,character varying,character varying)"))
             .Should().BeFalse();
         (await HasDatabaseColumnAsync(db, "ProviderFenceToken")).Should().BeFalse();
 
@@ -958,29 +971,180 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         var scenario = await SeedScenarioAsync("checkout-provider-seam");
         var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
         provider.Reset();
+        provider.CheckoutStatusAfterCreate = "succeeded";
+        var submitRace = new SubmitRaceBarrier(2);
 
         // Drive the real service: each call owns a scoped atomic unit of work, while the
         // deterministic provider is the only injected seam at the remote boundary.
         var results = await Task.WhenAll(
-            CreateCheckoutViaServiceAsync(scenario, "provider-seam"),
-            CreateCheckoutViaServiceAsync(scenario, "provider-seam"));
+            CreateCheckoutViaServiceAsync(scenario, "provider-seam", submitRaceBarrier: submitRace),
+            CreateCheckoutViaServiceAsync(scenario, "provider-seam", submitRaceBarrier: submitRace));
         results.Select(result => result.Result)
             .Should().OnlyContain(outcome =>
-                outcome == CheckoutResult.Outcome.Ok
+                outcome == CheckoutResult.Outcome.AlreadyPaid
                 || outcome == CheckoutResult.Outcome.AttemptPending);
-        results.Should().Contain(result => result.Result == CheckoutResult.Outcome.Ok,
-            "at least one concurrent caller must receive the created checkout session");
+        results.Should().Contain(result => result.Result == CheckoutResult.Outcome.AlreadyPaid,
+            "at least one concurrent caller must observe the committed provider success");
         results.Select(result => result.PaymentAttemptId).Distinct().Should().ContainSingle();
         var attemptId = results[0].PaymentAttemptId!.Value;
 
         await using var db = NewContext();
         var attempt = await db.TenantPaymentAttempts.SingleAsync(row => row.Id == attemptId);
-        attempt.State.Should().Be(TenantPaymentAttemptState.Submitted);
+        (await db.TenantPaymentAttempts.CountAsync(row =>
+            row.PortfolioId == scenario.PortfolioId
+            && row.TenantAccountId == scenario.AccountId
+            && row.IdempotencyKey == attempt.IdempotencyKey)).Should().Be(1,
+                "the idempotency key must have exactly one durable payment attempt");
+        attempt.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+        attempt.ProviderFenceToken.Should().BeNull();
+        (await db.TenantLedgerEntries.CountAsync(row =>
+            row.ProviderPaymentAttemptId == attemptId
+            && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
         attempt.IdempotencyKey.Should().Be(
             StripePaymentService.BuildPaymentIdempotencyKey(
                 "checkout", scenario.ChargeId, scenario.UserId, "provider-seam"));
         provider.CheckoutCreateCount.Should().Be(1,
-            "the real service must call the deterministic interactive provider once for one durable key");
+            "the real service must invoke the provider once at the raw method boundary");
+        provider.CreatedCheckoutObjectCount.Should().Be(1,
+            "one durable attempt may own only one provider object");
+    }
+
+    [SkippableFact]
+    public async Task InteractivePaymentReconciliationWorker_ClearsExpiredFenceRetainsOpenFenceAndRetriesTransport()
+    {
+        SkipIfNoDocker();
+        var expiredScenario = await SeedScenarioAsync("worker-expired");
+        var openScenario = await SeedScenarioAsync("worker-open");
+        var transportScenario = await SeedScenarioAsync("worker-transport");
+        var canceledScenario = await SeedScenarioAsync("worker-canceled");
+        var provider = _services!.GetRequiredService<DeterministicInteractiveProviderClient>();
+        provider.Reset();
+
+        var now = DateTime.UtcNow;
+        var expiredKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", expiredScenario.ChargeId, expiredScenario.UserId, "worker-expired");
+        var openKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", openScenario.ChargeId, openScenario.UserId, "worker-open");
+        var transportKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", transportScenario.ChargeId, transportScenario.UserId, "worker-transport");
+        long expiredId;
+        long openId;
+        long transportId;
+        long canceledId;
+        var canceledKey = StripePaymentService.BuildPaymentIdempotencyKey(
+            "checkout", canceledScenario.ChargeId, canceledScenario.UserId, "worker-canceled");
+        await using (var db = NewContext())
+        {
+            var expired = Attempt(expiredScenario, expiredKey, null,
+                TenantPaymentAttemptState.Submitted);
+            expired.PreparedAtUtc = now.AddHours(-25);
+            expired.SubmittedAtUtc = expired.PreparedAtUtc;
+            expired.UpdatedAtUtc = expired.PreparedAtUtc;
+            expired.ProviderFenceToken = Guid.NewGuid();
+            expired.ProviderFenceAcquiredAtUtc = expired.PreparedAtUtc;
+
+            var open = Attempt(openScenario, openKey, null,
+                TenantPaymentAttemptState.Submitted);
+            open.PreparedAtUtc = now.AddHours(-1);
+            open.SubmittedAtUtc = open.PreparedAtUtc;
+            open.ProviderFenceToken = Guid.NewGuid();
+            open.ProviderFenceAcquiredAtUtc = open.PreparedAtUtc;
+
+            var transport = Attempt(transportScenario, transportKey, null,
+                TenantPaymentAttemptState.Submitted);
+            transport.PreparedAtUtc = now.AddHours(-1);
+            transport.SubmittedAtUtc = transport.PreparedAtUtc;
+            transport.ProviderFenceToken = Guid.NewGuid();
+            transport.ProviderFenceAcquiredAtUtc = transport.PreparedAtUtc;
+
+            var canceled = Attempt(canceledScenario, canceledKey, null,
+                TenantPaymentAttemptState.Submitted);
+            canceled.PreparedAtUtc = now.AddHours(-1);
+            canceled.SubmittedAtUtc = canceled.PreparedAtUtc;
+            canceled.ProviderFenceToken = Guid.NewGuid();
+            canceled.ProviderFenceAcquiredAtUtc = canceled.PreparedAtUtc;
+
+            db.TenantPaymentAttempts.AddRange(expired, open, transport, canceled);
+            await db.SaveChangesAsync();
+            expiredId = expired.Id;
+            openId = open.Id;
+            transportId = transport.Id;
+            canceledId = canceled.Id;
+        }
+
+        provider.SetReconciled(expiredId,
+            new InteractiveProviderObject(string.Empty, "none", expiredKey,
+                ConfirmedNoProviderObject: true));
+        provider.SetReconciled(openId,
+            new InteractiveProviderObject("pi_worker_open", "open", openKey,
+                PaymentIntentId: "pi_worker_open"));
+        provider.SetReconciled(transportId,
+            new InteractiveProviderObject("pi_worker_transport", "succeeded", transportKey,
+                PaymentIntentId: "pi_worker_transport"));
+        provider.SetReconciled(canceledId,
+            new InteractiveProviderObject("pi_worker_canceled", "canceled", canceledKey,
+                PaymentIntentId: "pi_worker_canceled"));
+        provider.TransportFailureAttemptId = transportId;
+        provider.TransportFailuresRemaining = 1;
+
+        var options = new InteractivePaymentReconciliationOptions
+        {
+            BatchSize = 10,
+            Expiration = TimeSpan.FromHours(24),
+            RetryDelay = TimeSpan.FromSeconds(5),
+        };
+
+        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(3,
+            "the transport failure is scheduled for a later cycle while the terminal and open attempts are processed now");
+
+        await using (var firstVerify = NewContext())
+        {
+            var expired = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == expiredId);
+            expired.State.Should().Be(TenantPaymentAttemptState.Failed);
+            expired.ProviderFenceToken.Should().BeNull();
+
+            var open = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == openId);
+            open.State.Should().Be(TenantPaymentAttemptState.Submitted);
+            open.ProviderFenceToken.Should().NotBeNull();
+            open.NextAttemptAtUtc.Should().NotBeNull();
+
+            var transport = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == transportId);
+            transport.State.Should().Be(TenantPaymentAttemptState.Submitted);
+            transport.ProviderFenceToken.Should().NotBeNull();
+            transport.NextAttemptAtUtc.Should().BeAfter(now);
+
+            var canceled = await firstVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == canceledId);
+            canceled.State.Should().Be(TenantPaymentAttemptState.Canceled);
+            canceled.ProviderFenceToken.Should().BeNull();
+        }
+
+        // The browser is gone, so the next provider observation is supplied only by the worker.
+        provider.SetReconciled(openId,
+            new InteractiveProviderObject("pi_worker_open", "succeeded", openKey,
+                PaymentIntentId: "pi_worker_open"));
+        await Task.Delay(TimeSpan.FromMilliseconds(5500));
+        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(2);
+
+        await using (var secondVerify = NewContext())
+        {
+            var open = await secondVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == openId);
+            open.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+            open.ProviderFenceToken.Should().BeNull();
+            (await secondVerify.TenantLedgerEntries.CountAsync(row =>
+                row.ProviderPaymentAttemptId == openId
+                && row.EntryType == TenantLedgerEntryType.PaymentReceipt)).Should().Be(1);
+
+            var transport = await secondVerify.TenantPaymentAttempts.SingleAsync(row => row.Id == transportId);
+            transport.State.Should().Be(TenantPaymentAttemptState.Succeeded);
+            transport.ProviderFenceToken.Should().BeNull();
+        }
+
+        // A terminal attempt is no longer a candidate; a later cycle cannot post a second receipt.
+        (await RunInteractivePaymentReconciliationCycleAsync(options)).Should().Be(0);
+        provider.ReconcileCountFor(openId).Should().Be(2);
+        provider.ReconcileCountFor(transportId).Should().Be(2,
+            "the first transport failure was durably scheduled and retried on the configured cadence");
+        provider.ReconcileCountFor(canceledId).Should().Be(1);
     }
 
     [SkippableFact]
@@ -1900,12 +2064,15 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
     }
 
     private async Task<CheckoutResult> CreateCheckoutViaServiceAsync(
-        Scenario scenario, string attemptKey, bool throwAfterFinalize = false)
+        Scenario scenario, string attemptKey, bool throwAfterFinalize = false,
+        SubmitRaceBarrier? submitRaceBarrier = null)
     {
         await using var scope = _services!.CreateAsyncScope();
         IAtomicUnitOfWork atomic = scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>();
         if (throwAfterFinalize)
             atomic = new ThrowAfterFinalizeAtomicUnitOfWork(atomic);
+        if (submitRaceBarrier is not null)
+            atomic = new SubmitRaceBarrierAtomicUnitOfWork(atomic, submitRaceBarrier);
         var service = new StripePaymentService(
             Options.Create(new StripeConfig
             {
@@ -1920,6 +2087,20 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         return await service.CreatePaymentCheckoutSessionAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId, scenario.ChargeId,
             scenario.UserId, null, null, CancellationToken.None, attemptKey);
+    }
+
+    private async Task<int> RunInteractivePaymentReconciliationCycleAsync(
+        InteractivePaymentReconciliationOptions options)
+    {
+        await using var scope = _services!.CreateAsyncScope();
+        var service = new InteractivePaymentReconciliationService(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(),
+            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            scope.ServiceProvider.GetRequiredService<IInteractivePaymentProviderClient>(),
+            TimeProvider.System,
+            Options.Create(options),
+            NullLogger<InteractivePaymentReconciliationService>.Instance);
+        return await service.ReconcileAsync();
     }
 
     private async Task<CheckoutResult> CancelCheckoutViaServiceAsync(
@@ -1953,6 +2134,35 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         public int? UserId => null;
         public string? ActorLabel => "integration:provider-payment";
         public string? IpAddress => "127.0.0.1";
+    }
+
+    private sealed class SubmitRaceBarrier(int requiredArrivals)
+    {
+        private readonly TaskCompletionSource<bool> _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _arrivals;
+
+        public async Task WaitAsync(CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _arrivals) >= requiredArrivals)
+                _released.TrySetResult(true);
+            await _released.Task.WaitAsync(ct);
+        }
+    }
+
+    private sealed class SubmitRaceBarrierAtomicUnitOfWork(
+        IAtomicUnitOfWork inner, SubmitRaceBarrier barrier) : IAtomicUnitOfWork
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity, TCommand command,
+            AtomicJsonResultCodec<TResult> resultCodec, CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            if (identity.CommandType == "payments.provider-create.submit")
+                await barrier.WaitAsync(ct);
+            return await inner.ExecuteAsync(identity, command, resultCodec, ct);
+        }
     }
 
     private static TenantLedgerEntry Charge(Scenario scenario, string suffix, decimal amount) => new()
@@ -2009,13 +2219,30 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         private int _paymentIntentCreateCount;
         private int _reconcileCount;
         private int _cancelCount;
+        private readonly List<long> _reconciledAttemptIds = [];
 
         public int CheckoutCreateCount => Volatile.Read(ref _checkoutCreateCount);
+        public int CreatedCheckoutObjectCount
+        {
+            get
+            {
+                lock (_gate)
+                    return _createdByKey.Count(key => key.Key.StartsWith("checkout:", StringComparison.Ordinal));
+            }
+        }
         public int PaymentIntentCreateCount => Volatile.Read(ref _paymentIntentCreateCount);
         public int ReconcileCount => Volatile.Read(ref _reconcileCount);
         public int CancelCount => Volatile.Read(ref _cancelCount);
         public bool ThrowAfterCheckoutAccept { get; set; }
         public string CheckoutStatusAfterCreate { get; set; } = "open";
+        public int TransportFailuresRemaining { get; set; }
+        public long? TransportFailureAttemptId { get; set; }
+
+        public int ReconcileCountFor(long paymentAttemptId)
+        {
+            lock (_gate)
+                return _reconciledAttemptIds.Count(id => id == paymentAttemptId);
+        }
 
         public void Reset()
         {
@@ -2024,6 +2251,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
                 _createdByKey.Clear();
                 _reconciledByAttempt.Clear();
                 _canceledByAttempt.Clear();
+                _reconciledAttemptIds.Clear();
             }
             Interlocked.Exchange(ref _checkoutCreateCount, 0);
             Interlocked.Exchange(ref _paymentIntentCreateCount, 0);
@@ -2031,6 +2259,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             Interlocked.Exchange(ref _cancelCount, 0);
             ThrowAfterCheckoutAccept = false;
             CheckoutStatusAfterCreate = "open";
+            TransportFailuresRemaining = 0;
+            TransportFailureAttemptId = null;
         }
 
         public void SetReconciled(long attemptId, InteractiveProviderObject provider)
@@ -2064,6 +2294,9 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             InteractiveProviderCreateRequest request, string successUrl, string cancelUrl,
             CancellationToken ct)
         {
+            // Count the invocation before any fake idempotency lookup. This is a raw provider-call
+            // proof, not merely a count of objects surviving the lookup.
+            Interlocked.Increment(ref _checkoutCreateCount);
             lock (_gate)
             {
                 if (_createdByKey.TryGetValue(request.IdempotencyKey, out var existing))
@@ -2075,7 +2308,6 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
                     PaymentIntentId: $"pi_checkout_deterministic_{request.PaymentAttemptId}",
                     CheckoutSessionId: $"cs_deterministic_{request.PaymentAttemptId}");
                 _createdByKey[request.IdempotencyKey] = created;
-                Interlocked.Increment(ref _checkoutCreateCount);
                 if (ThrowAfterCheckoutAccept)
                     throw new InteractiveProviderException(
                         "The provider accepted Checkout before the response was lost.");
@@ -2096,6 +2328,16 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             InteractiveProviderAttempt attempt, CancellationToken ct)
         {
             Interlocked.Increment(ref _reconcileCount);
+            lock (_gate) _reconciledAttemptIds.Add(attempt.PaymentAttemptId);
+            if (TransportFailuresRemaining > 0
+                && (TransportFailureAttemptId is null
+                    || TransportFailureAttemptId == attempt.PaymentAttemptId))
+            {
+                TransportFailuresRemaining--;
+                throw new InteractiveProviderException(
+                    "The deterministic provider transport failed during reconciliation.",
+                    isDefinitive: false, failureCode: "provider_transport");
+            }
             lock (_gate)
             {
                 if (_reconciledByAttempt.TryGetValue(attempt.PaymentAttemptId, out var explicitProvider))

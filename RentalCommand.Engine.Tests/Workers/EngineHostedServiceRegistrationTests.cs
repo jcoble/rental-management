@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RentalCommand.Engine;
+using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 
 namespace RentalCommand.Engine.Tests.Workers;
@@ -40,5 +41,20 @@ public sealed class EngineHostedServiceRegistrationTests
             commandBridgeOnly: true);
 
         act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Production_RegistersInteractivePaymentReconcilerWithExplicitOneMinuteCadence()
+    {
+        var services = new ServiceCollection();
+
+        services.AddEngineHostedServices(simulationEnabled: false, commandBridgeOnly: false);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService)
+            && descriptor.ImplementationType == typeof(InteractivePaymentReconciliationWorker));
+        new InteractivePaymentReconciliationOptions().PollInterval
+            .Should().Be(InteractivePaymentReconciliationOptions.ProductionCadence)
+            .And.Be(TimeSpan.FromMinutes(1));
     }
 }

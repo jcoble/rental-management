@@ -60,6 +60,38 @@ public sealed record SubmitProviderPaymentCreateResult(
     string? ProviderPaymentId = null,
     [property: AtomicFingerprintIgnore] DateTime? PreparedAtUtc = null);
 
+/// <summary>
+/// Persists the next durable reconciliation slot after a provider call that did not prove a
+/// terminal outcome. The exact provider key and fence are part of the compare-and-set boundary.
+/// </summary>
+public sealed record ScheduleProviderPaymentReconciliationCommand(
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    string Provider,
+    string IdempotencyKey,
+    Guid? ProviderFenceToken,
+    DateTime NextAttemptAtUtc,
+    string FailureCode,
+    string FailureReason,
+    [property: AtomicFingerprintIgnore] DateTime ScheduledAtUtc) : IAtomicCommandData;
+
+public enum ScheduleProviderPaymentReconciliationOutcome
+{
+    Scheduled,
+    NotFound,
+    AlreadyTerminal,
+    Stale,
+}
+
+public sealed record ScheduleProviderPaymentReconciliationResult(
+    ScheduleProviderPaymentReconciliationOutcome Outcome,
+    int PortfolioId,
+    int TenantAccountId,
+    long PaymentAttemptId,
+    TenantPaymentAttemptState State,
+    DateTime? NextAttemptAtUtc);
+
 /// <summary>Creates a durable verification attempt before opening provider setup.</summary>
 public sealed record PrepareProviderAutopaySetupCommand(
     int PortfolioId,

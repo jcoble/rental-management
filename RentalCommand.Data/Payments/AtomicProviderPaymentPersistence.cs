@@ -92,6 +92,26 @@ public static Task<Guid?> ClaimExactAsync(
             paymentAttemptId, tenantAccountId, portfolioId, providerFenceToken, ct);
     }
 
+    public static Task<bool> ScheduleReconciliationAsync(
+        RentalCommandDbContext db,
+        IAtomicCommandContext context,
+        long paymentAttemptId,
+        int tenantAccountId,
+        int portfolioId,
+        string provider,
+        string idempotencyKey,
+        Guid? providerFenceToken,
+        DateTime nextAttemptAtUtc,
+        string failureCode,
+        string failureReason,
+        CancellationToken ct = default)
+    {
+        var scope = RequireAuditScope(db, context);
+        return new AtomicProviderPaymentPersistence(db, scope).ScheduleReconciliationAsync(
+            paymentAttemptId, tenantAccountId, portfolioId, provider, idempotencyKey,
+            providerFenceToken, nextAttemptAtUtc, failureCode, failureReason, ct);
+    }
+
     public async Task<Guid?> ClaimExactAsync(
         long paymentAttemptId,
         int tenantAccountId,
@@ -156,7 +176,36 @@ public static Task<Guid?> ClaimExactAsync(
         await _db.Database.SqlQuery<long>($"""
             SELECT rc_assert_provider_payment_fence(
                 {paymentAttemptId}, {tenantAccountId}, {portfolioId}, {providerFenceToken}) AS "Value"
-            """).SingleAsync(ct);
+        """).SingleAsync(ct);
+    }
+
+    private async Task<bool> ScheduleReconciliationAsync(
+        long paymentAttemptId,
+        int tenantAccountId,
+        int portfolioId,
+        string provider,
+        string idempotencyKey,
+        Guid? providerFenceToken,
+        DateTime nextAttemptAtUtc,
+        string failureCode,
+        string failureReason,
+        CancellationToken ct)
+    {
+        if (paymentAttemptId <= 0) throw new ArgumentOutOfRangeException(nameof(paymentAttemptId));
+        if (tenantAccountId <= 0) throw new ArgumentOutOfRangeException(nameof(tenantAccountId));
+        if (portfolioId <= 0) throw new ArgumentOutOfRangeException(nameof(portfolioId));
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureReason);
+        using var lease = _auditScope.BeginInternalRawDml(
+            "TenantPaymentAttempts", AtomicRawDmlOperation.Update);
+        return await _db.Database.SqlQuery<ProviderPaymentScheduleRow>($"""
+            SELECT rc_schedule_tenant_payment_reconciliation(
+                {paymentAttemptId}, {tenantAccountId}, {portfolioId}, {provider},
+                {idempotencyKey}, {providerFenceToken}, {nextAttemptAtUtc},
+                {failureCode}, {failureReason}) AS "Applied"
+            """).Select(row => row.Applied).SingleAsync(ct);
     }
 
     private async Task<ProviderPaymentSubmission?> SubmitAsync(
@@ -178,9 +227,11 @@ public static Task<Guid?> ClaimExactAsync(
         if (attempt is null) return null;
 
         var wasNewSubmission = false;
-        if (attempt.State == TenantPaymentAttemptState.Prepared)
+        if (attempt.State == TenantPaymentAttemptState.Prepared
+            || (attempt.State == TenantPaymentAttemptState.Submitted
+                && attempt.ProviderFenceToken is null))
         {
-            wasNewSubmission = true;
+            wasNewSubmission = attempt.State == TenantPaymentAttemptState.Prepared;
             var fence = Guid.NewGuid();
             var claim = await ClaimExactAsync(paymentAttemptId, tenantAccountId, portfolioId,
                 $"provider-submit:{paymentAttemptId}", ct);
@@ -208,6 +259,11 @@ public static Task<Guid?> ClaimExactAsync(
     }
 
     private sealed class ProviderPaymentTransitionRow
+    {
+        public bool Applied { get; set; }
+    }
+
+    private sealed class ProviderPaymentScheduleRow
     {
         public bool Applied { get; set; }
     }
