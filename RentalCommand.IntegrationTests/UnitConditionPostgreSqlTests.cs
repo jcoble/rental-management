@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
@@ -124,14 +125,12 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         dashboard.Turnover.EstimatedCost.Should().Be(300m);
         dashboard.Turnover.ActualCost.Should().Be(130m);
         dashboard.MaintenanceTurnover.Status.Should().Be("InProgress");
-        var aggregateCommands = _commands.Where(command =>
-            command.Sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
-            && (command.Sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase)
-                || command.Sql.Contains("Expenses", StringComparison.OrdinalIgnoreCase))).ToList();
-        aggregateCommands.Should().HaveCount(2);
-        aggregateCommands.Should().OnlyContain(command =>
-            command.Sql.Contains("sum(", StringComparison.OrdinalIgnoreCase));
-        Capture("TURNOVER_AGGREGATES", aggregateCommands);
+        var aggregateCommand = _commands.Should().ContainSingle(command =>
+            command.Sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase)).Subject;
+        aggregateCommand.Sql.Should().Contain("FROM \"WorkOrders\"");
+        aggregateCommand.Sql.Should().Contain("FROM \"Expenses\"");
+        aggregateCommand.Sql.ToLowerInvariant().Should().Contain("sum(");
+        Capture("TURNOVER_AGGREGATES", [aggregateCommand]);
     }
 
     [Fact]
@@ -151,6 +150,314 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         _output.WriteLine($"UNIT_DASHBOARD_TOTAL_QUERY_COUNT={_commands.Count}");
         Capture("UNIT_DASHBOARD_SQL", _commands);
         // L11 intentionally records this total without imposing a dashboard query cap.
+    }
+
+    [Fact]
+    public async Task UnitDashboard_UsesAtMostThreeSqlStatements()
+    {
+        var property = await SeedPropertyAsync("Unit dashboard budget");
+        var unit = await SeedUnitAsync(property, "6A");
+
+        _commands.Clear();
+        var dashboard = await DashboardService().GetDashboardAsync(
+            PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        _output.WriteLine($"UNIT_DASHBOARD_QUERY_BUDGET_COUNT={_commands.Count}");
+        Capture("UNIT_DASHBOARD_QUERY_BUDGET", _commands);
+        _commands.Should().HaveCountLessThanOrEqualTo(3,
+            "Unit Command Center initial load must use no more than three PostgreSQL statements");
+        _commands.Should().OnlyContain(command => command.StatementCount == 1,
+            "a raw multi-statement batch must not count as one dashboard statement");
+    }
+
+    [Fact]
+    public async Task RootDashboard_UsesAtMostThreeSqlStatements()
+    {
+        var property = await SeedPropertyAsync("Root dashboard budget");
+        await SeedUnitAsync(property, "7A");
+        var scope = await SeedAdministratorScopeAsync();
+        await _context.ActivateApiScopeAsync(scope);
+        var service = new DashboardService(_context.Db, new AuditDescriber(), TimeProvider.System);
+
+        _commands.Clear();
+        var dashboard = await service.GetDashboardAsync(scope, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        _output.WriteLine($"ROOT_DASHBOARD_QUERY_BUDGET_COUNT={_commands.Count}");
+        Capture("ROOT_DASHBOARD_QUERY_BUDGET", _commands);
+        _commands.Should().HaveCountLessThanOrEqualTo(3,
+            "Root Dashboard initial load must use no more than three PostgreSQL statements");
+        _commands.Should().OnlyContain(command => command.StatementCount == 1,
+            "a raw multi-statement batch must not count as one dashboard statement");
+    }
+
+    [Fact]
+    public async Task UnitDashboard_ReturnsAllCurrentTenantsInRoleThenPartyIdOrder()
+    {
+        var property = await SeedPropertyAsync("Current tenant ordering");
+        var unit = await SeedUnitAsync(property, "8A");
+        var relationship = await SeedPossessionWithoutAgreementAsync(property, unit);
+        await SeedTenantAccountAsync(relationship);
+
+        var tenants = Enumerable.Range(1, 7)
+            .Select(index => new Tenant
+            {
+                PortfolioId = PortfolioId,
+                FirstName = "Current",
+                LastName = $"Tenant {index}",
+                Email = $"current-{index}@example.test",
+                CreatedAt = Now,
+                UpdatedAt = Now,
+            })
+            .ToArray();
+        _context.Db.Tenants.AddRange(tenants);
+        await _context.Db.SaveChangesAsync();
+
+        var effectiveFrom = DateOnly.FromDateTime(Now.AddMonths(-1));
+        var roles = new[]
+        {
+            LeaseManagementPartyRole.Occupant,
+            LeaseManagementPartyRole.CoTenant,
+            LeaseManagementPartyRole.PrimaryTenant,
+            LeaseManagementPartyRole.Occupant,
+            LeaseManagementPartyRole.CoTenant,
+            LeaseManagementPartyRole.Occupant,
+            LeaseManagementPartyRole.CoTenant,
+        };
+        var parties = tenants.Select((tenant, index) => new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = roles[index],
+            EffectiveFrom = effectiveFrom,
+            ChangeReason = "Dashboard ordering regression",
+            CreatedAtUtc = Now,
+            CreatedByUserId = 1,
+        }).ToArray();
+        _context.Db.LeaseManagementParties.AddRange(parties);
+        await _context.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var dashboard = await DashboardService().GetDashboardAsync(
+            PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        var expectedTenantIds = parties
+            .OrderBy(party => TenantRoleSort(party.Role))
+            .ThenBy(party => party.Id)
+            .Select(party => party.TenantId)
+            .ToArray();
+        dashboard!.CurrentTenants.Should().HaveCount(7);
+        dashboard.CurrentTenants.Select(tenant => tenant.Id).Should().Equal(expectedTenantIds);
+        _commands.Should().OnlyContain(command => command.StatementCount == 1);
+    }
+
+    [Fact]
+    public async Task UnitDashboard_OverviewListsPreserveSqlOrderForTiedValues()
+    {
+        var property = await SeedPropertyAsync("Overview tie ordering");
+        var unit = await SeedUnitAsync(property, "9A");
+        var relationship = await SeedPossessionWithoutAgreementAsync(property, unit);
+        var account = await SeedTenantAccountAsync(relationship);
+        var tenant = await SeedTenantAsync("Overview", "Tenant");
+        _context.Db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = relationship.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(Now.AddMonths(-1)),
+            ChangeReason = "Dashboard tie ordering regression",
+            CreatedAtUtc = Now,
+            CreatedByUserId = 1,
+        });
+
+        var uploadedAt = Now.AddHours(2);
+        _context.Db.StoredFiles.AddRange(
+            new StoredFile
+            {
+                PortfolioId = PortfolioId,
+                FileName = "newer.pdf",
+                FilePath = "newer.pdf",
+                ContentType = "application/pdf",
+                FileSize = 1,
+                EntityType = "Unit",
+                EntityId = unit.Id,
+                UploadedAt = uploadedAt,
+            },
+            new StoredFile
+            {
+                PortfolioId = PortfolioId,
+                FileName = "tied-a.pdf",
+                FilePath = "tied-a.pdf",
+                ContentType = "application/pdf",
+                FileSize = 1,
+                EntityType = "Unit",
+                EntityId = unit.Id,
+                UploadedAt = uploadedAt.AddHours(-1),
+            },
+            new StoredFile
+            {
+                PortfolioId = PortfolioId,
+                FileName = "tied-b.pdf",
+                FilePath = "tied-b.pdf",
+                ContentType = "application/pdf",
+                FileSize = 1,
+                EntityType = "Unit",
+                EntityId = unit.Id,
+                UploadedAt = uploadedAt.AddHours(-1),
+            });
+
+        var appointmentStart = DateTime.UtcNow.AddDays(2);
+        _context.Db.Appointments.AddRange(
+            new Appointment
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Title = "Later appointment",
+                Type = AppointmentType.Inspection,
+                Status = AppointmentStatus.Scheduled,
+                ScheduledStart = appointmentStart.AddHours(1),
+                CreatedAt = Now,
+                UpdatedAt = Now,
+            },
+            new Appointment
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Title = "Tied appointment A",
+                Type = AppointmentType.Inspection,
+                Status = AppointmentStatus.Scheduled,
+                ScheduledStart = appointmentStart,
+                CreatedAt = Now,
+                UpdatedAt = Now,
+            },
+            new Appointment
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Title = "Tied appointment B",
+                Type = AppointmentType.Inspection,
+                Status = AppointmentStatus.Scheduled,
+                ScheduledStart = appointmentStart,
+                CreatedAt = Now,
+                UpdatedAt = Now,
+            });
+
+        var postedAt = Now.AddHours(3);
+        _context.Db.TenantLedgerEntries.AddRange(
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = PortfolioId,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.PaymentReceipt,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = 100m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(postedAt),
+                PostedAtUtc = postedAt,
+                Description = "Payment A",
+                BusinessKey = $"dashboard-payment-a:{Guid.NewGuid():N}",
+                CreatedByUserId = 1,
+            },
+            new TenantLedgerEntry
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = PortfolioId,
+                TenantAccountId = account.Id,
+                EntryType = TenantLedgerEntryType.PaymentReceipt,
+                Direction = TenantLedgerDirection.Credit,
+                Amount = 200m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(postedAt),
+                PostedAtUtc = postedAt,
+                Description = "Payment B",
+                BusinessKey = $"dashboard-payment-b:{Guid.NewGuid():N}",
+                CreatedByUserId = 1,
+            });
+
+        var requestedAt = Now.AddHours(4);
+        _context.Db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Title = "Work order A",
+                Description = "Work order A",
+                Status = WorkOrderStatus.New,
+                Priority = WorkOrderPriority.Normal,
+                RequestedAt = requestedAt,
+                UpdatedAt = Now,
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Title = "Work order B",
+                Description = "Work order B",
+                Status = WorkOrderStatus.New,
+                Priority = WorkOrderPriority.Normal,
+                RequestedAt = requestedAt,
+                UpdatedAt = Now,
+            });
+        await _context.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var dashboard = await DashboardService().GetDashboardAsync(
+            PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Overview.PendingDocs.Select(document => document.UploadedAt)
+            .Should().BeInDescendingOrder();
+        dashboard.Overview.UpcomingAppointments.Select(appointment => appointment.ScheduledStart)
+            .Should().BeInAscendingOrder();
+        dashboard.Overview.RecentPayments.Select(payment => payment.Id)
+            .Should().BeInDescendingOrder();
+        dashboard.Overview.OpenWorkOrders.Select(workOrder => workOrder.Id)
+            .Should().BeInDescendingOrder();
+
+        var overviewSql = _commands.Should().ContainSingle(command =>
+            command.Sql.Contains("UNION ALL", StringComparison.OrdinalIgnoreCase)).Subject;
+        overviewSql.Sql.Should().Contain("SortRole");
+        overviewSql.Sql.Should().Contain("SortDateDescending");
+        overviewSql.Sql.Should().Contain("SortDateAscending");
+        overviewSql.Sql.Should().Contain("SortIdDescending");
+        var finalOrderIndex = overviewSql.Sql.LastIndexOf("ORDER BY", StringComparison.OrdinalIgnoreCase);
+        var lastUnionIndex = overviewSql.Sql.LastIndexOf("UNION ALL", StringComparison.OrdinalIgnoreCase);
+        finalOrderIndex.Should().BeGreaterThan(lastUnionIndex);
+        overviewSql.Sql[finalOrderIndex..].Should().Contain("SortRole");
+        overviewSql.Sql[finalOrderIndex..].Should().Contain("SortIdAscending");
+        overviewSql.Sql[finalOrderIndex..].Should().Contain("SortDateDescending");
+        overviewSql.Sql[finalOrderIndex..].Should().Contain("SortDateAscending");
+        overviewSql.Sql[finalOrderIndex..].Should().Contain("SortIdDescending");
+        Capture("UNIT_DASHBOARD_FINAL_ORDER", [overviewSql]);
+    }
+
+    [Fact]
+    public async Task QueryRecorder_RecordsEveryDbCommandExecutionPathInOneCounter()
+    {
+        var commands = new List<CapturedCommand>();
+        var recorder = new QueryRecorder(commands);
+        await using var command = new NpgsqlCommand("SELECT 1");
+
+        recorder.ReaderExecuting(command, null!, default);
+        await recorder.ReaderExecutingAsync(command, null!, default);
+        recorder.ScalarExecuting(command, null!, default);
+        await recorder.ScalarExecutingAsync(command, null!, default);
+        recorder.NonQueryExecuting(command, null!, default);
+        await recorder.NonQueryExecutingAsync(command, null!, default);
+
+        commands.Should().HaveCount(6);
+        commands.Select(captured => captured.Sql).Should().OnlyContain(
+            sql => sql == "SELECT 1");
     }
 
     [Fact]
@@ -332,6 +639,30 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         return account;
     }
 
+    private async Task<Tenant> SeedTenantAsync(string firstName, string lastName)
+    {
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = $"{firstName.ToLowerInvariant()}-{Guid.NewGuid():N}@example.test",
+            CreatedAt = Now,
+            UpdatedAt = Now,
+        };
+        _context.Db.Tenants.Add(tenant);
+        await _context.Db.SaveChangesAsync();
+        return tenant;
+    }
+
+    private static int TenantRoleSort(LeaseManagementPartyRole role) => role switch
+    {
+        LeaseManagementPartyRole.PrimaryTenant => 0,
+        LeaseManagementPartyRole.CoTenant => 1,
+        LeaseManagementPartyRole.Occupant => 2,
+        _ => 3,
+    };
+
     private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync()
     {
         var authNow = DateTime.UtcNow;
@@ -463,7 +794,12 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
         }
     }
 
-    private sealed record CapturedCommand(string Sql);
+    private sealed record CapturedCommand(string Sql)
+    {
+        public int StatementCount => Sql.Trim().TrimEnd(';').Contains(';', StringComparison.Ordinal)
+            ? 2
+            : 1;
+    }
 
     private sealed class QueryRecorder(List<CapturedCommand> commands) : DbCommandInterceptor
     {
@@ -473,7 +809,7 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             InterceptionResult<DbDataReader> result)
         {
             commands.Add(new CapturedCommand(command.CommandText));
-            return base.ReaderExecuting(command, eventData, result);
+            return result;
         }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
@@ -483,7 +819,45 @@ public sealed class UnitConditionPostgreSqlTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             commands.Add(new CapturedCommand(command.CommandText));
-            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+            return ValueTask.FromResult(result);
+        }
+
+        public override InterceptionResult<object> ScalarExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result)
+        {
+            commands.Add(new CapturedCommand(command.CommandText));
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(new CapturedCommand(command.CommandText));
+            return ValueTask.FromResult(result);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result)
+        {
+            commands.Add(new CapturedCommand(command.CommandText));
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(new CapturedCommand(command.CommandText));
+            return ValueTask.FromResult(result);
         }
     }
 }

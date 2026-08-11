@@ -40,161 +40,101 @@ public class UnitDashboardService : IUnitDashboardService
         }
 
         var now = unitRow.EffectiveNowUtc;
-        var currentTenants = unitRow.LeaseManagementId is not int leaseManagementId
-            ? new List<UnitTenantSummary>()
-            : await _db.LeaseManagementParties
-                .AsNoTracking()
-                .Where(party => party.PortfolioId == portfolioId
-                    && party.LeaseManagementId == leaseManagementId
-                    && party.EffectiveFrom <= unitRow.BusinessDate
-                    && (party.EffectiveThrough == null || party.EffectiveThrough >= unitRow.BusinessDate)
-                    && party.Role != LeaseManagementPartyRole.Guarantor)
-                .OrderBy(party => party.Role == LeaseManagementPartyRole.PrimaryTenant ? 0
-                    : party.Role == LeaseManagementPartyRole.CoTenant ? 1
-                    : party.Role == LeaseManagementPartyRole.Occupant ? 2
-                    : 3)
-                .ThenBy(party => party.Id)
-                .Select(party => new UnitTenantSummary
-                {
-                    Id = party.TenantId,
-                    Name = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
-                    Email = party.Tenant.Email,
-                    Phone = party.Tenant.Phone,
-                })
-                .ToListAsync(ct);
+        var currentTenants = new List<UnitTenantSummary>();
+        var docs = new List<UnitDocumentSummary>();
+        var documentCount = 0;
+        var upcomingAppointments = new List<UnitAppointmentSummary>();
+        var recentPayments = new List<UnitPaymentSummary>();
+        var openWorkOrders = new List<UnitWorkOrderSummary>();
+
+        // All bounded overview lists share one translated UNION ALL statement. Each branch keeps its
+        // own SQL predicate/order/take; the loop only demultiplexes already-filtered rows by kind.
+        var overviewRows = await BuildUnitDashboardItemsQuery(
+            portfolioId,
+            unitId,
+            unitRow.LeaseManagementId,
+            unitRow.TenantAccountId,
+            unitRow.BusinessDate,
+            now)
+            .ToListAsync(ct);
+
+        foreach (var item in overviewRows)
+        {
+            switch (item.Kind)
+            {
+                case UnitDashboardItemKind.Tenant:
+                    currentTenants.Add(new UnitTenantSummary
+                    {
+                        Id = item.IntValue1!.Value,
+                        Name = item.TextValue1 ?? string.Empty,
+                        Email = item.TextValue2,
+                        Phone = item.TextValue3,
+                    });
+                    break;
+                case UnitDashboardItemKind.Document:
+                    docs.Add(new UnitDocumentSummary
+                    {
+                        Id = item.IntValue1!.Value,
+                        FileName = item.TextValue1 ?? string.Empty,
+                        ContentType = item.TextValue2 ?? string.Empty,
+                        EntityType = item.TextValue3,
+                        EntityId = item.LongValue1,
+                        UploadedAt = item.DateValue1!.Value,
+                    });
+                    break;
+                case UnitDashboardItemKind.DocumentCount:
+                    documentCount = item.IntValue1 ?? 0;
+                    break;
+                case UnitDashboardItemKind.Appointment:
+                    upcomingAppointments.Add(new UnitAppointmentSummary
+                    {
+                        Id = item.IntValue1!.Value,
+                        Title = item.TextValue1 ?? string.Empty,
+                        Type = item.TextValue2 ?? string.Empty,
+                        Status = item.TextValue3 ?? string.Empty,
+                        ScheduledStart = item.DateValue1!.Value,
+                        AssignedTo = item.TextValue4,
+                    });
+                    break;
+                case UnitDashboardItemKind.Payment:
+                    recentPayments.Add(new UnitPaymentSummary
+                    {
+                        Id = item.LongValue1!.Value,
+                        TenantAccountId = item.IntValue1!.Value,
+                        LeaseManagementId = unitRow.LeaseManagementId!.Value,
+                        LeaseAgreementId = item.IntValue2,
+                        Type = item.TextValue1 ?? string.Empty,
+                        Status = item.TextValue2 ?? string.Empty,
+                        Description = item.TextValue3 ?? string.Empty,
+                        Amount = item.DecimalValue1!.Value,
+                        DueDate = item.DateValue1!.Value,
+                        PaidDate = item.DateValue2,
+                    });
+                    break;
+                case UnitDashboardItemKind.WorkOrder:
+                    openWorkOrders.Add(new UnitWorkOrderSummary
+                    {
+                        Id = item.IntValue1!.Value,
+                        Title = item.TextValue1 ?? string.Empty,
+                        Status = item.TextValue2 ?? string.Empty,
+                        Priority = item.TextValue3 ?? string.Empty,
+                        RequestedAt = item.DateValue1!.Value,
+                    });
+                    break;
+            }
+        }
 
         var outstanding = unitRow.ReceivableBalance;
         var hasOverdue = unitRow.PastDueAmount > 0m;
         var hasDueSoon = unitRow.NextDueOn is not null;
 
-        // (4) Counts — open work orders + documents on the unit and its children.
-        var openWorkOrderCount = await _db.WorkOrders
-            .AsNoTracking()
-            .CountAsync(w => w.UnitId == unitId && w.PortfolioId == portfolioId
-                && w.Status != WorkOrderStatus.Completed
-                && w.Status != WorkOrderStatus.Cancelled
-                && w.Status != WorkOrderStatus.Archived, ct);
-
-        // The unit's document set: files attached to the unit OR any of its children, computed DB-side as
-        // a set of (EntityType, EntityId) predicates against subqueries (one query, IN (...) per child type).
-        var docs = await BuildUnitDocumentsQuery(portfolioId, unitId)
-            .OrderByDescending(f => f.UploadedAt)
-            .Select(f => new UnitDocumentSummary
-            {
-                Id = f.Id,
-                FileName = f.FileName,
-                ContentType = f.ContentType,
-                EntityType = f.EntityType,
-                EntityId = f.EntityId,
-                UploadedAt = f.UploadedAt,
-            })
-            .Take(OverviewTake)
-            .ToListAsync(ct);
-
-        var docsCount = await BuildUnitDocumentsQuery(portfolioId, unitId).CountAsync(ct);
-
-        // (5) Upcoming appointments for the unit.
-        var upcomingAppointments = await _db.Appointments
-            .AsNoTracking()
-            .Where(a => a.UnitId == unitId && a.PortfolioId == portfolioId
-                && a.ScheduledStart >= now
-                && a.Status != AppointmentStatus.Cancelled)
-            .OrderBy(a => a.ScheduledStart)
-            .Take(OverviewTake)
-            .Select(a => new UnitAppointmentSummary
-            {
-                Id = a.Id,
-                Title = a.Title,
-                Type = a.Type.ToString(),
-                Status = a.Status.ToString(),
-                ScheduledStart = a.ScheduledStart,
-                AssignedTo = a.AssignedTo,
-            })
-            .ToListAsync(ct);
-
-        // Posted payment receipts use the same immutable ledger-entry ids as the global Tenant Account.
-        List<UnitPaymentSummary> recentPayments = unitRow.TenantAccountId is not int tenantAccountId
-            ? []
-            : await _db.TenantLedgerEntries
-            .AsNoTracking()
-            .Where(entry => entry.PortfolioId == portfolioId
-                && entry.TenantAccountId == tenantAccountId
-                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
-            .OrderByDescending(entry => entry.PostedAtUtc)
-            .ThenByDescending(entry => entry.Id)
-            .Take(OverviewTake)
-            .Select(entry => new UnitPaymentSummary
-            {
-                Id = entry.Id,
-                TenantAccountId = entry.TenantAccountId,
-                LeaseManagementId = unitRow.LeaseManagementId!.Value,
-                LeaseAgreementId = entry.LeaseAgreementId,
-                Type = entry.EntryType.ToString(),
-                Status = "Posted",
-                Description = entry.Description,
-                Amount = entry.Amount,
-                DueDate = entry.PostedAtUtc,
-                PaidDate = entry.PostedAtUtc,
-            })
-            .ToListAsync(ct);
-
-        var openWorkOrders = await _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId
-                && w.Status != WorkOrderStatus.Completed
-                && w.Status != WorkOrderStatus.Cancelled
-                && w.Status != WorkOrderStatus.Archived)
-            .OrderByDescending(w => w.RequestedAt)
-            .ThenByDescending(w => w.Id)
-            .Take(OverviewTake)
-            .Select(w => new UnitWorkOrderSummary
-            {
-                Id = w.Id,
-                Title = w.Title,
-                Status = w.Status.ToString(),
-                Priority = w.Priority.ToString(),
-                RequestedAt = w.RequestedAt,
-            })
-            .ToListAsync(ct);
-
-        // Stage inputs — a few cheap EXISTS checks plus the values already fetched above. The resolver is
-        // a pure function over these; it issues no queries and does not loop rows.
-        var hasDraftOrPendingLease = await _db.LeaseAgreements.AsNoTracking().AnyAsync(agreement =>
-            agreement.PortfolioId == portfolioId
-            && agreement.LeaseManagement!.UnitId == unitId
-            && agreement.FullyExecutedAtUtc == null
-            && agreement.VoidedAtUtc == null
-            && agreement.DraftCanceledAtUtc == null, ct);
-
-        var hasOpenApplication = await _db.RentalApplications.AsNoTracking().AnyAsync(a =>
-            a.UnitId == unitId && a.PortfolioId == portfolioId
-            && (a.Status == ApplicationStatus.Submitted || a.Status == ApplicationStatus.UnderReview || a.Status == ApplicationStatus.Approved)
-            && a.ApprovedTenantId == null, ct);
-
-        var hasUpcomingShowing = await _db.Appointments.AsNoTracking().AnyAsync(a =>
-            a.UnitId == unitId && a.PortfolioId == portfolioId
-            && a.Type == AppointmentType.Showing
-            && a.ScheduledStart >= now
-            && a.Status != AppointmentStatus.Cancelled, ct);
-
-        var hasUpcomingMoveInAppt = await _db.Appointments.AsNoTracking().AnyAsync(a =>
-            a.UnitId == unitId && a.PortfolioId == portfolioId
-            && a.Type == AppointmentType.MoveIn
-            && a.ScheduledStart >= now
-            && a.Status != AppointmentStatus.Cancelled, ct);
-
-        var moveOutInspectionDone = await _db.Inspections.AsNoTracking().AnyAsync(i =>
-            i.UnitId == unitId && i.PortfolioId == portfolioId
-            && i.Type == InspectionType.MoveOut
-            && (i.Status == InspectionStatus.Completed || i.Status == InspectionStatus.Reviewed), ct);
-
         var recentMoveOutSignal = unitRow.IsInTurnover || unitRow.IsOutOfService || unitRow.IsOnManagementHold
-            || openWorkOrderCount > 0
+            || unitRow.OpenWorkOrderCount > 0
             || unitRow.Lifecycle == "AccountingCloseout"
-            || moveOutInspectionDone;
+            || unitRow.MoveOutInspectionDone;
 
-        var stage = ResolveCanonicalStage(unitRow, hasDraftOrPendingLease, hasOpenApplication,
-            hasUpcomingShowing, hasUpcomingMoveInAppt, recentMoveOutSignal);
+        var stage = ResolveCanonicalStage(unitRow, unitRow.HasDraftOrPendingAgreement, unitRow.HasOpenApplication,
+            unitRow.HasUpcomingShowing, unitRow.HasUpcomingMoveInAppointment, recentMoveOutSignal);
         var nextBestAction = new UnitNextBestAction
         {
             Label = NextBestActionLabel(stage, outstanding, unitRow.AgreementEndOn, unitRow.BusinessDate),
@@ -212,7 +152,7 @@ public class UnitDashboardService : IUnitDashboardService
             ? Math.Max(0, end.DayNumber - unitRow.BusinessDate.DayNumber)
             : null;
 
-        var turnover = await BuildTurnoverSummaryAsync(portfolioId, unitId, stage, now, ct);
+        var turnover = BuildTurnoverSummary(unitRow, stage, now);
 
         return new UnitDashboardResponse
         {
@@ -265,7 +205,7 @@ public class UnitDashboardService : IUnitDashboardService
             MaintenanceTurnover = new UnitMaintenanceTurnoverCondition
             {
                 Status = turnover.Status,
-                OpenWorkOrderCount = openWorkOrderCount,
+                OpenWorkOrderCount = unitRow.OpenWorkOrderCount,
                 IsInTurnover = unitRow.IsInTurnover,
                 IsOutOfService = unitRow.IsOutOfService,
                 IsOnManagementHold = unitRow.IsOnManagementHold,
@@ -274,9 +214,9 @@ public class UnitDashboardService : IUnitDashboardService
             {
                 RentState = rentState,
                 OutstandingRentBalance = outstanding,
-                OpenWorkOrderCount = openWorkOrderCount,
+                OpenWorkOrderCount = unitRow.OpenWorkOrderCount,
                 LeaseEndsInDays = leaseEndsInDays,
-                DocsNeedingReviewCount = docsCount,
+                DocsNeedingReviewCount = documentCount,
                 CurrentTenantName = unitRow.CurrentPrimaryTenantName,
             },
             CurrentLease = unitRow.AgreementId is not int agreementId ? null : new UnitLeaseSummary
@@ -344,6 +284,88 @@ public class UnitDashboardService : IUnitDashboardService
             && notice.LeaseManagementId == selectedRelationshipId
             && notice.DismissedAt == null
             && notice.Status != "Sent")
+        let openWorkOrderCount = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Count(workOrder =>
+            workOrder.Status != WorkOrderStatus.Completed
+            && workOrder.Status != WorkOrderStatus.Cancelled
+            && workOrder.Status != WorkOrderStatus.Archived)
+        let hasDraftOrPendingAgreement = _db.LeaseAgreements.AsNoTracking().Any(agreement =>
+            agreement.PortfolioId == portfolioId
+            && agreement.LeaseManagement!.UnitId == unitId
+            && agreement.FullyExecutedAtUtc == null
+            && agreement.VoidedAtUtc == null
+            && agreement.DraftCanceledAtUtc == null)
+        let hasOpenApplication = _db.RentalApplications.AsNoTracking().Any(application =>
+            application.UnitId == unitId && application.PortfolioId == portfolioId
+            && (application.Status == ApplicationStatus.Submitted
+                || application.Status == ApplicationStatus.UnderReview
+                || application.Status == ApplicationStatus.Approved)
+            && application.ApprovedTenantId == null)
+        let hasUpcomingShowing = _db.Appointments.AsNoTracking().Any(appointment =>
+            appointment.UnitId == unitId && appointment.PortfolioId == portfolioId
+            && appointment.Type == AppointmentType.Showing
+            && appointment.ScheduledStart >= occupancy.EffectiveNowUtc
+            && appointment.Status != AppointmentStatus.Cancelled)
+        let hasUpcomingMoveInAppointment = _db.Appointments.AsNoTracking().Any(appointment =>
+            appointment.UnitId == unitId && appointment.PortfolioId == portfolioId
+            && appointment.Type == AppointmentType.MoveIn
+            && appointment.ScheduledStart >= occupancy.EffectiveNowUtc
+            && appointment.Status != AppointmentStatus.Cancelled)
+        let moveOutInspectionDone = _db.Inspections.AsNoTracking().Any(inspection =>
+            inspection.UnitId == unitId && inspection.PortfolioId == portfolioId
+            && inspection.Type == InspectionType.MoveOut
+            && (inspection.Status == InspectionStatus.Completed || inspection.Status == InspectionStatus.Reviewed))
+        let totalTaskCount = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Count()
+        let completedTaskCount = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Count(workOrder => workOrder.Status == WorkOrderStatus.Completed)
+        let estimatedCost = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Select(workOrder => (decimal?)workOrder.EstimatedCost).Sum() ?? 0m
+        let workOrderActualCost = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Select(workOrder => (decimal?)workOrder.ActualCost).Sum() ?? 0m
+        let startedAt = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Select(workOrder => (DateTime?)workOrder.RequestedAt).Min()
+        let targetReadyDate = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Where(workOrder => workOrder.Status != WorkOrderStatus.Completed
+                && workOrder.Status != WorkOrderStatus.Cancelled
+                && workOrder.Status != WorkOrderStatus.Archived)
+            .Select(workOrder => (DateTime?)(workOrder.ScheduledWindowEnd ?? workOrder.ScheduledFor))
+            .Max()
+        let lastWorkOrderActivityAt = _db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+            .Select(workOrder => (DateTime?)(workOrder.CompletedAt ?? workOrder.UpdatedAt))
+            .Max()
+        let receiptCount = _db.Expenses.AsNoTracking()
+            .Where(expense => expense.PortfolioId == portfolioId
+                && (expense.UnitId == unitId
+                    || (expense.WorkOrderId != null && _db.WorkOrders.AsNoTracking()
+                        .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+                        .Select(workOrder => workOrder.Id)
+                        .Contains(expense.WorkOrderId.Value))))
+            .Count()
+        let receiptCost = _db.Expenses.AsNoTracking()
+            .Where(expense => expense.PortfolioId == portfolioId
+                && (expense.UnitId == unitId
+                    || (expense.WorkOrderId != null && _db.WorkOrders.AsNoTracking()
+                        .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+                        .Select(workOrder => workOrder.Id)
+                        .Contains(expense.WorkOrderId.Value))))
+            .Select(expense => (decimal?)expense.Amount).Sum() ?? 0m
+        let lastReceiptAt = _db.Expenses.AsNoTracking()
+            .Where(expense => expense.PortfolioId == portfolioId
+                && (expense.UnitId == unitId
+                    || (expense.WorkOrderId != null && _db.WorkOrders.AsNoTracking()
+                        .Where(workOrder => workOrder.PortfolioId == portfolioId && workOrder.UnitId == unitId)
+                        .Select(workOrder => workOrder.Id)
+                        .Contains(expense.WorkOrderId.Value))))
+            .Select(expense => (DateTime?)(expense.PaidAt ?? expense.IncurredAt)).Max()
         select new UnitDashboardReadRow
         {
             Unit = new UnitResponse
@@ -394,6 +416,23 @@ public class UnitDashboardService : IUnitDashboardService
             NextDueOn = balance.NextDueOn,
             HeldDepositBalance = (decimal?)deposit.HeldBalance ?? 0m,
             OpenNoticeCount = openNoticeCount,
+            OpenWorkOrderCount = openWorkOrderCount,
+            DocumentsCount = 0,
+            HasDraftOrPendingAgreement = hasDraftOrPendingAgreement,
+            HasOpenApplication = hasOpenApplication,
+            HasUpcomingShowing = hasUpcomingShowing,
+            HasUpcomingMoveInAppointment = hasUpcomingMoveInAppointment,
+            MoveOutInspectionDone = moveOutInspectionDone,
+            TotalTaskCount = totalTaskCount,
+            CompletedTaskCount = completedTaskCount,
+            EstimatedCost = estimatedCost,
+            WorkOrderActualCost = workOrderActualCost,
+            StartedAt = startedAt,
+            TargetReadyDate = targetReadyDate,
+            LastWorkOrderActivityAt = lastWorkOrderActivityAt,
+            ReceiptCount = receiptCount,
+            ReceiptCost = receiptCost,
+            LastReceiptAt = lastReceiptAt,
         };
 
     private static UnitDashboardStage ResolveCanonicalStage(
@@ -469,92 +508,35 @@ public class UnitDashboardService : IUnitDashboardService
             _ => "Open unit",
         };
 
-    private async Task<UnitTurnoverSummary> BuildTurnoverSummaryAsync(
-        int portfolioId,
-        int unitId,
+    private static UnitTurnoverSummary BuildTurnoverSummary(
+        UnitDashboardReadRow row,
         UnitDashboardStage lifecycleStage,
-        DateTime now,
-        CancellationToken ct)
+        DateTime now)
     {
-        var workOrderIds = _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId && w.UnitId == unitId)
-            .Select(w => w.Id);
-
-        var workOrderAggregate = await _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId && w.UnitId == unitId)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                TotalTaskCount = g.Count(),
-                OpenTaskCount = g.Count(w =>
-                    w.Status != WorkOrderStatus.Completed
-                    && w.Status != WorkOrderStatus.Cancelled
-                    && w.Status != WorkOrderStatus.Archived),
-                CompletedTaskCount = g.Count(w => w.Status == WorkOrderStatus.Completed),
-                EstimatedCost = g.Sum(w => w.EstimatedCost ?? 0m),
-                WorkOrderActualCost = g.Sum(w => w.ActualCost ?? 0m),
-                StartedAt = g.Min(w => (DateTime?)w.RequestedAt),
-                TargetReadyDate = g.Max(w =>
-                    w.Status != WorkOrderStatus.Completed
-                    && w.Status != WorkOrderStatus.Cancelled
-                    && w.Status != WorkOrderStatus.Archived
-                        ? (w.ScheduledWindowEnd ?? w.ScheduledFor)
-                        : null),
-                LastWorkOrderActivityAt = g.Max(w => (DateTime?)(w.CompletedAt ?? w.UpdatedAt)),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var expenseAggregate = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId
-                && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                ReceiptCount = g.Count(),
-                ReceiptCost = g.Sum(e => e.Amount),
-                LastReceiptAt = g.Max(e => (DateTime?)(e.PaidAt ?? e.IncurredAt)),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var totalTasks = workOrderAggregate?.TotalTaskCount ?? 0;
-        var openTasks = workOrderAggregate?.OpenTaskCount ?? 0;
-        var completedTasks = workOrderAggregate?.CompletedTaskCount ?? 0;
-        var startedAt = workOrderAggregate?.StartedAt;
-        var lastActivityAt = MaxDate(workOrderAggregate?.LastWorkOrderActivityAt, expenseAggregate?.LastReceiptAt);
-
+        var lastActivityAt = MaxDate(row.LastWorkOrderActivityAt, row.LastReceiptAt);
         return new UnitTurnoverSummary
         {
-            Status = TurnoverStatus(lifecycleStage, totalTasks, openTasks),
-            TotalTaskCount = totalTasks,
-            OpenTaskCount = openTasks,
-            CompletedTaskCount = completedTasks,
-            ReceiptCount = expenseAggregate?.ReceiptCount ?? 0,
-            EstimatedCost = workOrderAggregate?.EstimatedCost ?? 0m,
-            ActualCost = (workOrderAggregate?.WorkOrderActualCost ?? 0m) + (expenseAggregate?.ReceiptCost ?? 0m),
-            StartedAt = startedAt,
-            TargetReadyDate = workOrderAggregate?.TargetReadyDate,
+            Status = TurnoverStatus(lifecycleStage, row.TotalTaskCount, row.OpenWorkOrderCount),
+            TotalTaskCount = row.TotalTaskCount,
+            OpenTaskCount = row.OpenWorkOrderCount,
+            CompletedTaskCount = row.CompletedTaskCount,
+            ReceiptCount = row.ReceiptCount,
+            EstimatedCost = row.EstimatedCost,
+            ActualCost = row.WorkOrderActualCost + row.ReceiptCost,
+            StartedAt = row.StartedAt,
+            TargetReadyDate = row.TargetReadyDate,
             LastActivityAt = lastActivityAt,
-            DaysInTurnover = startedAt is null
+            DaysInTurnover = row.StartedAt is null
                 ? null
-                : Math.Max(0, (int)Math.Ceiling(((openTasks > 0 ? now : lastActivityAt ?? now) - startedAt.Value).TotalDays)),
+                : Math.Max(0, (int)Math.Ceiling(((row.OpenWorkOrderCount > 0 ? now : lastActivityAt ?? now) - row.StartedAt.Value).TotalDays)),
         };
     }
 
     public async Task<IReadOnlyList<AuditEntryResponse>> GetTimelineAsync(
         int portfolioId, int unitId, int skip, int take, CancellationToken ct = default)
     {
-        // Confirm the unit is in the caller's portfolio before unioning its history (IDOR guard).
-        var inScope = await _db.Units
-            .AsNoTracking()
-            .AnyAsync(u => u.Id == unitId && u.Property!.PortfolioId == portfolioId, ct);
-        if (!inScope)
-        {
-            return Array.Empty<AuditEntryResponse>();
-        }
-
+        // Keep the IDOR guard as a scalar EXISTS inside the paged audit statement. This preserves the
+        // public timeline boundary without spending a separate round trip before the history query.
         skip = skip < 0 ? 0 : skip;
         take = take <= 0 ? RecentTimelineTake : Math.Min(take, 200);
 
@@ -861,7 +843,9 @@ public class UnitDashboardService : IUnitDashboardService
         // ONE audit query with translated OR/IN subqueries, newest first, paged.
         var rows = await _db.AtomicAuditLogs
             .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId && (
+            .Where(a => _db.Units.AsNoTracking().Any(u =>
+                    u.Id == unitId && u.Property!.PortfolioId == portfolioId)
+                && a.PortfolioId == portfolioId && (
                 (a.EntityType == "Unit" && a.EntityId == unitId) ||
                 (a.EntityType == nameof(LeaseManagement) && relationshipIds.Contains(a.EntityId)) ||
                 (a.EntityType == nameof(LeaseAgreement) && agreementIds.Contains(a.EntityId)) ||
@@ -944,6 +928,201 @@ public class UnitDashboardService : IUnitDashboardService
                 return response;
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// All bounded Unit Command Center overview lists as one server-side UNION ALL statement. Every
+    /// branch retains its own authorization predicate, ordering, and cap where the legacy response was
+    /// bounded; the current-tenant branch remains complete. The response layer only demultiplexes the
+    /// tagged rows into the existing DTO lists.
+    /// </summary>
+    private IQueryable<UnitDashboardItemReadRow> BuildUnitDashboardItemsQuery(
+        int portfolioId,
+        int unitId,
+        int? leaseManagementId,
+        int? tenantAccountId,
+        DateOnly businessDate,
+        DateTime now)
+    {
+        var tenantRows = _db.LeaseManagementParties
+            .AsNoTracking()
+            .Where(party => party.PortfolioId == portfolioId
+                && party.LeaseManagementId == leaseManagementId
+                && party.EffectiveFrom <= businessDate
+                && (party.EffectiveThrough == null || party.EffectiveThrough >= businessDate)
+                && party.Role != LeaseManagementPartyRole.Guarantor)
+            .OrderBy(party => party.Role == LeaseManagementPartyRole.PrimaryTenant ? 0
+                : party.Role == LeaseManagementPartyRole.CoTenant ? 1
+                : party.Role == LeaseManagementPartyRole.Occupant ? 2
+                : 3)
+            .ThenBy(party => party.Id)
+            .Select(party => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.Tenant,
+                IntValue1 = party.TenantId,
+                IntValue2 = 0,
+                LongValue1 = 0L,
+                TextValue1 = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+                TextValue2 = party.Tenant.Email,
+                TextValue3 = party.Tenant.Phone,
+                TextValue4 = string.Empty,
+                DateValue1 = DateTime.UnixEpoch,
+                DateValue2 = DateTime.UnixEpoch,
+                DecimalValue1 = 0m,
+                SortRole = party.Role == LeaseManagementPartyRole.PrimaryTenant ? 0
+                    : party.Role == LeaseManagementPartyRole.CoTenant ? 1
+                    : party.Role == LeaseManagementPartyRole.Occupant ? 2
+                    : 3,
+                SortIdAscending = party.Id,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = DateTime.UnixEpoch,
+            });
+
+        var documentRows = BuildUnitDocumentsQuery(portfolioId, unitId)
+            .OrderByDescending(file => file.UploadedAt)
+            .Take(OverviewTake)
+            .Select(file => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.Document,
+                IntValue1 = file.Id,
+                IntValue2 = 0,
+                LongValue1 = file.EntityId,
+                TextValue1 = file.FileName,
+                TextValue2 = file.ContentType,
+                TextValue3 = file.EntityType,
+                TextValue4 = string.Empty,
+                DateValue1 = file.UploadedAt,
+                DateValue2 = DateTime.UnixEpoch,
+                DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = file.UploadedAt,
+                SortDateAscending = DateTime.UnixEpoch,
+            });
+
+        var documentCountRows = BuildUnitDocumentsQuery(portfolioId, unitId)
+            .GroupBy(_ => 1)
+            .Select(group => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.DocumentCount,
+                IntValue1 = group.Count(),
+                IntValue2 = 0,
+                LongValue1 = 0L,
+                TextValue1 = string.Empty,
+                TextValue2 = string.Empty,
+                TextValue3 = string.Empty,
+                TextValue4 = string.Empty,
+                DateValue1 = DateTime.UnixEpoch,
+                DateValue2 = DateTime.UnixEpoch,
+                DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = DateTime.UnixEpoch,
+            });
+
+        var appointmentRows = _db.Appointments
+            .AsNoTracking()
+            .Where(appointment => appointment.UnitId == unitId
+                && appointment.PortfolioId == portfolioId
+                && appointment.ScheduledStart >= now
+                && appointment.Status != AppointmentStatus.Cancelled)
+            .OrderBy(appointment => appointment.ScheduledStart)
+            .Take(OverviewTake)
+            .Select(appointment => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.Appointment,
+                IntValue1 = appointment.Id,
+                IntValue2 = 0,
+                LongValue1 = 0L,
+                TextValue1 = appointment.Title,
+                TextValue2 = appointment.Type.ToString(),
+                TextValue3 = appointment.Status.ToString(),
+                TextValue4 = appointment.AssignedTo,
+                DateValue1 = appointment.ScheduledStart,
+                DateValue2 = DateTime.UnixEpoch,
+                DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = 0L,
+                SortDateDescending = DateTime.UnixEpoch,
+                SortDateAscending = appointment.ScheduledStart,
+            });
+
+        var paymentRows = _db.TenantLedgerEntries
+            .AsNoTracking()
+            .Where(entry => tenantAccountId != null
+                && entry.PortfolioId == portfolioId
+                && entry.TenantAccountId == tenantAccountId
+                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt)
+            .OrderByDescending(entry => entry.PostedAtUtc)
+            .ThenByDescending(entry => entry.Id)
+            .Take(OverviewTake)
+            .Select(entry => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.Payment,
+                LongValue1 = entry.Id,
+                IntValue1 = entry.TenantAccountId,
+                IntValue2 = entry.LeaseAgreementId,
+                TextValue1 = entry.EntryType.ToString(),
+                TextValue2 = "Posted",
+                TextValue3 = entry.Description,
+                DecimalValue1 = entry.Amount,
+                DateValue1 = entry.PostedAtUtc,
+                DateValue2 = entry.PostedAtUtc,
+                TextValue4 = string.Empty,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = entry.Id,
+                SortDateDescending = entry.PostedAtUtc,
+                SortDateAscending = DateTime.UnixEpoch,
+            });
+
+        var workOrderRows = _db.WorkOrders
+            .AsNoTracking()
+            .Where(workOrder => workOrder.UnitId == unitId
+                && workOrder.PortfolioId == portfolioId
+                && workOrder.Status != WorkOrderStatus.Completed
+                && workOrder.Status != WorkOrderStatus.Cancelled
+                && workOrder.Status != WorkOrderStatus.Archived)
+            .OrderByDescending(workOrder => workOrder.RequestedAt)
+            .ThenByDescending(workOrder => workOrder.Id)
+            .Take(OverviewTake)
+            .Select(workOrder => new UnitDashboardItemReadRow
+            {
+                Kind = UnitDashboardItemKind.WorkOrder,
+                IntValue1 = workOrder.Id,
+                IntValue2 = 0,
+                LongValue1 = 0L,
+                TextValue1 = workOrder.Title,
+                TextValue2 = workOrder.Status.ToString(),
+                TextValue3 = workOrder.Priority.ToString(),
+                TextValue4 = string.Empty,
+                DateValue1 = workOrder.RequestedAt,
+                DateValue2 = DateTime.UnixEpoch,
+                DecimalValue1 = 0m,
+                SortRole = 0,
+                SortIdAscending = 0L,
+                SortIdDescending = workOrder.Id,
+                SortDateDescending = workOrder.RequestedAt,
+                SortDateAscending = DateTime.UnixEpoch,
+            });
+
+        return tenantRows
+            .Concat(documentRows)
+            .Concat(documentCountRows)
+            .Concat(appointmentRows)
+            .Concat(paymentRows)
+            .Concat(workOrderRows)
+            .OrderBy(row => row.Kind)
+            .ThenBy(row => row.SortRole)
+            .ThenBy(row => row.SortIdAscending)
+            .ThenByDescending(row => row.SortDateDescending)
+            .ThenBy(row => row.SortDateAscending)
+            .ThenByDescending(row => row.SortIdDescending);
     }
 
     /// <summary>
@@ -1109,6 +1288,53 @@ public class UnitDashboardService : IUnitDashboardService
         public DateOnly? NextDueOn { get; init; }
         public decimal HeldDepositBalance { get; init; }
         public int OpenNoticeCount { get; init; }
+        public int OpenWorkOrderCount { get; init; }
+        public int DocumentsCount { get; init; }
+        public bool HasDraftOrPendingAgreement { get; init; }
+        public bool HasOpenApplication { get; init; }
+        public bool HasUpcomingShowing { get; init; }
+        public bool HasUpcomingMoveInAppointment { get; init; }
+        public bool MoveOutInspectionDone { get; init; }
+        public int TotalTaskCount { get; init; }
+        public int CompletedTaskCount { get; init; }
+        public int ReceiptCount { get; init; }
+        public decimal EstimatedCost { get; init; }
+        public decimal WorkOrderActualCost { get; init; }
+        public decimal ReceiptCost { get; init; }
+        public DateTime? StartedAt { get; init; }
+        public DateTime? TargetReadyDate { get; init; }
+        public DateTime? LastWorkOrderActivityAt { get; init; }
+        public DateTime? LastReceiptAt { get; init; }
+    }
+
+    private enum UnitDashboardItemKind
+    {
+        Tenant,
+        Document,
+        DocumentCount,
+        Appointment,
+        Payment,
+        WorkOrder,
+    }
+
+    private sealed class UnitDashboardItemReadRow
+    {
+        public UnitDashboardItemKind Kind { get; init; }
+        public int? IntValue1 { get; init; }
+        public int? IntValue2 { get; init; }
+        public long? LongValue1 { get; init; }
+        public string? TextValue1 { get; init; }
+        public string? TextValue2 { get; init; }
+        public string? TextValue3 { get; init; }
+        public string? TextValue4 { get; init; }
+        public DateTime? DateValue1 { get; init; }
+        public DateTime? DateValue2 { get; init; }
+        public decimal? DecimalValue1 { get; init; }
+        public int SortRole { get; init; }
+        public long SortIdAscending { get; init; }
+        public long SortIdDescending { get; init; }
+        public DateTime SortDateDescending { get; init; }
+        public DateTime SortDateAscending { get; init; }
     }
 
     private sealed class TimelineReadRow

@@ -13,8 +13,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <summary>
 /// Pins the enriched dashboard "Recent Activity" feed: every row must carry the touched entity's
 /// <c>EntityId</c> (for deep-linking) and a human <c>Label</c> naming the specific record, and the
-/// labels must be resolved from one page-keyed entity-fact statement after the authorized, stably
-/// ordered ten-row audit page. No entity branch may scan beyond the keys in that bounded page.
+/// labels must be resolved by the same SQL statement as the authorized, stably ordered ten-row audit
+/// page. Entity branches remain correlated to that bounded page in SQL.
 /// </summary>
 [Collection(MigratedPostgreSqlCollection.Name)]
 public class DashboardRecentActivityTests : IAsyncLifetime
@@ -229,8 +229,8 @@ public class DashboardRecentActivityTests : IAsyncLifetime
         dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(0m);
         dashboard.Accounting.NetThisMonth.Should().Be(0m);
 
-        _executedSql.Should().HaveCount(6,
-            "the dashboard should use header/KPI, expiring, accounting, audit-page, page-keyed entity-fact, and appointment statements");
+        _executedSql.Should().HaveCount(3,
+            "the dashboard should use one initial read, one accounting read, and one recent-activity read");
     }
 
     [Fact]
@@ -270,47 +270,30 @@ public class DashboardRecentActivityTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RecentActivity_Uses_Two_PageKeyed_Statements_With_No_Label_Followups()
+    public async Task RecentActivity_Uses_One_PageJoined_Statement_With_No_Label_Followups()
     {
         SeedActivityGraph();
 
         _executedSql.Clear();
         await _sut.GetDashboardAsync(_scope);
 
-        var auditQueries = _executedSql
+        var activityQueries = _executedSql
             .Where(command => command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        auditQueries.Should().ContainSingle(
-            "recent activity must fetch the authorized, stably ordered ten-row audit page first");
-        auditQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
-        auditQueries[0].Should().Contain("ORDER BY");
-        auditQueries[0].Should().Contain("LIMIT");
-
-        var entityFactQueries = _executedSql
-            .Where(command =>
-                !command.Contains("AtomicAuditLogs", StringComparison.OrdinalIgnoreCase) &&
-                command.Contains("AS \"EntityType\"", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        entityFactQueries.Should().ContainSingle(
-            "all labels and Unit ids must be resolved in one bounded entity-fact statement");
-        var entityFacts = entityFactQueries[0];
-        entityFacts.Should().Contain("UNION ALL");
-        entityFacts.Should().Contain("= ANY",
-            "each generated entity branch must carry its page-ID predicate in SQL");
-        entityFacts.Should().Contain("array_agg");
-        entityFacts.Should().Contain("\"EffectiveFrom\" DESC");
-        entityFacts.Should().Contain("\"Id\" DESC",
+        activityQueries.Should().ContainSingle(
+            "recent activity must resolve the authorized audit page and its facts in one statement");
+        activityQueries[0].Should().Contain("public.rc_api_effective_capability_scopes");
+        activityQueries[0].Should().Contain("ORDER BY");
+        activityQueries[0].Should().Contain("LIMIT");
+        activityQueries[0].Should().Contain("UNION ALL");
+        activityQueries[0].Should().Contain("array_agg");
+        activityQueries[0].Should().Contain("\"EffectiveFrom\" DESC");
+        activityQueries[0].Should().Contain("\"Id\" DESC",
             "tenant Unit context must use the latest party by EffectiveFrom and then Id");
-        entityFacts.Should().NotContain("\"Appointments\"");
-        entityFacts.Should().NotContain("\"Inspections\"");
-        entityFacts.Should().NotContain("\"RentalApplications\"");
-        entityFacts.Should().NotContain("\"SecurityDepositEntries\"",
-            "entity types absent from the audit page must not generate union branches");
 
-        _executedSql.Should().HaveCount(6,
-            "recent activity contributes exactly two statements and never performs per-row lookups");
+        _executedSql.Should().HaveCount(3,
+            "recent activity must not perform a separate label lookup or per-row query");
     }
 
     [Fact]
