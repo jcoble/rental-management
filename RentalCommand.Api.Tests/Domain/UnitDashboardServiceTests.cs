@@ -623,7 +623,11 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         var completedWork = WorkOrderFor(unit, property, "Trash-out", WorkOrderStatus.Completed,
             now.AddDays(-6), estimatedCost: 100m, actualCost: 120m, completedAt: now.AddDays(-2));
         var linkedReceipt = ExpenseFor(unit, property, "Paint supplies", 75m, now.AddDays(-1), openWork);
+        linkedReceipt.Status = ExpenseStatus.Paid;
+        linkedReceipt.PaidAt = now.AddDays(-1);
         var directReceipt = ExpenseFor(unit, property, "Key copies", 25m, now.AddDays(-3));
+        directReceipt.Status = ExpenseStatus.Paid;
+        directReceipt.PaidAt = now.AddDays(-3);
         var (_, foreignUnit) = SeedPropertyUnit("Other Building", "8", 900m, now);
         var foreignReceipt = ExpenseFor(foreignUnit, foreignUnit.Property!, "Other unit", 999m, now);
         _db.AddRange(openWork, completedWork, linkedReceipt, directReceipt, foreignReceipt);
@@ -650,6 +654,43 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         dashboardSql.Should().Contain("FROM \"WorkOrders\"");
         dashboardSql.Should().Contain("FROM \"Expenses\"");
         dashboardSql.ToLowerInvariant().Should().Contain("sum(");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_TurnoverActualCostIncludesOnlyPaidLinkedExpenses()
+    {
+        var now = DateTime.UtcNow;
+        var (property, unit) = SeedPropertyUnit("Turnover Status Flats", "9", 1400m, now);
+        var source = SeedHistoricalRelationship(
+            property, unit, "Former", "Resident", 1400m, now.AddYears(-1), now.AddDays(-6));
+        SeedOperationalState(
+            unit, UnitOperationalPeriodType.Turnover, now.AddDays(-6), source.Relationship);
+
+        var completedWork = WorkOrderFor(unit, property, "Trash-out", WorkOrderStatus.Completed,
+            now.AddDays(-6), estimatedCost: 200m, actualCost: 120m, completedAt: now.AddDays(-2));
+        var paidReceipt = ExpenseFor(unit, property, "Paid supplies", 75m, now.AddDays(-1), completedWork);
+        paidReceipt.Status = ExpenseStatus.Paid;
+        paidReceipt.PaidAt = now.AddDays(-1);
+        var pendingReceipt = ExpenseFor(unit, property, "Pending supplies", 60m, now.AddDays(-1), completedWork);
+        pendingReceipt.Status = ExpenseStatus.Pending;
+        var draftReceipt = ExpenseFor(unit, property, "Draft supplies", 70m, now.AddDays(-1), completedWork);
+        draftReceipt.Status = ExpenseStatus.Draft;
+        var rejectedReceipt = ExpenseFor(unit, property, "Rejected supplies", 80m, now.AddDays(-1), completedWork);
+        rejectedReceipt.Status = ExpenseStatus.Rejected;
+        _db.AddRange(completedWork, paidReceipt, pendingReceipt, draftReceipt, rejectedReceipt);
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Turnover.ReceiptCount.Should().Be(4);
+        dashboard.Turnover.ActualCost.Should().Be(195m);
+        dashboard.Turnover.LastActivityAt.Should().BeCloseTo(
+            now.AddDays(-1),
+            TimeSpan.FromMilliseconds(1));
+        _executedSql.Should().HaveCount(3,
+            "the unit dashboard should keep one canonical read, one overview read, and one timeline read");
     }
 
     [Fact]
